@@ -116,12 +116,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             config.epoch_height,
         );
 
-        let da_membership = StakeCommittee::new_stake(
+        let da_membership = StaticCommittee::new(
             config.known_nodes_with_stake.clone(),
             config.known_da_nodes.clone(),
             Topic::Da,
-            &instance_state,
-            config.epoch_height,
         );
 
         let memberships = Memberships {
