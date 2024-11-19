@@ -59,8 +59,9 @@ impl<TYPES: NodeType> StakeCommittee<TYPES> {
     pub fn new_stake(
         // TODO remove `new` from trait and rename this to `new`.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        eligible_leaders: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
+        // committee_members are stake holders
         committee_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
+        da_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
         committee_topic: Topic,
         instance_state: &NodeState,
         epoch_size: u64,

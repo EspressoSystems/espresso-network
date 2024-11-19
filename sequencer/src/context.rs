@@ -15,6 +15,7 @@ use futures::{
     stream::{Stream, StreamExt},
 };
 use hotshot::{
+    traits::election::static_committee::StaticCommittee,
     types::{Event, EventType, SystemContextHandle},
     MarketplaceConfig, Memberships, SystemContext,
 };
@@ -26,6 +27,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     network::NetworkConfig,
     traits::{
+        election::Membership,
         metrics::Metrics,
         network::{ConnectedNetwork, Topic},
         node_implementation::{ConsensusTime, Versions},
@@ -108,24 +110,15 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             .load_consensus_state::<V>(instance_state.clone())
             .await?;
 
-        let committee_membership = StakeCommittee::new_stake(
+        // FIXME requires hotshot update
+        // https://github.com/EspressoSystems/HotShot/pull/3867
+        let memberships = StakeCommittee::new_stake(
             config.known_nodes_with_stake.clone(),
-            config.known_nodes_with_stake.clone(),
+            config.known_da_nodes.clone(),
             Topic::Global,
             &instance_state,
             config.epoch_height,
         );
-
-        let da_membership = StaticCommittee::new(
-            config.known_nodes_with_stake.clone(),
-            config.known_da_nodes.clone(),
-            Topic::Da,
-        );
-
-        let memberships = Memberships {
-            quorum_membership: committee_membership,
-            da_membership,
-        };
 
         let stake_table_commit = static_stake_table_commitment(
             &config.known_nodes_with_stake,
