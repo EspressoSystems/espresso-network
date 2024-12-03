@@ -119,7 +119,7 @@ use hotshot::traits::implementations::{
 };
 use hotshot_query_service::metrics::PrometheusMetrics;
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey};
-use service::data_state::MAX_HISTORY;
+use service::data_state::MAX_VOTERS_HISTORY;
 use tide_disco::App;
 use tokio::spawn;
 use url::Url;
@@ -258,9 +258,9 @@ pub async fn run_standalone_service(options: Options) {
             },
         };
 
-        // We want to make sure that we have at least MAX_HISTORY blocks of
+        // We want to make sure that we have at least MAX_VOTERS_HISTORY blocks of
         // history that we are pulling
-        block_height.saturating_sub(MAX_HISTORY as u64 + 1)
+        block_height.saturating_sub(MAX_VOTERS_HISTORY as u64 + 1)
     };
 
     tracing::debug!("creating stream starting at block height: {}", block_height);
