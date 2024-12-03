@@ -99,27 +99,30 @@
 pub mod api;
 pub mod service;
 
+use crate::{
+    api::node_validator::v0::{
+        cdn::{BroadcastRollCallTask, CdnReceiveMessagesTask},
+        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
+        BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender, STATIC_VER_0_1,
+    },
+    service::{client_message::InternalClientMessage, server_message::ServerMessage},
+};
+use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 use clap::Parser;
 use espresso_types::{PubKey, SeqTypes};
-use futures::channel::mpsc::{self, Sender};
+use futures::{
+    channel::mpsc::{self, Sender},
+    StreamExt,
+};
 use hotshot::traits::implementations::{
     CdnMetricsValue, CdnTopic, PushCdnNetwork, WrappedSignatureKey,
 };
 use hotshot_query_service::metrics::PrometheusMetrics;
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey};
+use service::data_state::MAX_HISTORY;
 use tide_disco::App;
 use tokio::spawn;
 use url::Url;
-
-use crate::{
-    api::node_validator::v0::{
-        cdn::{BroadcastRollCallTask, CdnReceiveMessagesTask},
-        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
-        HotshotQueryServiceLeafStreamRetriever, ProcessProduceLeafStreamTask,
-        StateClientMessageSender, STATIC_VER_0_1,
-    },
-    service::{client_message::InternalClientMessage, server_message::ServerMessage},
-};
 
 /// Options represents the configuration options that are available for running
 /// the node validator service via the [run_standalone_service] function.
@@ -240,12 +243,35 @@ pub async fn run_standalone_service(options: Options) {
         },
     }
 
-    let (leaf_sender, leaf_receiver) = mpsc::channel(10);
+    let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
 
-    let _process_consume_leaves = ProcessProduceLeafStreamTask::new(
-        HotshotQueryServiceLeafStreamRetriever::new(options.leaf_stream_base_url().clone()),
-        leaf_sender,
-    );
+    let client = surf_disco::Client::new(options.leaf_stream_base_url().clone());
+
+    // Let's get the current starting block height.
+    let block_height = {
+        let block_height_result = client.get("status/block-height").send().await;
+        let block_height: u64 = match block_height_result {
+            Ok(block_height) => block_height,
+            Err(err) => {
+                tracing::warn!("retrieve block height request failed: {}", err);
+                panic!("error retrieving block height request failed: {}", err);
+            },
+        };
+
+        // We want to make sure that we have at least MAX_HISTORY blocks of
+        // history that we are pulling
+        block_height.saturating_sub(MAX_HISTORY as u64 + 1)
+    };
+
+    tracing::debug!("creating stream starting at block height: {}", block_height);
+
+    let leaf_stream = SurfDiscoAvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
+    let block_stream = SurfDiscoAvailabilityAPIStream::new_block_stream(client, block_height);
+
+    let zipped_stream = leaf_stream.zip(block_stream);
+
+    let _process_consume_leaves =
+        BridgeLeafAndBlockStreamToSenderTask::new(zipped_stream, leaf_and_block_pair_sender);
 
     let node_validator_task_state = match create_node_validator_processing(
         NodeValidatorConfig {
@@ -253,7 +279,7 @@ pub async fn run_standalone_service(options: Options) {
             initial_node_public_base_urls: options.initial_node_public_base_urls().to_vec(),
         },
         internal_client_message_receiver,
-        leaf_receiver,
+        leaf_and_block_pair_receiver,
     )
     .await
     {
