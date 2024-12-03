@@ -935,11 +935,12 @@ impl InternalClientMessageProcessingTask {
                 process_client_message(message, data_state.clone(), client_thread_state.clone())
                     .await
             {
+                // We log this error, but we ignore it so that other connections
+                // are not affected by a single client.
                 tracing::info!(
                     "internal client message processing encountered an error: {}",
                     err,
                 );
-                return;
             }
         }
     }
