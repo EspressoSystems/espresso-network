@@ -385,7 +385,7 @@ mod test {
             SurfDiscoAvailabilityAPIStream, STATIC_VER_0_1,
         },
         service::{
-            client_message::InternalClientMessage, data_state::MAX_HISTORY,
+            client_message::InternalClientMessage, data_state::MAX_VOTERS_HISTORY,
             server_message::ServerMessage,
         },
     };
@@ -440,9 +440,9 @@ mod test {
                 },
             };
 
-            // We want to make sure that we have at least MAX_HISTORY blocks of
+            // We want to make sure that we have at least MAX_VOTERS_HISTORY blocks of
             // history that we are pulling
-            block_height.saturating_sub(MAX_HISTORY as u64 + 1)
+            block_height.saturating_sub(MAX_VOTERS_HISTORY as u64 + 1)
         };
 
         tracing::info!("retrieved initial block height, starting at {block_height}");

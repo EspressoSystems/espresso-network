@@ -34,12 +34,16 @@ use tokio::{spawn, task::JoinHandle};
 /// DataState structure for the various different sample types.
 pub const MAX_HISTORY: usize = 50;
 
+/// MAX_VOTERS_HISTORY represents the last N records that are stored within
+/// the DataState structure for the voters.
+pub const MAX_VOTERS_HISTORY: usize = 100;
+
 /// [DataState] represents the state of the data that is being stored within
 /// the service.
 #[cfg_attr(test, derive(Default))]
 pub struct DataState {
     latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
-    latest_voters: CircularBuffer<MAX_HISTORY, BitVec<u16>>,
+    latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
     stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
     // Do we need any other data at the moment?
     node_identity: Vec<NodeIdentity>,
@@ -48,7 +52,7 @@ pub struct DataState {
 impl DataState {
     pub fn new(
         latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
-        latest_voters: CircularBuffer<MAX_HISTORY, BitVec<u16>>,
+        latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
         stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
     ) -> Self {
         let node_identity = {
