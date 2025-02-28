@@ -21,6 +21,7 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
+use hotshot_types::signature_key::SchnorrPubKey;
 use hotshot_types::{
     data::{QuorumProposal, ViewNumber},
     signature_key::BLSPubKey,
@@ -140,6 +141,7 @@ impl NodeType for MockTypes {
     type Membership = StaticCommittee<Self>;
     type BuilderSignatureKey = BLSPubKey;
     type AuctionResult = TestAuctionResult;
+    type StateSignatureKey = SchnorrPubKey;
 }
 
 #[derive(Clone, Debug, Copy)]

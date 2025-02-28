@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    signature_key::BLSPubKey,
+    signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
@@ -142,6 +142,7 @@ impl NodeType for SeqTypes {
     type Membership = EpochCommittees;
     type BuilderSignatureKey = FeeAccount;
     type AuctionResult = SolverAuctionResults;
+    type StateSignatureKey = SchnorrPubKey;
 }
 
 #[derive(Clone, Default, Debug, Copy)]

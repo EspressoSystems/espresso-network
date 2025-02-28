@@ -22,19 +22,22 @@ mod tests {
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use hotshot::types::SignatureKey;
     use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
+    use hotshot_example_types::auction_results_provider_types::TestAuctionResult;
+    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_types::data::{DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper};
+    use hotshot_types::signature_key::SchnorrPubKey;
+    use hotshot_types::simple_vote::QuorumData2;
+    use hotshot_types::traits::node_implementation::Versions;
+    use hotshot_types::{
+        data::vid_commitment, signature_key::BuilderKey, traits::block_contents::BlockHeader,
+        traits::EncodeBytes, utils::BuilderCommitment,
+    };
+
     use hotshot_example_types::{
-        auction_results_provider_types::TestAuctionResult,
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-        node_types::TestVersions,
         state_types::{TestInstanceState, TestValidatedState},
     };
-    use hotshot_types::{
-        data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
-        signature_key::BuilderKey,
-        simple_vote::QuorumData2,
-        traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
-        utils::BuilderCommitment,
-    };
+
     use marketplace_builder_shared::{
         block::ParentBlockReferences,
         testing::constants::{
@@ -89,6 +92,7 @@ mod tests {
             type Membership = StaticCommittee<Self>;
             type BuilderSignatureKey = BuilderKey;
             type AuctionResult = TestAuctionResult;
+            type StateSignatureKey = SchnorrPubKey;
         }
         // no of test messages to send
         let num_test_messages = 5;
