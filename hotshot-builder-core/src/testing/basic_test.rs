@@ -24,6 +24,7 @@ mod tests {
     use hotshot_example_types::auction_results_provider_types::TestAuctionResult;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::data::{DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper};
+    use hotshot_types::signature_key::SchnorrPubKey;
     use hotshot_types::simple_vote::QuorumData2;
     use hotshot_types::traits::node_implementation::Versions;
     use hotshot_types::{
@@ -92,6 +93,7 @@ mod tests {
             type Membership = StaticCommittee<Self>;
             type BuilderSignatureKey = BuilderKey;
             type AuctionResult = TestAuctionResult;
+            type StateSignatureKey = SchnorrPubKey;
         }
         // no of test messages to send
         let num_test_messages = 5;

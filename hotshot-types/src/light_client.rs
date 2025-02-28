@@ -22,6 +22,8 @@ use tagged_base64::tagged;
 pub type CircuitField = ark_ed_on_bn254::Fq;
 /// Concrete type for light client state
 pub type LightClientState = GenericLightClientState<CircuitField>;
+/// Concreate type for light client state message to sign
+pub type LightClientStateMsg = GenericLightClientStateMsg<CircuitField>;
 /// Concrete type for stake table state
 pub type StakeTableState = GenericStakeTableState<CircuitField>;
 /// Signature scheme
@@ -84,7 +86,9 @@ pub struct GenericLightClientState<F: PrimeField> {
     pub block_comm_root: F,
 }
 
-impl<F: PrimeField> From<GenericLightClientState<F>> for [F; 3] {
+pub type GenericLightClientStateMsg<F> = [F; 3];
+
+impl<F: PrimeField> From<GenericLightClientState<F>> for GenericLightClientStateMsg<F> {
     fn from(state: GenericLightClientState<F>) -> Self {
         [
             F::from(state.view_number as u64),
@@ -94,7 +98,7 @@ impl<F: PrimeField> From<GenericLightClientState<F>> for [F; 3] {
     }
 }
 
-impl<F: PrimeField> From<&GenericLightClientState<F>> for [F; 3] {
+impl<F: PrimeField> From<&GenericLightClientState<F>> for GenericLightClientStateMsg<F> {
     fn from(state: &GenericLightClientState<F>) -> Self {
         [
             F::from(state.view_number as u64),
