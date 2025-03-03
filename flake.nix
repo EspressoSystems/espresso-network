@@ -120,13 +120,6 @@
               types_or = [ "toml" ];
               pass_filenames = false;
             };
-            cargo-clippy = {
-              enable = true;
-              description = "Run clippy";
-              entry = "just clippy";
-              types_or = [ "rust" "toml" ];
-              pass_filenames = false;
-            };
             cargo-lock = {
               enable = true;
               description = "Ensure Cargo.lock is compatible with Cargo.toml";

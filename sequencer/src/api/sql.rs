@@ -66,6 +66,7 @@ impl SequencerDataSource for DataSource {
         }
 
         if opt.lightweight {
+            tracing::warn!("enabling light weight mode..");
             builder = builder.leaf_only();
         }
 

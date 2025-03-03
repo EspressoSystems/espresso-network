@@ -26,6 +26,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
     traits::signature_key::SignatureKey as _,
+    PeerConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -212,6 +213,18 @@ impl From<NodeInfoJf> for StakeTableEntry<BLSPubKey> {
         StakeTableEntry {
             stake_key: value.stake_table_key,
             stake_amount: U256::from(1), // dummy stake amount
+        }
+    }
+}
+
+impl From<NodeInfoJf> for PeerConfig<BLSPubKey> {
+    fn from(value: NodeInfoJf) -> Self {
+        Self {
+            stake_table_entry: StakeTableEntry {
+                stake_key: value.stake_table_key,
+                stake_amount: U256::from(1), // dummy stake amount
+            },
+            state_ver_key: value.state_ver_key,
         }
     }
 }

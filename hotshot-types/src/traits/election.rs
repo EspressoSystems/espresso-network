@@ -11,14 +11,13 @@ use async_trait::async_trait;
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
-use crate::{drb::DrbResult, traits::signature_key::SignatureKey, PeerConfig};
+use crate::{drb::DrbResult, PeerConfig};
 
 #[async_trait]
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
-
     /// Create a committee
     fn new(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
@@ -28,16 +27,10 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     ) -> Self;
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES::SignatureKey>>;
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn da_stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES::SignatureKey>>;
 
     /// Get all participants in the committee for a specific view for a specific epoch
     fn committee_members(
@@ -66,7 +59,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
+    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
 
     /// Get the DA stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
@@ -74,7 +67,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
+    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
 
     /// See if a node has stake in the committee in a specific epoch
     fn has_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<TYPES::Epoch>) -> bool;
@@ -143,13 +136,6 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        None
-    }
-
-    #[allow(clippy::type_complexity)]
-    /// Called after add_epoch_root runs and any callback has been invoked.
-    /// Causes a read lock to be reacquired for this functionality.
-    async fn sync_l1(&self) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
         None
     }
 

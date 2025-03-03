@@ -731,6 +731,13 @@ impl PruneStorage for SqlStorage {
             }
         }
 
+        #[cfg(feature = "embedded-db")]
+        {
+            let mut conn = self.pool().acquire().await?;
+            query("VACUUM").execute(conn.as_mut()).await?;
+            conn.close().await?;
+        }
+
         // If threshold is set, prune data exceeding minimum retention in batches
         // This parameter is needed for SQL storage as there is no direct way to get free space.
         if let Some(threshold) = cfg.pruning_threshold() {
@@ -764,6 +771,13 @@ impl PruneStorage for SqlStorage {
                         tx.commit().await.map_err(|e| QueryError::Error {
                             message: format!("failed to commit {e}"),
                         })?;
+
+                        #[cfg(feature = "embedded-db")]
+                        {
+                            let mut conn = self.pool().acquire().await?;
+                            query("VACUUM").execute(conn.as_mut()).await?;
+                            conn.close().await?;
+                        }
 
                         pruner.pruned_height = Some(height);
 

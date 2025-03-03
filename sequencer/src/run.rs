@@ -199,7 +199,13 @@ where
             if let Some(submit) = modules.submit {
                 http_opt = http_opt.submit(submit);
             }
+            if let Some(status) = modules.status {
+                http_opt = http_opt.status(status);
+            }
 
+            if let Some(catchup) = modules.catchup {
+                http_opt = http_opt.catchup(catchup);
+            }
             if let Some(hotshot_events) = modules.hotshot_events {
                 http_opt = http_opt.hotshot_events(hotshot_events);
             }

@@ -3,8 +3,8 @@
 use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    BlockMerkleTree, FeeMerkleTree, PubKey, SeqTypes,
+    v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
+    BlockMerkleTree, PubKey,
 };
 use futures::{
     channel::oneshot,
@@ -12,22 +12,25 @@ use futures::{
 };
 use hotshot_events_service::events::Error as EventStreamingError;
 use hotshot_query_service::{
-    data_source::ExtensibleDataSource,
+    data_source::{ExtensibleDataSource, MetricsDataSource},
     fetching::provider::QueryServiceProvider,
-    merklized_state::MerklizedStateDataSource,
     status::{self, UpdateStatusData},
     ApiState as AppState, Error,
 };
 use hotshot_types::traits::{
-    metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions,
+    metrics::{Metrics, NoMetrics},
+    network::ConnectedNetwork,
+    node_implementation::Versions,
 };
-use jf_merkle_tree::MerkleTreeScheme;
 use std::sync::Arc;
-use tide_disco::{listener::RateLimitListener, App, Url};
+use tide_disco::{listener::RateLimitListener, method::ReadState, App, Url};
 use vbs::version::StaticVersionType;
 
 use super::{
-    data_source::{provider, NodeStateDataSource, Provider, SequencerDataSource},
+    data_source::{
+        provider, CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, Provider,
+        SequencerDataSource, StateSignatureDataSource, SubmitDataSource,
+    },
     endpoints, fs, sql,
     update::ApiEventConsumer,
     ApiState, StorageState,
@@ -36,15 +39,17 @@ use crate::{
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     persistence,
-    state::{update_state_storage_loop, SequencerStateDataSource, SequencerStateUpdate},
+    state::update_state_storage_loop,
     SequencerApiVersion,
 };
 
 #[derive(Clone, Debug)]
 pub struct Options {
     pub http: Http,
-    pub query: Query,
+    pub query: Option<Query>,
     pub submit: Option<Submit>,
+    pub status: Option<Status>,
+    pub catchup: Option<Catchup>,
     pub config: Option<Config>,
     pub hotshot_events: Option<HotshotEvents>,
     pub explorer: Option<Explorer>,
@@ -56,8 +61,10 @@ impl From<Http> for Options {
     fn from(http: Http) -> Self {
         Self {
             http,
-            query: Default::default(),
+            query: None,
             submit: None,
+            status: None,
+            catchup: None,
             config: None,
             hotshot_events: None,
             explorer: None,
@@ -75,14 +82,14 @@ impl Options {
 
     /// Add a query API module backed by a Postgres database.
     pub fn query_sql(mut self, query: Query, storage: persistence::sql::Options) -> Self {
-        self.query = query;
+        self.query = Some(query);
         self.storage_sql = Some(storage);
         self
     }
 
     /// Add a query API module backed by the file system.
     pub fn query_fs(mut self, query: Query, storage: persistence::fs::Options) -> Self {
-        self.query = query;
+        self.query = Some(query);
         self.storage_fs = Some(storage);
         self
     }
@@ -90,6 +97,18 @@ impl Options {
     /// Add a submit API module.
     pub fn submit(mut self, opt: Submit) -> Self {
         self.submit = Some(opt);
+        self
+    }
+
+    /// Add a status API module.
+    pub fn status(mut self, opt: Status) -> Self {
+        self.status = Some(opt);
+        self
+    }
+
+    /// Add a catchup API module.
+    pub fn catchup(mut self, opt: Catchup) -> Self {
+        self.catchup = Some(opt);
         self
     }
 
@@ -109,6 +128,11 @@ impl Options {
     pub fn explorer(mut self, opt: Explorer) -> Self {
         self.explorer = Some(opt);
         self
+    }
+
+    /// Whether these options will run the query API.
+    pub fn has_query_module(&self) -> bool {
+        self.query.is_some() && (self.storage_fs.is_some() || self.storage_sql.is_some())
     }
 
     /// Start the server.
@@ -139,31 +163,81 @@ impl Options {
         });
         let mut tasks = TaskList::default();
 
-        let query_opt = self.query.clone();
         // The server state type depends on whether we are running a query or status API or not, so
         // we handle the two cases differently.
         let (metrics, consumer): (Box<dyn Metrics>, Box<dyn EventConsumer>) =
-            if let Some(opt) = self.storage_sql.take() {
-                self.init_with_query_module_sql(
-                    query_opt,
-                    opt,
-                    state,
-                    &mut tasks,
-                    SequencerApiVersion::instance(),
-                )
-                .await?
-            } else if let Some(opt) = self.storage_fs.take() {
-                self.init_with_query_module_fs(
-                    query_opt,
-                    opt,
-                    state,
-                    &mut tasks,
-                    SequencerApiVersion::instance(),
-                )
-                .await?
+            if let Some(query_opt) = self.query.take() {
+                if let Some(opt) = self.storage_sql.take() {
+                    self.init_with_query_module_sql(
+                        query_opt,
+                        opt,
+                        state,
+                        &mut tasks,
+                        SequencerApiVersion::instance(),
+                    )
+                    .await?
+                } else if let Some(opt) = self.storage_fs.take() {
+                    self.init_with_query_module_fs(
+                        query_opt,
+                        opt,
+                        state,
+                        &mut tasks,
+                        SequencerApiVersion::instance(),
+                    )
+                    .await?
+                } else {
+                    bail!("query module requested but not storage provided");
+                }
+            } else if self.status.is_some() {
+                // If a status API is requested but no availability API, we use the
+                // `MetricsDataSource`, which allows us to run the status API with no persistent
+                // storage.
+                let ds = MetricsDataSource::default();
+                let metrics = ds.populate_metrics();
+                let mut app = App::<_, Error>::with_state(AppState::from(
+                    ExtensibleDataSource::new(ds, state.clone()),
+                ));
+
+                // Initialize status API.
+                let status_api =
+                    status::define_api(&Default::default(), SequencerApiVersion::instance())?;
+                app.register_module("status", status_api)?;
+
+                self.init_hotshot_modules(&mut app)?;
+
+                if self.hotshot_events.is_some() {
+                    self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
+                }
+
+                tasks.spawn(
+                    "API server",
+                    self.listen(self.http.port, app, SequencerApiVersion::instance()),
+                );
+
+                (metrics, Box::new(NullEventConsumer))
             } else {
-                bail!("query module is required for all nodes, but no storage options provided");
+                // If no status or availability API is requested, we don't need metrics or a query
+                // service data source. The only app state is the HotShot handle, which we use to
+                // submit transactions.
+                //
+                // If we have no availability API, we cannot load a saved leaf from local storage,
+                // so we better have been provided the leaf ahead of time if we want it at all.
+                let mut app = App::<_, Error>::with_state(AppState::from(state.clone()));
+
+                self.init_hotshot_modules(&mut app)?;
+
+                if self.hotshot_events.is_some() {
+                    self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
+                }
+
+                tasks.spawn(
+                    "API server",
+                    self.listen(self.http.port, app, SequencerApiVersion::instance()),
+                );
+
+                (Box::new(NoMetrics), Box::new(NullEventConsumer))
             };
+
         let ctx = init_context(metrics, consumer).await?;
         send_ctx
             .send(super::ConsensusState::from(&ctx))
@@ -253,25 +327,38 @@ impl Options {
         Ok((metrics, Box::new(ApiEventConsumer::from(ds))))
     }
 
-    async fn init_state_and_event_modules<N, D, P, V: Versions + 'static>(
-        &self,
-        app: &mut App<AppState<StorageState<N, P, D, V>>, Error>,
+    async fn init_with_query_module_sql<N, P, V: Versions + 'static>(
+        self,
+        query_opt: Query,
+        mod_opt: persistence::sql::Options,
         state: ApiState<N, P, V>,
         tasks: &mut TaskList,
-        ds: Arc<StorageState<N, P, D, V>>,
-    ) -> anyhow::Result<()>
+        bind_version: SequencerApiVersion,
+    ) -> anyhow::Result<(Box<dyn Metrics>, Box<dyn EventConsumer>)>
     where
-        P: SequencerPersistence,
-        D: SequencerStateDataSource
-            + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-            + MerklizedStateDataSource<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
-            + Send
-            + Sync
-            + 'static,
-
-        for<'a> D::Transaction<'a>: SequencerStateUpdate,
         N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
     {
+        let mut provider = Provider::default();
+
+        // Use the database itself as a fetching provider: sometimes we can fetch data that is
+        // missing from the query service from ephemeral consensus storage.
+        provider = provider.with_provider(mod_opt.clone().create().await?);
+        // If that fails, fetch missing data from peers.
+        for peer in query_opt.peers {
+            tracing::info!("will fetch missing data from {peer}");
+            provider = provider.with_provider(QueryServiceProvider::new(peer, bind_version));
+        }
+
+        let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
+        let (metrics, ds, mut app) = self
+            .init_app_modules(ds, state.clone(), bind_version)
+            .await?;
+
+        if self.explorer.is_some() {
+            app.register_module("explorer", endpoints::explorer()?)?;
+        }
+
         // Initialize merklized state module for block merkle tree
         app.register_module(
             "block-state",
@@ -287,59 +374,61 @@ impl Options {
             let state = state.clone();
             async move { state.node_state().await.clone() }
         };
-
         tasks.spawn(
             "merklized state storage update loop",
             update_state_storage_loop(ds.clone(), get_node_state),
         );
-
         if self.hotshot_events.is_some() {
             self.init_and_spawn_hotshot_event_streaming_module(state, tasks)?;
         }
-
-        Ok(())
-    }
-
-    async fn init_with_query_module_sql<N, P, V: Versions + 'static>(
-        self,
-        query_opt: Query,
-        mod_opt: persistence::sql::Options,
-        state: ApiState<N, P, V>,
-        tasks: &mut TaskList,
-        bind_version: SequencerApiVersion,
-    ) -> anyhow::Result<(Box<dyn Metrics>, Box<dyn EventConsumer>)>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
-        let mut provider = Provider::default();
-        // Use the database itself as a fetching provider: sometimes we can fetch data that is
-        // missing from the query service from ephemeral consensus storage.
-        provider = provider.with_provider(mod_opt.clone().create().await?);
-        // If that fails, fetch missing data from peers.
-        for peer in query_opt.peers.clone() {
-            tracing::info!("will fetch missing data from {peer}");
-            provider = provider.with_provider(QueryServiceProvider::new(peer, bind_version));
-        }
-        let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
-
-        let (metrics, ds, mut app) = self
-            .init_app_modules(ds, state.clone(), bind_version)
-            .await?;
-
-        if self.explorer.is_some() {
-            app.register_module("explorer", endpoints::explorer()?)?;
-        };
-
-        self.init_state_and_event_modules(&mut app, state.clone(), tasks, ds.clone())
-            .await?;
 
         tasks.spawn(
             "API server",
             self.listen(self.http.port, app, SequencerApiVersion::instance()),
         );
-
         Ok((metrics, Box::new(ApiEventConsumer::from(ds))))
+    }
+
+    /// Initialize the modules for interacting with HotShot.
+    ///
+    /// This function adds the `submit`, `state`, and `state_signature` API modules to the given
+    /// app. These modules only require a HotShot handle as state, and thus they work with any data
+    /// source, so initialization is the same no matter what mode the service is running in.
+    fn init_hotshot_modules<N, P, S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
+    where
+        S: 'static + Send + Sync + ReadState,
+        P: SequencerPersistence,
+        S::State: Send
+            + Sync
+            + SubmitDataSource<N, P>
+            + StateSignatureDataSource<N>
+            + NodeStateDataSource
+            + CatchupDataSource
+            + HotShotConfigDataSource,
+        N: ConnectedNetwork<PubKey>,
+    {
+        let bind_version = SequencerApiVersion::instance();
+        // Initialize submit API
+        if self.submit.is_some() {
+            let submit_api = endpoints::submit::<_, _, _, SequencerApiVersion>()?;
+            app.register_module("submit", submit_api)?;
+        }
+
+        // Initialize state API.
+        if self.catchup.is_some() {
+            tracing::info!("initializing state API");
+            let catchup_api = endpoints::catchup(bind_version)?;
+            app.register_module("catchup", catchup_api)?;
+        }
+
+        let state_signature_api = endpoints::state_signature(bind_version)?;
+        app.register_module("state-signature", state_signature_api)?;
+
+        if self.config.is_some() {
+            app.register_module("config", endpoints::config(bind_version)?)?;
+        }
+
+        Ok(())
     }
 
     // Enable the events streaming api module

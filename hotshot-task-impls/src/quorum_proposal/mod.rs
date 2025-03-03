@@ -15,6 +15,7 @@ use hotshot_task::{
     dependency_task::DependencyTask,
     task::TaskState,
 };
+use hotshot_types::StakeTableEntries;
 use hotshot_types::{
     consensus::OuterConsensus,
     message::UpgradeLock,
@@ -479,7 +480,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 
                 certificate
                     .is_valid_cert(
-                        membership_stake_table,
+                        StakeTableEntries::<TYPES>::from(membership_stake_table).0,
                         membership_success_threshold,
                         &self.upgrade_lock,
                     )
@@ -563,7 +564,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 drop(membership_reader);
 
                 qc.is_valid_cert(
-                    membership_stake_table,
+                    StakeTableEntries::<TYPES>::from(membership_stake_table).0,
                     membership_success_threshold,
                     &self.upgrade_lock,
                 )

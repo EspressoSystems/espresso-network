@@ -4,7 +4,11 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{cmp::max, collections::BTreeMap, num::NonZeroU64};
+use std::{
+    cmp::max,
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
+};
 
 use hotshot_types::{
     drb::{
@@ -28,77 +32,86 @@ pub struct Committee<T: NodeType> {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
-    eligible_leaders: Vec<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    eligible_leaders: Vec<PeerConfig<T::SignatureKey>>,
 
     /// The nodes on the committee and their stake
-    stake_table: Vec<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    stake_table: Vec<PeerConfig<T::SignatureKey>>,
 
     /// The nodes on the committee and their stake
-    da_stake_table: Vec<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    da_stake_table: Vec<PeerConfig<T::SignatureKey>>,
 
     /// Stake tables randomized with the DRB, used (only) for leader election
     randomized_committee: RandomizedCommittee<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
 
     /// The nodes on the committee and their stake, indexed by public key
-    indexed_stake_table:
-        BTreeMap<T::SignatureKey, <T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T::SignatureKey>>,
 
     /// The nodes on the committee and their stake, indexed by public key
-    indexed_da_stake_table:
-        BTreeMap<T::SignatureKey, <T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T::SignatureKey>>,
 }
 
 impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     type Error = hotshot_utils::anytrace::Error;
-
     /// Create a new election
     fn new(
         committee_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
         da_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
     ) -> Self {
         // For each eligible leader, get the stake table entry
-        let eligible_leaders: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> =
+        let eligible_leaders: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> =
             committee_members
                 .iter()
-                .map(|member| member.stake_table_entry.clone())
-                .filter(|entry| entry.stake() > U256::zero())
+                .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+                .cloned()
                 .collect();
 
         // For each member, get the stake table entry
-        let members: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> =
-            committee_members
-                .iter()
-                .map(|member| member.stake_table_entry.clone())
-                .filter(|entry| entry.stake() > U256::zero())
-                .collect();
+        let members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> = committee_members
+            .iter()
+            .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+            .cloned()
+            .collect();
 
         // For each member, get the stake table entry
-        let da_members: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> = da_members
+        let da_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> = da_members
             .iter()
-            .map(|member| member.stake_table_entry.clone())
-            .filter(|entry| entry.stake() > U256::zero())
+            .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+            .cloned()
             .collect();
 
         // Index the stake table by public key
-        let indexed_stake_table: BTreeMap<
-            TYPES::SignatureKey,
-            <TYPES::SignatureKey as SignatureKey>::StakeTableEntry,
-        > = members
-            .iter()
-            .map(|entry| (TYPES::SignatureKey::public_key(entry), entry.clone()))
-            .collect();
+        let indexed_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES::SignatureKey>> =
+            members
+                .iter()
+                .map(|config| {
+                    (
+                        TYPES::SignatureKey::public_key(&config.stake_table_entry),
+                        config.clone(),
+                    )
+                })
+                .collect();
 
         // Index the stake table by public key
-        let indexed_da_stake_table: BTreeMap<
-            TYPES::SignatureKey,
-            <TYPES::SignatureKey as SignatureKey>::StakeTableEntry,
-        > = da_members
-            .iter()
-            .map(|entry| (TYPES::SignatureKey::public_key(entry), entry.clone()))
-            .collect();
+        let indexed_da_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES::SignatureKey>> =
+            da_members
+                .iter()
+                .map(|config| {
+                    (
+                        TYPES::SignatureKey::public_key(&config.stake_table_entry),
+                        config.clone(),
+                    )
+                })
+                .collect();
 
         // We use a constant value of `[0u8; 32]` for the drb, since this is just meant to be used in tests
-        let randomized_committee = generate_stake_cdf(eligible_leaders.clone(), [0u8; 32]);
+        let randomized_committee = generate_stake_cdf(
+            eligible_leaders
+                .clone()
+                .into_iter()
+                .map(|leader| leader.stake_table_entry)
+                .collect::<Vec<_>>(),
+            [0u8; 32],
+        );
 
         Self {
             eligible_leaders,
@@ -114,7 +127,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     fn stake_table(
         &self,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry> {
+    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
         self.stake_table.clone()
     }
 
@@ -122,7 +135,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     fn da_stake_table(
         &self,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry> {
+    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
         self.da_stake_table.clone()
     }
 
@@ -131,10 +144,10 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         &self,
         _view_number: <TYPES as NodeType>::View,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> std::collections::BTreeSet<<TYPES as NodeType>::SignatureKey> {
+    ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
         self.stake_table
             .iter()
-            .map(TYPES::SignatureKey::public_key)
+            .map(|x| TYPES::SignatureKey::public_key(&x.stake_table_entry))
             .collect()
     }
 
@@ -143,10 +156,10 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         &self,
         _view_number: <TYPES as NodeType>::View,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> std::collections::BTreeSet<<TYPES as NodeType>::SignatureKey> {
+    ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
         self.da_stake_table
             .iter()
-            .map(TYPES::SignatureKey::public_key)
+            .map(|x| TYPES::SignatureKey::public_key(&x.stake_table_entry))
             .collect()
     }
 
@@ -155,10 +168,10 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         &self,
         _view_number: <TYPES as NodeType>::View,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> std::collections::BTreeSet<<TYPES as NodeType>::SignatureKey> {
+    ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
         self.eligible_leaders
             .iter()
-            .map(TYPES::SignatureKey::public_key)
+            .map(|x| TYPES::SignatureKey::public_key(&x.stake_table_entry))
             .collect()
     }
 
@@ -167,7 +180,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
+    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
         // Only return the stake if it is above zero
         self.indexed_stake_table.get(pub_key).cloned()
     }
@@ -177,7 +190,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
+    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
         // Only return the stake if it is above zero
         self.indexed_da_stake_table.get(pub_key).cloned()
     }
@@ -190,7 +203,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     ) -> bool {
         self.indexed_stake_table
             .get(pub_key)
-            .is_some_and(|x| x.stake() > U256::zero())
+            .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
     }
 
     /// Check if a node has stake in the committee
@@ -201,7 +214,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     ) -> bool {
         self.indexed_da_stake_table
             .get(pub_key)
-            .is_some_and(|x| x.stake() > U256::zero())
+            .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
     }
 
     // /// Get the network topic for the committee

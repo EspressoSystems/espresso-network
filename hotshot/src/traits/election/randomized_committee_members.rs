@@ -32,21 +32,19 @@ pub struct RandomizedCommitteeMembers<T: NodeType, C: QuorumFilterConfig> {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
-    eligible_leaders: Vec<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    eligible_leaders: Vec<PeerConfig<T::SignatureKey>>,
 
     /// The nodes on the committee and their stake
-    stake_table: Vec<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    stake_table: Vec<PeerConfig<T::SignatureKey>>,
 
     /// The nodes on the da committee and their stake
-    da_stake_table: Vec<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    da_stake_table: Vec<PeerConfig<T::SignatureKey>>,
 
     /// The nodes on the committee and their stake, indexed by public key
-    indexed_stake_table:
-        BTreeMap<T::SignatureKey, <T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T::SignatureKey>>,
 
     /// The nodes on the da committee and their stake, indexed by public key
-    indexed_da_stake_table:
-        BTreeMap<T::SignatureKey, <T::SignatureKey as SignatureKey>::StakeTableEntry>,
+    indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T::SignatureKey>>,
 
     /// Phantom
     _pd: PhantomData<C>,
@@ -98,51 +96,52 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
     for RandomizedCommitteeMembers<TYPES, CONFIG>
 {
     type Error = hotshot_utils::anytrace::Error;
-
     /// Create a new election
     fn new(
         committee_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
         da_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
     ) -> Self {
         // For each eligible leader, get the stake table entry
-        let eligible_leaders: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> =
-            committee_members
-                .iter()
-                .map(|member| member.stake_table_entry.clone())
-                .filter(|entry| entry.stake() > U256::zero())
-                .collect();
+        let eligible_leaders = committee_members
+            .iter()
+            .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+            .cloned()
+            .collect();
 
         // For each member, get the stake table entry
-        let members: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> =
-            committee_members
-                .iter()
-                .map(|member| member.stake_table_entry.clone())
-                .filter(|entry| entry.stake() > U256::zero())
-                .collect();
+        let members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> = committee_members
+            .iter()
+            .filter(|&entry| entry.stake_table_entry.stake() > U256::zero())
+            .cloned()
+            .collect();
 
         // For each da member, get the stake table entry
-        let da_members: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> = da_members
+        let da_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> = da_members
             .iter()
-            .map(|member| member.stake_table_entry.clone())
-            .filter(|entry| entry.stake() > U256::zero())
+            .filter(|&entry| entry.stake_table_entry.stake() > U256::zero())
+            .cloned()
             .collect();
 
         // Index the stake table by public key
-        let indexed_stake_table: BTreeMap<
-            TYPES::SignatureKey,
-            <TYPES::SignatureKey as SignatureKey>::StakeTableEntry,
-        > = members
+        let indexed_stake_table = members
             .iter()
-            .map(|entry| (TYPES::SignatureKey::public_key(entry), entry.clone()))
+            .map(|entry| {
+                (
+                    TYPES::SignatureKey::public_key(&entry.stake_table_entry),
+                    entry.clone(),
+                )
+            })
             .collect();
 
         // Index the stake table by public key
-        let indexed_da_stake_table: BTreeMap<
-            TYPES::SignatureKey,
-            <TYPES::SignatureKey as SignatureKey>::StakeTableEntry,
-        > = da_members
+        let indexed_da_stake_table = da_members
             .iter()
-            .map(|entry| (TYPES::SignatureKey::public_key(entry), entry.clone()))
+            .map(|entry| {
+                (
+                    TYPES::SignatureKey::public_key(&entry.stake_table_entry),
+                    entry.clone(),
+                )
+            })
             .collect();
 
         let s = Self {
@@ -163,7 +162,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
     fn stake_table(
         &self,
         epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry> {
+    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
         if let Some(epoch) = epoch {
             let filter = self.make_quorum_filter(epoch);
             //self.stake_table.clone()s
@@ -182,7 +181,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
     fn da_stake_table(
         &self,
         epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry> {
+    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
         if let Some(epoch) = epoch {
             let filter = self.make_da_quorum_filter(epoch);
             //self.stake_table.clone()s
@@ -209,12 +208,12 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| TYPES::SignatureKey::public_key(v))
+                .map(|(_, v)| TYPES::SignatureKey::public_key(&v.stake_table_entry))
                 .collect()
         } else {
             self.stake_table
                 .iter()
-                .map(TYPES::SignatureKey::public_key)
+                .map(|config| TYPES::SignatureKey::public_key(&config.stake_table_entry))
                 .collect()
         }
     }
@@ -231,12 +230,12 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| TYPES::SignatureKey::public_key(v))
+                .map(|(_, v)| TYPES::SignatureKey::public_key(&v.stake_table_entry))
                 .collect()
         } else {
             self.da_stake_table
                 .iter()
-                .map(TYPES::SignatureKey::public_key)
+                .map(|config| TYPES::SignatureKey::public_key(&config.stake_table_entry))
                 .collect()
         }
     }
@@ -255,7 +254,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
         epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
+    ) -> Option<PeerConfig<<TYPES as NodeType>::SignatureKey>> {
         if let Some(epoch) = epoch {
             let filter = self.make_quorum_filter(epoch);
             let actual_members: BTreeSet<_> = self
@@ -263,7 +262,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| TYPES::SignatureKey::public_key(v))
+                .map(|(_, v)| TYPES::SignatureKey::public_key(&v.stake_table_entry))
                 .collect();
 
             if actual_members.contains(pub_key) {
@@ -283,7 +282,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
         epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry> {
+    ) -> Option<PeerConfig<<TYPES as NodeType>::SignatureKey>> {
         if let Some(epoch) = epoch {
             let filter = self.make_da_quorum_filter(epoch);
             let actual_members: BTreeSet<_> = self
@@ -291,7 +290,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| TYPES::SignatureKey::public_key(v))
+                .map(|(_, v)| TYPES::SignatureKey::public_key(&v.stake_table_entry))
                 .collect();
 
             if actual_members.contains(pub_key) {
@@ -319,13 +318,13 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| TYPES::SignatureKey::public_key(v))
+                .map(|(_, v)| TYPES::SignatureKey::public_key(&v.stake_table_entry))
                 .collect();
 
             if actual_members.contains(pub_key) {
                 self.indexed_stake_table
                     .get(pub_key)
-                    .is_some_and(|x| x.stake() > U256::zero())
+                    .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
             } else {
                 // Skip members which aren't included based on the quorum filter
                 false
@@ -333,7 +332,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         } else {
             self.indexed_stake_table
                 .get(pub_key)
-                .is_some_and(|x| x.stake() > U256::zero())
+                .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
         }
     }
 
@@ -350,13 +349,13 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .iter()
                 .enumerate()
                 .filter(|(idx, _)| filter.contains(idx))
-                .map(|(_, v)| TYPES::SignatureKey::public_key(v))
+                .map(|(_, v)| TYPES::SignatureKey::public_key(&v.stake_table_entry))
                 .collect();
 
             if actual_members.contains(pub_key) {
                 self.indexed_da_stake_table
                     .get(pub_key)
-                    .is_some_and(|x| x.stake() > U256::zero())
+                    .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
             } else {
                 // Skip members which aren't included based on the quorum filter
                 false
@@ -364,7 +363,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         } else {
             self.indexed_da_stake_table
                 .get(pub_key)
-                .is_some_and(|x| x.stake() > U256::zero())
+                .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
         }
     }
 
@@ -392,7 +391,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
 
             let res = leader_vec[index].clone();
 
-            Ok(TYPES::SignatureKey::public_key(&res))
+            Ok(TYPES::SignatureKey::public_key(&res.stake_table_entry))
         } else {
             let mut rng: StdRng = rand::SeedableRng::seed_from_u64(*view_number);
 
@@ -402,7 +401,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
 
             let res = self.eligible_leaders[index].clone();
 
-            Ok(TYPES::SignatureKey::public_key(&res))
+            Ok(TYPES::SignatureKey::public_key(&res.stake_table_entry))
         }
     }
 

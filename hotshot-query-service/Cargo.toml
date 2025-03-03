@@ -101,7 +101,7 @@ vbs = "0.1"
 vec1 = "1.12"
 
 # Dependencies enabled by feature "file-system-data-source".
-atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.4", optional = true }
+atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5", optional = true }
 
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { version = "0.7", optional = true }

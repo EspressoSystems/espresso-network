@@ -37,7 +37,7 @@ use hotshot_types::{
     },
     utils::{option_epoch_from_block_number, View, ViewInner},
     vote::{Certificate, HasViewNumber, Vote},
-    ValidatorConfig,
+    StakeTableEntries, ValidatorConfig,
 };
 use primitive_types::U256;
 use serde::Serialize;
@@ -229,7 +229,7 @@ pub async fn build_assembled_sig<
     let stake_table = CERT::stake_table(&*membership_reader, epoch);
     let real_qc_pp: <TYPES::SignatureKey as SignatureKey>::QcParams =
         <TYPES::SignatureKey as SignatureKey>::public_parameter(
-            stake_table.clone(),
+            StakeTableEntries::<TYPES>::from(stake_table.clone()).0,
             U256::from(CERT::threshold(&*membership_reader, epoch)),
         );
     drop(membership_reader);

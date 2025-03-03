@@ -1598,7 +1598,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "atomic_store"
 version = "0.1.3"
-source = "git+https://github.com/EspressoSystems/atomicstore.git?tag=0.1.4#64c092596e889b9f376fd4bae8974404c43cd12c"
+source = "git+https://github.com/EspressoSystems/atomicstore.git?tag=0.1.5#6d2bbaf0bb3b5cd49e9907e60738bccbd4b8c374"
 dependencies = [
  "ark-serialize 0.4.2",
  "bincode",

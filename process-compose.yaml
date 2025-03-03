@@ -224,7 +224,7 @@ processes:
       restart: exit_on_failure
 
   sequencer2:
-    command: sequencer -- http -- query -- storage-fs
+    command: sequencer -- http
     environment:
       - ESPRESSO_SEQUENCER_API_PORT=$ESPRESSO_SEQUENCER2_API_PORT
       - ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_SEQUENCER_LIBP2P_PORT_2

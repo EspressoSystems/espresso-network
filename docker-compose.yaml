@@ -344,7 +344,7 @@ services:
     image: ghcr.io/espressosystems/espresso-sequencer/sequencer:main
     ports:
       - "$ESPRESSO_SEQUENCER2_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
-    command: sequencer -- http -- query -- storage-fs
+    command: sequencer -- http
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
       - ESPRESSO_SEQUENCER_GENESIS_FILE

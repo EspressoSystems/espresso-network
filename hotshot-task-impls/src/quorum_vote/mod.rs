@@ -15,6 +15,7 @@ use hotshot_task::{
     dependency_task::{DependencyTask, HandleDepOutput},
     task::TaskState,
 };
+use hotshot_types::StakeTableEntries;
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
     data::{Leaf2, QuorumProposalWrapper},
@@ -553,7 +554,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 // Validate the DAC.
                 cert.is_valid_cert(
-                    membership_da_stake_table,
+                    StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
                     membership_da_success_threshold,
                     &self.upgrade_lock,
                 )
