@@ -292,12 +292,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                             &upgrade_lock,
                         )
                         .await;
-                        if let Some(Some(vid_share)) = consensus
+                        if let Some(vid_share) = consensus
                             .read()
                             .await
                             .vid_shares()
                             .get(&view_number)
-                            .map(|shares| shares.get(&public_key).cloned())
+                            .and_then(|key_map| key_map.get(&public_key))
+                            .and_then(|epoch_map| {
+                                epoch_map
+                                    .get(&epoch_number)
+                                    .or_else(|| epoch_map.get(&epoch_number.map(|e| e + 1)))
+                            })
                         {
                             broadcast_event(
                                 Arc::new(HotShotEvent::VidShareRecv(

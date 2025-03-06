@@ -163,9 +163,11 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
         key: &TYPES::SignatureKey,
     ) -> Option<Proposal<TYPES, VidDisperseShare<TYPES>>> {
         let consensus_reader = self.consensus.read().await;
-        if let Some(view) = consensus_reader.vid_shares().get(&view) {
-            if let Some(share) = view.get(key) {
-                return Some(share.clone());
+        if let Some(key_map) = consensus_reader.vid_shares().get(&view) {
+            if let Some(epoch_map) = key_map.get(key) {
+                if let Some(share) = epoch_map.get(&target_epoch) {
+                    return Some(share.clone());
+                }
             }
         }
 
@@ -200,7 +202,8 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
             .await
             .vid_shares()
             .get(&view)?
-            .get(key)
+            .get(key)?
+            .get(&target_epoch)
             .cloned();
     }
 

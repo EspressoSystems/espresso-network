@@ -6,19 +6,19 @@
 
 //! Provides the core consensus types
 
+use async_lock::{RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
+use committable::{Commitment, Committable};
+use hotshot_utils::anytrace::*;
 use std::{
     collections::{BTreeMap, HashMap},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
-
-use async_lock::{RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
-use committable::{Commitment, Committable};
-use hotshot_utils::anytrace::*;
 use tracing::instrument;
 use vec1::Vec1;
 
+use crate::simple_vote::HasEpoch;
 pub use crate::utils::{View, ViewInner};
 use crate::{
     data::{Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseShare},
@@ -44,10 +44,13 @@ use crate::{
 /// A type alias for `HashMap<Commitment<T>, T>`
 pub type CommitmentMap<T> = HashMap<Commitment<T>, T>;
 
-/// A type alias for `BTreeMap<T::Time, HashMap<T::SignatureKey, Proposal<T, VidDisperseShare<T>>>>`
+/// A type alias for `BTreeMap<T::Time, HashMap<T::SignatureKey, BTreeMap<T::Epoch, Proposal<T, VidDisperseShare<T>>>>>`
 pub type VidShares<TYPES> = BTreeMap<
     <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare<TYPES>>>,
+    HashMap<
+        <TYPES as NodeType>::SignatureKey,
+        BTreeMap<Option<<TYPES as NodeType>::Epoch>, Proposal<TYPES, VidDisperseShare<TYPES>>>,
+    >,
 >;
 
 /// Type alias for consensus state wrapped in a lock.
@@ -533,6 +536,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         public_key: &TYPES::SignatureKey,
     ) -> Option<LeafInfo<TYPES>> {
         let parent_view_number = leaf.justify_qc().view_number();
+        let parent_epoch = leaf.justify_qc().epoch();
         let parent_leaf = self
             .saved_leaves
             .get(&leaf.justify_qc().data().leaf_commit)?;
@@ -543,7 +547,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let parent_vid = self
             .vid_shares()
             .get(&parent_view_number)
-            .and_then(|inner_map| inner_map.get(public_key).cloned())
+            .and_then(|key_map| key_map.get(public_key).cloned())
+            .and_then(|epoch_map| {
+                epoch_map
+                    .get(&parent_epoch)
+                    .or_else(|| epoch_map.get(&parent_epoch.map(|e| e + 1)))
+                    .cloned()
+            })
             .map(|prop| prop.data);
 
         Some(LeafInfo {
@@ -801,7 +811,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.vid_shares
             .entry(view_number)
             .or_default()
-            .insert(disperse.data.recipient_key().clone(), disperse);
+            .entry(disperse.data.recipient_key().clone())
+            .or_default()
+            .insert(disperse.data.target_epoch(), disperse);
     }
 
     /// Add a new entry to the da_certs map.

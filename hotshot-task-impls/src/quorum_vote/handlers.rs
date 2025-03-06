@@ -387,6 +387,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             &task_state.public_key,
             version >= V::Epochs::VERSION,
             &task_state.membership,
+            task_state.epoch_height,
         )
         .await
     };

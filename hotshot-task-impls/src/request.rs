@@ -375,7 +375,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         let maybe_vid_share = consensus_reader
             .vid_shares()
             .get(view)
-            .and_then(|shares| shares.get(public_key));
+            .and_then(|key_map| key_map.get(public_key))
+            .and_then(|epoch_map| epoch_map.first_key_value())
+            .map(|(_, vid_share)| vid_share.clone());
         let cancel = shutdown_flag.load(Ordering::Relaxed)
             || maybe_vid_share.is_some()
             || consensus_reader.cur_view() > *view;

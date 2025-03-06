@@ -248,6 +248,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             epoch_upgrade_block_height: handle.hotshot.config.epoch_start_block,
             staged_epoch_upgrade_certificate: None,
             consensus_metrics,
+            timeout: handle.hotshot.config.next_view_timeout,
         }
     }
 }
