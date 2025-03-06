@@ -11,53 +11,56 @@ import { EdOnBN254 } from "../libraries/EdOnBn254.sol";
 /// @dev Stake table contract should store a reference to the `LightClient.sol` to query
 /// "epoch-related" info
 abstract contract AbstractStakeTable {
-    /// @notice Supported stake type, either using native token or re-staked using ETH
-    enum StakeType {
-        Native,
-        Restake
-    }
+    // === Events ===
 
-    /// @notice Get the total number of stakers, uniquely identified by their `blsVK`
-    uint32 public totalKeys;
-    /// @notice Get the total stake of the registered keys in the voting stake table
-    /// (LastEpochStart)
-    uint256 public totalVotingStake;
-
-    /// @notice Signals a registration of a BLS public key.
-    /// @param account the address of the validator
-    /// @param registerEpoch epoch when the registration becomes effective.
-    /// @param amountDeposited amount deposited when registering the new node.
-    event Registered(address account, uint64 registerEpoch, uint256 amountDeposited);
-
-    /// @notice Signals an exit request has been granted.
-    /// @param account the address of the validator
-    /// @param exitEpoch epoch when the user will be allowed to withdraw its funds.
-    event Exit(address account, uint64 exitEpoch);
-
-    /// @notice Signals a deposit to a BLS public key.
-    /// @param account the address of the validator
-    /// @param amount amount of the deposit
-    event Deposit(address account, uint256 amount);
-
-    /// @notice Signals a consensus key update for a validator
-    /// @param account the address of the validator
-    /// @param newBlsVK the new BLS verification key
-    /// @param newSchnorrVK the new Schnorr verification key
-    event UpdatedConsensusKeys(
-        address account, BN254.G2Point newBlsVK, EdOnBN254.EdOnBN254Point newSchnorrVK
+    /// @notice Signals a registration of a new validator.
+    ///
+    /// Signals to the confirmation layer that a new validator is available for
+    /// delegations. The confirmation layer needs to to use this event to keep
+    /// track of the validator's keys for the stake table.
+    event ValidatorRegistered(
+        address account, BN254.G2Point blsVk, EdOnBN254.EdOnBN254Point schnorrVk, uint16 commission
     );
 
-    /// @notice Signals the min stake amount has been updated
-    /// @param minStakeAmount the new min stake amount
-    event MinStakeAmountUpdated(uint256 minStakeAmount);
+    /// @notice Validator initiated exit from stake table
+    ///
+    /// All funds delegated to this validator will be undelegated and the
+    /// validator will be removed from the active stake table.
+    event ValidatorExit(address validator);
 
-    /// @notice Signals the max churn rate has been updated
-    /// @param maxChurnRate the new max churn rate
-    event MaxChurnRateUpdated(uint256 maxChurnRate);
+    /// @notice Signals a new delegation to a validator
+    ///
+    /// A delegator delegates funds to a validator. The confirmation layer needs
+    /// to update the stake table and adjust the weight for this validator and
+    /// the delegators delegation associated with it.
+    event Delegated(address delegator, address validator, uint256 amount);
 
-    /// @notice Signals the light client address has been updated
-    /// @param lightClientAddress the new light client address
-    event LightClientAddressUpdated(address lightClientAddress);
+    /// @notice Signals an undelegation to a validator
+    ///
+    /// A delegator undelegates funds from a validator. The confirmation layer
+    /// needs to update the stake table and adjust the weight for this validator
+    /// and the delegators delegation associated with it.
+    event Undelegated(address delegator, address validator, uint256 amount);
+
+    /// @notice Signals a consensus key update for a validator
+    ///
+    /// @param account the address of the validator
+    /// @param blsVK the new BLS verification key
+    /// @param schnorrVK the new Schnorr verification key
+    ///
+    /// The confirmation layer needs to update the stake table with the new keys.
+    event ConsensusKeysUpdated(
+        address account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
+    );
+
+    /// @notice Unlocked funds were claimed.
+    ///
+    /// @dev This event is not relevant for the confirmation layer because the
+    /// events that remove stake from the stake table are `Undelegated` and
+    /// `ValidatorExit`.
+    event Withdrawal(address account, uint256 amount);
+
+    // === Structs ===
 
     /// @dev (sadly, Solidity doesn't support type alias on non-primitive types)
     // We avoid declaring another struct even if the type info helps with readability,
@@ -78,36 +81,26 @@ abstract contract AbstractStakeTable {
     /// @param schnorrVK The Schnorr verification key associated. Used for signing the light client
     /// state.
     /// @param blsVK The BLS verification key associated. Used for consensus voting.
-    struct Node {
-        address account;
-        uint256 balance;
-        uint64 registerEpoch;
-        uint64 exitEpoch;
-        EdOnBN254.EdOnBN254Point schnorrVK;
-        BN254.G2Point blsVK;
-    }
+    // struct Node {
+    //     address account;
+    //     uint256 balance;
+    //     EdOnBN254.EdOnBN254Point schnorrVK;
+    //     BN254.G2Point blsVK;
+    // }
+
+    /// These are just examples for now
+    // enum SlashableOffense {
+    //     DoubleSigning,
+    //     InvalidSignature
+    // }
 
     // === Table State & Stats ===
 
-    /// @notice Look up the balance of `account`
-    function lookupStake(address account) external view virtual returns (uint256);
+    // /// @notice Look up the balance of `account`
+    // function lookupStake(address account) external view virtual returns (uint256);
 
-    /// @notice Look up the full `Node` state associated with `account`
-    function lookupNode(address account) external view virtual returns (Node memory);
-
-    // === Queuing Stats ===
-
-    /// @notice Get the number of pending registration requests in the waiting queue
-    function numPendingRegistrationsInEpoch() external view virtual returns (uint64);
-
-    /// @notice Get the number of pending exit requests in the waiting queue
-    function numPendingExitsInEpoch() external view virtual returns (uint64);
-
-    /// @notice push a registration request to the waiting queue
-    function pushToRegistrationQueue() internal virtual;
-
-    /// @notice push an exit request to the waiting queue
-    function pushToExitQueue() internal virtual;
+    // /// @notice Look up the full `Node` state associated with `account`
+    // function lookupNode(address account) external view virtual returns (Node memory);
 
     // === Write APIs ===
 
@@ -115,38 +108,35 @@ abstract contract AbstractStakeTable {
     ///
     /// @param blsVK The BLS verification key
     /// @param schnorrVK The Schnorr verification key (as the auxiliary info)
-    /// @param amount The amount to register
     /// @param blsSig The BLS signature that the caller owns the `blsVK`
-    /// @param validUntilEpoch The maximum epoch the sender is willing to wait to be included
-    /// (cannot be smaller than the current epoch)
     /// @dev No validity check on `schnorrVK`, as it's assumed to be sender's responsibility,
     /// the contract only treat it as auxiliary info submitted by `blsVK`.
     /// @dev `blsSig` field is necessary to prevent "rogue public-key attack".
     /// The signature is over the caller address of the function to ensure that each message is
     /// unique.
-    function register(
+    function registerValidator(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
-        uint256 amount,
         BN254.G1Point memory blsSig,
-        uint64 validUntilEpoch
+        uint16 commission
     ) external virtual;
 
-    /// @notice Deposit more stakes to registered keys
+    /// @notice The validator and all their delegation will exit the stake table.
+    function deregisterValidator() external virtual;
+
+    /// @notice Delegate
     ///
     /// @param amount The amount to deposit
-    /// @return (newBalance, effectiveEpoch) the new balance effective at a future epoch
-    function deposit(uint256 amount) external virtual returns (uint256, uint64);
+    function delegate(address validator, uint256 amount) external virtual;
 
-    /// @notice Request to exit from the stake table, not immediately withdrawable!
-    ///
-    function requestExit() external virtual;
+    /// @notice initiate withdrawal
+    function undelegate(address validator, uint256 amount) external virtual;
 
-    /// @notice Withdraw from the staking pool. Transfers occur! Only successfully exited keys can
-    /// withdraw past their `exitEpoch`.
-    ///
-    /// @return The total amount withdrawn, equal to `Node.balance` associated with `blsVK`
-    function withdrawFunds() external virtual returns (uint256);
+    /// @notice Withdraw an undelegation
+    function claimWithdrawal(address validator) external virtual;
+
+    /// @notice Withdraw after a validator has exited
+    function claimValidatorExit(address validator) external virtual;
 
     /// @notice Update the consensus keys for a validator
     /// @dev This function is used to update the consensus keys for a validator

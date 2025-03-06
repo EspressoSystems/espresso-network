@@ -10,6 +10,7 @@ pub use permissioned_stake_table::*;
     non_camel_case_types
 )]
 pub mod permissioned_stake_table {
+    pub use super::super::shared_types::*;
     #[allow(deprecated)]
     fn __abi() -> ::ethers::core::abi::Abi {
         ::ethers::core::abi::ethabi::Contract {
@@ -1297,42 +1298,6 @@ pub mod permissioned_stake_table {
         Hash,
     )]
     pub struct OwnerReturn(pub ::ethers::core::types::Address);
-    ///`G2Point(uint256,uint256,uint256,uint256)`
-    #[derive(
-        Clone,
-        ::ethers::contract::EthAbiType,
-        ::ethers::contract::EthAbiCodec,
-        serde::Serialize,
-        serde::Deserialize,
-        Default,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-    )]
-    pub struct G2Point {
-        pub x_0: ::ethers::core::types::U256,
-        pub x_1: ::ethers::core::types::U256,
-        pub y_0: ::ethers::core::types::U256,
-        pub y_1: ::ethers::core::types::U256,
-    }
-    ///`EdOnBN254Point(uint256,uint256)`
-    #[derive(
-        Clone,
-        ::ethers::contract::EthAbiType,
-        ::ethers::contract::EthAbiCodec,
-        serde::Serialize,
-        serde::Deserialize,
-        Default,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-    )]
-    pub struct EdOnBN254Point {
-        pub x: ::ethers::core::types::U256,
-        pub y: ::ethers::core::types::U256,
-    }
     ///`NodeInfo((uint256,uint256,uint256,uint256),(uint256,uint256),bool)`
     #[derive(
         Clone,
