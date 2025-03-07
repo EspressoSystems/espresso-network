@@ -38,27 +38,17 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     /// @notice when the permissioned prover is unset, this event is emitted.
     event PermissionedProverNotRequired();
-    /// @notice When entering a new epoch and a new stake table snapshot.
-    event NewEpoch(uint64 epoch);
-
-    /// @notice Event that a new finalized state has been successfully verified and updated
-    event NewState(
-        uint64 indexed viewNum, uint64 indexed blockHeight, BN254.ScalarField blockCommRoot
-    );
 
     // === System Parameters ===
     //
-    /// @notice number of blocks per epoch
-    uint64 public _blocksPerEpoch;
-
     // === Storage ===
     //
     /// @notice genesis stake commitment
     StakeTableState public genesisStakeTableState;
-    /// @notice stake table commitments for the current voting stakers
-    StakeTableState public votingStakeTableState;
+
     /// @notice genesis block commitment
     LightClientState public genesisState;
+
     /// @notice Finalized HotShot's light client state
     LightClientState public finalizedState;
 
@@ -118,6 +108,11 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         BN254.ScalarField hotShotBlockCommRoot;
     }
 
+    /// @notice Event that a new finalized state has been successfully verified and updated
+    event NewState(
+        uint64 indexed viewNum, uint64 indexed blockHeight, BN254.ScalarField blockCommRoot
+    );
+
     /// @notice The state is outdated and older than currently known `finalizedState`
     error OutdatedState();
     /// @notice Invalid user inputs: wrong format or non-sensible arguments
@@ -138,8 +133,6 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     error InvalidHotShotBlockForCommitmentCheck();
     /// @notice Invalid Max Block States
     error InvalidMaxStateHistory();
-    /// @notice The last block of the epoch (of the finalizedState) should not be skipped
-    error MissingLastBlockInEpochUpdate();
 
     /// @notice Constructor disables initializers to prevent the implementation contract from being
     /// initialized
@@ -156,19 +149,15 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @param _stateHistoryRetentionPeriod The maximum retention period (in seconds) for the state
     /// history. the min retention period allowed is 1 hour and max 365 days
     /// @param owner The address of the contract owner
-    /// @param blocksPerEpoch Number of HotShot block per epoch (also per stake table snapshot)
     function initialize(
         LightClientState memory _genesis,
         StakeTableState memory _genesisStakeTableState,
         uint32 _stateHistoryRetentionPeriod,
-        address owner,
-        uint64 blocksPerEpoch
+        address owner
     ) public initializer {
         __Ownable_init(owner); //sets owner of the contract
         __UUPSUpgradeable_init();
-        _initializeState(
-            _genesis, _genesisStakeTableState, _stateHistoryRetentionPeriod, blocksPerEpoch
-        );
+        _initializeState(_genesis, _genesisStakeTableState, _stateHistoryRetentionPeriod);
     }
 
     /// @notice returns the current block number
@@ -200,12 +189,10 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @param _genesisStakeTableState The initial stake table state of the light client
     /// @param _stateHistoryRetentionPeriod The maximum retention period (in seconds) for the state
     /// history. The min retention period allowed is 1 hour and the max is 365 days.
-    /// @param blocksPerEpoch Number of HotShot block per epoch (also per stake table snapshot)
     function _initializeState(
         LightClientState memory _genesis,
         StakeTableState memory _genesisStakeTableState,
-        uint32 _stateHistoryRetentionPeriod,
-        uint64 blocksPerEpoch
+        uint32 _stateHistoryRetentionPeriod
     ) internal {
         // The viewNum and blockHeight in the genesis state must be zero to indicate that this is
         // the initial state. Stake table commitments and threshold cannot be zero, otherwise it's
@@ -218,18 +205,16 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
                 || BN254.ScalarField.unwrap(_genesisStakeTableState.schnorrKeyComm) == 0
                 || BN254.ScalarField.unwrap(_genesisStakeTableState.amountComm) == 0
                 || _genesisStakeTableState.threshold == 0 || _stateHistoryRetentionPeriod < 1 hours
-                || _stateHistoryRetentionPeriod > 365 days || blocksPerEpoch == 0
+                || _stateHistoryRetentionPeriod > 365 days
         ) {
             revert InvalidArgs();
         }
 
         genesisState = _genesis;
-        finalizedState = _genesis;
         genesisStakeTableState = _genesisStakeTableState;
-        votingStakeTableState = _genesisStakeTableState;
+        finalizedState = _genesis;
 
         stateHistoryRetentionPeriod = _stateHistoryRetentionPeriod;
-        _blocksPerEpoch = blocksPerEpoch;
     }
 
     // === State Modifying APIs ===
@@ -245,12 +230,9 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice While `newState.stakeTable*` refers to the (possibly) new stake table states,
     /// the entire `newState` needs to be signed by stakers in `finalizedState`
     /// @param newState new light client state
-    /// @param nextStakeTable the stake table to use in the next block (same as the current except
-    /// during epoch change)
     /// @param proof PlonkProof
     function newFinalizedState(
         LightClientState memory newState,
-        StakeTableState memory nextStakeTable,
         IPlonkVerifier.PlonkProof memory proof
     ) external virtual {
         //revert if we're in permissionedProver mode and the permissioned prover has not been set
@@ -267,34 +249,11 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         // format validity check
         BN254.validateScalarField(newState.blockCommRoot);
 
-        // epoch-related checks
-        uint64 lastUpdateEpoch = currentEpoch();
-        uint64 newEpoch = epochFromBlockNumber(newState.blockHeight, _blocksPerEpoch);
-        if (
-            newEpoch == lastUpdateEpoch + 1 && !isLastBlockInEpoch(finalizedState.blockHeight)
-                && lastUpdateEpoch > 0
-        ) {
-            // advancing 1 epoch is only allowed if the last block of last epoch was submitted
-            // or if there is no last epoch (i.e. when current epoch is epoch 1)
-            revert MissingLastBlockInEpochUpdate();
-        }
-        if (newEpoch >= lastUpdateEpoch + 2) {
-            revert MissingLastBlockInEpochUpdate();
-        }
-        BN254.validateScalarField(nextStakeTable.blsKeyComm);
-        BN254.validateScalarField(nextStakeTable.schnorrKeyComm);
-        BN254.validateScalarField(nextStakeTable.amountComm);
-
         // check plonk proof
-        verifyProof(newState, nextStakeTable, proof);
+        verifyProof(newState, proof);
 
         // upon successful verification, update the latest finalized state
-        // during epoch change, also update to the new stake table
         finalizedState = newState;
-        if (isLastBlockInEpoch(newState.blockHeight)) {
-            votingStakeTableState = nextStakeTable;
-            emit NewEpoch(newEpoch + 1);
-        }
 
         updateStateHistory(uint64(currentBlockNumber()), uint64(block.timestamp), newState);
 
@@ -303,36 +262,21 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     /// @notice Verify the Plonk proof, marked as `virtual` for easier testing as we can swap VK
     /// used in inherited contracts.
-    function verifyProof(
-        LightClientState memory state,
-        StakeTableState memory nextStakeTable,
-        IPlonkVerifier.PlonkProof memory proof
-    ) internal virtual {
+    function verifyProof(LightClientState memory state, IPlonkVerifier.PlonkProof memory proof)
+        internal
+        virtual
+    {
         IPlonkVerifier.VerifyingKey memory vk = VkLib.getVk();
 
         // Prepare the public input
-        uint256[11] memory publicInput;
+        uint256[7] memory publicInput;
         publicInput[0] = uint256(state.viewNum);
         publicInput[1] = uint256(state.blockHeight);
         publicInput[2] = BN254.ScalarField.unwrap(state.blockCommRoot);
-        publicInput[3] = BN254.ScalarField.unwrap(votingStakeTableState.blsKeyComm);
-        publicInput[4] = BN254.ScalarField.unwrap(votingStakeTableState.schnorrKeyComm);
-        publicInput[5] = BN254.ScalarField.unwrap(votingStakeTableState.amountComm);
-        publicInput[6] = votingStakeTableState.threshold;
-
-        if (isLastBlockInEpoch(state.blockHeight)) {
-            // during epoch change: use the next stake table
-            publicInput[7] = BN254.ScalarField.unwrap(nextStakeTable.blsKeyComm);
-            publicInput[8] = BN254.ScalarField.unwrap(nextStakeTable.schnorrKeyComm);
-            publicInput[9] = BN254.ScalarField.unwrap(nextStakeTable.amountComm);
-            publicInput[10] = nextStakeTable.threshold;
-        } else {
-            // use the previous stake table, effectively force nextStakeTable == votingStakeTable
-            publicInput[7] = BN254.ScalarField.unwrap(votingStakeTableState.blsKeyComm);
-            publicInput[8] = BN254.ScalarField.unwrap(votingStakeTableState.schnorrKeyComm);
-            publicInput[9] = BN254.ScalarField.unwrap(votingStakeTableState.amountComm);
-            publicInput[10] = votingStakeTableState.threshold;
-        }
+        publicInput[3] = BN254.ScalarField.unwrap(genesisStakeTableState.blsKeyComm);
+        publicInput[4] = BN254.ScalarField.unwrap(genesisStakeTableState.schnorrKeyComm);
+        publicInput[5] = BN254.ScalarField.unwrap(genesisStakeTableState.amountComm);
+        publicInput[6] = genesisStakeTableState.threshold;
 
         if (!PlonkVerifier.verify(vk, publicInput, proof)) {
             revert InvalidProof();
@@ -526,41 +470,5 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice Check if permissioned prover is enabled
     function isPermissionedProverEnabled() public view returns (bool) {
         return (permissionedProver != address(0));
-    }
-
-    // === Epoch-related logic ===
-    //
-
-    /// @notice Returns the current epoch according the latest update on finalizedState
-    /// @return current epoch (computed from the last known hotshot block number)
-    function currentEpoch() public view returns (uint64) {
-        return epochFromBlockNumber(finalizedState.blockHeight, _blocksPerEpoch);
-    }
-
-    /// @notice Calculate the epoch number from the hotshot block number
-    /// @dev same logic as `hotshot_types::utils::epoch_from_block_number()`
-    function epochFromBlockNumber(uint64 blockNum, uint64 blocksPerEpoch)
-        public
-        pure
-        returns (uint64)
-    {
-        if (blocksPerEpoch == 0) {
-            // this case is unreachable in our context since we reject zero-valued _blocksPerEpoch
-            // at init time
-            return 0;
-        } else if (blockNum % blocksPerEpoch == 0) {
-            return blockNum / blocksPerEpoch;
-        } else {
-            return blockNum / blocksPerEpoch + 1;
-        }
-    }
-
-    /// @notice Decide if a block height is the last block in an epoch
-    function isLastBlockInEpoch(uint64 blockHeight) public view returns (bool) {
-        if (blockHeight == 0) {
-            return false;
-        } else {
-            return blockHeight % _blocksPerEpoch == 0;
-        }
     }
 }

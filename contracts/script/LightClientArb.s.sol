@@ -13,12 +13,7 @@ contract DeployLightClientArbitrum is Script {
     error RetentionPeriodIsNotSetCorrectly();
     error InitialStateIsNotSetCorrectly();
 
-    function run(
-        uint32 numInitValidators,
-        uint32 stateHistoryRetentionPeriod,
-        address owner,
-        uint64 blocksPerEpoch
-    )
+    function run(uint32 numInitValidators, uint32 stateHistoryRetentionPeriod, address owner)
         public
         returns (
             address proxyAddress,
@@ -52,8 +47,7 @@ contract DeployLightClientArbitrum is Script {
         proxyAddress = Upgrades.deployUUPSProxy(
             "LightClientArbitrum.sol:LightClientArbitrum",
             abi.encodeCall(
-                LC.initialize,
-                (state, stakeState, stateHistoryRetentionPeriod, deployer, blocksPerEpoch)
+                LC.initialize, (state, stakeState, stateHistoryRetentionPeriod, deployer)
             )
         );
 

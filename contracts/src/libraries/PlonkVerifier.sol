@@ -67,7 +67,7 @@ library PlonkVerifier {
     /// @return _ A boolean indicating successful verification, false otherwise
     function verify(
         IPlonkVerifier.VerifyingKey memory verifyingKey,
-        uint256[11] memory publicInput,
+        uint256[7] memory publicInput,
         IPlonkVerifier.PlonkProof memory proof
     ) external view returns (bool) {
         _validateProof(proof);
@@ -79,10 +79,6 @@ library PlonkVerifier {
         BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[4]));
         BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[5]));
         BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[6]));
-        BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[7]));
-        BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[8]));
-        BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[9]));
-        BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[10]));
 
         return _verify(verifyingKey, publicInput, proof);
     }
@@ -119,10 +115,10 @@ library PlonkVerifier {
     // core verifier logic, assuming all input arguments are validated
     function _verify(
         IPlonkVerifier.VerifyingKey memory verifyingKey,
-        uint256[11] memory publicInput,
+        uint256[7] memory publicInput,
         IPlonkVerifier.PlonkProof memory proof
     ) private view returns (bool) {
-        if (verifyingKey.numInputs != 11) revert WrongPlonkVK();
+        if (verifyingKey.numInputs != 7) revert WrongPlonkVK();
 
         Challenges memory chal = _computeChallenges(verifyingKey, publicInput, proof);
 
@@ -171,7 +167,7 @@ library PlonkVerifier {
 
     function _computeChallenges(
         IPlonkVerifier.VerifyingKey memory vk,
-        uint256[11] memory pi,
+        uint256[7] memory pi,
         IPlonkVerifier.PlonkProof memory proof
     ) internal pure returns (Challenges memory res) {
         uint256 p = BN254.R_MOD;
@@ -265,34 +261,30 @@ library PlonkVerifier {
             mstore(add(dataPtr, 0x600), mload(add(pi, 0x80))) // PI[4]
             mstore(add(dataPtr, 0x620), mload(add(pi, 0xa0))) // PI[5]
             mstore(add(dataPtr, 0x640), mload(add(pi, 0xc0))) // PI[6]
-            mstore(add(dataPtr, 0x660), mload(add(pi, 0xe0))) // PI[7]
-            mstore(add(dataPtr, 0x680), mload(add(pi, 0x100))) // PI[8]
-            mstore(add(dataPtr, 0x6a0), mload(add(pi, 0x120))) // PI[9]
-            mstore(add(dataPtr, 0x6c0), mload(add(pi, 0x140))) // PI[10]
 
             // proof
             let wire0Ptr := mload(proof)
-            mstore(add(dataPtr, 0x6e0), mload(wire0Ptr)) // wire0.x
-            mstore(add(dataPtr, 0x700), mload(add(wire0Ptr, 0x20))) // wire0.y
+            mstore(add(dataPtr, 0x660), mload(wire0Ptr)) // wire0.x
+            mstore(add(dataPtr, 0x680), mload(add(wire0Ptr, 0x20))) // wire0.y
             let wire1Ptr := mload(add(proof, 0x20))
-            mstore(add(dataPtr, 0x720), mload(wire1Ptr)) // wire1.x
-            mstore(add(dataPtr, 0x740), mload(add(wire1Ptr, 0x20))) // wire1.y
+            mstore(add(dataPtr, 0x6a0), mload(wire1Ptr)) // wire1.x
+            mstore(add(dataPtr, 0x6c0), mload(add(wire1Ptr, 0x20))) // wire1.y
             let wire2Ptr := mload(add(proof, 0x40))
-            mstore(add(dataPtr, 0x760), mload(wire2Ptr)) // wire2.x
-            mstore(add(dataPtr, 0x780), mload(add(wire2Ptr, 0x20))) // wire2.y
+            mstore(add(dataPtr, 0x6e0), mload(wire2Ptr)) // wire2.x
+            mstore(add(dataPtr, 0x700), mload(add(wire2Ptr, 0x20))) // wire2.y
             let wire3Ptr := mload(add(proof, 0x60))
-            mstore(add(dataPtr, 0x7a0), mload(wire3Ptr)) // wire3.x
-            mstore(add(dataPtr, 0x7c0), mload(add(wire3Ptr, 0x20))) // wire3.y
+            mstore(add(dataPtr, 0x720), mload(wire3Ptr)) // wire3.x
+            mstore(add(dataPtr, 0x740), mload(add(wire3Ptr, 0x20))) // wire3.y
             let wire4Ptr := mload(add(proof, 0x80))
-            mstore(add(dataPtr, 0x7e0), mload(wire4Ptr)) // wire4.x
-            mstore(add(dataPtr, 0x800), mload(add(wire4Ptr, 0x20))) // wire4.y
+            mstore(add(dataPtr, 0x760), mload(wire4Ptr)) // wire4.x
+            mstore(add(dataPtr, 0x780), mload(add(wire4Ptr, 0x20))) // wire4.y
 
             // challenge: beta
             {
                 mstore(statePtr, 0x0) // init state
-                // preimage len: state(0x20) + transcript(0x820)
+                // preimage len: state(0x20) + transcript(0x7a0)
                 // overwrite previous state at freePtr
-                mstore(statePtr, keccak256(statePtr, 0x840))
+                mstore(statePtr, keccak256(statePtr, 0x7c0))
                 // (mod p) to get beta
                 mstore(add(res, 0x60), mod(mload(statePtr), p))
             }

@@ -23,13 +23,8 @@ contract DeployLightClientScript is Script {
     /// @param stateHistoryRetentionPeriod state history retention period in seconds
     /// @param owner The address that will be set as the owner of the proxy (typically a multisig
     /// wallet).
-    /// @param blocksPerEpoch Number of HotShot block per epoch (also per stake table snapshot)
-    function run(
-        uint32 numInitValidators,
-        uint32 stateHistoryRetentionPeriod,
-        address owner,
-        uint64 blocksPerEpoch
-    )
+
+    function run(uint32 numInitValidators, uint32 stateHistoryRetentionPeriod, address owner)
         public
         returns (
             address proxyAddress,
@@ -62,8 +57,7 @@ contract DeployLightClientScript is Script {
         proxyAddress = Upgrades.deployUUPSProxy(
             contractName,
             abi.encodeCall(
-                LC.initialize,
-                (state, stakeState, stateHistoryRetentionPeriod, deployer, blocksPerEpoch)
+                LC.initialize, (state, stakeState, stateHistoryRetentionPeriod, deployer)
             )
         );
 
@@ -215,11 +209,7 @@ contract UpgradeLightClientContractWithSameContractScript is Script {
 /// the admin is not a multisig wallet but is the same as the associated mnemonic
 /// used in staging deployments only
 contract DeployLightClientContractScript is Script {
-    function run(
-        uint32 numInitValidators,
-        uint32 stateHistoryRetentionPeriod,
-        uint64 blocksPerEpoch
-    )
+    function run(uint32 numInitValidators, uint32 stateHistoryRetentionPeriod)
         external
         returns (
             address payable proxyAddress,
@@ -239,7 +229,7 @@ contract DeployLightClientContractScript is Script {
         (LC.LightClientState memory state, LC.StakeTableState memory stakeState) =
             abi.decode(result, (LC.LightClientState, LC.StakeTableState));
 
-        return deployContract(state, stakeState, stateHistoryRetentionPeriod, blocksPerEpoch);
+        return deployContract(state, stakeState, stateHistoryRetentionPeriod);
     }
 
     /// @notice deploys the impl, proxy & initializes the impl
@@ -249,8 +239,7 @@ contract DeployLightClientContractScript is Script {
     function deployContract(
         LC.LightClientState memory state,
         LC.StakeTableState memory stakeState,
-        uint32 stateHistoryRetentionPeriod,
-        uint64 blocksPerEpoch
+        uint32 stateHistoryRetentionPeriod
     )
         private
         returns (
@@ -270,12 +259,11 @@ contract DeployLightClientContractScript is Script {
 
         // Encode the initializer function call
         bytes memory data = abi.encodeWithSignature(
-            "initialize((uint64,uint64,uint256),(uint256,uint256,uint256,uint256),uint32,address,uint64)",
+            "initialize((uint64,uint64,uint256),(uint256,uint256,uint256,uint256),uint32,address)",
             state,
             stakeState,
             stateHistoryRetentionPeriod,
-            admin,
-            blocksPerEpoch
+            admin
         );
 
         // our proxy
