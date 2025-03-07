@@ -440,6 +440,7 @@ impl L1Client {
                     let chunks = ChunkGenerator::new(start_block, finalized.number, chunk_size);
                     let mut events: Vec<StakersUpdated> = Vec::new();
                     for Range { start, end } in chunks {
+                        tracing::debug!("fetching l1 events from {start} to {end}");
                         match stake_table_contract
                             .StakersUpdated_filter()
                             .from_block(start)
@@ -449,6 +450,7 @@ impl L1Client {
                         {
                             Ok(e) => {
                                 for event in e {
+                                    // tracing::debug!("event {:?}", event.0.added);
                                     events.push(event.0)
                                 }
                                 break;
@@ -462,6 +464,7 @@ impl L1Client {
                     {
                         let st = StakeTables::from_l1_events(events);
                         let mut state = state.lock().await;
+                        tracing::debug!("putting st at block {} {st:?}", finalized.number);
                         state.put_stake_tables(finalized.number, st)
                     };
                     sleep(retry_delay).await;
@@ -1804,6 +1807,7 @@ mod test {
             let node = NodeInfoJf::random(&mut rng);
             let new_nodes: Vec<contract_bindings_ethers::permissioned_stake_table::NodeInfo> =
                 vec![node.into()];
+            dbg!(&new_nodes);
             let updater = stake_table_contract.update(vec![], new_nodes.clone());
             let receipt = updater.send().await?.await?;
             if let Some(receipt) = receipt {
@@ -1826,6 +1830,11 @@ mod test {
 
         let block = receipts.last().unwrap().block_number.unwrap().as_u64();
         let _ = l1_client.wait_for_finalized_block(block).await;
+
+        dbg!(&receipts
+            .iter()
+            .map(|receipt| receipt.block_number.unwrap().as_u64())
+            .collect::<Vec<u64>>());
 
         let mut lock = l1_client.state.lock().await;
         for receipt in receipts {

@@ -81,6 +81,7 @@ impl StakeTables {
         let mut consensus_stake_table: Vec<PeerConfig<PubKey>> = vec![];
         let mut da_members: Vec<PeerConfig<PubKey>> = vec![];
         for node in currently_staking {
+            tracing::debug!(?node);
             consensus_stake_table.push(node.clone().into());
             if node.da {
                 da_members.push(node.into());

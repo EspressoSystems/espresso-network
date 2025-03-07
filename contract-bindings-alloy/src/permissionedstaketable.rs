@@ -137,7 +137,7 @@ pub mod BN254 {
     struct G2Point { BaseField x0; BaseField x1; BaseField y0; BaseField y1; }
     ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct G2Point {
         pub x0: <BaseField as alloy::sol_types::SolType>::RustType,
         pub x1: <BaseField as alloy::sol_types::SolType>::RustType,
@@ -465,7 +465,7 @@ pub mod EdOnBN254 {
     struct EdOnBN254Point { uint256 x; uint256 y; }
     ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct EdOnBN254Point {
         pub x: alloy::sol_types::private::primitives::aliases::U256,
         pub y: alloy::sol_types::private::primitives::aliases::U256,
@@ -1379,7 +1379,7 @@ pub mod PermissionedStakeTable {
     struct NodeInfo { BN254.G2Point blsVK; EdOnBN254.EdOnBN254Point schnorrVK; bool isDA; }
     ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct NodeInfo {
         pub blsVK: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
         pub schnorrVK: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
@@ -2190,7 +2190,7 @@ pub mod PermissionedStakeTable {
         clippy::pub_underscore_fields,
         clippy::style
     )]
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct StakersUpdated {
         #[allow(missing_docs)]
         pub removed:
