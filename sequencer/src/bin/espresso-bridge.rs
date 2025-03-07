@@ -231,6 +231,8 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
         }
     };
 
+    // TODO this appears to be broken. We often hit the `else` block
+    // when the builder was in fact funded.
     // Confirm that the Espresso balance has increased.
     let final_balance = espresso
         .get_espresso_balance(l1.address(), Some(espresso_block))

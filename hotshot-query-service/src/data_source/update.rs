@@ -22,16 +22,19 @@ use anyhow::{ensure, Context};
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot::types::{Event, EventType};
-use hotshot_types::data::{VidDisperseShare, VidShare};
+use hotshot_types::{data::VidCommitment, event::LeafInfo};
 use hotshot_types::{
-    data::Leaf2,
+    data::{ns_table::parse_ns_table, Leaf2},
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
         node_implementation::{ConsensusTime, NodeType},
     },
     vid::advz::advz_scheme,
 };
-use hotshot_types::{data::VidCommitment, event::LeafInfo};
+use hotshot_types::{
+    data::{VidDisperseShare, VidShare},
+    vid::avidm::{init_avidm_param, AvidMScheme},
+};
 use jf_vid::VidScheme;
 use std::iter::once;
 
@@ -168,19 +171,46 @@ fn genesis_vid<Types: NodeType>(
 ) -> anyhow::Result<(VidCommonQueryData<Types>, VidShare)> {
     let payload = Payload::<Types>::empty().0;
     let bytes = payload.encode();
-    let mut disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
-        .disperse(bytes)
-        .context("unable to compute VID dispersal for genesis block")?;
-    ensure!(
-        VidCommitment::V0(disperse.commit) == leaf.block_header().payload_commitment(),
-        "computed VID commit {} for genesis block does not match header commit {}",
-        disperse.commit,
-        leaf.block_header().payload_commitment()
-    );
-    Ok((
-        VidCommonQueryData::new(leaf.block_header().clone(), Some(disperse.common)),
-        VidShare::V0(disperse.shares.remove(0)),
-    ))
+
+    match leaf.block_header().payload_commitment() {
+        VidCommitment::V0(commit) => {
+            let mut disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
+                .disperse(bytes)
+                .context("unable to compute VID dispersal for genesis block")?;
+
+            ensure!(
+                disperse.commit == commit,
+                "computed VID commit {} for genesis block does not match header commit {}",
+                disperse.commit,
+                commit
+            );
+            Ok((
+                VidCommonQueryData::new(leaf.block_header().clone(), Some(disperse.common)),
+                VidShare::V0(disperse.shares.remove(0)),
+            ))
+        }
+        VidCommitment::V1(commit) => {
+            let avidm_param = init_avidm_param(GENESIS_VID_NUM_STORAGE_NODES)?;
+            let weights = vec![1; GENESIS_VID_NUM_STORAGE_NODES];
+            tracing::error!(">>>0");
+            let ns_table = parse_ns_table(bytes.len(), &leaf.block_header().metadata().encode());
+            tracing::error!(">>>1");
+            let (calculated_commit, mut shares) =
+                AvidMScheme::ns_disperse(&avidm_param, &weights, &bytes, ns_table).unwrap();
+
+            ensure!(
+                calculated_commit == commit,
+                "computed VID commit {} for genesis block does not match header commit {}",
+                calculated_commit,
+                commit
+            );
+
+            Ok((
+                VidCommonQueryData::new(leaf.block_header().clone(), None),
+                VidShare::V1(shares.remove(0)),
+            ))
+        }
+    }
 }
 
 /// A data source with an atomic transaction-based synchronization interface.

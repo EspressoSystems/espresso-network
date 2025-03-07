@@ -53,6 +53,7 @@ pub struct Genesis {
     pub base_version: Version,
     #[serde(with = "version_ser")]
     pub upgrade_version: Version,
+    pub epoch_height: Option<u64>,
     pub chain_config: ChainConfig,
     pub stake_table: StakeTableConfig,
     #[serde(default)]
@@ -83,6 +84,7 @@ impl Genesis {
 }
 
 impl Genesis {
+    // TODO `validate_stake_table_contract` and wrapper `validate_contracts`
     pub async fn validate_fee_contract(&self, l1_rpc_url: Url) -> anyhow::Result<()> {
         let l1 = L1Client::new(vec![l1_rpc_url]).with_context(|| "failed to create L1 client")?;
 
@@ -101,7 +103,8 @@ impl Genesis {
         // now iterate over each upgrade type and validate the fee contract if it exists
         for (version, upgrade) in &self.upgrades {
             let chain_config = &upgrade.upgrade_type.chain_config();
-
+            // Is this not an error case? Isn't a chain config a
+            // requirement? At least for most versions?
             if chain_config.is_none() {
                 continue;
             }

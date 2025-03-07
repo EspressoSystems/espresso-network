@@ -24,16 +24,22 @@ lint:
     cargo clippy --workspace --features testing --all-targets -- -D warnings
     cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml -- -D warnings
 
-build profile="test":
+build profile="test" features="":
     #!/usr/bin/env bash
     set -euxo pipefail
     # Use the same target dir for both `build` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
-    cargo build --profile {{profile}}
-    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml
+    cargo build --profile {{profile}} {{features}}
+    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
 
 demo-native-mp *args: build
     scripts/demo-native -f process-compose.yaml -f process-compose-mp.yml {{args}}
+
+demo-native-pos *args: (build "test" "--features fee,pos")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-pos-base *args: build
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -77,9 +83,14 @@ test-all:
 test-integration:
 	@echo 'NOTE that demo-native must be running for this test to succeed.'
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run --all-features --nocapture --profile integration smoke
+
 test-integration-mp:
     @echo 'NOTE that demo-native-mp must be running for this test to succeed.'
     INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run --all-features --nocapture --profile integration
+
+test-integration-pos:
+    @echo 'NOTE that demo-native-pos must be running for this test to succeed.'
+    INTEGRATION_TEST_SEQUENCER_VERSION=3 cargo nextest run --all-features --nocapture --profile integration smoke
 
 clippy:
     @echo 'features: "embedded-db"'

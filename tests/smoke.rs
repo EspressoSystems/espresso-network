@@ -1,6 +1,7 @@
-use crate::common::TestConfig;
-use anyhow::Result;
+use crate::common::{test_stake_table_update, TestConfig};
+use anyhow::{Context, Result};
 use futures::StreamExt;
+use sequencer_utils::test_utils::setup_test;
 use std::time::Instant;
 
 /// We allow for no change in state across this many consecutive iterations.
@@ -10,6 +11,7 @@ const MAX_TXNS_NOT_INCREMENTING: u8 = 5;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_smoke() -> Result<()> {
+    setup_test();
     let start = Instant::now();
     dotenvy::dotenv()?;
 
@@ -76,6 +78,20 @@ async fn test_smoke() -> Result<()> {
         }
 
         last = new;
+    }
+
+    let epoch = testing
+        .espresso
+        .current_epoch()
+        .await?
+        .context("curr epoch")?;
+
+    tracing::info!("epoch before stake table update {epoch:?}");
+
+    // Check if epoch number is greater than Epoch::genesis() i.e 1
+    if epoch > 1 {
+        tracing::info!("testing stake table update");
+        test_stake_table_update(testing.sequencer_clients).await?;
     }
     Ok(())
 }

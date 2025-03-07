@@ -43,7 +43,8 @@ mod testing {
 #[cfg(test)]
 #[espresso_macros::generic_tests]
 mod persistence_tests {
-    use std::{collections::BTreeMap, marker::PhantomData};
+    use sequencer_utils::test_utils::setup_test;
+    use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
     use vbs::version::StaticVersionType;
 
     use anyhow::bail;
@@ -77,12 +78,8 @@ mod persistence_tests {
         vote::HasViewNumber,
     };
 
-    use sequencer_utils::test_utils::setup_test;
-    use std::sync::Arc;
-    use testing::TestablePersistence;
+    use super::{testing::TestablePersistence, *};
     use vbs::version::Version;
-
-    use super::*;
 
     #[derive(Clone, Debug, Default)]
     struct EventCollector {

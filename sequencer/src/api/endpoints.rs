@@ -219,6 +219,35 @@ where
                 .await)
         }
         .boxed()
+    })?
+    .at("current_epoch", |_, state| {
+        async move { Ok(state.read(|state| state.get_current_epoch().boxed()).await) }.boxed()
+    })?
+    .at("da_members", |req, state| {
+        async move {
+            // Try to get the epoch from the request. If this fails, error
+            // as it was probably a mistake
+            let epoch = req
+                .opt_integer_param("epoch_number")
+                .map_err(|_| hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?
+                .map(EpochNumber::new);
+
+            Ok(state
+                .read(|state| state.get_da_members(epoch).boxed())
+                .await)
+        }
+        .boxed()
+    })?
+    .at("da_members_current", |_, state| {
+        async move {
+            Ok(state
+                .read(|state| state.get_da_members_current().boxed())
+                .await)
+        }
+        .boxed()
     })?;
 
     Ok(api)

@@ -26,11 +26,11 @@ pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>
         return vec![(0..payload_byte_len)];
     }
     let num_entries = u32::from_le_bytes(bytes[..NUM_NSS_BYTE_LEN].try_into().unwrap()) as usize;
-    if num_entries
-        != bytes.len().saturating_sub(NUM_NSS_BYTE_LEN)
-            / NS_ID_BYTE_LEN.saturating_add(NS_OFFSET_BYTE_LEN)
+    if num_entries == 0
+        || num_entries
+            != bytes.len().saturating_sub(NUM_NSS_BYTE_LEN)
+                / NS_ID_BYTE_LEN.saturating_add(NS_OFFSET_BYTE_LEN)
     {
-        tracing::warn!("Failed to parse the metadata as namespace table. Use a single namespace table instead.");
         return vec![(0..payload_byte_len)];
     }
     let mut l = 0;

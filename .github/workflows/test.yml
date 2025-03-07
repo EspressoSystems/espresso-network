@@ -110,8 +110,8 @@ jobs:
 
       - name: Build Bins
         run: |
-          cargo build --locked --profile test --bins
-          cargo build --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
+          cargo build --features "fee,pos,marketplace" --locked --profile test --bins 
+          cargo build --features "fee,pos,marketplace" --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target 
         timeout-minutes: 60
 
       - name: Upload archive to workflow
@@ -209,11 +209,14 @@ jobs:
     needs: [build-test-bins, build-test-artifacts-postgres]
     strategy:
       matrix:
-        version: [02,99]
+        version: [02, 03, 99]
         include:
           - version: 02
             compose: "-f process-compose.yaml -D"
-
+          - version: 03
+            env:
+              ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml
+            compose: "-f process-compose.yaml -D"
           - version: 99
             compose: "-f process-compose.yaml -f process-compose-mp.yml -D"
       fail-fast: false
@@ -251,7 +254,7 @@ jobs:
           NEXTEST_PROFILE: integration
           INTEGRATION_TEST_SEQUENCER_VERSION: ${{ matrix.version }}
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
+          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast \
           --workspace-remap $PWD $(if [ "${{ matrix.version }}" == "2" ]; then echo " smoke"; fi)
         timeout-minutes: 10
 
