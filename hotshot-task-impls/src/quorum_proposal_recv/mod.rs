@@ -22,8 +22,8 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::UpgradeCertificate,
     simple_vote::HasEpoch,
-    traits::block_contents::BlockHeader,
     traits::{
+        block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
     },
@@ -180,10 +180,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 )
                 .await
                 {
-                    Ok(()) => {}
+                    Ok(()) => {},
                     Err(e) => error!(?e, "Failed to validate the proposal"),
                 }
-            }
+            },
             HotShotEvent::ViewChange(view, epoch) => {
                 if *epoch > self.cur_epoch {
                     self.cur_epoch = *epoch;
@@ -198,8 +198,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 // to enter view V + 1.
                 let oldest_view_to_keep = TYPES::View::new(view.saturating_sub(1));
                 self.cancel_tasks(oldest_view_to_keep);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }

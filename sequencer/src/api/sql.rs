@@ -1,3 +1,5 @@
+use std::collections::{HashSet, VecDeque};
+
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -30,7 +32,6 @@ use jf_merkle_tree::{
     LookupResult, MerkleTreeScheme,
 };
 use sqlx::{Encode, Type};
-use std::collections::{HashSet, VecDeque};
 
 use super::{
     data_source::{Provider, SequencerDataSource},
@@ -145,7 +146,7 @@ impl CatchupStorage for SqlStorage {
                 LookupResult::Ok(_, proof) => Ok(proof),
                 _ => {
                     bail!("state snapshot {view:?},{height} was found but does not contain frontier at height {}; this should not be possible", height - 1);
-                }
+                },
             }
         }
     }
@@ -275,13 +276,13 @@ async fn load_accounts<Mode: TransactionMode>(
         ))? {
             MerkleNode::Leaf { pos, elem, .. } => {
                 snapshot.remember(*pos, *elem, proof)?;
-            }
+            },
             MerkleNode::Empty => {
                 snapshot.non_membership_remember(*account, proof)?;
-            }
+            },
             _ => {
                 bail!("Invalid proof");
-            }
+            },
         }
     }
 
@@ -442,7 +443,7 @@ async fn header_dependencies<Mode: TransactionMode>(
                     // so the STF will be able to look it up later.
                     catchup.add_chain_config(cf);
                     cf
-                }
+                },
             }
         };
 

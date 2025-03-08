@@ -13,6 +13,7 @@ use jf_vid::{VidDisperse as JfVidDisperse, VidScheme};
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 
+use super::ns_table::parse_ns_table;
 use crate::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     impl_has_epoch,
@@ -28,8 +29,6 @@ use crate::{
     },
     vote::HasViewNumber,
 };
-
-use super::ns_table::parse_ns_table;
 
 impl_has_epoch!(
     ADVZDisperse<TYPES>,

@@ -10,14 +10,14 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use async_trait::async_trait;
+use chrono::Utc;
+use hotshot_types::traits::metrics::Metrics;
+
 use crate::{
     metrics::{MetricsError, PrometheusMetrics},
     QueryError, QueryResult,
 };
-
-use async_trait::async_trait;
-use chrono::Utc;
-use hotshot_types::traits::metrics::Metrics;
 
 pub trait HasMetrics {
     fn metrics(&self) -> &PrometheusMetrics;

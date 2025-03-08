@@ -1,9 +1,10 @@
+use std::{fmt, str::FromStr, time::Duration};
+
 use anyhow::{anyhow, Result};
 use client::SequencerClient;
 use espresso_types::{FeeAmount, FeeVersion, MarketplaceVersion};
 use ethers::prelude::*;
 use futures::future::join_all;
-use std::{fmt, str::FromStr, time::Duration};
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 use vbs::version::StaticVersionType;

@@ -406,24 +406,24 @@ impl<
                         Err(e) => {
                             warn!("Received invalid message: {e}");
                             continue;
-                        }
+                        },
                     };
 
                     // Handle the message based on its type
                     match message {
                         Message::Request(request_message) => {
                             self.handle_request(request_message, &mut outgoing_responses);
-                        }
+                        },
                         Message::Response(response_message) => {
                             self.handle_response(response_message, &mut incoming_responses);
-                        }
+                        },
                     }
-                }
+                },
                 // An error here means the receiver will _NEVER_ receive any more messages
                 Err(e) => {
                     error!("Request/response receive task exited: {e}");
                     return;
-                }
+                },
             }
         }
     }

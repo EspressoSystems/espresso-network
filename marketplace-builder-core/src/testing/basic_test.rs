@@ -1,14 +1,15 @@
+use std::{marker::PhantomData, sync::Arc};
+
 use async_broadcast::broadcast;
 use hotshot_builder_api::v0_99::data_source::{AcceptsTxnSubmits, BuilderDataSource};
-
 use hotshot_example_types::block_types::TestTransaction;
+use marketplace_builder_shared::testing::consensus::SimulatedChainState;
 use tracing_test::traced_test;
 
-use crate::hooks::NoHooks;
-use crate::service::{BuilderConfig, GlobalState, ProxyGlobalState};
-use marketplace_builder_shared::testing::consensus::SimulatedChainState;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use crate::{
+    hooks::NoHooks,
+    service::{BuilderConfig, GlobalState, ProxyGlobalState},
+};
 
 /// This test simulates multiple builder states receiving messages from the channels and processing them
 #[tokio::test]

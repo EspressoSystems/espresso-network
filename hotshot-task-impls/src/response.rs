@@ -111,7 +111,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                                 )
                                 .await;
                             }
-                        }
+                        },
                         HotShotEvent::QuorumProposalRequestRecv(req, signature) => {
                             // Make sure that this request came from who we think it did
                             if !req.key.validate(signature, req.commit().as_ref()) {
@@ -137,16 +137,16 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                                 )
                                 .await;
                             }
-                        }
+                        },
                         HotShotEvent::Shutdown => {
                             return;
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
-                }
+                },
                 Err(e) => {
                     tracing::error!("Failed to receive event. {:?}", e);
-                }
+                },
             }
         }
     }

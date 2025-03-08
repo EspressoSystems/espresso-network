@@ -1,6 +1,8 @@
 pub mod location_details;
 pub mod node_identity;
 
+use std::{collections::HashSet, iter::zip, sync::Arc};
+
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use circular_buffer::CircularBuffer;
@@ -23,7 +25,6 @@ use hotshot_types::{
 };
 pub use location_details::LocationDetails;
 pub use node_identity::NodeIdentity;
-use std::{collections::HashSet, iter::zip, sync::Arc};
 use time::OffsetDateTime;
 use tokio::{spawn, task::JoinHandle};
 
@@ -52,7 +53,7 @@ impl DataState {
             let stake_table_iter_result = stake_table.try_iter(SnapshotVersion::Head);
             match stake_table_iter_result {
                 Ok(into_iter) => into_iter
-                    .map(|(key, _, _)| NodeIdentity::from_public_key(key))
+                    .map(|(key, ..)| NodeIdentity::from_public_key(key))
                     .collect(),
                 Err(_) => vec![],
             }
@@ -106,10 +107,10 @@ impl DataState {
         };
 
         let missing_node_identity_entries =
-            stake_table_iter.filter(|(key, _, _)| !current_identity_set.contains(key));
+            stake_table_iter.filter(|(key, ..)| !current_identity_set.contains(key));
 
         self.node_identity.extend(
-            missing_node_identity_entries.map(|(key, _, _)| NodeIdentity::from_public_key(key)),
+            missing_node_identity_entries.map(|(key, ..)| NodeIdentity::from_public_key(key)),
         );
     }
 
@@ -200,10 +201,10 @@ impl std::fmt::Display for ProcessLeafError {
         match self {
             ProcessLeafError::BlockSendError(err) => {
                 write!(f, "error sending block detail to sender: {}", err)
-            }
+            },
             ProcessLeafError::VotersSendError(err) => {
                 write!(f, "error sending voters to sender: {}", err)
-            }
+            },
         }
     }
 }
@@ -283,7 +284,7 @@ where
             // In this case, we just want to determine who voted for this
             // Leaf.
 
-            let (key, _, _): (BLSPubKey, _, _) = entry;
+            let (key, ..): (BLSPubKey, _, _) = entry;
             key
         });
 
@@ -396,10 +397,10 @@ impl ProcessLeafStreamTask {
                 match err {
                     ProcessLeafError::BlockSendError(_) => {
                         panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, blocks will stagnate: {}", err)
-                    }
+                    },
                     ProcessLeafError::VotersSendError(_) => {
                         panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {}", err)
-                    }
+                    },
                 }
             }
         }
@@ -429,7 +430,7 @@ impl std::fmt::Display for ProcessNodeIdentityError {
         match self {
             ProcessNodeIdentityError::SendError(err) => {
                 write!(f, "error sending node identity to sender: {}", err)
-            }
+            },
         }
     }
 }
@@ -563,21 +564,22 @@ impl Drop for ProcessNodeIdentityStreamTask {
 
 #[cfg(test)]
 mod tests {
-    use super::{DataState, ProcessLeafStreamTask};
-    use crate::service::data_state::{
-        LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask,
-    };
+    use std::{sync::Arc, time::Duration};
+
     use async_lock::RwLock;
     use espresso_types::{
         v0_99::ChainConfig, BlockMerkleTree, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
     };
     use futures::{channel::mpsc, SinkExt, StreamExt};
-
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
-    use std::{sync::Arc, time::Duration};
     use tokio::time::timeout;
     use url::Url;
+
+    use super::{DataState, ProcessLeafStreamTask};
+    use crate::service::data_state::{
+        LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask,
+    };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_process_leaf_error_debug() {

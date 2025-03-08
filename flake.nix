@@ -13,10 +13,6 @@
   };
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.nixpkgs-legacy-foundry.url = "github:NixOS/nixpkgs/9abb87b552b7f55ac8916b6fc9e5cb486656a2f3";
-
-  inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
-
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
 
   inputs.nixpkgs-cross-overlay.url =
@@ -33,8 +29,6 @@
   outputs =
     { self
     , nixpkgs
-    , nixpkgs-legacy-foundry
-    , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
@@ -67,7 +61,6 @@
 
       overlays = [
         (import rust-overlay)
-        foundry-nix.overlay
         solc-bin.overlays.default
         (final: prev: {
           solhint =
@@ -116,7 +109,7 @@
             cargo-fmt = {
               enable = true;
               description = "Enforce rustfmt";
-              entry = "cargo fmt --all";
+              entry = "just fmt";
               types_or = [ "rust" "toml" ];
               pass_filenames = false;
             };
@@ -185,7 +178,7 @@
         let
           stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.minimal.override {
-            extensions = [ "rust-analyzer" ];
+            extensions = [ "rust-analyzer" "rustfmt" ];
           });
           solc = pkgs.solc-bin."0.8.23";
         in
@@ -193,7 +186,7 @@
           buildInputs = [
             # Rust dependencies
             pkg-config
-            openssl
+            openssl_3 # match ubuntu 24.04 that we use on CI and as base image in docker
             curl
             protobuf # to compile libp2p-autonat
             stableToolchain
@@ -208,6 +201,7 @@
             typos
             just
             nightlyToolchain.passthru.availableComponents.rust-analyzer
+            nightlyToolchain.passthru.availableComponents.rustfmt
 
             # Tools
             nixpkgs-fmt
@@ -223,7 +217,25 @@
             coreutils
 
             # Ethereum contracts, solidity, ...
-            foundry-bin
+            # TODO: remove alloy patch when forge includes this fix: https://github.com/alloy-rs/core/pull/864
+            # foundry
+            (foundry.overrideAttrs {
+              # Set the resolve limit to 128 by replacing the value in the vendored dependencies.
+              postPatch = ''
+                pushd $cargoDepsCopy/alloy-sol-macro-expander
+
+                oldHash=$(sha256sum src/expand/mod.rs | cut -d " " -f 1)
+
+                substituteInPlace src/expand/mod.rs \
+                  --replace-warn \
+                  'const RESOLVE_LIMIT: usize = 32;' 'const RESOLVE_LIMIT: usize = 128;'
+
+                substituteInPlace .cargo-checksum.json \
+                  --replace-warn $oldHash $(sha256sum src/expand/mod.rs | cut -d " " -f 1)
+
+                popd
+              '';
+            })
             solc
             nodePackages.prettier
             solhint
@@ -243,28 +255,10 @@
 
             # Add rust binaries to PATH for native demo
             export PATH="$PWD/$CARGO_TARGET_DIR/debug:$PATH"
-
-            # Needed to compile with the sqlite-unbundled feature
-            export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib";
           '' + self.checks.${system}.pre-commit-check.shellHook;
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
-      # A shell with foundry v0.3.0 which can still build ethers-rs bindings.
-      # Can be removed when we are no longer using the ethers-rs bindings.
-      devShells.legacyFoundry =
-        let
-          overlays = [
-            solc-bin.overlays.default
-          ];
-          pkgs = import nixpkgs-legacy-foundry { inherit system overlays; };
-        in
-        mkShell {
-          packages = with pkgs; [
-            solc
-            foundry
-          ];
-        };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =
@@ -279,7 +273,7 @@
           buildInputs = [
             # Rust dependencies
             pkg-config
-            openssl
+            openssl_3
             curl
             protobuf # to compile libp2p-autonat
             toolchain
@@ -293,7 +287,7 @@
           buildInputs = [
             # Rust dependencies
             pkg-config
-            openssl
+            openssl_3
             curl
             protobuf # to compile libp2p-autonat
             toolchain
@@ -316,7 +310,7 @@
           buildInputs = [
             # Rust dependencies
             pkg-config
-            openssl
+            openssl_3
             curl
             protobuf # to compile libp2p-autonat
             stableToolchain

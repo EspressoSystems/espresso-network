@@ -10,15 +10,11 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use super::{
-    fetch::Fetch,
-    query_data::{
-        BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonMetadata,
-        VidCommonQueryData,
-    },
+use std::{
+    cmp::Ordering,
+    ops::{Bound, RangeBounds},
 };
-use crate::{types::HeightIndexed, Header, Payload};
+
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::{Display, From};
@@ -30,10 +26,16 @@ use hotshot_types::{
     data::{VidCommitment, VidShare},
     traits::node_implementation::NodeType,
 };
-use std::{
-    cmp::Ordering,
-    ops::{Bound, RangeBounds},
+
+use super::{
+    fetch::Fetch,
+    query_data::{
+        BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
+        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonMetadata,
+        VidCommonQueryData,
+    },
 };
+use crate::{types::HeightIndexed, Header, Payload};
 
 #[derive(Derivative, From, Display)]
 #[derivative(Ord = "feature_allow_slow_enum")]

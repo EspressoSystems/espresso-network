@@ -97,10 +97,10 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         tracing::warn!("Error posting signature to the relay server: {:?}", error);
                     }
                 }
-            }
+            },
             Err(err) => {
                 tracing::error!("Error generating light client state: {:?}", err)
-            }
+            },
         }
     }
 

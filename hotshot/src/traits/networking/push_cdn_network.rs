@@ -591,7 +591,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for PushCdnNetwork<K> {
                 return Err(NetworkError::MessageReceiveError(format!(
                     "failed to receive message: {error}"
                 )));
-            }
+            },
         };
 
         // Extract the underlying message

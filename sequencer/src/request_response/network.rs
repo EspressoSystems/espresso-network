@@ -1,13 +1,11 @@
-use crate::external_event_handler::ExternalMessage;
-use crate::external_event_handler::OutboundMessage;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use espresso_types::PubKey;
-use espresso_types::SeqTypes;
+use espresso_types::{PubKey, SeqTypes};
 use hotshot_types::message::MessageKind;
-use request_response::network::Bytes;
-use request_response::network::Sender as SenderTrait;
+use request_response::network::{Bytes, Sender as SenderTrait};
 use tokio::sync::mpsc;
+
+use crate::external_event_handler::{ExternalMessage, OutboundMessage};
 
 /// A wrapper type that we will implement the `Sender` trait for
 #[derive(Clone)]

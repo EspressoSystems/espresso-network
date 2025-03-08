@@ -138,7 +138,7 @@ impl<
                 self.accumulator = None;
 
                 Ok(Some(cert))
-            }
+            },
         }
     }
 }
@@ -279,7 +279,7 @@ where
             entry.insert(collector);
 
             Ok(())
-        }
+        },
         Entry::Occupied(mut entry) => {
             // handle the vote, and garbage collect if the vote collector is finished
             if entry
@@ -293,7 +293,7 @@ where
             }
 
             Ok(())
-        }
+        },
     }
 }
 
@@ -517,7 +517,7 @@ impl<TYPES: NodeType, V: Versions>
             HotShotEvent::QuorumVoteRecv(vote) => {
                 // #3967 REVIEW NOTE: Should we error if self.epoch is None?
                 self.accumulate_vote(&vote.clone().into(), sender).await
-            }
+            },
             _ => Ok(None),
         }
     }
@@ -599,7 +599,7 @@ impl<TYPES: NodeType, V: Versions>
         match event.as_ref() {
             HotShotEvent::ViewSyncPreCommitVoteRecv(vote) => {
                 self.accumulate_vote(vote, sender).await
-            }
+            },
             _ => Ok(None),
         }
     }
@@ -641,7 +641,7 @@ impl<TYPES: NodeType, V: Versions>
         match event.as_ref() {
             HotShotEvent::ViewSyncFinalizeVoteRecv(vote) => {
                 self.accumulate_vote(vote, sender).await
-            }
+            },
             _ => Ok(None),
         }
     }

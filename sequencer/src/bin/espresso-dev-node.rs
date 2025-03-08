@@ -559,7 +559,6 @@ struct SetHotshotUpReqBody {
 mod tests {
     use std::{process::Child, sync::Arc, time::Duration};
 
-    use crate::AltChainInfo;
     use committable::{Commitment, Committable};
     use contract_bindings_ethers::light_client::LightClient;
     use escargot::CargoBuild;
@@ -577,11 +576,10 @@ mod tests {
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::time::sleep;
-
     use url::Url;
     use vbs::version::StaticVersion;
 
-    use crate::{DevInfo, SetHotshotDownReqBody, SetHotshotUpReqBody};
+    use crate::{AltChainInfo, DevInfo, SetHotshotDownReqBody, SetHotshotUpReqBody};
 
     const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
     const NUM_ALT_CHAIN_PROVIDERS: usize = 1;

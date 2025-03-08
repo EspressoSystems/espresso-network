@@ -10,7 +10,6 @@
 pub mod task_state;
 use std::{collections::BTreeMap, fmt::Debug, num::NonZeroUsize, sync::Arc, time::Duration};
 
-use crate::EpochMembershipCoordinator;
 use async_broadcast::{broadcast, RecvError};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -46,8 +45,9 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
-    ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, HotShotConfig, HotShotInitializer,
-    MarketplaceConfig, NetworkTaskRegistry, SignatureKey, SystemContext, Versions,
+    ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, EpochMembershipCoordinator,
+    HotShotConfig, HotShotInitializer, MarketplaceConfig, NetworkTaskRegistry, SignatureKey,
+    SystemContext, Versions,
 };
 
 /// event for global event stream
@@ -280,13 +280,13 @@ pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPE
                     if matches!(event.as_ref(), HotShotEvent::Shutdown) {
                         return;
                     }
-                }
+                },
                 Err(RecvError::Closed) => {
                     return;
-                }
+                },
                 Err(e) => {
                     tracing::error!("Shutdown event monitor channel recv error: {}", e);
-                }
+                },
             }
         }
     }

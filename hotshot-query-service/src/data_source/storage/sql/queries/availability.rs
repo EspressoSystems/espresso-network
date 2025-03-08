@@ -12,27 +12,30 @@
 
 //! Availability storage implementation for a database query engine.
 
-use super::{
-    super::transaction::{query, Transaction, TransactionMode},
-    QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
-    VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
-};
-use crate::data_source::storage::sql::sqlx::Row;
-use crate::{
-    availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryableHeader,
-        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
-    },
-    data_source::storage::{AvailabilityStorage, PayloadMetadata, VidCommonMetadata},
-    types::HeightIndexed,
-    ErrorSnafu, Header, MissingSnafu, Payload, QueryError, QueryResult,
-};
+use std::ops::RangeBounds;
+
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
 use hotshot_types::traits::node_implementation::NodeType;
 use snafu::OptionExt;
 use sqlx::FromRow;
-use std::ops::RangeBounds;
+
+use super::{
+    super::transaction::{query, Transaction, TransactionMode},
+    QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
+    VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
+};
+use crate::{
+    availability::{
+        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryableHeader,
+        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
+    },
+    data_source::storage::{
+        sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
+    },
+    types::HeightIndexed,
+    ErrorSnafu, Header, MissingSnafu, Payload, QueryError, QueryResult,
+};
 
 #[async_trait]
 impl<Mode, Types> AvailabilityStorage<Types> for Transaction<Mode>

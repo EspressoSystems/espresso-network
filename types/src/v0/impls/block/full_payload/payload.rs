@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_query_service::availability::QueryablePayload;
-use hotshot_types::data::ViewNumber;
 use hotshot_types::{
+    data::ViewNumber,
     traits::{BlockPayload, EncodeBytes},
     utils::BuilderCommitment,
     vid::advz::{ADVZCommon, ADVZScheme},
@@ -13,12 +13,11 @@ use jf_vid::VidScheme;
 use sha2::Digest;
 use thiserror::Error;
 
-use crate::Transaction;
 use crate::{
     v0::impls::{NodeState, ValidatedState},
     v0_1::ChainConfig,
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
-    NsTableBuilder, Payload, PayloadByteLen, SeqTypes, TxProof,
+    NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxProof,
 };
 
 #[derive(serde::Deserialize, serde::Serialize, Error, Debug, Eq, PartialEq)]
@@ -281,7 +280,7 @@ impl PayloadByteLen {
                     ADVZScheme::get_payload_byte_len(common)
                 );
                 return false;
-            }
+            },
         };
 
         self.0 == expected

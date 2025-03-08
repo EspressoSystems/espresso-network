@@ -1,8 +1,18 @@
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    ops::RangeInclusive,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
 use anyhow::{anyhow, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
+    upgrade_commitment_map,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
@@ -27,18 +37,8 @@ use hotshot_types::{
     utils::View,
     vote::HasViewNumber,
 };
-use std::sync::Arc;
-use std::{
-    collections::{BTreeMap, HashSet},
-    fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    ops::RangeInclusive,
-    path::{Path, PathBuf},
-};
 
 use crate::ViewNumber;
-
-use espresso_types::upgrade_commitment_map;
 
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]
@@ -606,7 +606,7 @@ impl SequencerPersistence for Persistence {
                 // managed to persist the decided leaves successfully, and the event processing will
                 // just run again at the next decide.
                 tracing::warn!(?view, "event processing failed: {err:#}");
-            }
+            },
             Ok(intervals) => {
                 if let Err(err) = inner.collect_garbage(view, &intervals) {
                     // Similarly, garbage collection is not an error. We have done everything we
@@ -614,7 +614,7 @@ impl SequencerPersistence for Persistence {
                     // error but do not return it.
                     tracing::warn!(?view, "GC failed: {err:#}");
                 }
-            }
+            },
         }
 
         Ok(())
@@ -846,7 +846,7 @@ impl SequencerPersistence for Persistence {
                         // some unintended file whose name happened to match the naming convention.
                         tracing::warn!(?view, "ignoring malformed quorum proposal file: {err:#}");
                         continue;
-                    }
+                    },
                 };
             let proposal2 = convert_proposal(proposal);
 
@@ -1508,32 +1508,27 @@ mod generic_tests {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{NodeState, PubKey};
+    use std::marker::PhantomData;
+
+    use committable::{Commitment, CommitmentBoundsArkless, Committable};
+    use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
-    use hotshot_types::data::{vid_commitment, QuorumProposal2};
-    use hotshot_types::traits::node_implementation::Versions;
-
-    use hotshot_types::vid::advz::advz_scheme;
-    use sequencer_utils::test_utils::setup_test;
-    use vbs::version::StaticVersionType;
-
-    use serde_json::json;
-    use std::marker::PhantomData;
-
-    use super::*;
-    use crate::persistence::testing::TestablePersistence;
-
-    use crate::BLSPubKey;
-    use committable::Committable;
-    use committable::{Commitment, CommitmentBoundsArkless};
-    use espresso_types::{Header, Leaf, ValidatedState};
-
     use hotshot_types::{
-        simple_certificate::QuorumCertificate, simple_vote::QuorumData, traits::EncodeBytes,
+        data::{vid_commitment, QuorumProposal2},
+        simple_certificate::QuorumCertificate,
+        simple_vote::QuorumData,
+        traits::{node_implementation::Versions, EncodeBytes},
+        vid::advz::advz_scheme,
     };
     use jf_vid::VidScheme;
+    use sequencer_utils::test_utils::setup_test;
+    use serde_json::json;
+    use vbs::version::StaticVersionType;
+
+    use super::*;
+    use crate::{persistence::testing::TestablePersistence, BLSPubKey};
 
     #[test]
     fn test_config_migrations_add_builder_urls() {

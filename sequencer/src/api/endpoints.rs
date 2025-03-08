@@ -13,11 +13,12 @@ use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
     merklized_state::{
-        self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence,
+        self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
-    node, ApiState, Error,
+    node,
+    node::NodeDataSource,
+    ApiState, Error,
 };
-use hotshot_query_service::{merklized_state::Snapshot, node::NodeDataSource};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{
@@ -28,7 +29,6 @@ use hotshot_types::{
 use jf_merkle_tree::MerkleTreeScheme;
 use serde::{de::Error as _, Deserialize, Serialize};
 use snafu::OptionExt;
-
 use tagged_base64::TaggedBase64;
 use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
 use vbs::version::{StaticVersion, StaticVersionType};

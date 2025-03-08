@@ -199,10 +199,10 @@ where
                                             marketplace_config,
                                         )
                                         .await
-                                    }
+                                    },
                                     LateNodeContext::Restart => {
                                         panic!("Cannot spin up a node with Restart context")
-                                    }
+                                    },
                                 };
 
                                 let handle = context.run_tasks().await;
@@ -219,13 +219,13 @@ where
 
                                 self.handles.write().await.push(node);
                             }
-                        }
+                        },
                         NodeAction::Down => {
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
                                 tracing::error!("Node {} shutting down", idx);
                                 node.handle.shut_down().await;
                             }
-                        }
+                        },
                         NodeAction::RestartDown(delay_views) => {
                             let node_id = idx.try_into().unwrap();
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
@@ -327,25 +327,25 @@ where
                                     self.restart_contexts.insert(idx, new_ctx);
                                 }
                             }
-                        }
+                        },
                         NodeAction::RestartUp => {
                             if let Some(ctx) = self.restart_contexts.remove(&idx) {
                                 new_nodes.push((ctx.context, idx));
                                 new_networks.push(ctx.network.clone());
                             }
-                        }
+                        },
                         NodeAction::NetworkUp => {
                             if let Some(handle) = self.handles.write().await.get(idx) {
                                 tracing::error!("Node {} networks resuming", idx);
                                 handle.network.resume();
                             }
-                        }
+                        },
                         NodeAction::NetworkDown => {
                             if let Some(handle) = self.handles.write().await.get(idx) {
                                 tracing::error!("Node {} networks pausing", idx);
                                 handle.network.pause();
                             }
-                        }
+                        },
                     }
                 }
             }

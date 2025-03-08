@@ -1,37 +1,34 @@
 pub mod cdn;
 pub mod create_node_validator_api;
 
-use crate::service::client_message::{ClientMessage, InternalClientMessage};
-use crate::service::data_state::{LocationDetails, NodeIdentity};
-use crate::service::server_message::ServerMessage;
+use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
+
 use espresso_types::{BackoffParams, SeqTypes};
-use futures::channel::mpsc::SendError;
-use futures::future::Either;
 use futures::{
-    channel::mpsc::{self, Sender},
+    channel::mpsc::{self, SendError, Sender},
+    future::Either,
     FutureExt, Sink, SinkExt, Stream, StreamExt,
 };
 use hotshot_query_service::Leaf2;
 use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::light_client::{CircuitField, StateVerKey};
-use hotshot_types::signature_key::BLSPubKey;
-use hotshot_types::traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme};
-use hotshot_types::PeerConfig;
+use hotshot_types::{
+    light_client::{CircuitField, StateVerKey},
+    signature_key::BLSPubKey,
+    traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme},
+    PeerConfig,
+};
 use prometheus_parse::{Sample, Scrape};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::future::Future;
-use std::io::BufRead;
-use std::pin::Pin;
-use std::str::FromStr;
-use std::time::Duration;
-use tide_disco::socket::Connection;
-use tide_disco::{api::ApiError, Api};
-use tokio::spawn;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use tide_disco::{api::ApiError, socket::Connection, Api};
+use tokio::{spawn, task::JoinHandle, time::sleep};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
+
+use crate::service::{
+    client_message::{ClientMessage, InternalClientMessage},
+    data_state::{LocationDetails, NodeIdentity},
+    server_message::ServerMessage,
+};
 
 /// CONSTANT for protocol major version
 pub const VERSION_MAJ: u16 = 0;
@@ -64,11 +61,11 @@ impl fmt::Display for Error {
         match self {
             Self::UnhandledSurfDisco(status, msg) => {
                 write!(f, "Unhandled Surf Disco Error: {} - {}", status, msg)
-            }
+            },
 
             Self::UnhandledTideDisco(status, msg) => {
                 write!(f, "Unhandled Tide Disco Error: {} - {}", status, msg)
-            }
+            },
         }
     }
 }
@@ -255,7 +252,7 @@ where
                             // let's queue up the next client message to receive
                             next_client_message = socket_stream.next();
                             next_server_message = remaining_server_message;
-                        }
+                        },
                         Either::Right((server_message, remaining_client_message)) => {
                             // Alright, we have a server message, we want to forward it
                             // to the down-stream client.
@@ -277,7 +274,7 @@ where
                             // let's queue up the next server message to receive
                             next_server_message = server_message_receiver.next();
                             next_client_message = remaining_client_message;
-                        }
+                        },
                     }
                 }
 
@@ -327,7 +324,7 @@ pub async fn get_stake_table_from_sequencer(
         Err(err) => {
             tracing::info!("retrieve stake table request failed: {}", err);
             return Err(err);
-        }
+        },
     };
 
     let public_hot_shot_config = sequencer_config.config;
@@ -481,7 +478,7 @@ impl LeafStreamRetriever for HotshotQueryServiceLeafStreamRetriever {
                 Err(err) => {
                     tracing::info!("retrieve block height request failed: {}", err);
                     return Err(err);
-                }
+                },
             };
 
             let latest_block_start = block_height.saturating_sub(50);
@@ -504,7 +501,7 @@ impl LeafStreamRetriever for HotshotQueryServiceLeafStreamRetriever {
                 Err(err) => {
                     tracing::info!("retrieve leaves stream failed: {}", err);
                     return Err(err);
-                }
+                },
             };
 
             Ok(leaves_stream)
@@ -621,7 +618,7 @@ impl ProcessProduceLeafStreamTask {
                     delay = backoff_params.backoff(delay);
                     sleep(delay).await;
                     continue;
-                }
+                },
 
                 Ok(leaves_stream) => leaves_stream,
             };
@@ -795,7 +792,7 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
                     // We couldn't parse the public key, so we can't create a NodeIdentity.
                     tracing::info!("parsing public key failed: {}", err);
                     return;
-                }
+                },
             }
         } else {
             // We were unable to find the public key in the scrape result.
@@ -878,7 +875,7 @@ pub fn node_identity_from_scrape(scrape: Scrape) -> Option<NodeIdentity> {
         Err(err) => {
             tracing::info!("parsing public key failed: {}", err);
             return None;
-        }
+        },
     };
 
     let mut node_identity = NodeIdentity::from_public_key(public_key);
@@ -937,7 +934,7 @@ impl ProcessNodeIdentityUrlStreamTask {
                 None => {
                     tracing::info!("node identity url stream closed");
                     return;
-                }
+                },
             };
 
             // Alright we have a new Url to try and scrape for a Node Identity.
@@ -949,7 +946,7 @@ impl ProcessNodeIdentityUrlStreamTask {
                 Err(err) => {
                     tracing::warn!("get node identity from url failed.  bad base url?: {}", err);
                     continue;
-                }
+                },
             };
 
             let send_result = node_identity_sender.send(node_identity).await;

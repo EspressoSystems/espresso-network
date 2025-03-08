@@ -5,6 +5,8 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #![allow(clippy::panic)]
+use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, sync::Arc};
+
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use bitvec::bitvec;
@@ -22,7 +24,6 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_task_impls::events::HotShotEvent;
-use hotshot_types::traits::node_implementation::ConsensusTime;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseShare},
@@ -33,7 +34,7 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     traits::{
         election::Membership,
-        node_implementation::{NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         EncodeBytes,
     },
     utils::{option_epoch_from_block_number, View, ViewInner},
@@ -42,7 +43,6 @@ use hotshot_types::{
 };
 use primitive_types::U256;
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, sync::Arc};
 use vbs::version::Version;
 
 use crate::{test_builder::TestDescription, test_launcher::TestLauncher};

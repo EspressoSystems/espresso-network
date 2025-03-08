@@ -11,6 +11,31 @@
 // see <https://www.gnu.org/licenses/>.
 
 #![cfg(feature = "sql-data-source")]
+use std::{cmp::min, fmt::Debug, str::FromStr, time::Duration};
+
+use anyhow::Context;
+use async_trait::async_trait;
+use chrono::Utc;
+use committable::Committable;
+#[cfg(not(feature = "embedded-db"))]
+use futures::future::FutureExt;
+use hotshot_types::{
+    data::{Leaf, Leaf2, VidShare},
+    simple_certificate::{QuorumCertificate, QuorumCertificate2},
+    traits::{metrics::Metrics, node_implementation::NodeType},
+    vid::advz::ADVZShare,
+};
+use itertools::Itertools;
+use log::LevelFilter;
+#[cfg(not(feature = "embedded-db"))]
+use sqlx::postgres::{PgConnectOptions, PgSslMode};
+#[cfg(feature = "embedded-db")]
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{
+    pool::{Pool, PoolOptions},
+    ConnectOptions, Row,
+};
+
 use crate::{
     data_source::{
         storage::pruning::{PruneStorage, PrunerCfg, PrunerConfig},
@@ -21,31 +46,6 @@ use crate::{
     status::HasMetrics,
     QueryError, QueryResult,
 };
-use anyhow::Context;
-use async_trait::async_trait;
-use chrono::Utc;
-use committable::Committable;
-use hotshot_types::{
-    data::{Leaf, Leaf2, VidShare},
-    simple_certificate::{QuorumCertificate, QuorumCertificate2},
-    traits::{metrics::Metrics, node_implementation::NodeType},
-    vid::advz::ADVZShare,
-};
-
-use itertools::Itertools;
-use log::LevelFilter;
-
-#[cfg(not(feature = "embedded-db"))]
-use futures::future::FutureExt;
-#[cfg(not(feature = "embedded-db"))]
-use sqlx::postgres::{PgConnectOptions, PgSslMode};
-#[cfg(feature = "embedded-db")]
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{
-    pool::{Pool, PoolOptions},
-    ConnectOptions, Row,
-};
-use std::{cmp::min, fmt::Debug, str::FromStr, time::Duration};
 pub extern crate sqlx;
 pub use sqlx::{Database, Sqlite};
 
@@ -55,10 +55,6 @@ mod queries;
 mod transaction;
 
 pub use anyhow::Error;
-// This needs to be reexported so that we can reference it by absolute path relative to this crate
-// in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
-// crate which doesn't have `include_dir` as a dependency.
-pub use crate::include_migrations;
 pub use db::*;
 pub use include_dir::include_dir;
 pub use queries::QueryBuilder;
@@ -66,6 +62,10 @@ pub use refinery::Migration;
 pub use transaction::*;
 
 use self::{migrate::Migrator, transaction::PoolMetrics};
+// This needs to be reexported so that we can reference it by absolute path relative to this crate
+// in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
+// crate which doesn't have `include_dir` as a dependency.
+pub use crate::include_migrations;
 
 /// Embed migrations from the given directory into the current binary for PostgreSQL or SQLite.
 ///
@@ -577,11 +577,11 @@ impl SqlStorage {
             match runner.run_async(&mut Migrator::from(&mut conn)).await {
                 Ok(report) => {
                     tracing::info!("ran DB migrations: {report:?}");
-                }
+                },
                 Err(err) => {
                     tracing::error!("DB migrations failed: {:?}", err.report());
                     Err(err)?;
-                }
+                },
             }
         }
 
@@ -709,7 +709,7 @@ impl PruneStorage for SqlStorage {
                 };
 
                 height
-            }
+            },
         };
 
         // Prune data exceeding target retention in batches
@@ -973,21 +973,19 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 #[cfg(all(any(test, feature = "testing"), not(target_os = "windows")))]
 pub mod testing {
     #![allow(unused_imports)]
-    use refinery::Migration;
     use std::{
         env,
         process::{Command, Stdio},
         str::{self, FromStr},
         time::Duration,
     };
-    use tokio::net::TcpStream;
-    use tokio::time::timeout;
 
     use portpicker::pick_unused_port;
+    use refinery::Migration;
+    use tokio::{net::TcpStream, time::timeout};
 
     use super::Config;
-    use crate::availability::query_data::QueryableHeader;
-    use crate::testing::sleep;
+    use crate::{availability::query_data::QueryableHeader, testing::sleep};
     #[derive(Debug)]
     pub struct TmpDb {
         #[cfg(not(feature = "embedded-db"))]
@@ -1275,28 +1273,28 @@ pub mod testing {
 // These tests run the `postgres` Docker image, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
+    use std::time::Duration;
+
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         node_types::TestVersions,
         state_types::{TestInstanceState, TestValidatedState},
     };
-    use jf_vid::VidScheme;
-
     use hotshot_types::{
-        data::vid_commitment,
-        traits::{node_implementation::Versions, EncodeBytes},
-        vid::advz::advz_scheme,
-    };
-    use hotshot_types::{
-        data::{QuorumProposal, ViewNumber},
+        data::{vid_commitment, QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
-        traits::{block_contents::BlockHeader, node_implementation::ConsensusTime},
+        traits::{
+            block_contents::BlockHeader,
+            node_implementation::{ConsensusTime, Versions},
+            EncodeBytes,
+        },
+        vid::advz::advz_scheme,
     };
     use jf_merkle_tree::{
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
-    use std::time::Duration;
+    use jf_vid::VidScheme;
     use tokio::time::sleep;
     use vbs::version::StaticVersionType;
 

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Context;
 use espresso_types::{FeeAccount, FeeAmount, FeeMerkleTree, Header};
 use ethers::types::Address;
@@ -6,7 +8,6 @@ use jf_merkle_tree::{
     prelude::{MerkleProof, Sha3Node},
     MerkleTreeScheme,
 };
-use std::time::Duration;
 use surf_disco::{
     error::ClientError,
     socket::{Connection, Unsupported},
@@ -110,7 +111,7 @@ impl SequencerClient {
                     } else {
                         sleep(Duration::from_millis(200)).await;
                     }
-                }
+                },
             }
         };
 

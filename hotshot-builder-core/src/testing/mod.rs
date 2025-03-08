@@ -1,16 +1,16 @@
-use std::{collections::VecDeque, marker::PhantomData};
+use std::{collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration};
 
-use crate::{
-    builder_state::{
-        BuilderState, DAProposalInfo, DaProposalMessage, MessageType, QuorumProposalMessage,
-    },
-    service::ReceivedTransaction,
-};
-use async_broadcast::broadcast;
-use async_broadcast::Sender as BroadcastSender;
+use async_broadcast::{broadcast, Sender as BroadcastSender};
+use async_lock::RwLock;
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::{
     traits::BlockPayload,
     types::{BLSPubKey, SignatureKey},
+};
+use hotshot_example_types::{
+    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
+    node_types::{TestTypes, TestVersions},
+    state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
     data::{
@@ -25,26 +25,21 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use vbs::version::StaticVersionType;
-
-use hotshot_example_types::{
-    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TestTypes, TestVersions},
-    state_types::{TestInstanceState, TestValidatedState},
-};
-use sha2::{Digest, Sha256};
-
-use crate::service::GlobalState;
-use async_lock::RwLock;
-use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use marketplace_builder_shared::{
     block::{BuilderStateId, ParentBlockReferences},
     testing::constants::{
         TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM, TEST_PROTOCOL_MAX_BLOCK_SIZE,
     },
 };
-use std::sync::Arc;
-use std::time::Duration;
+use sha2::{Digest, Sha256};
+use vbs::version::StaticVersionType;
+
+use crate::{
+    builder_state::{
+        BuilderState, DAProposalInfo, DaProposalMessage, MessageType, QuorumProposalMessage,
+    },
+    service::{GlobalState, ReceivedTransaction},
+};
 
 mod basic_test;
 pub mod finalization_test;
@@ -192,7 +187,7 @@ pub async fn calc_proposal_msg<V: Versions>(
                 &TestInstanceState::default(),
             )
             .await
-        }
+        },
         Some(prev_proposal) => {
             let prev_justify_qc = prev_proposal.justify_qc();
             let quorum_data = QuorumData2::<TestTypes> {
@@ -208,7 +203,7 @@ pub async fn calc_proposal_msg<V: Versions>(
                 prev_justify_qc.signatures.clone(),
                 PhantomData,
             )
-        }
+        },
     };
 
     tracing::debug!("Iteration: {} justify_qc: {:?}", round, justify_qc);

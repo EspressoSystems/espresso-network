@@ -1,15 +1,13 @@
-use std::sync::Arc;
+use std::{cmp::Ordering, collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use committable::Commitment;
-use committable::Committable;
-use espresso_types::config::PublicNetworkConfig;
-use espresso_types::traits::SequencerPersistence;
+use committable::{Commitment, Committable};
 use espresso_types::{
-    v0::traits::StateCatchup, v0_99::ChainConfig, BackoffParams, BlockMerkleTree, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState,
+    config::PublicNetworkConfig, traits::SequencerPersistence, v0::traits::StateCatchup,
+    v0_99::ChainConfig, BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState,
 };
 use futures::future::{Future, FutureExt, TryFuture, TryFutureExt};
 use hotshot_types::{
@@ -25,15 +23,13 @@ use itertools::Itertools;
 use jf_merkle_tree::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
-use std::{cmp::Ordering, collections::HashMap, fmt::Display, time::Duration};
 use surf_disco::Request;
 use tide_disco::error::ServerError;
 use tokio::time::timeout;
 use url::Url;
 use vbs::version::StaticVersionType;
 
-use crate::api::BlocksFrontier;
-use crate::PubKey;
+use crate::{api::BlocksFrontier, PubKey};
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
@@ -75,7 +71,7 @@ pub(crate) async fn local_and_remote(
         Err(err) => {
             tracing::warn!("not using local catchup: {err:#}");
             Arc::new(remote)
-        }
+        },
     }
 }
 
@@ -164,15 +160,15 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                     requests.insert(id, true);
                     res = Ok(t);
                     break;
-                }
+                },
                 Ok(Err(err)) => {
                     tracing::warn!(id, ?score, peer = %client.url, "error from peer: {err:#}");
                     requests.insert(id, false);
-                }
+                },
                 Err(_) => {
                     tracing::warn!(id, ?score, peer = %client.url, ?timeout_dur, "request timed out");
                     requests.insert(id, false);
-                }
+                },
             }
         }
 

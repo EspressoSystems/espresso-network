@@ -16,6 +16,8 @@
 //! consensus network with two nodes and connects a query service to each node. It runs each query
 //! server on local host. The program continues until it is manually killed.
 
+use std::{num::NonZeroUsize, str::FromStr, sync::Arc, time::Duration};
+
 use async_lock::RwLock;
 use clap::Parser;
 use futures::future::{join_all, try_join_all};
@@ -48,7 +50,6 @@ use hotshot_types::{
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
-use std::{num::NonZeroUsize, str::FromStr, sync::Arc, time::Duration};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;

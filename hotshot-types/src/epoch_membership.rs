@@ -1,17 +1,25 @@
-use std::collections::BTreeSet;
-use std::num::NonZeroU64;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    num::NonZeroU64,
+    sync::Arc,
+};
 
 use async_broadcast::{broadcast, InactiveReceiver};
 use async_lock::{Mutex, RwLock};
-use hotshot_utils::anytrace::{self, Error, Level, Result, DEFAULT_LOG_LEVEL};
-use hotshot_utils::{ensure, line_info, log, warn};
+use hotshot_utils::{
+    anytrace::{self, Error, Level, Result, DEFAULT_LOG_LEVEL},
+    ensure, line_info, log, warn,
+};
 
-use crate::drb::DrbResult;
-use crate::traits::election::Membership;
-use crate::traits::node_implementation::{ConsensusTime, NodeType};
-use crate::utils::root_block_in_epoch;
-use crate::PeerConfig;
+use crate::{
+    drb::DrbResult,
+    traits::{
+        election::Membership,
+        node_implementation::{ConsensusTime, NodeType},
+    },
+    utils::root_block_in_epoch,
+    PeerConfig,
+};
 
 type EpochMap<TYPES> =
     HashMap<<TYPES as NodeType>::Epoch, InactiveReceiver<Result<EpochMembership<TYPES>>>>;

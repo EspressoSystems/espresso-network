@@ -1,8 +1,9 @@
-use crate::common::TestConfig;
 use anyhow::Result;
 use espresso_types::{FeeVersion, MarketplaceVersion};
 use futures::{future::join_all, StreamExt};
 use vbs::version::StaticVersionType;
+
+use crate::common::TestConfig;
 
 const SEQUENCER_BLOCKS_TIMEOUT: u64 = 200;
 

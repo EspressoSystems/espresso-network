@@ -10,8 +10,8 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
+
 use tide_disco::api::{Api, ApiError};
 use toml::{map::Entry, Value};
 use vbs::version::StaticVersionType;
@@ -40,7 +40,7 @@ fn merge_toml(into: &mut Value, from: Value) {
                 Entry::Occupied(mut entry) => merge_toml(entry.get_mut(), value),
                 Entry::Vacant(entry) => {
                     entry.insert(value);
-                }
+                },
             }
         }
     }

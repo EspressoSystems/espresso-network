@@ -12,6 +12,18 @@
 
 //! Node storage implementation for a database query engine.
 
+use std::ops::{Bound, RangeBounds};
+
+use anyhow::anyhow;
+use async_trait::async_trait;
+use futures::stream::{StreamExt, TryStreamExt};
+use hotshot_types::{
+    data::VidShare,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+};
+use snafu::OptionExt;
+use sqlx::Row;
+
 use super::{
     super::transaction::{query, query_as, Transaction, TransactionMode, Write},
     parse_header, DecodeError, QueryBuilder, HEADER_COLUMNS,
@@ -24,16 +36,6 @@ use crate::{
     types::HeightIndexed,
     Header, MissingSnafu, NotFoundSnafu, QueryError, QueryResult,
 };
-use anyhow::anyhow;
-use async_trait::async_trait;
-use futures::stream::{StreamExt, TryStreamExt};
-use hotshot_types::{
-    data::VidShare,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-};
-use snafu::OptionExt;
-use sqlx::Row;
-use std::ops::{Bound, RangeBounds};
 
 #[async_trait]
 impl<Mode, Types> NodeStorage<Types> for Transaction<Mode>
@@ -50,11 +52,11 @@ where
                 // The height of the block is the number of blocks below it, so the total number of
                 // blocks is one more than the height of the highest block.
                 Ok(height as usize + 1)
-            }
+            },
             (None,) => {
                 // If there are no blocks yet, the height is 0.
                 Ok(0)
-            }
+            },
         }
     }
 
@@ -174,11 +176,11 @@ where
                 // The height of the block is the number of blocks below it, so the total number of
                 // blocks is one more than the height of the highest block.
                 height as usize + 1
-            }
+            },
             None => {
                 // If there are no blocks yet, the height is 0.
                 0
-            }
+            },
         };
         let total_leaves = row.get::<i64, _>("total_leaves") as usize;
         let null_payloads = row.get::<i64, _>("null_payloads") as usize;
@@ -216,7 +218,7 @@ where
                 // sufficient data to answer the query is not as simple as just trying `load_header`
                 // for a specific block ID.
                 return self.time_window::<Types>(t, end, limit).await;
-            }
+            },
             WindowStart::Height(h) => h,
             WindowStart::Hash(h) => self.load_header::<Types>(h).await?.block_number(),
         };
@@ -479,7 +481,7 @@ async fn aggregate_range_bounds(
                 return Ok(None);
             }
             height - 1
-        }
+        },
     };
     Ok(Some((from, to)))
 }

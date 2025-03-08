@@ -47,16 +47,18 @@ pub use update::{Transaction, UpdateDataSource, VersionedDataSource};
 
 #[cfg(any(test, feature = "testing"))]
 mod test_helpers {
+    use std::ops::{Bound, RangeBounds};
+
+    use futures::{
+        future,
+        stream::{BoxStream, StreamExt},
+    };
+
     use crate::{
         availability::{BlockQueryData, Fetch, LeafQueryData},
         node::NodeDataSource,
         testing::{consensus::TestableDataSource, mocks::MockTypes},
     };
-    use futures::{
-        future,
-        stream::{BoxStream, StreamExt},
-    };
-    use std::ops::{Bound, RangeBounds};
 
     /// Apply an upper bound to a range based on the currently available block height.
     async fn bound_range<R, D>(ds: &D, range: R) -> impl RangeBounds<usize>
@@ -119,6 +121,16 @@ mod test_helpers {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod availability_tests {
+    use std::{
+        collections::HashMap,
+        fmt::Debug,
+        ops::{Bound, RangeBounds},
+    };
+
+    use committable::Committable;
+    use futures::stream::StreamExt;
+    use hotshot_types::data::Leaf2;
+
     use super::test_helpers::*;
     use crate::{
         availability::{payload_size, BlockId},
@@ -131,12 +143,6 @@ pub mod availability_tests {
         },
         types::HeightIndexed,
     };
-    use committable::Committable;
-    use futures::stream::StreamExt;
-    use hotshot_types::data::Leaf2;
-    use std::collections::HashMap;
-    use std::fmt::Debug;
-    use std::ops::{Bound, RangeBounds};
 
     async fn validate(ds: &impl TestableDataSource) {
         // Check the consistency of every block/leaf pair. Keep track of payloads and transactions
@@ -537,6 +543,10 @@ pub mod availability_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
+    use committable::Committable;
+    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
+    use hotshot_types::simple_certificate::QuorumCertificate2;
+
     use crate::{
         availability::{BlockQueryData, LeafQueryData},
         data_source::{
@@ -552,9 +562,6 @@ pub mod persistence_tests {
         types::HeightIndexed,
         Leaf2,
     };
-    use committable::Committable;
-    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
-    use hotshot_types::simple_certificate::QuorumCertificate2;
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_revert<D: TestableDataSource>()
@@ -756,6 +763,24 @@ pub mod persistence_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod node_tests {
+    use std::time::Duration;
+
+    use committable::Committable;
+    use futures::{future::join_all, stream::StreamExt};
+    use hotshot::traits::BlockPayload;
+    use hotshot_example_types::{
+        block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
+        node_types::TestTypes,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
+    use hotshot_types::{
+        data::{vid_commitment, VidCommitment, VidShare},
+        traits::{block_contents::EncodeBytes, node_implementation::Versions},
+        vid::advz::{advz_scheme, ADVZScheme},
+    };
+    use jf_vid::VidScheme;
+    use vbs::version::StaticVersionType;
+
     use crate::{
         availability::{
             BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, VidCommonQueryData,
@@ -773,24 +798,6 @@ pub mod node_tests {
         types::HeightIndexed,
         Header,
     };
-    use committable::Committable;
-    use futures::{future::join_all, stream::StreamExt};
-    use hotshot::traits::BlockPayload;
-    use hotshot_example_types::{
-        block_types::TestBlockPayload, node_types::TestTypes, state_types::TestValidatedState,
-    };
-    use hotshot_example_types::{
-        block_types::{TestBlockHeader, TestMetadata},
-        state_types::TestInstanceState,
-    };
-    use hotshot_types::{
-        data::{vid_commitment, VidCommitment, VidShare},
-        traits::{block_contents::EncodeBytes, node_implementation::Versions},
-        vid::advz::{advz_scheme, ADVZScheme},
-    };
-    use jf_vid::VidScheme;
-    use std::time::Duration;
-    use vbs::version::StaticVersionType;
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_sync_status<D: TestableDataSource>()
@@ -1387,6 +1394,8 @@ pub mod node_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod status_tests {
+    use std::time::Duration;
+
     use crate::{
         status::StatusDataSource,
         testing::{
@@ -1395,7 +1404,6 @@ pub mod status_tests {
             setup_test, sleep,
         },
     };
-    use std::time::Duration;
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_metrics<D: DataSourceLifeCycle + StatusDataSource>() {

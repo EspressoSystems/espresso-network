@@ -10,8 +10,14 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::ops::{Bound, RangeBounds};
+
+use async_trait::async_trait;
+use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
+use jf_merkle_tree::prelude::MerkleProof;
+use tagged_base64::TaggedBase64;
+
 use super::VersionedDataSource;
-use crate::data_source::storage::pruning::PrunedHeightDataSource;
 use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
@@ -19,6 +25,7 @@ use crate::{
         TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
         VidCommonQueryData,
     },
+    data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
@@ -29,12 +36,6 @@ use crate::{
     status::{HasMetrics, StatusDataSource},
     Header, Payload, QueryResult, Transaction,
 };
-use async_trait::async_trait;
-use hotshot_types::data::VidShare;
-use hotshot_types::traits::node_implementation::NodeType;
-use jf_merkle_tree::prelude::MerkleProof;
-use std::ops::{Bound, RangeBounds};
-use tagged_base64::TaggedBase64;
 /// Wrapper to add extensibility to an existing data source.
 ///
 /// [`ExtensibleDataSource`] adds app-specific data to any existing data source. It implements all
@@ -500,6 +501,8 @@ where
 
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
+    use hotshot::types::Event;
+
     use super::*;
     use crate::{
         data_source::UpdateDataSource,
@@ -508,7 +511,6 @@ mod impl_testable_data_source {
             mocks::MockTypes,
         },
     };
-    use hotshot::types::Event;
 
     #[async_trait]
     impl<D, U> DataSourceLifeCycle for ExtensibleDataSource<D, U>
@@ -540,7 +542,6 @@ mod impl_testable_data_source {
 mod test {
     use super::ExtensibleDataSource;
     use crate::testing::consensus::MockDataSource;
-
     // For some reason this is the only way to import the macro defined in another module of this
     // crate.
     use crate::*;

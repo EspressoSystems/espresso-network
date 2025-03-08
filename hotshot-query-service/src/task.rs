@@ -12,10 +12,10 @@
 
 //! Async task utilities.
 
+use std::{fmt::Display, sync::Arc};
+
 use derivative::Derivative;
 use futures::future::Future;
-use std::fmt::Display;
-use std::sync::Arc;
 use tokio::{
     spawn,
     task::{JoinError, JoinHandle},

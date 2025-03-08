@@ -199,19 +199,19 @@ impl TxProof {
                     {
                         return Some(false);
                     }
-                }
-                (None, true) => {} // 0-length tx, nothing to verify
+                },
+                (None, true) => {}, // 0-length tx, nothing to verify
                 (None, false) => {
                     tracing::error!(
                         "tx verify: missing proof for nonempty tx payload range {:?}",
                         range
                     );
                     return None;
-                }
+                },
                 (Some(_), true) => {
                     tracing::error!("tx verify: unexpected proof for empty tx payload range");
                     return None;
-                }
+                },
             }
         }
 

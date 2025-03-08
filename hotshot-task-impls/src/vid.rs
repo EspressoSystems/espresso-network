@@ -160,7 +160,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     &event_stream,
                 )
                 .await;
-            }
+            },
 
             HotShotEvent::ViewChange(view, epoch) => {
                 if *epoch > self.cur_epoch {
@@ -178,7 +178,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 self.cur_view = view;
 
                 return None;
-            }
+            },
 
             HotShotEvent::QuorumProposalSend(proposal, _) => {
                 let proposed_block_number = proposal.data.block_header().block_number();
@@ -243,11 +243,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     &event_stream,
                 )
                 .await;
-            }
+            },
             HotShotEvent::Shutdown => {
                 return Some(HotShotTaskCompleted);
-            }
-            _ => {}
+            },
+            _ => {},
         }
         None
     }

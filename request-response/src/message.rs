@@ -140,14 +140,14 @@ impl<R: Request, K: SignatureKey> Serializable for Message<R, K> {
 
                 // Write the request content
                 bytes.extend_from_slice(request_message.to_bytes()?.as_slice());
-            }
+            },
             Message::Response(response_message) => {
                 // Write the type (response)
                 bytes.push(1);
 
                 // Write the response content
                 bytes.extend_from_slice(response_message.to_bytes()?.as_slice());
-            }
+            },
         };
 
         Ok(bytes)
@@ -168,13 +168,13 @@ impl<R: Request, K: SignatureKey> Serializable for Message<R, K> {
                 Ok(Message::Request(RequestMessage::from_bytes(&read_to_end(
                     &mut bytes,
                 )?)?))
-            }
+            },
             1 => {
                 // Read the `ResponseMessage`
                 Ok(Message::Response(ResponseMessage::from_bytes(
                     &read_to_end(&mut bytes)?,
                 )?))
-            }
+            },
             _ => Err(anyhow::anyhow!("invalid message type")),
         }
     }
@@ -353,7 +353,7 @@ mod tests {
 
                     // It should not be valid anymore
                     (false, Duration::from_secs(1))
-                }
+                },
 
                 2 => {
                     // Alter the timestamp
@@ -361,13 +361,13 @@ mod tests {
 
                     // It should not be valid anymore
                     (false, Duration::from_secs(1))
-                }
+                },
 
                 3 => {
                     // Change the request ttl to be 0. This should make the request
                     // invalid immediately
                     (true, Duration::from_secs(0))
-                }
+                },
 
                 _ => unreachable!(),
             };

@@ -1,3 +1,5 @@
+use std::{fs, path::Path, sync::Arc, time::Duration};
+
 /// Utilities for loading an initial permissioned stake table from a toml file.
 ///
 /// The initial stake table is passed to the permissioned stake table contract
@@ -16,8 +18,6 @@ use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::stake_table::{bls_jf_to_sol, NodeInfoJf};
 use hotshot_types::network::PeerConfigKeys;
 use url::Url;
-
-use std::{fs, path::Path, sync::Arc, time::Duration};
 
 /// A stake table config stored in a file
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -144,11 +144,14 @@ pub async fn update_stake_table(
 
 #[cfg(test)]
 mod test {
-    use crate::stake_table::{PermissionedStakeTableConfig, PermissionedStakeTableUpdate};
-    use crate::test_utils::setup_test;
     use hotshot::types::{BLSPubKey, SignatureKey};
     use hotshot_types::{light_client::StateKeyPair, network::PeerConfigKeys};
     use toml::toml;
+
+    use crate::{
+        stake_table::{PermissionedStakeTableConfig, PermissionedStakeTableUpdate},
+        test_utils::setup_test,
+    };
 
     fn assert_peer_config_eq(p1: &PeerConfigKeys<BLSPubKey>, p2: &PeerConfigKeys<BLSPubKey>) {
         assert_eq!(p1.stake_table_key, p2.stake_table_key);

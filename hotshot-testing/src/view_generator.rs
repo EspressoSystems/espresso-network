@@ -675,7 +675,7 @@ impl<V: Versions> Stream for TestViewGenerator<V> {
             Poll::Ready(test_view) => {
                 self.current_view = Some(test_view.clone());
                 Poll::Ready(Some(test_view))
-            }
+            },
             Poll::Pending => Poll::Pending,
         }
     }

@@ -6,8 +6,7 @@ use espresso_types::{
     traits::StateCatchup, v0_99::ChainConfig, BlockMerkleTree, Delta, FeeAccount, FeeMerkleTree,
     Leaf2, ValidatedState,
 };
-use futures::future::Future;
-use futures::StreamExt;
+use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, LeafQueryData},
@@ -300,12 +299,12 @@ where
                     parent_leaf = leaf;
                     parent_state = state;
                     break;
-                }
+                },
                 Err(err) => {
                     tracing::error!(height = leaf.height(), "failed to updated state: {err:#}");
                     // If we fail, delay for a second and retry.
                     sleep(Duration::from_secs(1)).await;
-                }
+                },
             }
         }
     }

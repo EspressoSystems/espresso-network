@@ -44,15 +44,15 @@ fn sanitize_node_map<TYPES: NodeType>(
         reduced.dedup();
 
         match reduced.len() {
-            0 => {}
+            0 => {},
             1 => {
                 result.insert(*view, reduced[0].clone());
-            }
+            },
             _ => {
                 bail!(
                     "We have received inconsistent leaves for view {view:?}. Leaves:\n\n{leaves:?}"
                 );
-            }
+            },
         }
     }
 
@@ -300,12 +300,12 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
         match result {
             Ok(TestProgress::Finished) => {
                 let _ = self.test_sender.broadcast(TestEvent::Shutdown).await;
-            }
+            },
             Err(e) => {
                 self.add_error(e);
                 let _ = self.test_sender.broadcast(TestEvent::Shutdown).await;
-            }
-            Ok(TestProgress::Incomplete) => {}
+            },
+            Ok(TestProgress::Incomplete) => {},
         }
     }
 

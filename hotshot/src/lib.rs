@@ -215,10 +215,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     ) -> Arc<Self> {
         #[allow(clippy::panic)]
         match storage.migrate_consensus().await {
-            Ok(()) => {}
+            Ok(()) => {},
             Err(e) => {
                 panic!("Failed to migrate consensus storage: {e}");
-            }
+            },
         }
 
         let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
@@ -767,10 +767,10 @@ where
                         match event {
                             Either::Left(msg) => {
                                 let _ = left_sender.broadcast(msg.into()).await;
-                            }
+                            },
                             Either::Right(msg) => {
                                 let _ = right_sender.broadcast(msg.into()).await;
-                            }
+                            },
                         }
                     }
                 }

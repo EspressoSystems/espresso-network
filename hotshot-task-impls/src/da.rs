@@ -10,10 +10,10 @@ use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
-use hotshot_types::epoch_membership::EpochMembershipCoordinator;
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
     data::{vid_commitment, DaProposal2, PackedBundle},
+    epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
@@ -141,7 +141,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     &event_stream,
                 )
                 .await;
-            }
+            },
             HotShotEvent::DaProposalValidated(proposal, sender) => {
                 let cur_view = self.consensus.read().await.cur_view();
                 let view_number = proposal.data.view_number();
@@ -315,7 +315,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                         }
                     });
                 }
-            }
+            },
             HotShotEvent::DaVoteRecv(ref vote) => {
                 tracing::debug!("DA vote recv, Main Task {:?}", vote.view_number());
                 // Check if we are the leader and the vote is from the sender.
@@ -348,7 +348,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     EpochTransitionIndicator::NotInTransition,
                 )
                 .await?;
-            }
+            },
             HotShotEvent::ViewChange(view, epoch) => {
                 if *epoch > self.cur_epoch {
                     self.cur_epoch = *epoch;
@@ -364,7 +364,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     tracing::info!("View changed by more than 1 going to view {:?}", view);
                 }
                 self.cur_view = view;
-            }
+            },
             HotShotEvent::BlockRecv(packed_bundle) => {
                 let PackedBundle::<TYPES> {
                     encoded_transactions,
@@ -434,8 +434,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 {
                     tracing::trace!("{e:?}");
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
         Ok(())
     }

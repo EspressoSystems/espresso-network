@@ -12,16 +12,17 @@
 
 #![cfg(feature = "file-system-data-source")]
 
+use std::path::Path;
+
+use atomic_store::AtomicStoreLoader;
+use hotshot_types::traits::node_implementation::NodeType;
+
+pub use super::storage::fs::Transaction;
 use super::{storage::FileSystemStorage, AvailabilityProvider, FetchingDataSource};
 use crate::{
     availability::{query_data::QueryablePayload, QueryableHeader},
     Header, Payload,
 };
-use atomic_store::AtomicStoreLoader;
-use hotshot_types::traits::node_implementation::NodeType;
-use std::path::Path;
-
-pub use super::storage::fs::Transaction;
 
 /// A data source for the APIs provided in this crate, backed by the local file system.
 ///
@@ -239,14 +240,15 @@ where
 
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
+    use async_trait::async_trait;
+    use hotshot::types::Event;
+    use tempfile::TempDir;
+
     use super::*;
     use crate::{
         data_source::UpdateDataSource,
         testing::{consensus::DataSourceLifeCycle, mocks::MockTypes},
     };
-    use async_trait::async_trait;
-    use hotshot::types::Event;
-    use tempfile::TempDir;
 
     #[async_trait]
     impl<P: AvailabilityProvider<MockTypes> + Default> DataSourceLifeCycle
@@ -279,11 +281,10 @@ mod impl_testable_data_source {
 #[cfg(test)]
 mod test {
     use super::FileSystemDataSource;
-    use crate::{fetching::provider::NoFetching, testing::mocks::MockTypes};
-
     // For some reason this is the only way to import the macro defined in another module of this
     // crate.
     use crate::*;
+    use crate::{fetching::provider::NoFetching, testing::mocks::MockTypes};
 
     instantiate_data_source_tests!(FileSystemDataSource<MockTypes, NoFetching>);
 }

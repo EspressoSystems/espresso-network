@@ -1,6 +1,5 @@
 use futures::future;
-use hotshot::helpers::initialize_logging;
-use hotshot::traits::BlockPayload;
+use hotshot::{helpers::initialize_logging, traits::BlockPayload};
 use hotshot_types::{
     data::VidCommitment,
     traits::EncodeBytes,

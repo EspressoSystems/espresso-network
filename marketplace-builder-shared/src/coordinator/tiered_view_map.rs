@@ -143,10 +143,10 @@ where
         match self.0.entry(*key.view()) {
             Entry::Vacant(entry) => {
                 entry.insert(nem![key.into_subkey() => value]);
-            }
+            },
             Entry::Occupied(mut entry) => {
                 entry.get_mut().insert(key.into_subkey(), value);
-            }
+            },
         }
     }
 
@@ -181,13 +181,13 @@ where
 mod tests {
     use std::{cmp::Ordering, ops::Bound, sync::Arc};
 
-    use crate::{state::BuilderState, testing::mock};
-
-    use super::*;
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::{data::ViewNumber, traits::node_implementation::ConsensusTime};
     use rand::{distributions::Standard, thread_rng, Rng};
     use tracing_test::traced_test;
+
+    use super::*;
+    use crate::{state::BuilderState, testing::mock};
 
     type View = ViewNumber;
     type BuilderStateMap =

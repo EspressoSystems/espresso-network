@@ -17,9 +17,7 @@ pub(crate) mod monetary_value;
 pub(crate) mod query_data;
 pub(crate) mod traits;
 
-use self::errors::InvalidLimit;
-use crate::availability::{QueryableHeader, QueryablePayload};
-use crate::{api::load_api, Header, Payload, Transaction};
+use std::{fmt::Display, num::NonZeroUsize, path::Path};
 
 pub use currency::*;
 pub use data_source::*;
@@ -28,13 +26,16 @@ use hotshot_types::traits::node_implementation::NodeType;
 pub use monetary_value::*;
 pub use query_data::*;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use std::num::NonZeroUsize;
-use std::path::Path;
-use tide_disco::StatusCode;
-use tide_disco::{api::ApiError, method::ReadState, Api};
+use tide_disco::{api::ApiError, method::ReadState, Api, StatusCode};
 pub use traits::*;
 use vbs::version::StaticVersionType;
+
+use self::errors::InvalidLimit;
+use crate::{
+    api::load_api,
+    availability::{QueryableHeader, QueryablePayload},
+    Header, Payload, Transaction,
+};
 
 /// [Error] is an enum that represents the various errors that can be returned
 /// from the Explorer API.
@@ -308,7 +309,7 @@ where
                         ) {
                             (Ok(Some(height)), Ok(Some(offset)), _) => {
                                 TransactionIdentifier::HeightAndOffset(height, offset)
-                            }
+                            },
                             (_, _, Ok(Some(hash))) => TransactionIdentifier::Hash(hash),
                             _ => TransactionIdentifier::Latest,
                         },
@@ -341,7 +342,7 @@ where
                 ) {
                     (Ok(Some(height)), Ok(Some(offset)), _) => {
                         TransactionIdentifier::HeightAndOffset(height, offset)
-                    }
+                    },
                     (_, _, Ok(Some(hash))) => TransactionIdentifier::Hash(hash),
                     _ => TransactionIdentifier::Latest,
                 };
@@ -393,6 +394,13 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::{cmp::min, time::Duration};
+
+    use futures::StreamExt;
+    use portpicker::pick_unused_port;
+    use surf_disco::Client;
+    use tide_disco::App;
+
     use super::*;
     use crate::{
         availability,
@@ -403,11 +411,6 @@ mod test {
         },
         ApiState, Error,
     };
-    use futures::StreamExt;
-    use portpicker::pick_unused_port;
-    use std::{cmp::min, time::Duration};
-    use surf_disco::Client;
-    use tide_disco::App;
 
     async fn validate(client: &Client<Error, MockBase>) {
         let explorer_summary_response: ExplorerSummaryResponse<MockTypes> =

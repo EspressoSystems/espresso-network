@@ -1,5 +1,7 @@
 //! Sequencer-specific API options and initialization.
 
+use std::sync::Arc;
+
 use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
@@ -22,7 +24,6 @@ use hotshot_types::traits::{
     network::ConnectedNetwork,
     node_implementation::Versions,
 };
-use std::sync::Arc;
 use tide_disco::{listener::RateLimitListener, method::ReadState, App, Url};
 use vbs::version::StaticVersionType;
 

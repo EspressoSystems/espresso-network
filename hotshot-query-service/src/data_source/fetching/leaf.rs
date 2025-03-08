@@ -12,6 +12,18 @@
 
 //! [`Fetchable`] implementation for [`LeafQueryData`].
 
+use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds, sync::Arc};
+
+use anyhow::bail;
+use async_trait::async_trait;
+use committable::Committable;
+use derivative::Derivative;
+use derive_more::From;
+use futures::future::{BoxFuture, FutureExt};
+use hotshot_types::traits::node_implementation::NodeType;
+use tokio::spawn;
+use tracing::Instrument;
+
 use super::{
     header::HeaderCallback, AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights,
     Notifiers, RangedFetchable, Storable,
@@ -29,17 +41,6 @@ use crate::{
     types::HeightIndexed,
     Payload, QueryError, QueryResult,
 };
-use anyhow::bail;
-use async_trait::async_trait;
-use committable::Committable;
-use derivative::Derivative;
-use derive_more::From;
-use futures::future::{BoxFuture, FutureExt};
-use hotshot_types::traits::node_implementation::NodeType;
-use std::sync::Arc;
-use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds};
-use tokio::spawn;
-use tracing::Instrument;
 
 pub(super) type LeafFetcher<Types, S, P> =
     fetching::Fetcher<request::LeafRequest<Types>, LeafCallback<Types, S, P>>;
@@ -172,19 +173,19 @@ where
                         callbacks,
                     );
                     return Ok(());
-                }
+                },
                 Err(QueryError::Missing | QueryError::NotFound) => {
                     // We successfully queried the database, but the next leaf wasn't there. We
                     // know for sure that based on the current state of the DB, we cannot fetch this
                     // leaf.
                     tracing::debug!(n, "not fetching leaf with unknown successor");
                     return Ok(());
-                }
+                },
                 Err(QueryError::Error { message }) => {
                     // An error occurred while querying the database. We don't know if we need to
                     // fetch the leaf or not. Return an error so we can try again.
                     bail!("failed to fetch successor for leaf {n}: {message}");
-                }
+                },
             };
 
             let fetcher = fetcher.clone();
@@ -197,13 +198,13 @@ where
                 fetcher.provider.clone(),
                 once(LeafCallback::Leaf { fetcher }).chain(callbacks),
             );
-        }
+        },
         LeafId::Hash(h) => {
             // We don't actively fetch leaves when requested by hash, because we have no way of
             // knowing whether a leaf with such a hash actually exists, and we don't want to bother
             // peers with requests for non-existent leaves.
             tracing::debug!("not fetching unknown leaf {h}");
-        }
+        },
     }
 
     Ok(())
@@ -262,7 +263,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
                     if tx.get_leaf(((height - 1) as usize).into()).await.is_ok() {
                         return;
                     }
-                }
+                },
                 Err(err) => {
                     // If we can't open a transaction, we can't be sure that we already have the
                     // parent, so we fall through to fetching it just to be safe.
@@ -271,7 +272,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
                         %parent,
                         "error opening transaction to check for parent leaf: {err:#}",
                     );
-                }
+                },
             }
 
             tracing::info!(height, %parent, "received new leaf; fetching missing parent");
@@ -369,7 +370,7 @@ impl<Types: NodeType, S, P> Ord for LeafCallback<Types, S, P> {
 
             (Self::Continuation { callback: cb1 }, Self::Continuation { callback: cb2 }) => {
                 cb1.cmp(cb2)
-            }
+            },
             _ => Ordering::Equal,
         }
     }
@@ -396,7 +397,7 @@ where
                 // Trigger a fetch of the parent leaf, if we don't already have it.
                 trigger_fetch_for_parent(&fetcher, &leaf);
                 fetcher.store_and_notify(leaf).await;
-            }
+            },
             Self::Continuation { callback } => callback.run(leaf.leaf.block_header().clone()),
         }
     }

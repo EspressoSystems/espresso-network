@@ -185,12 +185,12 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
                             // The primary fail counter reached 0, the primary is now considered up
                             primary_down.store(false, Ordering::Relaxed);
                             debug!("primary_fail_counter reached zero, primary_down set to false");
-                        }
+                        },
                         c => {
                             // Decrement the primary fail counter
                             primary_fail_counter.store(c - 1, Ordering::Relaxed);
                             debug!("primary_fail_counter set to {:?}", c - 1);
-                        }
+                        },
                     }
                     return Ok(());
                 }
@@ -211,7 +211,7 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
                     c if c < COMBINED_NETWORK_PRIMARY_CHECK_INTERVAL => {
                         // Just increment the 'no delay counter'
                         self.no_delay_counter.store(c + 1, Ordering::Relaxed);
-                    }
+                    },
                     _ => {
                         // The 'no delay counter' reached the threshold
                         debug!(
@@ -226,7 +226,7 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
                         // The primary fail counter is set just below the threshold to delay the next message
                         self.primary_fail_counter
                             .store(COMBINED_NETWORK_MIN_PRIMARY_FAILURES, Ordering::Relaxed);
-                    }
+                    },
                 }
             }
             // Send the message

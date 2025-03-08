@@ -360,7 +360,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 query.progress = DHTProgress::NotStarted;
                 query.backoff.start_next(false);
                 error!("Error publishing to DHT: {e:?} for peer {:?}", self.peer_id);
-            }
+            },
             Ok(qid) => {
                 debug!("Published record to DHT with qid {:?}", qid);
                 let query = KadPutQuery {
@@ -368,7 +368,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     ..query
                 };
                 self.dht_handler.put_record(qid, query);
-            }
+            },
         }
     }
 
@@ -392,20 +392,20 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     ClientRequest::BeginBootstrap => {
                         debug!("Beginning Libp2p bootstrap");
                         let _ = self.swarm.behaviour_mut().dht.bootstrap();
-                    }
+                    },
                     ClientRequest::LookupPeer(pid, chan) => {
                         let id = self.swarm.behaviour_mut().dht.get_closest_peers(pid);
                         self.dht_handler
                             .in_progress_get_closest_peers
                             .insert(id, chan);
-                    }
+                    },
                     ClientRequest::GetRoutingTable(chan) => {
                         self.dht_handler
                             .print_routing_table(&mut self.swarm.behaviour_mut().dht);
                         if chan.send(()).is_err() {
                             warn!("Tried to notify client but client not tracking anymore");
                         }
-                    }
+                    },
                     ClientRequest::PutDHT { key, value, notify } => {
                         let query = KadPutQuery {
                             progress: DHTProgress::NotStarted,
@@ -415,17 +415,17 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             backoff: ExponentialBackoff::default(),
                         };
                         self.put_record(query);
-                    }
+                    },
                     ClientRequest::GetConnectedPeerNum(s) => {
                         if s.send(self.num_connected()).is_err() {
                             error!("error sending peer number to client");
                         }
-                    }
+                    },
                     ClientRequest::GetConnectedPeers(s) => {
                         if s.send(self.connected_pids()).is_err() {
                             error!("error sending peer set to client");
                         }
-                    }
+                    },
                     ClientRequest::GetDHT {
                         key,
                         notify,
@@ -439,20 +439,20 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             retry_count,
                             &mut self.swarm.behaviour_mut().dht,
                         );
-                    }
+                    },
                     ClientRequest::IgnorePeers(_peers) => {
                         // NOTE used by test with conductor only
-                    }
+                    },
                     ClientRequest::Shutdown => {
                         if let Some(listener_id) = self.listener_id {
                             self.swarm.remove_listener(listener_id);
                         }
 
                         return Ok(true);
-                    }
+                    },
                     ClientRequest::GossipMsg(topic, contents) => {
                         behaviour.publish_gossip(Topic::new(topic.clone()), contents.clone());
-                    }
+                    },
                     ClientRequest::Subscribe(t, chan) => {
                         behaviour.subscribe_gossip(&t);
                         if let Some(chan) = chan {
@@ -460,7 +460,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                 error!("finished subscribing but response channel dropped");
                             }
                         }
-                    }
+                    },
                     ClientRequest::Unsubscribe(t, chan) => {
                         behaviour.unsubscribe_gossip(&t);
                         if let Some(chan) = chan {
@@ -468,7 +468,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                 error!("finished unsubscribing but response channel dropped");
                             }
                         }
-                    }
+                    },
                     ClientRequest::DirectRequest {
                         pid,
                         contents,
@@ -483,23 +483,23 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             retry_count,
                         };
                         self.direct_message_state.add_direct_request(req, id);
-                    }
+                    },
                     ClientRequest::DirectResponse(chan, msg) => {
                         behaviour.add_direct_response(chan, msg);
-                    }
+                    },
                     ClientRequest::AddKnownPeers(peers) => {
                         self.add_known_peers(&peers);
-                    }
+                    },
                     ClientRequest::Prune(pid) => {
                         if self.swarm.disconnect_peer_id(pid).is_err() {
                             warn!("Could not disconnect from {:?}", pid);
                         }
-                    }
+                    },
                 }
-            }
+            },
             None => {
                 error!("Error receiving msg in main behaviour loop: channel closed");
-            }
+            },
         }
         Ok(false)
     }
@@ -541,7 +541,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 send_to_client
                     .send(NetworkEvent::ConnectedPeersUpdate(self.num_connected()))
                     .map_err(|err| NetworkError::ChannelSendError(err.to_string()))?;
-            }
+            },
             SwarmEvent::ConnectionClosed {
                 connection_id: _,
                 peer_id,
@@ -565,13 +565,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 send_to_client
                     .send(NetworkEvent::ConnectedPeersUpdate(self.num_connected()))
                     .map_err(|err| NetworkError::ChannelSendError(err.to_string()))?;
-            }
+            },
             SwarmEvent::Dialing {
                 peer_id,
                 connection_id: _,
             } => {
                 debug!("Attempting to dial {:?}", peer_id);
-            }
+            },
             SwarmEvent::ListenerClosed {
                 listener_id: _,
                 addresses: _,
@@ -591,7 +591,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 connection_id: _,
                 local_addr: _,
                 send_back_addr: _,
-            } => {}
+            } => {},
             SwarmEvent::Behaviour(b) => {
                 let maybe_event = match b {
                     NetworkEventInternal::DHTEvent(e) => self
@@ -621,7 +621,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             }
                         }
                         None
-                    }
+                    },
                     NetworkEventInternal::GossipEvent(e) => match *e {
                         GossipEvent::Message {
                             propagation_source: _peer_id,
@@ -631,25 +631,25 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         GossipEvent::Subscribed { peer_id, topic } => {
                             debug!("Peer {:?} subscribed to topic {:?}", peer_id, topic);
                             None
-                        }
+                        },
                         GossipEvent::Unsubscribed { peer_id, topic } => {
                             debug!("Peer {:?} unsubscribed from topic {:?}", peer_id, topic);
                             None
-                        }
+                        },
                         GossipEvent::GossipsubNotSupported { peer_id } => {
                             warn!("Peer {:?} does not support gossipsub", peer_id);
                             None
-                        }
+                        },
                     },
                     NetworkEventInternal::DMEvent(e) => self
                         .direct_message_state
                         .handle_dm_event(e, self.resend_tx.clone()),
                     NetworkEventInternal::AutonatEvent(e) => {
                         match e {
-                            autonat::Event::InboundProbe(_) => {}
+                            autonat::Event::InboundProbe(_) => {},
                             autonat::Event::OutboundProbe(e) => match e {
                                 autonat::OutboundProbeEvent::Request { .. }
-                                | autonat::OutboundProbeEvent::Response { .. } => {}
+                                | autonat::OutboundProbeEvent::Response { .. } => {},
                                 autonat::OutboundProbeEvent::Error {
                                     probe_id: _,
                                     peer,
@@ -659,14 +659,14 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                         "AutoNAT Probe failed to peer {:?} with error: {:?}",
                                         peer, error
                                     );
-                                }
+                                },
                             },
                             autonat::Event::StatusChanged { old, new } => {
                                 debug!("AutoNAT Status changed. Old: {:?}, New: {:?}", old, new);
-                            }
+                            },
                         };
                         None
-                    }
+                    },
                 };
 
                 if let Some(event) = maybe_event {
@@ -675,14 +675,14 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         .send(event)
                         .map_err(|err| NetworkError::ChannelSendError(err.to_string()))?;
                 }
-            }
+            },
             SwarmEvent::OutgoingConnectionError {
                 connection_id: _,
                 peer_id,
                 error,
             } => {
                 warn!("Outgoing connection error to {:?}: {:?}", peer_id, error);
-            }
+            },
             SwarmEvent::IncomingConnectionError {
                 connection_id: _,
                 local_addr: _,
@@ -690,29 +690,29 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 error,
             } => {
                 warn!("Incoming connection error: {:?}", error);
-            }
+            },
             SwarmEvent::ListenerError {
                 listener_id: _,
                 error,
             } => {
                 warn!("Listener error: {:?}", error);
-            }
+            },
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 let my_id = *self.swarm.local_peer_id();
                 self.swarm
                     .behaviour_mut()
                     .dht
                     .add_address(&my_id, address.clone());
-            }
+            },
             SwarmEvent::NewExternalAddrOfPeer { peer_id, address } => {
                 self.swarm
                     .behaviour_mut()
                     .dht
                     .add_address(&peer_id, address.clone());
-            }
+            },
             _ => {
                 debug!("Unhandled swarm event {:?}", event);
-            }
+            },
         }
         Ok(())
     }

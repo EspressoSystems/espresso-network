@@ -1,3 +1,5 @@
+use std::fmt;
+
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
@@ -19,11 +21,11 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use serde_json::{Map, Value};
-use std::fmt;
 use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
+use super::{instance_state::NodeState, state::ValidatedState};
 use crate::{
     v0::{
         header::{EitherOrVersion, VersionedHeader},
@@ -34,8 +36,6 @@ use crate::{
     BlockMerkleCommitment, BuilderSignature, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
     Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes, UpgradeType,
 };
-
-use super::{instance_state::NodeState, state::ValidatedState};
 
 impl v0_1::Header {
     pub(crate) fn commit(&self) -> Commitment<Header> {
@@ -174,7 +174,7 @@ impl<'de> Deserialize<'de> for Header {
                     )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
-                    }
+                    },
                 }
             }
 
@@ -211,7 +211,7 @@ impl<'de> Deserialize<'de> for Header {
                         )),
                         EitherOrVersion::Version(v) => {
                             Err(de::Error::custom(format!("invalid version {v:?}")))
-                        }
+                        },
                         chain_config => Err(de::Error::custom(format!(
                             "expected version, found chain_config {chain_config:?}"
                         ))),
@@ -604,7 +604,7 @@ impl Header {
                     .as_ref()
                     .fetch_chain_config(validated_cf.commit())
                     .await
-            }
+            },
         }
     }
 }
@@ -1176,14 +1176,12 @@ mod test_headers {
     use ethers::{types::Address, utils::Anvil};
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
-
     use sequencer_utils::test_utils::setup_test;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
     use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
 
-    use crate::{eth_signature_key::EthKeyPair, mock::MockStateCatchup, Leaf};
-
     use super::*;
+    use crate::{eth_signature_key::EthKeyPair, mock::MockStateCatchup, Leaf};
 
     #[derive(Debug, Default)]
     #[must_use]

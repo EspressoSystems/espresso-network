@@ -13,27 +13,30 @@
 
 //! Immutable query functionality of a SQL database.
 
+use std::{
+    fmt::Display,
+    ops::{Bound, RangeBounds},
+};
+
+use anyhow::Context;
+use derivative::Derivative;
+use hotshot_types::{
+    simple_certificate::QuorumCertificate2,
+    traits::{
+        block_contents::{BlockHeader, BlockPayload},
+        node_implementation::NodeType,
+    },
+};
+use sqlx::{Arguments, FromRow, Row};
+
 use super::{Database, Db, Query, QueryAs, Transaction};
-use crate::Leaf2;
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryablePayload,
         VidCommonQueryData,
     },
     data_source::storage::{PayloadMetadata, VidCommonMetadata},
-    Header, Payload, QueryError, QueryResult,
-};
-use anyhow::Context;
-use derivative::Derivative;
-use hotshot_types::simple_certificate::QuorumCertificate2;
-use hotshot_types::traits::{
-    block_contents::{BlockHeader, BlockPayload},
-    node_implementation::NodeType,
-};
-use sqlx::{Arguments, FromRow, Row};
-use std::{
-    fmt::Display,
-    ops::{Bound, RangeBounds},
+    Header, Leaf2, Payload, QueryError, QueryResult,
 };
 
 pub(super) mod availability;
@@ -137,20 +140,20 @@ impl QueryBuilder<'_> {
         match range.start_bound() {
             Bound::Included(n) => {
                 bounds.push(format!("{column} >= {}", self.bind(*n as i64)?));
-            }
+            },
             Bound::Excluded(n) => {
                 bounds.push(format!("{column} > {}", self.bind(*n as i64)?));
-            }
-            Bound::Unbounded => {}
+            },
+            Bound::Unbounded => {},
         }
         match range.end_bound() {
             Bound::Included(n) => {
                 bounds.push(format!("{column} <= {}", self.bind(*n as i64)?));
-            }
+            },
             Bound::Excluded(n) => {
                 bounds.push(format!("{column} < {}", self.bind(*n as i64)?));
-            }
-            Bound::Unbounded => {}
+            },
+            Bound::Unbounded => {},
         }
 
         let mut where_clause = bounds.join(" AND ");

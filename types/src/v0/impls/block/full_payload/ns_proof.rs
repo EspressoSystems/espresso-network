@@ -109,25 +109,25 @@ impl NsProof {
                         )
                         .ok()? // error: internal to payload_verify()
                         .ok()?; // verification failure
-                    }
-                    (None, true) => {} // 0-length namespace, nothing to verify
+                    },
+                    (None, true) => {}, // 0-length namespace, nothing to verify
                     (None, false) => {
                         tracing::error!(
                             "ns verify: missing proof for nonempty ns payload range {:?}",
                             range
                         );
                         return None;
-                    }
+                    },
                     (Some(_), true) => {
                         tracing::error!("ns verify: unexpected proof for empty ns payload range");
                         return None;
-                    }
+                    },
                 }
 
                 // verification succeeded, return some data
                 let ns_id = ns_table.read_ns_id_unchecked(&self.ns_index);
                 Some((self.ns_payload.export_all_txs(&ns_id), ns_id))
-            }
+            },
             VidCommitment::V1(_) => None,
         }
     }

@@ -1,5 +1,6 @@
-use super::client_id::ClientId;
 use serde::{Deserialize, Serialize};
+
+use super::client_id::ClientId;
 
 /// [ClientMessage] represents the messages that the client can send to the
 /// server for a request.
@@ -38,11 +39,12 @@ impl ClientMessage {
 
 #[cfg(test)]
 mod tests {
-    use super::InternalClientMessage;
-    use super::*;
-    use crate::service::server_message::ServerMessage;
-    use futures::channel::mpsc::Sender;
     use std::iter::zip;
+
+    use futures::channel::mpsc::Sender;
+
+    use super::{InternalClientMessage, *};
+    use crate::service::server_message::ServerMessage;
 
     impl<K> PartialEq for InternalClientMessage<K> {
         fn eq(&self, other: &Self) -> bool {
@@ -141,7 +143,7 @@ mod tests {
                 match internal_client_message {
                     InternalClientMessage::Request(id, _) => {
                         assert_eq!(id, client_id);
-                    }
+                    },
                     _ => panic!("Unexpected InternalClientMessage"),
                 }
             }

@@ -4,6 +4,8 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
+use std::{sync::Arc, time::Instant};
+
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
@@ -22,7 +24,6 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
-use std::{sync::Arc, time::Instant};
 use tokio::task::JoinHandle;
 use tracing::instrument;
 
@@ -120,14 +121,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 {
                     tracing::debug!("Failed to handle QuorumVoteRecv event; error = {e}");
                 }
-            }
+            },
             HotShotEvent::TimeoutVoteRecv(ref vote) => {
                 if let Err(e) =
                     handle_timeout_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {
                     tracing::debug!("Failed to handle TimeoutVoteRecv event; error = {e}");
                 }
-            }
+            },
             HotShotEvent::ViewChange(new_view_number, epoch_number) => {
                 if let Err(e) =
                     handle_view_change(*new_view_number, *epoch_number, &sender, &receiver, self)
@@ -136,12 +137,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::trace!("Failed to handle ViewChange event; error = {e}");
                 }
                 self.view_start_time = Instant::now();
-            }
+            },
             HotShotEvent::Timeout(view_number, epoch) => {
                 if let Err(e) = handle_timeout(*view_number, *epoch, &sender, self).await {
                     tracing::debug!("Failed to handle Timeout event; error = {e}");
                 }
-            }
+            },
             HotShotEvent::ExtendedQc2Formed(eqc) => {
                 let cert_view = eqc.view_number();
                 let cert_block_number = self
@@ -168,7 +169,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     &sender,
                 )
                 .await;
-            }
+            },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {
                 if !self
                     .consensus
@@ -217,8 +218,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     )
                     .await;
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         Ok(())

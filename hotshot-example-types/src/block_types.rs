@@ -13,8 +13,7 @@ use std::{
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
-    data::VidCommitment,
-    data::{BlockError, Leaf2},
+    data::{BlockError, Leaf2, VidCommitment},
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
         node_implementation::NodeType,

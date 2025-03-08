@@ -5,14 +5,19 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #![allow(clippy::panic)]
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    marker::PhantomData,
+    sync::Arc,
+};
+
 use async_broadcast::{broadcast, Receiver, Sender};
 use async_lock::RwLock;
 use futures::future::join_all;
-use hotshot::InitializerEpochInfo;
 use hotshot::{
     traits::TestableNodeImplementation,
     types::{Event, SystemContextHandle},
-    HotShotInitializer, MarketplaceConfig, SystemContext,
+    HotShotInitializer, InitializerEpochInfo, MarketplaceConfig, SystemContext,
 };
 use hotshot_example_types::{
     auction_results_provider_types::TestAuctionResultsProvider,
@@ -22,11 +27,11 @@ use hotshot_example_types::{
 };
 use hotshot_fakeapi::fake_solver::FakeSolverState;
 use hotshot_task_impls::events::HotShotEvent;
-use hotshot_types::drb::INITIAL_DRB_RESULT;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     constants::EVENT_CHANNEL_SIZE,
     data::Leaf2,
+    drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::QuorumCertificate2,
     traits::{
@@ -35,11 +40,6 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
     HotShotConfig, ValidatorConfig,
-};
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    marker::PhantomData,
-    sync::Arc,
 };
 use tide_disco::Url;
 use tokio::{spawn, task::JoinHandle};
@@ -281,12 +281,12 @@ where
                 Ok(res) => match res {
                     TestResult::Pass => {
                         info!("Task shut down successfully");
-                    }
+                    },
                     TestResult::Fail(e) => error_list.push(e),
                 },
                 Err(e) => {
                     tracing::error!("Error Joining the test task {:?}", e);
-                }
+                },
             }
         }
 
@@ -560,14 +560,14 @@ where
                     if let Some(task) = builder_tasks.pop() {
                         task.start(Box::new(handle.event_stream()))
                     }
-                }
+                },
                 std::cmp::Ordering::Equal => {
                     // If we have more builder tasks than DA nodes, pin them all on the last node.
                     while let Some(task) = builder_tasks.pop() {
                         task.start(Box::new(handle.event_stream()))
                     }
-                }
-                std::cmp::Ordering::Greater => {}
+                },
+                std::cmp::Ordering::Greater => {},
             }
 
             self.nodes.push(Node {

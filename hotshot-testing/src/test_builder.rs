@@ -4,6 +4,8 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
+use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Duration};
+
 use async_lock::RwLock;
 use hotshot::{
     tasks::EventTransformerState,
@@ -15,16 +17,14 @@ use hotshot_example_types::{
     auction_results_provider_types::TestAuctionResultsProvider, node_types::TestTypes,
     state_types::TestInstanceState, storage_types::TestStorage, testable_delay::DelayConfig,
 };
-use hotshot_types::traits::node_implementation::ConsensusTime;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::{NodeType, Versions},
+    traits::node_implementation::{ConsensusTime, NodeType, Versions},
     HotShotConfig, PeerConfig, ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
-use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Duration};
 use tide_disco::Url;
 use vec1::Vec1;
 
@@ -283,7 +283,7 @@ pub async fn create_test_handle<
                 .await;
 
             left_handle
-        }
+        },
         Behaviour::Byzantine(state) => {
             let state = Box::leak(state);
             state
@@ -300,7 +300,7 @@ pub async fn create_test_handle<
                     marketplace_config,
                 )
                 .await
-        }
+        },
         Behaviour::Standard => {
             let hotshot = SystemContext::<TYPES, I, V>::new(
                 public_key,
@@ -317,7 +317,7 @@ pub async fn create_test_handle<
             .await;
 
             hotshot.run_tasks().await
-        }
+        },
     }
 }
 

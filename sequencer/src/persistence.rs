@@ -43,8 +43,7 @@ mod testing {
 #[cfg(test)]
 #[espresso_macros::generic_tests]
 mod persistence_tests {
-    use std::{collections::BTreeMap, marker::PhantomData};
-    use vbs::version::StaticVersionType;
+    use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
     use anyhow::bail;
     use async_lock::RwLock;
@@ -53,8 +52,10 @@ mod persistence_tests {
         traits::{EventConsumer, NullEventConsumer, PersistenceOptions},
         Event, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
     };
-    use hotshot::types::{BLSPubKey, SignatureKey};
-    use hotshot::InitializerEpochInfo;
+    use hotshot::{
+        types::{BLSPubKey, SignatureKey},
+        InitializerEpochInfo,
+    };
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::{
@@ -77,11 +78,9 @@ mod persistence_tests {
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
     };
-
     use sequencer_utils::test_utils::setup_test;
-    use std::sync::Arc;
     use testing::TestablePersistence;
-    use vbs::version::Version;
+    use vbs::version::{StaticVersionType, Version};
 
     use super::*;
 
@@ -809,7 +808,7 @@ mod persistence_tests {
         let leaf_chain = chain
             .iter()
             .take(2)
-            .map(|(leaf, qc, _, _)| (leaf_info(leaf.clone()), qc.clone()))
+            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
             .collect::<Vec<_>>();
         tracing::info!("decide with event handling failure");
         storage
@@ -856,7 +855,7 @@ mod persistence_tests {
         let leaf_chain = chain
             .iter()
             .skip(2)
-            .map(|(leaf, qc, _, _)| (leaf_info(leaf.clone()), qc.clone()))
+            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
             .collect::<Vec<_>>();
         tracing::info!("decide successfully");
         storage
@@ -901,7 +900,7 @@ mod persistence_tests {
         tracing::info!("check decide event");
         let leaf_chain = consumer.leaf_chain().await;
         assert_eq!(leaf_chain.len(), 4, "{leaf_chain:#?}");
-        for ((leaf, _, _, _), info) in chain.iter().zip(leaf_chain.iter()) {
+        for ((leaf, ..), info) in chain.iter().zip(leaf_chain.iter()) {
             assert_eq!(info.leaf, *leaf);
             let decided_vid_share = info.vid_share.as_ref().unwrap();
             let view_number = match decided_vid_share {

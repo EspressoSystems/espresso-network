@@ -209,7 +209,7 @@ impl<K: SignatureKey> NetworkConfig<K> {
             Ok(data) => data,
             Err(e) => {
                 return Err(NetworkConfigError::ReadFromFileError(e));
-            }
+            },
         };
 
         // deserialize
@@ -256,7 +256,7 @@ impl<K: SignatureKey> NetworkConfig<K> {
             Ok(data) => data,
             Err(e) => {
                 return Err(NetworkConfigError::SerializeError(e));
-            }
+            },
         };
 
         // write to file

@@ -1,7 +1,9 @@
 use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet, HashMap},
+    fmt::Debug,
     num::NonZeroU64,
+    sync::Arc,
 };
 
 use anyhow::Context;
@@ -24,9 +26,7 @@ use hotshot_types::{
     },
     PeerConfig,
 };
-
 use itertools::Itertools;
-use std::{fmt::Debug, sync::Arc};
 use thiserror::Error;
 
 use super::{

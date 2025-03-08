@@ -2,10 +2,11 @@
 //! to calculate/derive a response for a specific request. In the confirmation layer the implementer
 //! would be something like a [`FeeMerkleTree`] for fee catchup
 
-use super::request::{Request, Response};
 use anyhow::Result;
 use async_trait::async_trait;
 use request_response::data_source::DataSource as DataSourceTrait;
+
+use super::request::{Request, Response};
 
 #[derive(Clone, Debug)]
 pub struct DataSource {}

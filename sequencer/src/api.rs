@@ -1,3 +1,5 @@
+use std::{pin::Pin, sync::Arc};
+
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -18,7 +20,6 @@ use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
 use hotshot_query_service::data_source::ExtensibleDataSource;
-use hotshot_types::vote::HasViewNumber;
 use hotshot_types::{
     data::ViewNumber,
     event::Event,
@@ -30,12 +31,11 @@ use hotshot_types::{
         ValidatedState as _,
     },
     utils::{View, ViewInner},
+    vote::HasViewNumber,
     PeerConfig,
 };
 use itertools::Itertools;
 use jf_merkle_tree::MerkleTreeScheme;
-use std::pin::Pin;
-use std::sync::Arc;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
@@ -284,7 +284,7 @@ impl<
             Ok(accounts) => return Ok(accounts),
             Err(err) => {
                 tracing::info!("accounts not in memory, trying storage: {err:#}");
-            }
+            },
         }
 
         // Try storage.
@@ -321,7 +321,7 @@ impl<
                 }
 
                 (Arc::new(state), delta.clone())
-            }
+            },
             _ => {
                 // If we don't already have a leaf for this view, or if we don't have the view
                 // at all, we can create a new view based on the recovered leaf and add it to
@@ -330,7 +330,7 @@ impl<
                 let mut state = ValidatedState::from_header(leaf.block_header());
                 state.fee_merkle_tree = tree.clone();
                 (Arc::new(state), None)
-            }
+            },
         };
         if let Err(err) = consensus.update_leaf(leaf, Arc::clone(&state), delta) {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
@@ -352,7 +352,7 @@ impl<
             Ok(frontier) => return Ok(frontier),
             Err(err) => {
                 tracing::info!("frontier is not in memory, trying storage: {err:#}");
-            }
+            },
         }
 
         // Try storage.
@@ -368,7 +368,7 @@ impl<
             Ok(cf) => return Ok(cf),
             Err(err) => {
                 tracing::info!("chain config is not in memory, trying storage: {err:#}");
-            }
+            },
         }
 
         // Try storage.
@@ -380,7 +380,7 @@ impl<
             Ok(cf) => return Ok(cf),
             Err(err) => {
                 tracing::info!("chain config is not in memory, trying storage: {err:#}");
-            }
+            },
         }
 
         // Try storage.
@@ -557,17 +557,12 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
-    use committable::Committable;
-    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
     use std::time::Duration;
-    use tempfile::TempDir;
-    use tokio::{spawn, time::sleep};
 
-    use crate::network;
-    use espresso_types::MockSequencerVersions;
+    use committable::Committable;
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        MarketplaceVersion, NamespaceId, ValidatedState,
+        MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
     };
     use ethers::{prelude::Address, utils::Anvil};
     use futures::{
@@ -576,6 +571,7 @@ pub mod test_helpers {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::light_client::{ParsedLightClientState, ParsedStakeTableState};
+    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -585,15 +581,16 @@ pub mod test_helpers {
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
-    use tide_disco::error::ServerError;
-    use tide_disco::{Api, App, Error, StatusCode};
-    use tokio::task::JoinHandle;
+    use tempfile::TempDir;
+    use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
+    use tokio::{spawn, task::JoinHandle, time::sleep};
     use url::Url;
     use vbs::version::{StaticVersion, StaticVersionType};
 
     use super::*;
     use crate::{
         catchup::NullStateCatchup,
+        network,
         persistence::no_storage,
         testing::{
             run_marketplace_builder, run_test_builder, wait_for_decide_on_handle, TestConfig,
@@ -1157,13 +1154,14 @@ pub mod test_helpers {
 #[cfg(test)]
 #[espresso_macros::generic_tests]
 mod api_tests {
+    use std::fmt::Debug;
+
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use endpoints::NamespaceProofQueryData;
-    use espresso_types::MockSequencerVersions;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
-        Header, Leaf2, NamespaceId,
+        Header, Leaf2, MockSequencerVersions, NamespaceId,
     };
     use ethers::utils::Anvil;
     use futures::{future, stream::StreamExt};
@@ -1171,23 +1169,19 @@ mod api_tests {
     use hotshot_query_service::availability::{
         AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
     };
-
-    use hotshot_types::data::ns_table::parse_ns_table;
-    use hotshot_types::data::vid_disperse::VidDisperseShare2;
-    use hotshot_types::data::{DaProposal2, EpochNumber, VidCommitment};
-    use hotshot_types::simple_certificate::QuorumCertificate2;
-
-    use hotshot_types::vid::avidm::{init_avidm_param, AvidMScheme};
     use hotshot_types::{
-        data::{QuorumProposal2, QuorumProposalWrapper},
+        data::{
+            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, DaProposal2, EpochNumber,
+            QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+        },
         event::LeafInfo,
         message::Proposal,
+        simple_certificate::QuorumCertificate2,
         traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
+        vid::avidm::{init_avidm_param, AvidMScheme},
     };
-
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use std::fmt::Debug;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
@@ -1197,8 +1191,8 @@ mod api_tests {
     use vbs::version::StaticVersion;
 
     use super::{update::ApiEventConsumer, *};
-    use crate::network;
     use crate::{
+        network,
         persistence::no_storage::NoStorage,
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
     };
@@ -1628,10 +1622,9 @@ mod api_tests {
 
 #[cfg(test)]
 mod test {
-    use committable::{Commitment, Committable};
     use std::{collections::BTreeMap, time::Duration};
-    use tokio::time::sleep;
 
+    use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
@@ -1665,6 +1658,7 @@ mod test {
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use time::OffsetDateTime;
+    use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use self::{
@@ -2479,7 +2473,7 @@ mod test {
                     let new_version = upgrade.new_version;
                     assert_eq!(new_version, <MockSeqVersions as Versions>::Upgrade::VERSION);
                     break upgrade.new_version_first_view;
-                }
+                },
                 _ => continue,
             }
         };

@@ -7,7 +7,21 @@
 //! Libp2p based/production networking implementation
 //! This module provides a libp2p based networking implementation where each node in the
 //! network forms a tcp or udp connection to a subset of other nodes in the network
-use crate::EpochMembershipCoordinator;
+#[cfg(feature = "hotshot-testing")]
+use std::str::FromStr;
+use std::{
+    cmp::min,
+    collections::{BTreeSet, HashSet},
+    fmt::Debug,
+    net::{IpAddr, ToSocketAddrs},
+    num::NonZeroUsize,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
 use anyhow::{anyhow, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -51,20 +65,6 @@ use libp2p_identity::{
 };
 use rand::{rngs::StdRng, seq::IteratorRandom, SeedableRng};
 use serde::Serialize;
-#[cfg(feature = "hotshot-testing")]
-use std::str::FromStr;
-use std::{
-    cmp::min,
-    collections::{BTreeSet, HashSet},
-    fmt::Debug,
-    net::{IpAddr, ToSocketAddrs},
-    num::NonZeroUsize,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
 use tokio::{
     select, spawn,
     sync::{
@@ -75,7 +75,7 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::BroadcastDelay;
+use crate::{BroadcastDelay, EpochMembershipCoordinator};
 
 /// Libp2p-specific metrics
 #[derive(Clone, Debug)]
@@ -289,7 +289,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                             Ok(network) => network,
                             Err(err) => {
                                 panic!("Failed to create libp2p network: {err:?}");
-                            }
+                            },
                         },
                     )
                 })
@@ -372,7 +372,7 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
             }
 
             format!("/dns/{host}/udp/{port}/quic-v1")
-        }
+        },
     };
 
     // Convert the multiaddr string to a `Multiaddr`
@@ -680,7 +680,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 sender.try_send(msg).map_err(|err| {
                     NetworkError::ChannelSendError(format!("failed to send gossip message: {err}"))
                 })?;
-            }
+            },
             DirectRequest(msg, _pid, chan) => {
                 sender.try_send(msg).map_err(|err| {
                     NetworkError::ChannelSendError(format!(
@@ -702,12 +702,12 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 {
                     error!("failed to ack!");
                 };
-            }
-            DirectResponse(_msg, _) => {}
+            },
+            DirectResponse(_msg, _) => {},
             NetworkEvent::IsBootstrapped => {
                 error!("handle_recvd_events received `NetworkEvent::IsBootstrapped`, which should be impossible.");
-            }
-            NetworkEvent::ConnectedPeersUpdate(_) => {}
+            },
+            NetworkEvent::ConnectedPeersUpdate(_) => {},
         }
         Ok::<(), NetworkError>(())
     }
@@ -909,7 +909,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                 return Err(NetworkError::LookupError(format!(
                     "failed to look up node for direct message: {err}"
                 )));
-            }
+            },
         };
 
         #[cfg(feature = "hotshot-testing")]
@@ -941,7 +941,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             Err(e) => {
                 self.inner.metrics.num_failed_messages.add(1);
                 Err(e)
-            }
+            },
         }
     }
 
@@ -1002,7 +1002,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             Ok(m) => m,
             Err(e) => {
                 return tracing::warn!(e.message);
-            }
+            },
         };
         let future_leader = match membership.leader(future_view).await {
             Ok(l) => l,
@@ -1011,7 +1011,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                     "Failed to calculate leader for view {:?}: {e}",
                     future_view
                 );
-            }
+            },
         };
 
         let _ = self

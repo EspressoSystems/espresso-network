@@ -173,9 +173,7 @@ impl<TYPES: NodeType> HasEpoch<TYPES> for MessageKind<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         match &self {
             MessageKind::Consensus(message) => message.epoch_number(),
-            MessageKind::Data(
-                DataMessage::SubmitTransaction(_, _) | DataMessage::RequestData(_),
-            )
+            MessageKind::Data(DataMessage::SubmitTransaction(..) | DataMessage::RequestData(_))
             | MessageKind::External(_) => None,
             MessageKind::Data(DataMessage::DataResponse(msg)) => match msg {
                 ResponseMessage::Found(m) => m.epoch_number(),
@@ -325,66 +323,66 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
                         p.data.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::Proposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
                         p.data.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ProposalRequested(req, _) => req.view_number,
                     GeneralConsensusMessage::ProposalResponse(proposal) => {
                         proposal.data.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ProposalResponse2(proposal) => {
                         proposal.data.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::Vote(vote_message) => vote_message.view_number(),
                     GeneralConsensusMessage::Vote2(vote_message) => vote_message.view_number(),
                     GeneralConsensusMessage::TimeoutVote(message) => message.view_number(),
                     GeneralConsensusMessage::ViewSyncPreCommitVote(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncCommitVote(message) => message.view_number(),
                     GeneralConsensusMessage::ViewSyncFinalizeVote(message) => message.view_number(),
                     GeneralConsensusMessage::ViewSyncPreCommitCertificate(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncCommitCertificate(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncFinalizeCertificate(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::TimeoutVote2(message) => message.view_number(),
                     GeneralConsensusMessage::ViewSyncPreCommitVote2(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncCommitVote2(message) => message.view_number(),
                     GeneralConsensusMessage::ViewSyncFinalizeVote2(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncPreCommitCertificate2(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncCommitCertificate2(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncFinalizeCertificate2(message) => {
                         message.view_number()
-                    }
+                    },
                     GeneralConsensusMessage::UpgradeProposal(message) => message.data.view_number(),
                     GeneralConsensusMessage::UpgradeVote(message) => message.view_number(),
                     GeneralConsensusMessage::HighQc(qc)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
                 }
-            }
+            },
             SequencingMessage::Da(da_message) => {
                 match da_message {
                     DaConsensusMessage::DaProposal(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
                         p.data.view_number()
-                    }
+                    },
                     DaConsensusMessage::DaVote(vote_message) => vote_message.view_number(),
                     DaConsensusMessage::DaCertificate(cert) => cert.view_number,
                     DaConsensusMessage::VidDisperseMsg(disperse) => disperse.data.view_number(),
@@ -392,12 +390,12 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
                         p.data.view_number()
-                    }
+                    },
                     DaConsensusMessage::DaVote2(vote_message) => vote_message.view_number(),
                     DaConsensusMessage::DaCertificate2(cert) => cert.view_number,
                     DaConsensusMessage::VidDisperseMsg2(disperse) => disperse.data.view_number(),
                 }
-            }
+            },
         }
     }
 
@@ -410,13 +408,13 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
                         p.data.epoch()
-                    }
+                    },
                     GeneralConsensusMessage::Proposal2(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
                         p.data.epoch()
-                    }
-                    GeneralConsensusMessage::ProposalRequested(_, _) => None,
+                    },
+                    GeneralConsensusMessage::ProposalRequested(..) => None,
                     GeneralConsensusMessage::ProposalResponse(proposal) => proposal.data.epoch(),
                     GeneralConsensusMessage::ProposalResponse2(proposal) => proposal.data.epoch(),
                     GeneralConsensusMessage::Vote(vote_message) => vote_message.epoch(),
@@ -427,35 +425,35 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::ViewSyncFinalizeVote(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncPreCommitCertificate(message) => {
                         message.epoch()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncCommitCertificate(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncFinalizeCertificate(message) => {
                         message.epoch()
-                    }
+                    },
                     GeneralConsensusMessage::TimeoutVote2(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncPreCommitVote2(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncCommitVote2(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncFinalizeVote2(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncPreCommitCertificate2(message) => {
                         message.epoch()
-                    }
+                    },
                     GeneralConsensusMessage::ViewSyncCommitCertificate2(message) => message.epoch(),
                     GeneralConsensusMessage::ViewSyncFinalizeCertificate2(message) => {
                         message.epoch()
-                    }
+                    },
                     GeneralConsensusMessage::UpgradeProposal(message) => message.data.epoch(),
                     GeneralConsensusMessage::UpgradeVote(message) => message.epoch(),
                     GeneralConsensusMessage::HighQc(qc)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
                 }
-            }
+            },
             SequencingMessage::Da(da_message) => {
                 match da_message {
                     DaConsensusMessage::DaProposal(p) => {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
                         p.data.epoch()
-                    }
+                    },
                     DaConsensusMessage::DaVote(vote_message) => vote_message.epoch(),
                     DaConsensusMessage::DaCertificate(cert) => cert.epoch(),
                     DaConsensusMessage::VidDisperseMsg(disperse) => disperse.data.epoch(),
@@ -464,11 +462,11 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                         // view of leader in the leaf when proposal
                         // this should match replica upon receipt
                         p.data.epoch()
-                    }
+                    },
                     DaConsensusMessage::DaVote2(vote_message) => vote_message.epoch(),
                     DaConsensusMessage::DaCertificate2(cert) => cert.epoch(),
                 }
-            }
+            },
         }
     }
 }
@@ -649,7 +647,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
                 } else {
                     V::Base::VERSION
                 }
-            }
+            },
             None => V::Base::VERSION,
         };
 
@@ -669,7 +667,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
                 } else {
                     cert.data.old_version
                 }
-            }
+            },
             None => V::Base::VERSION,
         }
     }
@@ -698,7 +696,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::serialize(&message),
             v => {
                 bail!("Attempted to serialize with version {}, which is incompatible. This should be impossible.", v);
-            }
+            },
         };
 
         serialized_message
@@ -725,7 +723,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
             v if v == V::Upgrade::VERSION => Serializer::<V::Upgrade>::deserialize(message),
             v => {
                 bail!("Cannot deserialize message with stated version {}", v);
-            }
+            },
         }
         .wrap()
         .context(info!("Failed to deserialize message!"))?;

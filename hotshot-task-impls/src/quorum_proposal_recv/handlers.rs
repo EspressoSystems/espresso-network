@@ -221,7 +221,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
             } else {
                 bail!("Parent state not found! Consensus internally inconsistent");
             }
-        }
+        },
         None => None,
     };
 

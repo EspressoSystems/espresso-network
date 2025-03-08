@@ -382,7 +382,7 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                 match stream.next().await {
                     None => {
                         break;
-                    }
+                    },
                     Some(evt) => match evt.event {
                         EventType::ViewFinished { view_number } => {
                             if let Some(change) = self.changes.remove(&view_number) {
@@ -392,14 +392,14 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                                         should_build_blocks = false;
                                         self.transactions.write().await.clear();
                                         self.blocks.write().await.clear();
-                                    }
+                                    },
                                     BuilderChange::FailClaims(value) => {
                                         self.should_fail_claims.store(value, Ordering::Relaxed);
-                                    }
+                                    },
                                 }
                                 let _ = self.change_sender.broadcast(change).await;
                             }
-                        }
+                        },
                         EventType::Decide { leaf_chain, .. } if should_build_blocks => {
                             let mut queue = self.transactions.write().await;
                             for leaf_info in leaf_chain.iter() {
@@ -413,7 +413,7 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                                 }
                             }
                             self.blocks.write().await.clear();
-                        }
+                        },
                         EventType::DaProposal { proposal, .. } if should_build_blocks => {
                             let payload = TYPES::BlockPayload::from_bytes(
                                 &proposal.data.encoded_transactions,
@@ -429,7 +429,7 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                                     txn.claimed = Some(now);
                                 }
                             }
-                        }
+                        },
                         EventType::Transactions { transactions } if should_build_blocks => {
                             let mut queue = self.transactions.write().await;
                             for transaction in transactions {
@@ -443,8 +443,8 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                                     );
                                 }
                             }
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     },
                 }
             }

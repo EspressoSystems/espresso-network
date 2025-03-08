@@ -147,14 +147,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                         .await;
                 }
                 Ok(())
-            }
+            },
             HotShotEvent::ViewChange(view, _) => {
                 let view = *view;
                 if view > self.view {
                     self.view = view;
                 }
                 Ok(())
-            }
+            },
             _ => Ok(()),
         }
     }
@@ -226,7 +226,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
             Err(e) => {
                 tracing::warn!(e.message);
                 return;
-            }
+            },
         };
         let mut da_committee_for_view = membership_reader.da_committee_members(view).await;
         if let Ok(leader) = membership_reader.leader(view).await {

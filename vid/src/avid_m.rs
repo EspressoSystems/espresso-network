@@ -11,10 +11,8 @@
 //! vectors. And for dispersal, each storage node gets some vectors and their
 //! Merkle proofs according to its weight.
 
-use crate::{
-    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
-    VidError, VidResult, VidScheme,
-};
+use std::ops::Range;
+
 use ark_ff::PrimeField;
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -26,8 +24,12 @@ use p3_maybe_rayon::prelude::{
     IntoParallelIterator, IntoParallelRefIterator, ParallelIterator, ParallelSlice,
 };
 use serde::{Deserialize, Serialize};
-use std::ops::Range;
 use tagged_base64::tagged;
+
+use crate::{
+    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
+    VidError, VidResult, VidScheme,
+};
 
 mod config;
 
@@ -401,8 +403,9 @@ impl VidScheme for AvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use crate::{avid_m::AvidMScheme, VidScheme};
     use rand::{seq::SliceRandom, RngCore};
+
+    use crate::{avid_m::AvidMScheme, VidScheme};
 
     #[test]
     fn round_trip() {

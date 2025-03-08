@@ -38,7 +38,7 @@ impl RecipientSourceTrait<Request, PubKey> for RecipientSource {
                     .iter()
                     .map(|entry| entry.stake_table_entry.stake_key)
                     .collect()
-            }
+            },
         }
     }
 }

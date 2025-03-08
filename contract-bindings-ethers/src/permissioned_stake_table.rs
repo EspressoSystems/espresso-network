@@ -763,17 +763,17 @@ pub mod permissioned_stake_table {
             match self {
                 Self::InvalidInitialization(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::NotInitializing(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::OwnableInvalidOwner(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::OwnableUnauthorizedAccount(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::StakerAlreadyExists(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::StakerNotFound(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::RevertString(s) => ::ethers::core::abi::AbiEncode::encode(s),
             }
@@ -787,28 +787,28 @@ pub mod permissioned_stake_table {
                     == <InvalidInitialization as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector == <NotInitializing as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector
                     == <OwnableInvalidOwner as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <OwnableUnauthorizedAccount as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <StakerAlreadyExists as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector == <StakerNotFound as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ => false,
             }
         }
@@ -1178,7 +1178,7 @@ pub mod permissioned_stake_table {
                 Self::Initialize(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::InitializedAtBlock(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::IsStaker(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::Owner(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::RenounceOwnership(element) => ::ethers::core::abi::AbiEncode::encode(element),

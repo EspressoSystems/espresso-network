@@ -589,7 +589,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 // because the leader of view n + 1 may propose to the DA (and we would vote)
                 // before the leader of view n.
                 return true;
-            }
+            },
             _ => return true,
         };
         if view > *old_view {

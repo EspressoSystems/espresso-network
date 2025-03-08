@@ -1,4 +1,5 @@
-use crate::{catchup::SqlStateCatchup, NodeType, SeqTypes, ViewNumber};
+use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use clap::Parser;
@@ -31,7 +32,6 @@ use hotshot_query_service::{
     merklized_state::MerklizedState,
     VidCommon,
 };
-use hotshot_types::drb::DrbResult;
 use hotshot_types::{
     consensus::CommitmentMap,
     data::{
@@ -39,6 +39,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare,
     },
+    drb::DrbResult,
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -52,9 +53,9 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
-use sqlx::Row;
-use sqlx::{query, Executor};
-use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use sqlx::{query, Executor, Row};
+
+use crate::{catchup::SqlStateCatchup, NodeType, SeqTypes, ViewNumber};
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -662,7 +663,7 @@ impl Persistence {
                         // we do have.
                         tracing::warn!("error loading row: {err:#}");
                         break;
-                    }
+                    },
                 };
 
                 let leaf_data: Vec<u8> = row.get("leaf");
@@ -1960,7 +1961,7 @@ impl Provider<SeqTypes, VidCommonRequest> for Persistence {
             Err(err) => {
                 tracing::warn!("could not open transaction: {err:#}");
                 return None;
-            }
+            },
         };
 
         let bytes = match query_as::<(Vec<u8>,)>(
@@ -1975,7 +1976,7 @@ impl Provider<SeqTypes, VidCommonRequest> for Persistence {
             Err(err) => {
                 tracing::error!("error loading VID share: {err:#}");
                 return None;
-            }
+            },
         };
 
         let share: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
@@ -1984,7 +1985,7 @@ impl Provider<SeqTypes, VidCommonRequest> for Persistence {
                 Err(err) => {
                     tracing::warn!("error decoding VID share: {err:#}");
                     return None;
-                }
+                },
             };
 
         match share.data {
@@ -2004,7 +2005,7 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
             Err(err) => {
                 tracing::warn!("could not open transaction: {err:#}");
                 return None;
-            }
+            },
         };
 
         let bytes = match query_as::<(Vec<u8>,)>(
@@ -2019,7 +2020,7 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
             Err(err) => {
                 tracing::warn!("error loading DA proposal: {err:#}");
                 return None;
-            }
+            },
         };
 
         let proposal: Proposal<SeqTypes, DaProposal2<SeqTypes>> = match bincode::deserialize(&bytes)
@@ -2028,7 +2029,7 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
             Err(err) => {
                 tracing::error!("error decoding DA proposal: {err:#}");
                 return None;
-            }
+            },
         };
 
         Some(Payload::from_bytes(
@@ -2047,7 +2048,7 @@ impl Provider<SeqTypes, LeafRequest<SeqTypes>> for Persistence {
             Err(err) => {
                 tracing::warn!("could not open transaction: {err:#}");
                 return None;
-            }
+            },
         };
 
         let (leaf, qc) = match fetch_leaf_from_proposals(&mut tx, req).await {
@@ -2055,7 +2056,7 @@ impl Provider<SeqTypes, LeafRequest<SeqTypes>> for Persistence {
             Err(err) => {
                 tracing::info!("requested leaf not found in undecided proposals: {err:#}");
                 return None;
-            }
+            },
         };
 
         match LeafQueryData::new(leaf, qc) {
@@ -2063,7 +2064,7 @@ impl Provider<SeqTypes, LeafRequest<SeqTypes>> for Persistence {
             Err(err) => {
                 tracing::warn!("fetched invalid leaf: {err:#}");
                 None
-            }
+            },
         }
     }
 }
@@ -2155,8 +2156,6 @@ mod generic_tests {
 #[cfg(test)]
 mod test {
 
-    use super::*;
-    use crate::{persistence::testing::TestablePersistence, BLSPubKey, PubKey};
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
@@ -2181,6 +2180,9 @@ mod test {
     use jf_vid::VidScheme;
     use sequencer_utils::test_utils::setup_test;
     use vbs::version::StaticVersionType;
+
+    use super::*;
+    use crate::{persistence::testing::TestablePersistence, BLSPubKey, PubKey};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quorum_proposals_leaf_hash_migration() {

@@ -442,12 +442,12 @@ pub mod plonk_verifier {
                 [0x08, 0xc3, 0x79, 0xa0] => true,
                 _ if selector == <InvalidPlonkArgs as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector
                     == <UnsupportedDegree as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector == <WrongPlonkVK as ::ethers::contract::EthError>::selector() => true,
                 _ => false,
             }

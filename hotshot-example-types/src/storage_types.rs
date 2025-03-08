@@ -12,7 +12,6 @@ use std::{
 use anyhow::{bail, Result};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use hotshot_types::drb::DrbResult;
 use hotshot_types::{
     consensus::CommitmentMap,
     data::{
@@ -20,6 +19,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment,
     },
+    drb::DrbResult,
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},

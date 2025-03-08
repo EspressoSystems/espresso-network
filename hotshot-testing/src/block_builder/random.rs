@@ -178,7 +178,7 @@ where
                 match stream.next().await {
                     None => {
                         break;
-                    }
+                    },
                     Some(evt) => {
                         if let EventType::ViewFinished { view_number } = evt.event {
                             if let Some(change) = self.changes.remove(&view_number) {
@@ -192,18 +192,18 @@ where
                                                 self.blocks.clone(),
                                             )))
                                         }
-                                    }
+                                    },
                                     BuilderChange::Down => {
                                         if let Some(handle) = task.take() {
                                             handle.abort();
                                         }
-                                    }
-                                    BuilderChange::FailClaims(_) => {}
+                                    },
+                                    BuilderChange::FailClaims(_) => {},
                                 }
                                 let _ = self.change_sender.broadcast(change).await;
                             }
                         }
-                    }
+                    },
                 }
             }
         });

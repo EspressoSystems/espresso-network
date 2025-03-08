@@ -1,10 +1,9 @@
-use std::{arch::global_asm, collections::HashSet, num::NonZeroUsize, time::Duration};
+use std::{arch::global_asm, collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_broadcast::{
     broadcast, Receiver as BroadcastReceiver, RecvError, Sender as BroadcastSender, TryRecvError,
 };
-
 use async_lock::RwLock;
 use espresso_types::{
     eth_signature_key::EthKeyPair,
@@ -43,7 +42,6 @@ use marketplace_builder_core::{
 use marketplace_builder_shared::block::ParentBlockReferences;
 use marketplace_solver::SolverError;
 use sequencer::{catchup::StatePeers, L1Params, NetworkParams, SequencerApiVersion};
-use std::sync::Arc;
 use surf::http::headers::ACCEPT;
 use surf_disco::Client;
 use tide_disco::{app, method::ReadState, App, Url};
@@ -209,8 +207,7 @@ mod test {
 
     use anyhow::Error;
     use async_lock::RwLock;
-    use committable::Commitment;
-    use committable::Committable;
+    use committable::{Commitment, Committable};
     use espresso_types::{
         mock::MockStateCatchup,
         v0_99::{RollupRegistration, RollupRegistrationBody},
@@ -220,12 +217,14 @@ mod test {
     use ethers::{core::k256::elliptic_curve::rand_core::block, utils::Anvil};
     use futures::{Stream, StreamExt};
     use hooks::connect_to_solver;
-    use hotshot::helpers::initialize_logging;
-    use hotshot::types::{
-        BLSPrivKey,
-        EventType::{Decide, *},
+    use hotshot::{
+        helpers::initialize_logging,
+        rand,
+        types::{
+            BLSPrivKey, EventType,
+            EventType::{Decide, *},
+        },
     };
-    use hotshot::{rand, types::EventType};
     use hotshot_builder_api::v0_99::builder::BuildError;
     use hotshot_events_service::{
         events::{Error as EventStreamApiError, Options as EventStreamingApiOptions},
@@ -248,14 +247,16 @@ mod test {
     use marketplace_solver::{testing::MockSolver, SolverError};
     use portpicker::pick_unused_port;
     use sequencer::{
-        api::test_helpers::TestNetworkConfigBuilder,
+        api::{
+            fs::DataSource,
+            options::HotshotEvents,
+            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            Options,
+        },
+        persistence,
         persistence::no_storage::{self, NoStorage},
         testing::TestConfigBuilder,
         SequencerApiVersion,
-    };
-    use sequencer::{
-        api::{fs::DataSource, options::HotshotEvents, test_helpers::TestNetwork, Options},
-        persistence,
     };
     use sequencer_utils::test_utils::setup_test;
     use surf_disco::{
@@ -608,7 +609,7 @@ mod test {
                     get_bundle(builder_client, parent_view_number, parent_commitment).await,
                     parent_view_number,
                 )
-            }
+            },
             Mempool::Private => {
                 submit_and_get_bundle_with_private_mempool(
                     builder_client,
@@ -616,7 +617,7 @@ mod test {
                     urls,
                 )
                 .await
-            }
+            },
         };
 
         assert_eq!(bundle.transactions, vec![registered_transaction.clone()]);
@@ -728,7 +729,7 @@ mod test {
                     get_bundle(builder_client, parent_view_number, parent_commitment).await,
                     parent_view_number,
                 )
-            }
+            },
             Mempool::Private => {
                 submit_and_get_bundle_with_private_mempool(
                     builder_client,
@@ -736,7 +737,7 @@ mod test {
                     urls,
                 )
                 .await
-            }
+            },
         };
 
         assert_eq!(bundle.transactions, vec![unregistered_transaction.clone()]);

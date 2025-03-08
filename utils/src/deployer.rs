@@ -1,3 +1,5 @@
+use std::{collections::HashMap, io::Write, ops::Deref, sync::Arc, time::Duration};
+
 use alloy::{
     contract::RawCallBuilder,
     network::{Ethereum, EthereumWallet},
@@ -24,7 +26,6 @@ use futures::future::{BoxFuture, FutureExt};
 use hotshot_contract_adapter::light_client::{
     LightClientConstructorArgs, ParsedLightClientState, ParsedStakeTableState,
 };
-use std::{collections::HashMap, io::Write, ops::Deref, sync::Arc, time::Duration};
 use url::Url;
 
 /// Set of predeployed contracts.
@@ -548,6 +549,8 @@ fn link_light_client_contract(
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
 
+    use std::sync::Arc;
+
     use anyhow::Context;
     use contract_bindings_ethers::{
         erc1967_proxy::ERC1967Proxy,
@@ -557,11 +560,9 @@ pub mod test_helpers {
     };
     use ethers::prelude::*;
     use hotshot_contract_adapter::light_client::LightClientConstructorArgs;
-    use std::sync::Arc;
-
-    use crate::deployer::link_light_client_contract;
 
     use super::{Contract, Contracts};
+    use crate::deployer::link_light_client_contract;
 
     /// Deployment `LightClientMock.sol` as proxy for testing
     pub async fn deploy_light_client_contract_as_proxy_for_test<M: Middleware + 'static>(

@@ -10,7 +10,8 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use crate::{types::HeightIndexed, Header, Metadata, Payload, Transaction, VidCommon};
+use std::fmt::Debug;
+
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{Leaf, Leaf2, VidCommitment, VidShare},
@@ -26,7 +27,8 @@ use hotshot_types::{
 use jf_vid::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
-use std::fmt::Debug;
+
+use crate::{types::HeightIndexed, Header, Metadata, Payload, Transaction, VidCommon};
 
 pub type LeafHash<Types> = Commitment<Leaf2<Types>>;
 pub type QcHash<Types> = Commitment<QuorumCertificate2<Types>>;

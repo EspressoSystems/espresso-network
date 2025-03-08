@@ -4,12 +4,17 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use either::Either;
 use hotshot_task::dependency::{Dependency, EventDependency};
-use hotshot_types::traits::storage::Storage;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, ViewChangeEvidence2},
@@ -24,6 +29,7 @@ use hotshot_types::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
+        storage::Storage,
         BlockPayload, ValidatedState,
     },
     utils::{
@@ -34,11 +40,6 @@ use hotshot_types::{
     StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use tokio::time::timeout;
 use tracing::instrument;
 
@@ -814,7 +815,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
                             *view_number, e
                         )
                     })?;
-            }
+            },
             ViewChangeEvidence2::ViewSync(view_sync_cert) => {
                 ensure!(
                     view_sync_cert.view_number == view_number,
@@ -838,7 +839,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
                     )
                     .await
                     .context(|e| warn!("Invalid view sync finalize cert provided: {}", e))?;
-            }
+            },
         }
     }
 
@@ -871,13 +872,13 @@ pub async fn broadcast_event<E: Clone + std::fmt::Debug>(event: E, sender: &Send
                 "Event sender queue overflow, Oldest event removed form queue: {:?}",
                 overflowed
             );
-        }
+        },
         Err(SendError(e)) => {
             tracing::warn!(
                 "Event: {:?}\n Sending failed, event stream probably shutdown",
                 e
             );
-        }
+        },
     }
 }
 
