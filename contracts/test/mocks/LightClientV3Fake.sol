@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 
 pragma solidity ^0.8.0;
-pragma experimental ABIEncoderV2;
 
-import { LightClientV2 } from "./LightClientV2.sol";
+import { LightClientV2Fake } from "./LightClientV2Fake.sol";
 
-/// @notice A light client for HotShot consensus. Keeping track of its finalized states in safe,
-/// authenticated ways.
-
-contract LightClientV3 is LightClientV2 {
+/// @dev a Fake V3 for testing upgradability purposes only
+contract LightClientV3Fake is LightClientV2Fake {
     uint256 public anotherField;
 
     /// @notice Initialize v3
