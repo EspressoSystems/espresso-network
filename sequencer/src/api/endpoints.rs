@@ -15,7 +15,7 @@ use hotshot_query_service::{
     merklized_state::{
         self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence,
     },
-    node, ApiState, Error,
+    node, ApiState, Error, VidCommon,
 };
 use hotshot_query_service::{merklized_state::Snapshot, node::NodeDataSource};
 use hotshot_types::{
@@ -135,10 +135,12 @@ where
                         })
                 }
             )?;
-            let common = &common.common().clone().context(CustomSnafu {
-                message: format!("failed to make proof for namespace {ns_id}"),
-                status: StatusCode::NOT_FOUND,
-            })?;
+            let VidCommon::V0(common) = &common.common().clone() else {
+                return Err(availability::Error::Custom {
+                    message: format!("failed to make proof for namespace {ns_id}"),
+                    status: StatusCode::NOT_FOUND,
+                });
+            };
             if let Some(ns_index) = block.payload().ns_table().find_ns_id(&ns_id) {
                 let proof =
                     NsProof::new(block.payload(), &ns_index, common).context(CustomSnafu {

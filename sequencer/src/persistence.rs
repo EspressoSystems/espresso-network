@@ -200,6 +200,7 @@ mod persistence_tests {
             recipient_key: pubkey,
             epoch: Some(EpochNumber::new(0)),
             target_epoch: Some(EpochNumber::new(0)),
+            common: avidm_param,
         };
         let mut quorum_proposal = Proposal {
             data: QuorumProposalWrapper::<SeqTypes> {
@@ -694,6 +695,7 @@ mod persistence_tests {
             recipient_key: pubkey,
             epoch: Some(EpochNumber::new(0)),
             target_epoch: Some(EpochNumber::new(0)),
+            common: avidm_param,
         }
         .to_proposal(&privkey)
         .unwrap()
@@ -897,6 +899,7 @@ mod persistence_tests {
             recipient_key: pubkey,
             epoch: None,
             target_epoch: None,
+            common: avidm_param,
         }
         .to_proposal(&privkey)
         .unwrap()

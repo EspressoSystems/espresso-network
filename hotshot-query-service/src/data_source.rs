@@ -756,6 +756,7 @@ pub mod persistence_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod node_tests {
+    use crate::VidCommon;
     use crate::{
         availability::{
             BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, VidCommonQueryData,
@@ -838,7 +839,10 @@ pub mod node_tests {
             .iter()
             .map(|leaf| {
                 (
-                    VidCommonQueryData::new(leaf.header().clone(), Some(disperse.common.clone())),
+                    VidCommonQueryData::new(
+                        leaf.header().clone(),
+                        VidCommon::V0(disperse.common.clone()),
+                    ),
                     disperse.shares[0].clone(),
                 )
             })
@@ -1085,7 +1089,7 @@ pub mod node_tests {
             &TestInstanceState::default(),
         )
         .await;
-        let common = VidCommonQueryData::new(leaf.header().clone(), Some(disperse.common));
+        let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
         ds.append(BlockInfo::new(
             leaf,
             None,
@@ -1159,7 +1163,9 @@ pub mod node_tests {
         // Get VID common data and verify it.
         tracing::info!("fetching common data");
         let common = ds.get_vid_common(height).await.await;
-        let common = &common.common().clone().unwrap();
+        let VidCommon::V0(common) = &common.common() else {
+            panic!("expect ADVZ common");
+        };
         ADVZScheme::is_consistent(&commit, common).unwrap();
 
         // Collect shares from each node.
