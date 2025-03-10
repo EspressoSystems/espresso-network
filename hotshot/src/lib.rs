@@ -19,11 +19,8 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
     traits::{
-        
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions,
-    ,
-        signature_key::StateSignatureKey,
+        node_implementation::Versions, signature_key::StateSignatureKey,
     },
 };
 use rand::Rng;
@@ -1015,14 +1012,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusApi<TY
     ) -> &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey {
         &self.hotshot.state_private_key
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct InitializerEpochInfo<TYPES: NodeType> {
-    pub epoch: TYPES::Epoch,
-    pub drb_result: DrbResult,
-    // pub stake_table: Option<StakeTable>, // TODO: Figure out how to connect this up
-    pub block_header: Option<TYPES::BlockHeader>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
