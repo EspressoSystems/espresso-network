@@ -9,7 +9,7 @@ use alloy::{
 };
 use anyhow::{ensure, Context};
 use clap::{builder::OsStr, Parser, ValueEnum};
-use contract_bindings_alloy::feecontract::FeeContract;
+use contract_bindings_alloy::{esptoken::EspToken, feecontract::FeeContract};
 use contract_bindings_ethers::{
     erc1967_proxy::ERC1967Proxy,
     light_client::{LightClient, LIGHTCLIENT_ABI},
@@ -54,6 +54,22 @@ pub struct DeployedContracts {
     /// Use an already-deployed PermissonedStakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::PermissonedStakeTable)]
     permissioned_stake_table: Option<Address>,
+
+    /// Use an already-deployed EspToken.sol instead of deploying a new one.
+    #[clap(long, env = Contract::EspToken)]
+    esp_token: Option<Address>,
+
+    /// Use an already-deployed EspToken.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::EspTokenProxy)]
+    esp_token_proxy: Option<Address>,
+
+    /// Use an already-deployed StakeTable.sol instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTable)]
+    stake_table: Option<Address>,
+
+    /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTableProxy)]
+    stake_table_proxy: Option<Address>,
 }
 
 /// An identifier for a particular contract.
@@ -71,6 +87,14 @@ pub enum Contract {
     FeeContractProxy,
     #[display("ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS")]
     PermissonedStakeTable,
+    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS")]
+    EspToken,
+    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS")]
+    EspTokenProxy,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS")]
+    StakeTable,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
+    StakeTableProxy,
 }
 
 impl From<Contract> for OsStr {
@@ -482,6 +506,62 @@ pub async fn deploy(
         }
     }
 
+    // `EspToken.sol`
+    if should_deploy(ContractGroup::EspToken, &only) {
+        let token_address = contracts
+            .deploy_tx_alloy(
+                Contract::EspToken,
+                EspToken::deploy_builder(l1_alloy.clone()),
+            )
+            .await?;
+        let token = EspToken::new(token_address, l1_alloy.clone());
+        let data = token
+            .initialize(
+                deployer.to_alloy(),
+                // TODO: token recipient
+                deployer.to_alloy(),
+            )
+            .calldata()
+            .clone();
+        let token_proxy_address = contracts
+            .deploy_tx_alloy(
+                Contract::EspTokenProxy,
+                contract_bindings_alloy::erc1967proxy::ERC1967Proxy::deploy_builder(
+                    l1_alloy.clone(),
+                    token_address,
+                    data,
+                ),
+            )
+            .await?;
+
+        // confirm that the implementation address is the address of the fee contract deployed above
+        if !is_proxy_contract(&provider, token_proxy_address.to_ethers())
+            .await
+            .expect("Failed to determine if fee contract is a proxy")
+        {
+            panic!("Fee contract's address is not a proxy");
+        }
+
+        // Instantiate a wrapper with the proxy address and fee contract ABI.
+        let proxy =
+            contract_bindings_alloy::esptoken::EspToken::new(token_proxy_address, l1_alloy.clone());
+
+        // Transfer ownership to the multisig wallet if provided.
+        if let Some(owner) = multisig_address {
+            tracing::info!(
+                ?token_proxy_address,
+                ?owner,
+                "transferring fee contract proxy ownership to multisig",
+            );
+            let _ = proxy.transferOwnership(owner.to_alloy()).send().await?;
+        }
+    }
+
+    // `StakeTable.sol`
+    if should_deploy(ContractGroup::StakeTable, &only) {
+        todo!()
+    }
+
     Ok(contracts)
 }
 
@@ -516,6 +596,8 @@ pub enum ContractGroup {
     FeeContract,
     LightClient,
     PermissionedStakeTable,
+    EspToken,
+    StakeTable,
 }
 
 // Link with LightClient's bytecode artifacts. We include the unlinked bytecode for the contract

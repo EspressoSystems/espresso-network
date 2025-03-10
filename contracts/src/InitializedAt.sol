@@ -12,14 +12,12 @@ contract InitializedAt is Initializable {
     // @notice The block number the contract was initialized at.
     uint256 public initializedAtBlock;
 
-    error BlockNumberAlreadyInitialized();
+    constructor() {
+        _disableInitializers();
+    }
 
-    // @dev The the `initialize` function must be called during initialization.
-    // @dev The this function must be called from the contracts initializer.
-    function initializeAtBlock() internal {
-        if (initializedAtBlock != 0) {
-            revert BlockNumberAlreadyInitialized();
-        }
+    // @dev The `initializeAtBlock` function must be called during initialization.
+    function initializeAtBlock() internal initializer {
         initializedAtBlock = block.number;
     }
 }

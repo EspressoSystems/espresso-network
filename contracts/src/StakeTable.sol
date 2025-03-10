@@ -16,7 +16,7 @@ import { InitializedAt } from "./InitializedAt.sol";
 using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 
 /// @title Implementation of the Stake Table interface
-contract StakeTable is AbstractStakeTable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
+contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
     event Upgrade(address implementation);
 
@@ -289,13 +289,14 @@ contract StakeTable is AbstractStakeTable, InitializedAt, OwnableUpgradeable, UU
 
     /// @notice Withdraw undelegated funds
     function claimWithdrawal(address validator) external virtual override {
-        if (block.timestamp < undelegations[validator][msg.sender].unlocksAt) {
-            revert PrematureWithdrawal();
-        }
-
+        // If entries are missing at any of the levels of the mapping this will return zero
         uint256 amount = undelegations[validator][msg.sender].amount;
         if (amount == 0) {
             revert NothingToWithdraw();
+        }
+
+        if (block.timestamp < undelegations[validator][msg.sender].unlocksAt) {
+            revert PrematureWithdrawal();
         }
 
         // Mark funds as spent
