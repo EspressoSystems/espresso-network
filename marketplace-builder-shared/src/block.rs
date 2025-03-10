@@ -3,11 +3,12 @@
 use std::time::Instant;
 
 use committable::{Commitment, Committable};
-use hotshot_types::data::{fake_commitment, Leaf2};
-use hotshot_types::traits::node_implementation::ConsensusTime;
 use hotshot_types::{
-    data::VidCommitment,
-    traits::{block_contents::Transaction, node_implementation::NodeType},
+    data::{fake_commitment, Leaf2, VidCommitment},
+    traits::{
+        block_contents::Transaction,
+        node_implementation::{ConsensusTime, NodeType},
+    },
     utils::BuilderCommitment,
 };
 

@@ -40,7 +40,7 @@ fn merge_toml(into: &mut Value, from: Value) {
                 Entry::Occupied(mut entry) => merge_toml(entry.get_mut(), value),
                 Entry::Vacant(entry) => {
                     entry.insert(value);
-                }
+                },
             }
         }
     }

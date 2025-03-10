@@ -14,7 +14,6 @@ use std::{
 };
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_task::{
     dependency::{Dependency, EventDependency},
@@ -22,10 +21,10 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::OuterConsensus,
+    epoch_membership::EpochMembershipCoordinator,
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        election::Membership,
         network::{ConnectedNetwork, DataRequest, RequestKind},
         node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
@@ -68,7 +67,7 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub delay: Duration,
 
     /// Membership (Used here only for DA)
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// This nodes public key
     pub public_key: TYPES::SignatureKey,
@@ -114,14 +113,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
             HotShotEvent::QuorumProposalValidated(proposal, _) => {
                 let prop_view = proposal.data.view_number();
                 let prop_epoch = proposal.data.epoch();
-                let next_epoch = prop_epoch.map(|epoch| epoch + 1);
 
                 // Request VID share only if:
                 // 1. we are part of the current epoch or
                 // 2. we are part of the next epoch and this is a proposal for the last block.
-                let membership_reader = self.membership.read().await;
-                if !membership_reader.has_stake(&self.public_key, prop_epoch)
-                    && (!membership_reader.has_stake(&self.public_key, next_epoch)
+                let membership_reader = self
+                    .membership_coordinator
+                    .membership_for_epoch(prop_epoch)
+                    .await?;
+                if !membership_reader.has_stake(&self.public_key).await
+                    && (!membership_reader
+                        .next_epoch()
+                        .await?
+                        .has_stake(&self.public_key)
+                        .await
                         || !is_last_block_in_epoch(
                             proposal.data.block_header().block_number(),
                             self.epoch_height,
@@ -129,7 +134,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                 {
                     return Ok(());
                 }
-                drop(membership_reader);
 
                 let consensus_reader = self.consensus.read().await;
                 let maybe_vid_share = consensus_reader
@@ -143,14 +147,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                         .await;
                 }
                 Ok(())
-            }
+            },
             HotShotEvent::ViewChange(view, _) => {
                 let view = *view;
                 if view > self.view {
                     self.view = view;
                 }
                 Ok(())
-            }
+            },
             _ => Ok(()),
         }
     }
@@ -213,15 +217,26 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         let public_key = self.public_key.clone();
 
         // Get the committee members for the view and the leader, if applicable
-        let membership_reader = self.membership.read().await;
-        let mut da_committee_for_view = membership_reader.da_committee_members(view, epoch);
-        if let Ok(leader) = membership_reader.leader(view, epoch) {
+        let membership_reader = match self
+            .membership_coordinator
+            .membership_for_epoch(epoch)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(e.message);
+                return;
+            },
+        };
+        let mut da_committee_for_view = membership_reader.da_committee_members(view).await;
+        if let Ok(leader) = membership_reader.leader(view).await {
             da_committee_for_view.insert(leader);
         }
 
         // Get committee members for view
         let mut recipients: Vec<TYPES::SignatureKey> = membership_reader
-            .da_committee_members(view, epoch)
+            .da_committee_members(view)
+            .await
             .into_iter()
             .collect();
         drop(membership_reader);

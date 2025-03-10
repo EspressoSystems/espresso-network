@@ -24,6 +24,8 @@ pub mod constants;
 pub mod data;
 /// Holds the types and functions for DRB computation.
 pub mod drb;
+/// Epoch Membership wrappers
+pub mod epoch_membership;
 pub mod error;
 pub mod event;
 /// Holds the configuration file specification for a HotShot node.
@@ -139,7 +141,7 @@ impl<TYPES: NodeType> PeerConfig<TYPES> {
             Err(e) => {
                 error!(?e, "Failed to serialize public key");
                 vec![]
-            }
+            },
         }
     }
 
@@ -153,7 +155,7 @@ impl<TYPES: NodeType> PeerConfig<TYPES> {
             Err(e) => {
                 error!(?e, "Failed to deserialize public key");
                 None
-            }
+            },
         }
     }
 }
@@ -228,6 +230,8 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub stop_voting_time: u64,
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+    /// Epoch start block
+    pub epoch_start_block: u64,
 }
 
 impl<TYPES: NodeType> HotShotConfig<TYPES> {

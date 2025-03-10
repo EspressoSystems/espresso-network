@@ -10,9 +10,10 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::{fmt::Debug, time::Duration};
+
 use anyhow::bail;
 use async_trait::async_trait;
-use std::{fmt::Debug, time::Duration};
 
 #[derive(Clone, Debug)]
 pub struct PrunerCfg {

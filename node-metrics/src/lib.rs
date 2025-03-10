@@ -99,15 +99,6 @@
 pub mod api;
 pub mod service;
 
-use crate::{
-    api::node_validator::v0::{
-        cdn::{BroadcastRollCallTask, CdnReceiveMessagesTask},
-        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
-        HotshotQueryServiceLeafStreamRetriever, ProcessProduceLeafStreamTask,
-        StateClientMessageSender, STATIC_VER_0_1,
-    },
-    service::{client_message::InternalClientMessage, server_message::ServerMessage},
-};
 use clap::Parser;
 use espresso_types::{PubKey, SeqTypes};
 use futures::channel::mpsc::{self, Sender};
@@ -119,6 +110,16 @@ use hotshot_types::traits::{node_implementation::NodeType, signature_key::Builde
 use tide_disco::App;
 use tokio::spawn;
 use url::Url;
+
+use crate::{
+    api::node_validator::v0::{
+        cdn::{BroadcastRollCallTask, CdnReceiveMessagesTask},
+        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
+        HotshotQueryServiceLeafStreamRetriever, ProcessProduceLeafStreamTask,
+        StateClientMessageSender, STATIC_VER_0_1,
+    },
+    service::{client_message::InternalClientMessage, server_message::ServerMessage},
+};
 
 /// Options represents the configuration options that are available for running
 /// the node validator service via the [run_standalone_service] function.
@@ -233,10 +234,10 @@ pub async fn run_standalone_service(options: Options) {
         api::node_validator::v0::define_api().expect("error defining node validator api");
 
     match app.register_module("node-validator", node_validator_api) {
-        Ok(_) => {}
+        Ok(_) => {},
         Err(err) => {
             panic!("error registering node validator api: {:?}", err);
-        }
+        },
     }
 
     let (leaf_sender, leaf_receiver) = mpsc::channel(10);
@@ -260,7 +261,7 @@ pub async fn run_standalone_service(options: Options) {
 
         Err(err) => {
             panic!("error defining node validator api: {:?}", err);
-        }
+        },
     };
 
     let _cdn_tasks = if let Some(cdn_broker_url_string) = options.cdn_marshal_endpoint() {
@@ -278,7 +279,7 @@ pub async fn run_standalone_service(options: Options) {
             Ok(cdn_network) => cdn_network,
             Err(err) => {
                 panic!("error creating cdn network: {:?}", err);
-            }
+            },
         };
 
         let url_sender = node_validator_task_state.url_sender.clone();

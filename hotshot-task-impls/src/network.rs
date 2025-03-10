@@ -17,6 +17,7 @@ use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{VidDisperse, VidDisperseShare},
+    epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, HotShotAction},
     message::{
         convert_proposal, DaConsensusMessage, DataMessage, GeneralConsensusMessage, Message,
@@ -24,7 +25,6 @@ use hotshot_types::{
     },
     simple_vote::HasEpoch,
     traits::{
-        election::Membership,
         network::{
             BroadcastDelay, ConnectedNetwork, RequestKind, ResponseMessage, Topic, TransmitType,
             ViewMessage,
@@ -85,7 +85,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
-                        }
+                        },
                         GeneralConsensusMessage::Proposal2(proposal) => {
                             if !self
                                 .upgrade_lock
@@ -96,10 +96,10 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::QuorumProposalRecv(convert_proposal(proposal), sender)
-                        }
+                        },
                         GeneralConsensusMessage::ProposalRequested(req, sig) => {
                             HotShotEvent::QuorumProposalRequestRecv(req, sig)
-                        }
+                        },
                         GeneralConsensusMessage::ProposalResponse(proposal) => {
                             if self
                                 .upgrade_lock
@@ -110,7 +110,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::QuorumProposalResponseRecv(convert_proposal(proposal))
-                        }
+                        },
                         GeneralConsensusMessage::ProposalResponse2(proposal) => {
                             if !self
                                 .upgrade_lock
@@ -121,21 +121,21 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::QuorumProposalResponseRecv(convert_proposal(proposal))
-                        }
+                        },
                         GeneralConsensusMessage::Vote(vote) => {
                             if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                                 tracing::warn!("received GeneralConsensusMessage::Vote for view {} but epochs are enabled for that view", vote.view_number());
                                 return;
                             }
                             HotShotEvent::QuorumVoteRecv(vote.to_vote2())
-                        }
+                        },
                         GeneralConsensusMessage::Vote2(vote) => {
                             if !self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                                 tracing::warn!("received GeneralConsensusMessage::Vote2 for view {} but epochs are not enabled for that view", vote.view_number());
                                 return;
                             }
                             HotShotEvent::QuorumVoteRecv(vote)
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncPreCommitVote(view_sync_message) => {
                             if self
                                 .upgrade_lock
@@ -146,7 +146,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncPreCommitVoteRecv(view_sync_message.to_vote2())
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncPreCommitVote2(view_sync_message) => {
                             if !self
                                 .upgrade_lock
@@ -157,7 +157,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncPreCommitVoteRecv(view_sync_message)
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncPreCommitCertificate(
                             view_sync_message,
                         ) => {
@@ -172,7 +172,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             HotShotEvent::ViewSyncPreCommitCertificateRecv(
                                 view_sync_message.to_vsc2(),
                             )
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncPreCommitCertificate2(
                             view_sync_message,
                         ) => {
@@ -185,7 +185,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncPreCommitCertificateRecv(view_sync_message)
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncCommitVote(view_sync_message) => {
                             if self
                                 .upgrade_lock
@@ -196,7 +196,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncCommitVoteRecv(view_sync_message.to_vote2())
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncCommitVote2(view_sync_message) => {
                             if !self
                                 .upgrade_lock
@@ -207,7 +207,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncCommitVoteRecv(view_sync_message)
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncCommitCertificate(view_sync_message) => {
                             if self
                                 .upgrade_lock
@@ -218,7 +218,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncCommitCertificateRecv(view_sync_message.to_vsc2())
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncCommitCertificate2(view_sync_message) => {
                             if !self
                                 .upgrade_lock
@@ -229,7 +229,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncCommitCertificateRecv(view_sync_message)
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncFinalizeVote(view_sync_message) => {
                             if self
                                 .upgrade_lock
@@ -240,7 +240,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncFinalizeVoteRecv(view_sync_message.to_vote2())
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncFinalizeVote2(view_sync_message) => {
                             if !self
                                 .upgrade_lock
@@ -251,7 +251,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncFinalizeVoteRecv(view_sync_message)
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncFinalizeCertificate(view_sync_message) => {
                             if self
                                 .upgrade_lock
@@ -264,7 +264,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             HotShotEvent::ViewSyncFinalizeCertificateRecv(
                                 view_sync_message.to_vsc2(),
                             )
-                        }
+                        },
                         GeneralConsensusMessage::ViewSyncFinalizeCertificate2(
                             view_sync_message,
                         ) => {
@@ -277,7 +277,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::ViewSyncFinalizeCertificateRecv(view_sync_message)
-                        }
+                        },
                         GeneralConsensusMessage::TimeoutVote(message) => {
                             if self
                                 .upgrade_lock
@@ -288,7 +288,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::TimeoutVoteRecv(message.to_vote2())
-                        }
+                        },
                         GeneralConsensusMessage::TimeoutVote2(message) => {
                             if !self
                                 .upgrade_lock
@@ -299,21 +299,21 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::TimeoutVoteRecv(message)
-                        }
+                        },
                         GeneralConsensusMessage::UpgradeProposal(message) => {
                             HotShotEvent::UpgradeProposalRecv(message, sender)
-                        }
+                        },
                         GeneralConsensusMessage::UpgradeVote(message) => {
                             tracing::error!("Received upgrade vote!");
                             HotShotEvent::UpgradeVoteRecv(message)
-                        }
+                        },
                         GeneralConsensusMessage::HighQc(qc) => HotShotEvent::HighQcRecv(qc, sender),
                         GeneralConsensusMessage::ExtendedQc(qc, next_epoch_qc) => {
                             HotShotEvent::ExtendedQcRecv(qc, next_epoch_qc, sender)
-                        }
+                        },
                         GeneralConsensusMessage::ExtendedQuorumVote(vote) => {
                             HotShotEvent::ExtendedQuorumVoteRecv(vote)
-                        }
+                        },
                     },
                     SequencingMessage::Da(da_message) => match da_message {
                         DaConsensusMessage::DaProposal(proposal) => {
@@ -326,7 +326,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::DaProposalRecv(convert_proposal(proposal), sender)
-                        }
+                        },
                         DaConsensusMessage::DaProposal2(proposal) => {
                             if !self
                                 .upgrade_lock
@@ -337,35 +337,35 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::DaProposalRecv(proposal, sender)
-                        }
+                        },
                         DaConsensusMessage::DaVote(vote) => {
                             if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                                 tracing::warn!("received DaConsensusMessage::DaVote for view {} but epochs are enabled for that view", vote.view_number());
                                 return;
                             }
                             HotShotEvent::DaVoteRecv(vote.clone().to_vote2())
-                        }
+                        },
                         DaConsensusMessage::DaVote2(vote) => {
                             if !self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                                 tracing::warn!("received DaConsensusMessage::DaVote2 for view {} but epochs are not enabled for that view", vote.view_number());
                                 return;
                             }
                             HotShotEvent::DaVoteRecv(vote.clone())
-                        }
+                        },
                         DaConsensusMessage::DaCertificate(cert) => {
                             if self.upgrade_lock.epochs_enabled(cert.view_number()).await {
                                 tracing::warn!("received DaConsensusMessage::DaCertificate for view {} but epochs are enabled for that view", cert.view_number());
                                 return;
                             }
                             HotShotEvent::DaCertificateRecv(cert.to_dac2())
-                        }
+                        },
                         DaConsensusMessage::DaCertificate2(cert) => {
                             if !self.upgrade_lock.epochs_enabled(cert.view_number()).await {
                                 tracing::warn!("received DaConsensusMessage::DaCertificate2 for view {} but epochs are not enabled for that view", cert.view_number());
                                 return;
                             }
                             HotShotEvent::DaCertificateRecv(cert)
-                        }
+                        },
                         DaConsensusMessage::VidDisperseMsg(proposal) => {
                             if self
                                 .upgrade_lock
@@ -376,7 +376,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
-                        }
+                        },
                         DaConsensusMessage::VidDisperseMsg2(proposal) => {
                             if !self
                                 .upgrade_lock
@@ -387,11 +387,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                 return;
                             }
                             HotShotEvent::VidShareRecv(sender, convert_proposal(proposal))
-                        }
+                        },
                     },
                 };
                 broadcast_event(Arc::new(event), &self.internal_event_stream).await;
-            }
+            },
 
             // Handle data messages
             MessageKind::Data(message) => match message {
@@ -406,7 +406,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         &self.internal_event_stream,
                     )
                     .await;
-                }
+                },
                 DataMessage::DataResponse(response) => {
                     if let ResponseMessage::Found(message) = response {
                         match message {
@@ -419,7 +419,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                     &self.internal_event_stream,
                                 )
                                 .await;
-                            }
+                            },
                             SequencingMessage::Da(DaConsensusMessage::VidDisperseMsg2(
                                 proposal,
                             )) => {
@@ -431,11 +431,11 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                                     &self.internal_event_stream,
                                 )
                                 .await;
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     }
-                }
+                },
                 DataMessage::RequestData(data) => {
                     let req_data = data.clone();
                     if let RequestKind::Vid(_view_number, _key) = req_data.request {
@@ -445,7 +445,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         )
                         .await;
                     }
-                }
+                },
             },
 
             // Handle external messages
@@ -462,7 +462,7 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                     &self.external_event_stream,
                 )
                 .await;
-            }
+            },
         }
     }
 }
@@ -484,7 +484,7 @@ pub struct NetworkEventTaskState<
     pub epoch: Option<TYPES::Epoch>,
 
     /// network memberships
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// Storage to store actionable events
     pub storage: Arc<RwLock<S>>,
@@ -610,7 +610,7 @@ impl<
                 Err(e) => {
                     tracing::error!("Failed to serialize message: {}", e);
                     continue;
-                }
+                },
             };
 
             messages.insert(recipient, serialized_message);
@@ -633,7 +633,7 @@ impl<
                 return;
             }
             match net.vid_broadcast_message(messages).await {
-                Ok(()) => {}
+                Ok(()) => {},
                 Err(e) => tracing::warn!("Failed to send message from network task: {:?}", e),
             }
         });
@@ -668,7 +668,7 @@ impl<
                 Err(e) => {
                     tracing::warn!("Not Sending {:?} because of storage error: {:?}", action, e);
                     Err(())
-                }
+                },
             }
         } else {
             Ok(())
@@ -721,17 +721,19 @@ impl<
                 };
 
                 Some((sender, message, TransmitType::Broadcast))
-            }
+            },
 
             // ED Each network task is subscribed to all these message types.  Need filters per network task
             HotShotEvent::QuorumVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::Vote);
                 let view_number = vote.view_number() + 1;
                 let leader = match self
-                    .membership
-                    .read()
+                    .membership_coordinator
+                    .membership_for_epoch(vote.epoch())
                     .await
-                    .leader(view_number, vote.epoch())
+                    .ok()?
+                    .leader(view_number)
+                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -741,7 +743,7 @@ impl<
                             e
                         );
                         return None;
-                    }
+                    },
                 };
 
                 let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
@@ -755,7 +757,7 @@ impl<
                 };
 
                 Some((vote.signing_key(), message, TransmitType::Direct(leader)))
-            }
+            },
             HotShotEvent::ExtendedQuorumVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::Vote);
                 let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
@@ -769,7 +771,7 @@ impl<
                 };
 
                 Some((vote.vote.signing_key(), message, TransmitType::Broadcast))
-            }
+            },
             HotShotEvent::QuorumProposalRequestSend(req, signature) => Some((
                 req.key.clone(),
                 MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
@@ -797,11 +799,11 @@ impl<
                     message,
                     TransmitType::Direct(sender_key),
                 ))
-            }
+            },
             HotShotEvent::VidDisperseSend(proposal, sender) => {
                 self.handle_vid_disperse_proposal(proposal, &sender).await;
                 None
-            }
+            },
             HotShotEvent::DaProposalSend(proposal, sender) => {
                 *maybe_action = Some(HotShotAction::DaPropose);
 
@@ -820,12 +822,18 @@ impl<
                 };
 
                 Some((sender, message, TransmitType::DaCommitteeBroadcast))
-            }
+            },
             HotShotEvent::DaVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::DaVote);
                 let view_number = vote.view_number();
-                let epoch = vote.data.epoch;
-                let leader = match self.membership.read().await.leader(view_number, epoch) {
+                let leader = match self
+                    .membership_coordinator
+                    .membership_for_epoch(vote.epoch())
+                    .await
+                    .ok()?
+                    .leader(view_number)
+                    .await
+                {
                     Ok(l) => l,
                     Err(e) => {
                         tracing::warn!(
@@ -834,7 +842,7 @@ impl<
                             e
                         );
                         return None;
-                    }
+                    },
                 };
 
                 let message = if self.upgrade_lock.epochs_enabled(view_number).await {
@@ -848,7 +856,7 @@ impl<
                 };
 
                 Some((vote.signing_key(), message, TransmitType::Direct(leader)))
-            }
+            },
             HotShotEvent::DacSend(certificate, sender) => {
                 *maybe_action = Some(HotShotAction::DaCert);
                 let message = if self
@@ -866,10 +874,17 @@ impl<
                 };
 
                 Some((sender, message, TransmitType::Broadcast))
-            }
+            },
             HotShotEvent::ViewSyncPreCommitVoteSend(vote) => {
                 let view_number = vote.view_number() + vote.date().relay;
-                let leader = match self.membership.read().await.leader(view_number, self.epoch) {
+                let leader = match self
+                    .membership_coordinator
+                    .membership_for_epoch(self.epoch)
+                    .await
+                    .ok()?
+                    .leader(view_number)
+                    .await
+                {
                     Ok(l) => l,
                     Err(e) => {
                         tracing::warn!(
@@ -878,7 +893,7 @@ impl<
                             e
                         );
                         return None;
-                    }
+                    },
                 };
                 let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
@@ -891,11 +906,18 @@ impl<
                 };
 
                 Some((vote.signing_key(), message, TransmitType::Direct(leader)))
-            }
+            },
             HotShotEvent::ViewSyncCommitVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::ViewSyncVote);
                 let view_number = vote.view_number() + vote.date().relay;
-                let leader = match self.membership.read().await.leader(view_number, self.epoch) {
+                let leader = match self
+                    .membership_coordinator
+                    .membership_for_epoch(self.epoch)
+                    .await
+                    .ok()?
+                    .leader(view_number)
+                    .await
+                {
                     Ok(l) => l,
                     Err(e) => {
                         tracing::warn!(
@@ -904,7 +926,7 @@ impl<
                             e
                         );
                         return None;
-                    }
+                    },
                 };
                 let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
@@ -917,11 +939,18 @@ impl<
                 };
 
                 Some((vote.signing_key(), message, TransmitType::Direct(leader)))
-            }
+            },
             HotShotEvent::ViewSyncFinalizeVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::ViewSyncVote);
                 let view_number = vote.view_number() + vote.date().relay;
-                let leader = match self.membership.read().await.leader(view_number, self.epoch) {
+                let leader = match self
+                    .membership_coordinator
+                    .membership_for_epoch(self.epoch)
+                    .await
+                    .ok()?
+                    .leader(view_number)
+                    .await
+                {
                     Ok(l) => l,
                     Err(e) => {
                         tracing::warn!(
@@ -930,7 +959,7 @@ impl<
                             e
                         );
                         return None;
-                    }
+                    },
                 };
                 let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
@@ -943,7 +972,7 @@ impl<
                 };
 
                 Some((vote.signing_key(), message, TransmitType::Direct(leader)))
-            }
+            },
             HotShotEvent::ViewSyncPreCommitCertificateSend(certificate, sender) => {
                 let view_number = certificate.view_number();
                 let message = if self.upgrade_lock.epochs_enabled(view_number).await {
@@ -957,7 +986,7 @@ impl<
                 };
 
                 Some((sender, message, TransmitType::Broadcast))
-            }
+            },
             HotShotEvent::ViewSyncCommitCertificateSend(certificate, sender) => {
                 let view_number = certificate.view_number();
                 let message = if self.upgrade_lock.epochs_enabled(view_number).await {
@@ -971,7 +1000,7 @@ impl<
                 };
 
                 Some((sender, message, TransmitType::Broadcast))
-            }
+            },
             HotShotEvent::ViewSyncFinalizeCertificateSend(certificate, sender) => {
                 let view_number = certificate.view_number();
                 let message = if self.upgrade_lock.epochs_enabled(view_number).await {
@@ -985,11 +1014,18 @@ impl<
                 };
 
                 Some((sender, message, TransmitType::Broadcast))
-            }
+            },
             HotShotEvent::TimeoutVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::Vote);
                 let view_number = vote.view_number() + 1;
-                let leader = match self.membership.read().await.leader(view_number, self.epoch) {
+                let leader = match self
+                    .membership_coordinator
+                    .membership_for_epoch(self.epoch)
+                    .await
+                    .ok()?
+                    .leader(view_number)
+                    .await
+                {
                     Ok(l) => l,
                     Err(e) => {
                         tracing::warn!(
@@ -998,7 +1034,7 @@ impl<
                             e
                         );
                         return None;
-                    }
+                    },
                 };
                 let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
@@ -1011,7 +1047,7 @@ impl<
                 };
 
                 Some((vote.signing_key(), message, TransmitType::Direct(leader)))
-            }
+            },
             HotShotEvent::UpgradeProposalSend(proposal, sender) => Some((
                 sender,
                 MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
@@ -1022,7 +1058,14 @@ impl<
             HotShotEvent::UpgradeVoteSend(vote) => {
                 tracing::error!("Sending upgrade vote!");
                 let view_number = vote.view_number();
-                let leader = match self.membership.read().await.leader(view_number, self.epoch) {
+                let leader = match self
+                    .membership_coordinator
+                    .membership_for_epoch(self.epoch)
+                    .await
+                    .ok()?
+                    .leader(view_number)
+                    .await
+                {
                     Ok(l) => l,
                     Err(e) => {
                         tracing::warn!(
@@ -1031,7 +1074,7 @@ impl<
                             e
                         );
                         return None;
-                    }
+                    },
                 };
                 Some((
                     vote.signing_key(),
@@ -1040,7 +1083,7 @@ impl<
                     )),
                     TransmitType::Direct(leader),
                 ))
-            }
+            },
             HotShotEvent::ViewChange(view, epoch) => {
                 self.view = view;
                 if epoch > self.epoch {
@@ -1050,12 +1093,13 @@ impl<
                 self.cancel_tasks(keep_view);
                 let net = Arc::clone(&self.network);
                 let epoch = self.epoch.map(|x| x.u64());
-                let mem = Arc::clone(&self.membership);
+                let membership_coordinator = self.membership_coordinator.clone();
                 spawn(async move {
-                    net.update_view::<TYPES>(*keep_view, epoch, mem).await;
+                    net.update_view::<TYPES>(*keep_view, epoch, membership_coordinator)
+                        .await;
                 });
                 None
-            }
+            },
             HotShotEvent::VidRequestSend(req, sender, to) => Some((
                 sender,
                 MessageKind::Data(DataMessage::RequestData(req)),
@@ -1085,7 +1129,7 @@ impl<
                                 vid_share_proposal,
                             )),
                         )))
-                    }
+                    },
                     VidDisperseShare::V1(data) => {
                         if !epochs_enabled {
                             tracing::warn!(
@@ -1104,10 +1148,10 @@ impl<
                                 vid_share_proposal,
                             )),
                         )))
-                    }
+                    },
                 };
                 Some((sender, message, TransmitType::Direct(to)))
-            }
+            },
             HotShotEvent::HighQcSend(quorum_cert, leader, sender) => Some((
                 sender,
                 MessageKind::Consensus(SequencingMessage::General(
@@ -1148,11 +1192,14 @@ impl<
         let view_number = message.kind.view_number();
         let epoch = message.kind.epoch();
         let committee_topic = Topic::Global;
-        let da_committee = self
-            .membership
-            .read()
+        let Ok(mem) = self
+            .membership_coordinator
+            .membership_for_epoch(self.epoch)
             .await
-            .da_committee_members(view_number, self.epoch);
+        else {
+            return;
+        };
+        let da_committee = mem.da_committee_members(view_number).await;
         let network = Arc::clone(&self.network);
         let storage = Arc::clone(&self.storage);
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
@@ -1190,18 +1237,18 @@ impl<
                 Err(e) => {
                     tracing::error!("Failed to serialize message: {}", e);
                     return;
-                }
+                },
             };
 
             let transmit_result = match transmit {
                 TransmitType::Direct(recipient) => {
                     network.direct_message(serialized_message, recipient).await
-                }
+                },
                 TransmitType::Broadcast => {
                     network
                         .broadcast_message(serialized_message, committee_topic, broadcast_delay)
                         .await
-                }
+                },
                 TransmitType::DaCommitteeBroadcast => {
                     network
                         .da_broadcast_message(
@@ -1210,11 +1257,11 @@ impl<
                             broadcast_delay,
                         )
                         .await
-                }
+                },
             };
 
             match transmit_result {
-                Ok(()) => {}
+                Ok(()) => {},
                 Err(e) => tracing::warn!("Failed to send message task: {:?}", e),
             }
         });
@@ -1274,14 +1321,12 @@ pub mod test {
                 self.parse_event(event, &mut maybe_action).await
             {
                 // Modify the values acquired by parsing the event.
-                let membership_reader = self.membership.read().await;
                 (self.modifier)(
                     &mut sender,
                     &mut message_kind,
                     &mut transmit,
-                    &membership_reader,
+                    &*self.membership_coordinator.membership().read().await,
                 );
-                drop(membership_reader);
 
                 self.spawn_transmit_task(message_kind, maybe_action, transmit, sender)
                     .await;

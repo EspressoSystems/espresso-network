@@ -274,31 +274,31 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                                 let num_entries = o.get_mut();
                                 *num_entries += 1;
                                 *num_entries
-                            }
+                            },
                             std::collections::hash_map::Entry::Vacant(v) => {
                                 v.insert(1);
                                 1
-                            }
+                            },
                         }
-                    }
+                    },
                     GetRecordOk::FinishedWithNoAdditionalRecord {
                         cache_candidates: _,
                     } => {
                         tracing::debug!("GetRecord Finished with No Additional Record");
                         last = true;
                         0
-                    }
+                    },
                 },
                 Err(err) => {
                     warn!("Error in Kademlia query: {:?}", err);
                     0
-                }
+                },
             },
             None => {
                 // We already finished the query (or it's been cancelled). Do nothing and exit the
                 // function.
                 return;
-            }
+            },
         };
 
         // if the query has completed and we need to retry
@@ -398,7 +398,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     if query.notify.send(()).is_err() {
                         warn!("Put DHT: client channel closed before put record request could be sent");
                     }
-                }
+                },
                 Err(e) => {
                     query.progress = DHTProgress::NotStarted;
                     query.backoff.start_next(false);
@@ -409,7 +409,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     );
                     // push back onto the queue
                     self.retry_put(query);
-                }
+                },
             }
         } else {
             warn!("Put DHT: completed DHT query that is no longer tracked.");
@@ -439,7 +439,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 if last {
                     self.handle_put_query(record_results, id);
                 }
-            }
+            },
             KademliaEvent::OutboundQueryProgressed {
                 result: QueryResult::GetClosestPeers(r),
                 id: query_id,
@@ -454,13 +454,13 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                         };
                     };
                     debug!("Successfully got closest peers for key {:?}", key);
-                }
+                },
                 Err(e) => {
                     if let Some(chan) = self.in_progress_get_closest_peers.remove(&query_id) {
                         let _: Result<_, _> = chan.send(());
                     };
                     warn!("Failed to get closest peers: {:?}", e);
-                }
+                },
             },
             KademliaEvent::OutboundQueryProgressed {
                 result: QueryResult::GetRecord(record_results),
@@ -469,7 +469,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 ..
             } => {
                 self.handle_get_query(store, record_results, id, last);
-            }
+            },
             KademliaEvent::OutboundQueryProgressed {
                 result:
                     QueryResult::Bootstrap(Ok(BootstrapOk {
@@ -485,7 +485,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     debug!("Bootstrap in progress, {} nodes remaining", num_remaining);
                 }
                 return Some(NetworkEvent::IsBootstrapped);
-            }
+            },
             KademliaEvent::OutboundQueryProgressed {
                 result: QueryResult::Bootstrap(Err(e)),
                 ..
@@ -495,16 +495,16 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     error!("Failed to bootstrap: {:?}", e);
                 }
                 self.finish_bootstrap();
-            }
+            },
             KademliaEvent::RoutablePeer { peer, address: _ } => {
                 debug!("Found routable peer {:?}", peer);
-            }
+            },
             KademliaEvent::PendingRoutablePeer { peer, address: _ } => {
                 debug!("Found pending routable peer {:?}", peer);
-            }
+            },
             KademliaEvent::UnroutablePeer { peer } => {
                 debug!("Found unroutable peer {:?}", peer);
-            }
+            },
             KademliaEvent::RoutingUpdated {
                 peer: _,
                 is_new_peer: _,
@@ -513,13 +513,13 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 old_peer: _,
             } => {
                 debug!("Routing table updated");
-            }
+            },
             e @ KademliaEvent::OutboundQueryProgressed { .. } => {
                 debug!("Not handling dht event {:?}", e);
-            }
+            },
             e => {
                 debug!("New unhandled swarm event: {e:?}");
-            }
+            },
         }
         None
     }

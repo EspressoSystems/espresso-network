@@ -19,20 +19,21 @@ use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
     data::{Leaf2, QuorumProposalWrapper},
     drb::DrbComputation,
+    epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::{Proposal, UpgradeLock},
+    simple_certificate::UpgradeCertificate,
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
     },
     utils::{epoch_from_block_number, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
+    StakeTableEntries,
 };
-use hotshot_types::{traits::signature_key::StateSignatureKey, StakeTableEntries};
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
 use tracing::instrument;
@@ -73,7 +74,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub instance_state: Arc<TYPES::InstanceState>,
 
     /// Membership for Quorum certs/votes.
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// Reference to the storage.
     pub storage: Arc<RwLock<I::Storage>>,
@@ -125,7 +126,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                         Err(e) => {
                             tracing::error!("{e:#}");
                             return;
-                        }
+                        },
                     };
                     let proposal_payload_comm = proposal.data.block_header().payload_commitment();
                     let parent_commitment = parent_leaf.commit();
@@ -167,7 +168,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     }
                     leaf = Some(proposed_leaf);
                     parent_view_number = Some(parent_leaf.view_number());
-                }
+                },
                 HotShotEvent::DaCertificateValidated(cert) => {
                     let cert_payload_comm = &cert.data().payload_commit;
                     let next_epoch_cert_payload_comm = cert.data().next_epoch_payload_commit;
@@ -189,7 +190,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     } else {
                         next_epoch_payload_commitment = next_epoch_cert_payload_comm;
                     }
-                }
+                },
                 HotShotEvent::VidShareValidated(share) => {
                     let vid_payload_commitment = &share.data.payload_commitment();
                     vid_share = Some(share.clone());
@@ -213,8 +214,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     } else {
                         payload_commitment = Some(*vid_payload_commitment);
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -239,7 +240,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             self.sender.clone(),
             self.receiver.clone(),
-            Arc::clone(&self.membership),
+            self.membership_coordinator.clone(),
             self.public_key.clone(),
             self.private_key.clone(),
             self.upgrade_lock.clone(),
@@ -256,12 +257,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             tracing::error!("Failed to update shared consensus state; error = {e:#}");
             return;
         }
-
         let cur_epoch = option_epoch_from_block_number::<TYPES>(
             leaf.with_epoch,
             leaf.height(),
             self.epoch_height,
         );
+
+        let epoch_membership = match self
+            .membership_coordinator
+            .membership_for_epoch(cur_epoch)
+            .await
+        {
+            Ok(epoch_membership) => epoch_membership,
+            Err(e) => {
+                tracing::warn!("{:?}", e);
+                return;
+            },
+        };
+
         tracing::trace!(
             "Sending ViewChange for view {} and epoch {:?}",
             self.view_number + 1,
@@ -275,7 +288,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
 
         if let Err(e) = submit_vote::<TYPES, I, V>(
             self.sender.clone(),
-            Arc::clone(&self.membership),
+            epoch_membership,
             self.public_key.clone(),
             self.private_key.clone(),
             self.upgrade_lock.clone(),
@@ -320,7 +333,7 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub network: Arc<I::Network>,
 
     /// Membership for Quorum certs/votes and DA committee certs/votes.
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership: EpochMembershipCoordinator<TYPES>,
 
     /// In-progress DRB computation task.
     pub drb_computation: DrbComputation<TYPES>,
@@ -342,6 +355,12 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Upgrade certificate to enable epochs, staged until we reach the specified block height
+    pub staged_epoch_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+
+    /// Block height at which to enable the epoch upgrade
+    pub epoch_upgrade_block_height: u64,
 
     /// Signature key for light client state
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
@@ -368,21 +387,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                         } else {
                             return false;
                         }
-                    }
+                    },
                     VoteDependency::Dac => {
                         if let HotShotEvent::DaCertificateValidated(cert) = event {
                             cert.view_number
                         } else {
                             return false;
                         }
-                    }
+                    },
                     VoteDependency::Vid => {
                         if let HotShotEvent::VidShareValidated(disperse) = event {
                             disperse.data.view_number()
                         } else {
                             return false;
                         }
-                    }
+                    },
                 };
                 if event_view == view_number {
                     tracing::trace!(
@@ -441,7 +460,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 private_key: self.private_key.clone(),
                 consensus: OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
                 instance_state: Arc::clone(&self.instance_state),
-                membership: Arc::clone(&self.membership),
+                membership_coordinator: self.membership.clone(),
                 storage: Arc::clone(&self.storage),
                 view_number,
                 sender: event_sender.clone(),
@@ -541,7 +560,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                         Arc::clone(&event),
                     );
                 }
-            }
+            },
             HotShotEvent::DaCertificateRecv(cert) => {
                 let view = cert.view_number;
 
@@ -554,11 +573,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 let cert_epoch = cert.data.epoch;
 
-                let membership_reader = self.membership.read().await;
-                let membership_da_stake_table = membership_reader.da_stake_table(cert_epoch);
-                let membership_da_success_threshold =
-                    membership_reader.da_success_threshold(cert_epoch);
-                drop(membership_reader);
+                let epoch_membership = self.membership.membership_for_epoch(cert_epoch).await?;
+                let membership_da_stake_table = epoch_membership.da_stake_table().await;
+                let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
 
                 // Validate the DAC.
                 cert.is_valid_cert(
@@ -586,7 +603,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     &event_sender,
                     Arc::clone(&event),
                 );
-            }
+            },
             HotShotEvent::VidShareRecv(sender, share) => {
                 let view = share.data.view_number();
                 // Do nothing if the VID share is old
@@ -607,18 +624,23 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 let vid_epoch = share.data.epoch();
                 let target_epoch = share.data.target_epoch();
-                let membership_reader = self.membership.read().await;
+                let membership_reader = self.membership.membership_for_epoch(vid_epoch).await?;
                 // ensure that the VID share was sent by a DA member OR the view leader
                 ensure!(
                     membership_reader
-                        .da_committee_members(view, vid_epoch)
+                        .da_committee_members(view)
+                        .await
                         .contains(sender)
-                        || *sender == membership_reader.leader(view, vid_epoch)?,
+                        || *sender == membership_reader.leader(view).await?,
                     "VID share was not sent by a DA member or the view leader."
                 );
 
-                let membership_total_nodes = membership_reader.total_nodes(target_epoch);
-                drop(membership_reader);
+                let membership_total_nodes = self
+                    .membership
+                    .membership_for_epoch(target_epoch)
+                    .await?
+                    .total_nodes()
+                    .await;
 
                 if let Err(()) = share.data.verify_share(membership_total_nodes) {
                     bail!("Failed to verify VID share");
@@ -645,7 +667,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     &event_sender,
                     Arc::clone(&event),
                 );
-            }
+            },
             HotShotEvent::Timeout(view, ..) => {
                 let view = TYPES::View::new(view.saturating_sub(1));
                 // cancel old tasks
@@ -654,7 +676,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     task.abort();
                 }
                 self.vote_dependencies = current_tasks;
-            }
+            },
             HotShotEvent::ViewChange(mut view, _) => {
                 view = TYPES::View::new(view.saturating_sub(1));
                 if !self.update_latest_voted_view(view).await {
@@ -666,8 +688,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     task.abort();
                 }
                 self.vote_dependencies = current_tasks;
-            }
-            _ => {}
+            },
+            _ => {},
         }
         Ok(())
     }
@@ -735,7 +757,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             event_sender.clone(),
             event_receiver.clone().deactivate(),
-            Arc::clone(&self.membership),
+            self.membership.clone(),
             self.public_key.clone(),
             self.private_key.clone(),
             self.upgrade_lock.clone(),
@@ -782,7 +804,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
         submit_vote::<TYPES, I, V>(
             event_sender.clone(),
-            Arc::clone(&self.membership),
+            self.membership
+                .membership_for_epoch(Some(current_epoch))
+                .await?,
             self.public_key.clone(),
             self.private_key.clone(),
             self.upgrade_lock.clone(),

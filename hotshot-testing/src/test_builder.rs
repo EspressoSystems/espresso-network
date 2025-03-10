@@ -11,7 +11,7 @@ use hotshot::{
     tasks::EventTransformerState,
     traits::{NetworkReliability, NodeImplementation, TestableNodeImplementation},
     types::SystemContextHandle,
-    HotShotInitializer, MarketplaceConfig, SystemContext, TwinsHandlerState,
+    HotShotInitializer, InitializerEpochInfo, MarketplaceConfig, SystemContext, TwinsHandlerState,
 };
 use hotshot_example_types::{
     auction_results_provider_types::TestAuctionResultsProvider, node_types::TestTypes,
@@ -19,7 +19,9 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    traits::node_implementation::{NodeType, Versions},
+    drb::INITIAL_DRB_RESULT,
+    epoch_membership::EpochMembershipCoordinator,
+    traits::node_implementation::{ConsensusTime, NodeType, Versions},
     HotShotConfig, PeerConfig, ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
@@ -61,6 +63,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
     known_da_nodes: Vec<PeerConfig<TYPES>>,
     num_bootstrap_nodes: usize,
     epoch_height: u64,
+    epoch_start_block: u64,
 ) -> HotShotConfig<TYPES> {
     HotShotConfig {
         start_threshold: (1, 1),
@@ -85,6 +88,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         start_voting_time: u64::MAX,
         stop_voting_time: 0,
         epoch_height,
+        epoch_start_block,
     }
 }
 
@@ -235,6 +239,12 @@ pub async fn create_test_handle<
     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
         TestInstanceState::new(metadata.async_delay_config),
         metadata.test_config.epoch_height,
+        metadata.test_config.epoch_start_block,
+        vec![InitializerEpochInfo::<TYPES> {
+            epoch: TYPES::Epoch::new(1),
+            drb_result: INITIAL_DRB_RESULT,
+            block_header: None,
+        }],
     )
     .await
     .unwrap();
@@ -248,6 +258,7 @@ pub async fn create_test_handle<
     // Get key pair for certificate aggregation
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
+    let membership_coordinator = EpochMembershipCoordinator::new(memberships, config.epoch_height);
     let state_private_key = validator_config.state_private_key.clone();
 
     let behaviour = (metadata.behaviour)(node_id);
@@ -261,7 +272,7 @@ pub async fn create_test_handle<
                     state_private_key,
                     node_id,
                     config,
-                    memberships,
+                    membership_coordinator,
                     network,
                     initializer,
                     ConsensusMetricsValue::default(),
@@ -271,7 +282,7 @@ pub async fn create_test_handle<
                 .await;
 
             left_handle
-        }
+        },
         Behaviour::Byzantine(state) => {
             let state = Box::leak(state);
             state
@@ -281,7 +292,7 @@ pub async fn create_test_handle<
                     state_private_key,
                     node_id,
                     config,
-                    memberships,
+                    membership_coordinator,
                     network,
                     initializer,
                     ConsensusMetricsValue::default(),
@@ -289,7 +300,7 @@ pub async fn create_test_handle<
                     marketplace_config,
                 )
                 .await
-        }
+        },
         Behaviour::Standard => {
             let hotshot = SystemContext::<TYPES, I, V>::new(
                 public_key,
@@ -297,7 +308,7 @@ pub async fn create_test_handle<
                 state_private_key,
                 node_id,
                 config,
-                memberships,
+                membership_coordinator,
                 network,
                 initializer,
                 ConsensusMetricsValue::default(),
@@ -307,7 +318,7 @@ pub async fn create_test_handle<
             .await;
 
             hotshot.run_tasks().await
-        }
+        },
     }
 }
 
@@ -394,6 +405,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
         let num_nodes_with_stake = 20;
         let num_da_nodes = 14;
         let epoch_height = 10;
+        let epoch_start_block = 0;
 
         let (staked_nodes, da_nodes) = gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes);
 
@@ -403,6 +415,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
                 da_nodes,
                 num_nodes_with_stake.try_into().unwrap(),
                 epoch_height,
+                epoch_start_block,
             ),
             // The first 14 (i.e., 20 - f) nodes are in the DA committee and we may shutdown the
             // remaining 6 (i.e., f) nodes. We could remove this restriction after fixing the
@@ -439,6 +452,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
                 da_nodes,
                 self.test_config.num_bootstrap,
                 self.test_config.epoch_height,
+                self.test_config.epoch_start_block,
             ),
             ..self
         }
@@ -464,6 +478,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Default
         let num_nodes_with_stake = 7;
         let num_da_nodes = num_nodes_with_stake;
         let epoch_height = 10;
+        let epoch_start_block = 0;
 
         let (staked_nodes, da_nodes) = gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes);
 
@@ -473,6 +488,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Default
                 da_nodes,
                 num_nodes_with_stake.try_into().unwrap(),
                 epoch_height,
+                epoch_start_block,
             ),
             timing_data: TimingData::default(),
             skip_late: false,

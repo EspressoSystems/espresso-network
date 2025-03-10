@@ -118,7 +118,7 @@ impl ToLowerSnakeStr for syn::GenericArgument {
                 syn::Type::Path(p) => p.to_lower_snake_str(),
                 _ => {
                     panic!("Unexpected type for GenericArgument::Type: {t:?}");
-                }
+                },
             },
             syn::GenericArgument::Const(c) => match c {
                 syn::Expr::Lit(l) => match &l.lit {
@@ -126,15 +126,15 @@ impl ToLowerSnakeStr for syn::GenericArgument {
                     syn::Lit::Int(v) => format!("{}_", v.base10_digits()),
                     _ => {
                         panic!("Unexpected type for GenericArgument::Const::Lit: {l:?}");
-                    }
+                    },
                 },
                 _ => {
                     panic!("Unexpected type for GenericArgument::Const: {c:?}");
-                }
+                },
             },
             _ => {
                 panic!("Unexpected type for GenericArgument: {self:?}");
-            }
+            },
         }
     }
 }

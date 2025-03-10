@@ -1,8 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
 use core::fmt::Display;
-use jf_signature::{bls_over_bn254, schnorr};
-use sequencer_utils::logging;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -11,14 +9,16 @@ use std::{
     path::PathBuf,
     time::Duration,
 };
-use tagged_base64::TaggedBase64;
 
 use anyhow::{bail, Context};
 use clap::{error::ErrorKind, Args, FromArgMatches, Parser};
 use derivative::Derivative;
 use espresso_types::{parse_duration, BackoffParams, L1ClientOptions};
 use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+use jf_signature::{bls_over_bn254, schnorr};
 use libp2p::Multiaddr;
+use sequencer_utils::logging;
+use tagged_base64::TaggedBase64;
 use url::Url;
 
 use crate::{api, persistence, proposal_fetcher::ProposalFetcherConfig};
@@ -472,10 +472,10 @@ fn fmt_opt_urls(
             write!(fmt, "Some(")?;
             fmt_urls(urls, fmt)?;
             write!(fmt, ")")?;
-        }
+        },
         None => {
             write!(fmt, "None")?;
-        }
+        },
     }
     Ok(())
 }
@@ -536,13 +536,13 @@ impl ModuleArgs {
             match module {
                 SequencerModule::Storage(m) => {
                     curr = m.add(&mut modules.storage_fs, &mut provided)?
-                }
+                },
                 SequencerModule::StorageFs(m) => {
                     curr = m.add(&mut modules.storage_fs, &mut provided)?
-                }
+                },
                 SequencerModule::StorageSql(m) => {
                     curr = m.add(&mut modules.storage_sql, &mut provided)?
-                }
+                },
                 SequencerModule::Http(m) => curr = m.add(&mut modules.http, &mut provided)?,
                 SequencerModule::Query(m) => curr = m.add(&mut modules.query, &mut provided)?,
                 SequencerModule::Submit(m) => curr = m.add(&mut modules.submit, &mut provided)?,
@@ -551,10 +551,10 @@ impl ModuleArgs {
                 SequencerModule::Config(m) => curr = m.add(&mut modules.config, &mut provided)?,
                 SequencerModule::HotshotEvents(m) => {
                     curr = m.add(&mut modules.hotshot_events, &mut provided)?
-                }
+                },
                 SequencerModule::Explorer(m) => {
                     curr = m.add(&mut modules.explorer, &mut provided)?
-                }
+                },
             }
         }
 

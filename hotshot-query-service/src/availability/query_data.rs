@@ -10,12 +10,12 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use crate::{types::HeightIndexed, Header, Metadata, Payload, Transaction, VidCommon, VidShare};
+use std::fmt::Debug;
+
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::Leaf,
-    data::VidCommitment,
-    simple_certificate::QuorumCertificate,
+    data::{Leaf, Leaf2, VidCommitment, VidShare},
+    simple_certificate::QuorumCertificate2,
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
@@ -27,10 +27,11 @@ use hotshot_types::{
 use jf_vid::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
-use std::fmt::Debug;
 
-pub type LeafHash<Types> = Commitment<Leaf<Types>>;
-pub type QcHash<Types> = Commitment<QuorumCertificate<Types>>;
+use crate::{types::HeightIndexed, Header, Metadata, Payload, Transaction, VidCommon};
+
+pub type LeafHash<Types> = Commitment<Leaf2<Types>>;
+pub type QcHash<Types> = Commitment<QuorumCertificate2<Types>>;
 
 /// A block hash is the hash of the block header.
 ///
@@ -193,8 +194,8 @@ pub trait QueryablePayload<Types: NodeType>: traits::BlockPayload<Types> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(bound = "")]
 pub struct LeafQueryData<Types: NodeType> {
-    pub(crate) leaf: Leaf<Types>,
-    pub(crate) qc: QuorumCertificate<Types>,
+    pub(crate) leaf: Leaf2<Types>,
+    pub(crate) qc: QuorumCertificate2<Types>,
 }
 
 #[derive(Clone, Debug, Snafu)]
@@ -213,13 +214,13 @@ impl<Types: NodeType> LeafQueryData<Types> {
     ///
     /// Fails with an [`InconsistentLeafError`] if `qc` does not reference `leaf`.
     pub fn new(
-        mut leaf: Leaf<Types>,
-        qc: QuorumCertificate<Types>,
+        mut leaf: Leaf2<Types>,
+        qc: QuorumCertificate2<Types>,
     ) -> Result<Self, InconsistentLeafError<Types>> {
         // TODO: Replace with the new `commit` function in HotShot. Add an `upgrade_lock` parameter
         // and a `HsVer: Versions` bound, then call `leaf.commit(upgrade_lock).await`. This will
         // require updates in callers and relevant types as well.
-        let leaf_commit = <Leaf<Types> as Committable>::commit(&leaf);
+        let leaf_commit = <Leaf2<Types> as Committable>::commit(&leaf);
         ensure!(
             qc.data.leaf_commit == leaf_commit,
             InconsistentLeafSnafu {
@@ -240,16 +241,16 @@ impl<Types: NodeType> LeafQueryData<Types> {
         instance_state: &Types::InstanceState,
     ) -> Self {
         Self {
-            leaf: Leaf::genesis::<HsVer>(validated_state, instance_state).await,
-            qc: QuorumCertificate::genesis::<HsVer>(validated_state, instance_state).await,
+            leaf: Leaf2::genesis::<HsVer>(validated_state, instance_state).await,
+            qc: QuorumCertificate2::genesis::<HsVer>(validated_state, instance_state).await,
         }
     }
 
-    pub fn leaf(&self) -> &Leaf<Types> {
+    pub fn leaf(&self) -> &Leaf2<Types> {
         &self.leaf
     }
 
-    pub fn qc(&self) -> &QuorumCertificate<Types> {
+    pub fn qc(&self) -> &QuorumCertificate2<Types> {
         &self.qc
     }
 
@@ -261,7 +262,7 @@ impl<Types: NodeType> LeafQueryData<Types> {
         // TODO: Replace with the new `commit` function in HotShot. Add an `upgrade_lock` parameter
         // and a `HsVer: Versions` bound, then call `leaf.commit(upgrade_lock).await`. This will
         // require updates in callers and relevant types as well.
-        <Leaf<Types> as Committable>::commit(&self.leaf)
+        <Leaf2<Types> as Committable>::commit(&self.leaf)
     }
 
     pub fn block_hash(&self) -> BlockHash<Types> {
@@ -326,7 +327,7 @@ impl<Types: NodeType> BlockQueryData<Types> {
     where
         Payload<Types>: QueryablePayload<Types>,
     {
-        let leaf = Leaf::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
+        let leaf = Leaf2::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
         Self::new(leaf.block_header().clone(), leaf.block_payload().unwrap())
     }
 

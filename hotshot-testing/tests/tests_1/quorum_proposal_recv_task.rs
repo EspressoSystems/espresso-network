@@ -53,7 +53,7 @@ async fn test_quorum_proposal_recv_task() {
 
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
     let consensus = handle.hotshot.consensus();
     let mut consensus_writer = consensus.write().await;
 
@@ -127,7 +127,7 @@ async fn test_quorum_proposal_recv_task_liveness_check() {
 
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(4).await;
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
     let consensus = handle.hotshot.consensus();
     let mut consensus_writer = consensus.write().await;
 

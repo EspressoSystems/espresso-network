@@ -16,6 +16,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
+    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
     simple_certificate::{
         ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
@@ -25,7 +26,6 @@ use hotshot_types::{
         ViewSyncPreCommitData2, ViewSyncPreCommitVote2,
     },
     traits::{
-        election::Membership,
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
@@ -75,7 +75,7 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
     pub cur_epoch: Option<TYPES::Epoch>,
 
     /// Membership for the quorum
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// This Nodes Public Key
     pub public_key: TYPES::SignatureKey,
@@ -143,9 +143,6 @@ pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
     /// Round HotShot wishes to be in
     pub next_view: TYPES::View,
 
-    /// Current epoch HotShot is in
-    pub cur_epoch: Option<TYPES::Epoch>,
-
     /// The relay index we are currently on
     pub relay: u64,
 
@@ -162,7 +159,7 @@ pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
     pub id: u64,
 
     /// Membership for the quorum
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership: EpochMembership<TYPES>,
 
     /// This Nodes Public Key
     pub public_key: TYPES::SignatureKey,
@@ -227,16 +224,27 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
             return;
         }
 
+        let membership = match self
+            .membership_coordinator
+            .membership_for_epoch(self.cur_epoch)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(e.message);
+                return;
+            },
+        };
+
         // We do not have a replica task already running, so start one
         let mut replica_state: ViewSyncReplicaTaskState<TYPES, V> = ViewSyncReplicaTaskState {
             cur_view: view,
             next_view: view,
-            cur_epoch: self.cur_epoch,
             relay: 0,
             finalized: false,
             sent_view_change_event: false,
             timeout_task: None,
-            membership: Arc::clone(&self.membership),
+            membership,
             public_key: self.public_key.clone(),
             private_key: self.private_key.clone(),
             view_sync_timeout: self.view_sync_timeout,
@@ -270,25 +278,25 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 let view = certificate.view_number();
                 self.send_to_or_create_replica(event, view, &event_stream)
                     .await;
-            }
+            },
             HotShotEvent::ViewSyncCommitCertificateRecv(certificate) => {
                 tracing::debug!("Received view sync cert for phase {:?}", certificate);
                 let view = certificate.view_number();
                 self.send_to_or_create_replica(event, view, &event_stream)
                     .await;
-            }
+            },
             HotShotEvent::ViewSyncFinalizeCertificateRecv(certificate) => {
                 tracing::debug!("Received view sync cert for phase {:?}", certificate);
                 let view = certificate.view_number();
                 self.send_to_or_create_replica(event, view, &event_stream)
                     .await;
-            }
-            HotShotEvent::ViewSyncTimeout(view, _, _) => {
+            },
+            HotShotEvent::ViewSyncTimeout(view, ..) => {
                 tracing::debug!("view sync timeout in main task {:?}", view);
                 let view = *view;
                 self.send_to_or_create_replica(event, view, &event_stream)
                     .await;
-            }
+            },
 
             HotShotEvent::ViewSyncPreCommitVoteRecv(ref vote) => {
                 let mut map = self.pre_commit_relay_map.write().await;
@@ -310,22 +318,21 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     return Ok(());
                 }
 
+                let epoch_mem = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?;
                 // We do not have a relay task already running, so start one
                 ensure!(
-                    self.membership
-                        .read()
-                        .await
-                        .leader(vote_view + relay, self.cur_epoch)?
-                        == self.public_key,
+                    epoch_mem.leader(vote_view + relay).await? == self.public_key,
                     "View sync vote sent to wrong leader"
                 );
 
                 let info = AccumulatorInfo {
                     public_key: self.public_key.clone(),
-                    membership: Arc::clone(&self.membership),
+                    membership: epoch_mem,
                     view: vote_view,
                     id: self.id,
-                    epoch: vote.data.epoch,
                 };
                 let vote_collector = create_vote_accumulator(
                     &info,
@@ -337,7 +344,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 .await?;
 
                 relay_map.insert(relay, vote_collector);
-            }
+            },
 
             HotShotEvent::ViewSyncCommitVoteRecv(ref vote) => {
                 let mut map = self.commit_relay_map.write().await;
@@ -360,21 +367,20 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 }
 
                 // We do not have a relay task already running, so start one
+                let epoch_mem = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?;
                 ensure!(
-                    self.membership
-                        .read()
-                        .await
-                        .leader(vote_view + relay, self.cur_epoch)?
-                        == self.public_key,
+                    epoch_mem.leader(vote_view + relay).await? == self.public_key,
                     debug!("View sync vote sent to wrong leader")
                 );
 
                 let info = AccumulatorInfo {
                     public_key: self.public_key.clone(),
-                    membership: Arc::clone(&self.membership),
+                    membership: epoch_mem,
                     view: vote_view,
                     id: self.id,
-                    epoch: vote.data.epoch,
                 };
 
                 let vote_collector = create_vote_accumulator(
@@ -386,7 +392,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 )
                 .await?;
                 relay_map.insert(relay, vote_collector);
-            }
+            },
 
             HotShotEvent::ViewSyncFinalizeVoteRecv(vote) => {
                 let mut map = self.finalize_relay_map.write().await;
@@ -408,22 +414,21 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     return Ok(());
                 }
 
+                let epoch_mem = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?;
                 // We do not have a relay task already running, so start one
                 ensure!(
-                    self.membership
-                        .read()
-                        .await
-                        .leader(vote_view + relay, self.cur_epoch)?
-                        == self.public_key,
+                    epoch_mem.leader(vote_view + relay).await? == self.public_key,
                     debug!("View sync vote sent to wrong leader")
                 );
 
                 let info = AccumulatorInfo {
                     public_key: self.public_key.clone(),
-                    membership: Arc::clone(&self.membership),
+                    membership: epoch_mem,
                     view: vote_view,
                     id: self.id,
-                    epoch: vote.data.epoch,
                 };
                 let vote_collector = create_vote_accumulator(
                     &info,
@@ -436,7 +441,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 if let Ok(vote_task) = vote_collector {
                     relay_map.insert(relay, vote_task);
                 }
-            }
+            },
 
             &HotShotEvent::ViewChange(new_view, epoch) => {
                 if epoch > self.cur_epoch {
@@ -478,7 +483,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
                     self.last_garbage_collected_view = self.cur_view - 1;
                 }
-            }
+            },
             &HotShotEvent::Timeout(view_number, ..) => {
                 // This is an old timeout and we can ignore it
                 ensure!(
@@ -488,10 +493,11 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
                 self.num_timeouts_tracked += 1;
                 let leader = self
-                    .membership
-                    .read()
-                    .await
-                    .leader(view_number, self.cur_epoch)?;
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?
+                    .leader(view_number)
+                    .await?;
                 tracing::warn!(
                     %leader,
                     leader_mnemonic = hotshot_types::utils::mnemonic(&leader),
@@ -522,16 +528,16 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     )
                     .await;
                 }
-            }
+            },
 
-            _ => {}
+            _ => {},
         }
         Ok(())
     }
 }
 
 impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "View Sync Replica Task", level = "error")]
+    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.membership.epoch().map(|x| *x)), name = "View Sync Replica Task", level = "error")]
     /// Handle incoming events for the view sync replica task
     pub async fn handle(
         &mut self,
@@ -549,11 +555,8 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     return None;
                 }
 
-                let membership_reader = self.membership.read().await;
-                let membership_stake_table = membership_reader.stake_table(self.cur_epoch);
-                let membership_failure_threshold =
-                    membership_reader.failure_threshold(self.cur_epoch);
-                drop(membership_reader);
+                let membership_stake_table = self.membership.stake_table().await;
+                let membership_failure_threshold = self.membership.failure_threshold().await;
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate
@@ -631,7 +634,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                         .await;
                     }
                 }));
-            }
+            },
 
             HotShotEvent::ViewSyncCommitCertificateRecv(certificate) => {
                 let last_seen_certificate = ViewSyncPhase::Commit;
@@ -643,11 +646,8 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     return None;
                 }
 
-                let membership_reader = self.membership.read().await;
-                let membership_stake_table = membership_reader.stake_table(self.cur_epoch);
-                let membership_success_threshold =
-                    membership_reader.success_threshold(self.cur_epoch);
-                drop(membership_reader);
+                let membership_stake_table = self.membership.stake_table().await;
+                let membership_success_threshold = self.membership.success_threshold().await;
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate
@@ -707,7 +707,10 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
 
                 // TODO: Figure out the correct way to view sync across epochs if needed
                 broadcast_event(
-                    Arc::new(HotShotEvent::ViewChange(self.next_view, self.cur_epoch)),
+                    Arc::new(HotShotEvent::ViewChange(
+                        self.next_view,
+                        self.membership.epoch(),
+                    )),
                     &event_stream,
                 )
                 .await;
@@ -738,7 +741,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                         .await;
                     }
                 }));
-            }
+            },
 
             HotShotEvent::ViewSyncFinalizeCertificateRecv(certificate) => {
                 // Ignore certificate if it is for an older round
@@ -748,11 +751,8 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     return None;
                 }
 
-                let membership_reader = self.membership.read().await;
-                let membership_stake_table = membership_reader.stake_table(self.cur_epoch);
-                let membership_success_threshold =
-                    membership_reader.success_threshold(self.cur_epoch);
-                drop(membership_reader);
+                let membership_stake_table = self.membership.stake_table().await;
+                let membership_success_threshold = self.membership.success_threshold().await;
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate
@@ -788,12 +788,15 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
 
                 // TODO: Figure out the correct way to view sync across epochs if needed
                 broadcast_event(
-                    Arc::new(HotShotEvent::ViewChange(self.next_view, self.cur_epoch)),
+                    Arc::new(HotShotEvent::ViewChange(
+                        self.next_view,
+                        self.membership.epoch(),
+                    )),
                     &event_stream,
                 )
                 .await;
                 return Some(HotShotTaskCompleted);
-            }
+            },
 
             HotShotEvent::ViewSyncTrigger(view_number) => {
                 let view_number = *view_number;
@@ -802,7 +805,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     return None;
                 }
 
-                let epoch = self.cur_epoch;
+                let epoch = self.membership.epoch();
                 let Ok(vote) = ViewSyncPreCommitVote2::<TYPES>::create_signed_vote(
                     ViewSyncPreCommitData2 {
                         relay: 0,
@@ -847,7 +850,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                 }));
 
                 return None;
-            }
+            },
 
             HotShotEvent::ViewSyncTimeout(round, relay, last_seen_certificate) => {
                 let round = *round;
@@ -863,7 +866,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                                 ViewSyncPreCommitData2 {
                                     relay: self.relay,
                                     round: self.next_view,
-                                    epoch: self.cur_epoch,
+                                    epoch: self.membership.epoch(),
                                 },
                                 self.next_view,
                                 &self.public_key,
@@ -881,11 +884,11 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                                 &event_stream,
                             )
                             .await;
-                        }
+                        },
                         ViewSyncPhase::Finalize => {
                             // This should never occur
                             unimplemented!()
-                        }
+                        },
                     }
 
                     self.timeout_task = Some(spawn({
@@ -914,7 +917,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
 
                     return None;
                 }
-            }
+            },
             _ => return None,
         }
         None

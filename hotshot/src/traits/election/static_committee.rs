@@ -41,6 +41,22 @@ pub struct StaticCommittee<T: NodeType> {
 
     /// The nodes on the committee and their stake, indexed by public key
     indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
+
+    /// The first epoch which will be encountered. For testing, will panic if an epoch-carrying function is called
+    /// when first_epoch is None or is Some greater than that epoch.
+    first_epoch: Option<T::Epoch>,
+}
+
+impl<TYPES: NodeType> StaticCommittee<TYPES> {
+    fn check_first_epoch(&self, epoch: Option<<TYPES as NodeType>::Epoch>) {
+        if let Some(epoch) = epoch {
+            if let Some(first_epoch) = self.first_epoch {
+                assert!(first_epoch <= epoch, "Called a method in StaticCommittee where first_epoch={first_epoch:} but epoch={epoch}");
+            } else {
+                panic!("Called a method in StaticCommittee with non-None epoch={epoch}, but set_first_epoch was not yet called");
+            }
+        }
+    }
 }
 
 impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
@@ -94,16 +110,19 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
             da_stake_table: da_members,
             indexed_stake_table,
             indexed_da_stake_table,
+            first_epoch: None,
         }
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+        self.check_first_epoch(epoch);
         self.stake_table.clone()
     }
 
     /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+        self.check_first_epoch(epoch);
         self.da_stake_table.clone()
     }
 
@@ -111,8 +130,9 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn committee_members(
         &self,
         _view_number: <TYPES as NodeType>::View,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
+        self.check_first_epoch(epoch);
         self.stake_table
             .iter()
             .map(|sc| TYPES::SignatureKey::public_key(&sc.stake_table_entry))
@@ -123,8 +143,9 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn da_committee_members(
         &self,
         _view_number: <TYPES as NodeType>::View,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
+        self.check_first_epoch(epoch);
         self.da_stake_table
             .iter()
             .map(|da| TYPES::SignatureKey::public_key(&da.stake_table_entry))
@@ -135,8 +156,9 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn committee_leaders(
         &self,
         _view_number: <TYPES as NodeType>::View,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
+        self.check_first_epoch(epoch);
         self.eligible_leaders
             .iter()
             .map(|leader| TYPES::SignatureKey::public_key(&leader.stake_table_entry))
@@ -147,8 +169,9 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> Option<PeerConfig<TYPES>> {
+        self.check_first_epoch(epoch);
         // Only return the stake if it is above zero
         self.indexed_stake_table.get(pub_key).cloned()
     }
@@ -157,8 +180,9 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn da_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> Option<PeerConfig<TYPES>> {
+        self.check_first_epoch(epoch);
         // Only return the stake if it is above zero
         self.indexed_da_stake_table.get(pub_key).cloned()
     }
@@ -167,8 +191,9 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn has_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> bool {
+        self.check_first_epoch(epoch);
         self.indexed_stake_table
             .get(pub_key)
             .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
@@ -178,8 +203,9 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn has_da_stake(
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> bool {
+        self.check_first_epoch(epoch);
         self.indexed_da_stake_table
             .get(pub_key)
             .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
@@ -189,8 +215,9 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn lookup_leader(
         &self,
         view_number: <TYPES as NodeType>::View,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
+        epoch: Option<<TYPES as NodeType>::Epoch>,
     ) -> Result<TYPES::SignatureKey> {
+        self.check_first_epoch(epoch);
         #[allow(clippy::cast_possible_truncation)]
         let index = *view_number as usize % self.eligible_leaders.len();
         let res = self.eligible_leaders[index].clone();
@@ -198,35 +225,48 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     }
 
     /// Get the total number of nodes in the committee
-    fn total_nodes(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
+    fn total_nodes(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
+        self.check_first_epoch(epoch);
         self.stake_table.len()
     }
 
     /// Get the total number of DA nodes in the committee
-    fn da_total_nodes(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
+    fn da_total_nodes(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> usize {
+        self.check_first_epoch(epoch);
         self.da_stake_table.len()
     }
 
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
+    fn success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
+        self.check_first_epoch(epoch);
         NonZeroU64::new(((self.stake_table.len() as u64 * 2) / 3) + 1).unwrap()
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
+    fn da_success_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
+        self.check_first_epoch(epoch);
         NonZeroU64::new(((self.da_stake_table.len() as u64 * 2) / 3) + 1).unwrap()
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
+    fn failure_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
+        self.check_first_epoch(epoch);
         NonZeroU64::new(((self.stake_table.len() as u64) / 3) + 1).unwrap()
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
+    fn upgrade_threshold(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
+        self.check_first_epoch(epoch);
         let len = self.stake_table.len();
         NonZeroU64::new(max((len as u64 * 9) / 10, ((len as u64 * 2) / 3) + 1)).unwrap()
     }
+    fn has_epoch(&self, _epoch: TYPES::Epoch) -> bool {
+        true
+    }
 
     fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
+
+    fn set_first_epoch(&mut self, epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {
+        self.first_epoch = Some(epoch);
+    }
 }

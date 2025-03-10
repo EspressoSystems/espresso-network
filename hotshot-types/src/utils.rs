@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
     config::{
@@ -20,7 +21,7 @@ use bincode::{
     },
     DefaultOptions, Options,
 };
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use digest::OutputSizeUser;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -31,9 +32,12 @@ use vbs::version::StaticVersionType;
 use crate::{
     data::{Leaf2, VidCommitment},
     traits::{
+        election::Membership,
         node_implementation::{ConsensusTime, NodeType, Versions},
         ValidatedState,
     },
+    vote::{Certificate, HasViewNumber},
+    StakeTableEntries,
 };
 
 /// A view's state
@@ -98,6 +102,88 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<TYPES as NodeType>::ValidatedState>>,
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
+
+pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
+    leaf_chain: Vec<Leaf2<T>>,
+    membership: &T::Membership,
+    epoch: T::Epoch,
+    epoch_height: u64,
+    upgrade_lock: &crate::message::UpgradeLock<T, V>,
+) -> anyhow::Result<Leaf2<T>> {
+    // Check we actually have a chain long enough for deciding
+    if leaf_chain.len() < 3 {
+        return Err(anyhow!("Leaf chain is not long enough for a decide"));
+    }
+
+    let newest_leaf = leaf_chain.first().unwrap();
+    let parent = &leaf_chain[1];
+    let grand_parent = &leaf_chain[2];
+
+    // Check if the leaves form a decide
+    if newest_leaf.justify_qc().view_number() != parent.view_number()
+        || parent.justify_qc().view_number() != grand_parent.view_number()
+    {
+        return Err(anyhow!("Leaf views do not chain"));
+    }
+    if newest_leaf.justify_qc().data.leaf_commit != parent.commit()
+        || parent.justify_qc().data().leaf_commit != grand_parent.commit()
+    {
+        return Err(anyhow!("Leaf commits do not chain"));
+    }
+    if parent.view_number() != grand_parent.view_number() + 1 {
+        return Err(anyhow::anyhow!(
+            "Decide rule failed, parent does not directly extend grandparent"
+        ));
+    }
+
+    // verify all QCs are valid
+    let stake_table = membership.stake_table(Some(epoch));
+    let threshold = membership.success_threshold(Some(epoch));
+    newest_leaf
+        .justify_qc()
+        .is_valid_cert(
+            StakeTableEntries::<T>::from(stake_table.clone()).0,
+            threshold,
+            upgrade_lock,
+        )
+        .await?;
+    parent
+        .justify_qc()
+        .is_valid_cert(
+            StakeTableEntries::<T>::from(stake_table.clone()).0,
+            threshold,
+            upgrade_lock,
+        )
+        .await?;
+    grand_parent
+        .justify_qc()
+        .is_valid_cert(
+            StakeTableEntries::<T>::from(stake_table.clone()).0,
+            threshold,
+            upgrade_lock,
+        )
+        .await?;
+
+    // Verify the
+    let root_height_interval = epoch_height - 3;
+    let mut last_leaf = parent;
+    for leaf in leaf_chain.iter().skip(2) {
+        ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
+        ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
+        leaf.justify_qc()
+            .is_valid_cert(
+                StakeTableEntries::<T>::from(stake_table.clone()).0,
+                threshold,
+                upgrade_lock,
+            )
+            .await?;
+        if leaf.height() % root_height_interval == 0 {
+            return Ok(leaf.clone());
+        }
+        last_leaf = leaf;
+    }
+    Err(anyhow!("Epoch Root was not found in the decided chain"))
+}
 
 impl<TYPES: NodeType> ViewInner<TYPES> {
     /// Return the underlying undecide leaf commitment and validated state if they exist.
@@ -199,7 +285,7 @@ pub enum Terminator<T> {
 type Sha256Digest = [u8; <sha2::Sha256 as OutputSizeUser>::OutputSize::USIZE];
 
 #[tagged("BUILDER_COMMITMENT")]
-#[derive(Clone, Debug, Hash, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Clone, Debug, Default, Hash, PartialEq, Eq, CanonicalSerialize, CanonicalDeserialize)]
 /// Commitment that builders use to sign block options.
 /// A thin wrapper around a Sha256 digest.
 pub struct BuilderCommitment(Sha256Digest);

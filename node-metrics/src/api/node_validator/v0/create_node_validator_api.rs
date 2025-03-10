@@ -1,5 +1,17 @@
 use std::sync::Arc;
 
+use async_lock::RwLock;
+use espresso_types::{PubKey, SeqTypes};
+use futures::{
+    channel::mpsc::{self, Receiver, SendError, Sender},
+    Sink, SinkExt, Stream, StreamExt,
+};
+use hotshot_query_service::Leaf2;
+use hotshot_types::event::{Event, EventType};
+use serde::{Deserialize, Serialize};
+use tokio::{spawn, task::JoinHandle};
+use url::Url;
+
 use super::{get_stake_table_from_sequencer, ProcessNodeIdentityUrlStreamTask};
 use crate::service::{
     client_id::ClientId,
@@ -12,17 +24,6 @@ use crate::service::{
     data_state::{DataState, ProcessLeafStreamTask, ProcessNodeIdentityStreamTask},
     server_message::ServerMessage,
 };
-use async_lock::RwLock;
-use espresso_types::{downgrade_leaf, PubKey, SeqTypes};
-use futures::{
-    channel::mpsc::{self, Receiver, SendError, Sender},
-    Sink, SinkExt, Stream, StreamExt,
-};
-use hotshot_query_service::Leaf;
-use hotshot_types::event::{Event, EventType};
-use serde::{Deserialize, Serialize};
-use tokio::{spawn, task::JoinHandle};
-use url::Url;
 
 pub struct NodeValidatorAPI<K> {
     pub process_internal_client_message_handle: Option<InternalClientMessageProcessingTask>,
@@ -88,7 +89,7 @@ impl HotShotEventProcessingTask {
     where
         S: Stream<Item = Event<SeqTypes>> + Send + Unpin + 'static,
         K1: Sink<Url, Error = SendError> + Send + Unpin + 'static,
-        K2: Sink<Leaf<SeqTypes>, Error = SendError> + Send + Unpin + 'static,
+        K2: Sink<Leaf2<SeqTypes>, Error = SendError> + Send + Unpin + 'static,
     {
         let task_handle = spawn(Self::process_messages(
             event_stream,
@@ -107,7 +108,7 @@ impl HotShotEventProcessingTask {
     where
         S: Stream<Item = Event<SeqTypes>> + Send + Unpin + 'static,
         K1: Sink<Url, Error = SendError> + Unpin,
-        K2: Sink<Leaf<SeqTypes>, Error = SendError> + Unpin,
+        K2: Sink<Leaf2<SeqTypes>, Error = SendError> + Unpin,
     {
         let mut event_stream = event_receiver;
         let mut url_sender = url_sender;
@@ -119,7 +120,7 @@ impl HotShotEventProcessingTask {
                 None => {
                     tracing::info!("event stream closed");
                     break;
-                }
+                },
             };
 
             let Event { event, .. } = event;
@@ -128,15 +129,14 @@ impl HotShotEventProcessingTask {
                 EventType::Decide { leaf_chain, .. } => {
                     for leaf_info in leaf_chain.iter().rev() {
                         let leaf2 = leaf_info.leaf.clone();
-                        let leaf = downgrade_leaf(leaf2);
 
-                        let send_result = leaf_sender.send(leaf).await;
+                        let send_result = leaf_sender.send(leaf2).await;
                         if let Err(err) = send_result {
                             tracing::error!("leaf sender closed: {}", err);
                             panic!("HotShotEventProcessingTask leaf sender is closed, unrecoverable, the block state will stagnate.");
                         }
                     }
-                }
+                },
 
                 EventType::ExternalMessageReceived { data, .. } => {
                     let roll_call_info = match bincode::deserialize(&data) {
@@ -148,12 +148,12 @@ impl HotShotEventProcessingTask {
                                 err
                             );
                             continue;
-                        }
+                        },
 
                         _ => {
                             // Ignore any other potentially recognized messages
                             continue;
-                        }
+                        },
                     };
 
                     let public_api_url = roll_call_info.public_api_url;
@@ -164,11 +164,11 @@ impl HotShotEventProcessingTask {
                         tracing::error!("url sender closed: {}", err);
                         panic!("HotShotEventProcessingTask url sender is closed, unrecoverable, the node state will stagnate.");
                     }
-                }
+                },
                 _ => {
                     // Ignore all other events
                     continue;
-                }
+                },
             }
         }
     }
@@ -237,7 +237,7 @@ impl ProcessExternalMessageHandlingTask {
                 None => {
                     tracing::error!("external message receiver closed");
                     break;
-                }
+                },
             };
 
             match external_message {
@@ -249,12 +249,12 @@ impl ProcessExternalMessageHandlingTask {
                         tracing::error!("url sender closed: {}", err);
                         break;
                     }
-                }
+                },
 
                 _ => {
                     // Ignore all other messages
                     continue;
-                }
+                },
             }
         }
     }
@@ -280,7 +280,7 @@ impl Drop for ProcessExternalMessageHandlingTask {
 pub async fn create_node_validator_processing(
     config: NodeValidatorConfig,
     internal_client_message_receiver: Receiver<InternalClientMessage<Sender<ServerMessage>>>,
-    leaf_receiver: Receiver<Leaf<SeqTypes>>,
+    leaf_receiver: Receiver<Leaf2<SeqTypes>>,
 ) -> Result<NodeValidatorAPI<Sender<Url>>, CreateNodeValidatorProcessingError> {
     let client_thread_state = ClientThreadState::<Sender<ServerMessage>>::new(
         Default::default(),
@@ -369,6 +369,10 @@ pub async fn create_node_validator_processing(
 
 #[cfg(test)]
 mod test {
+    use futures::channel::mpsc::{self, Sender};
+    use tide_disco::App;
+    use tokio::spawn;
+
     use crate::{
         api::node_validator::v0::{
             HotshotQueryServiceLeafStreamRetriever, ProcessProduceLeafStreamTask,
@@ -376,9 +380,6 @@ mod test {
         },
         service::{client_message::InternalClientMessage, server_message::ServerMessage},
     };
-    use futures::channel::mpsc::{self, Sender};
-    use tide_disco::App;
-    use tokio::spawn;
 
     struct TestState(Sender<InternalClientMessage<Sender<ServerMessage>>>);
 
@@ -400,14 +401,14 @@ mod test {
             Ok(node_validator_api) => node_validator_api,
             Err(err) => {
                 panic!("error defining node validator api: {:?}", err);
-            }
+            },
         };
 
         match app.register_module("node-validator", node_validator_api) {
-            Ok(_) => {}
+            Ok(_) => {},
             Err(err) => {
                 panic!("error registering node validator api: {:?}", err);
-            }
+            },
         }
 
         let (leaf_sender, leaf_receiver) = mpsc::channel(10);
@@ -450,7 +451,7 @@ mod test {
 
             Err(err) => {
                 panic!("error defining node validator api: {:?}", err);
-            }
+            },
         };
 
         // We would like to wait until being signaled

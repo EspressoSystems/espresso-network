@@ -1,3 +1,9 @@
+use std::{
+    fmt::{Debug, Display},
+    sync::Arc,
+    time::Duration,
+};
+
 use anyhow::Context;
 use async_lock::RwLock;
 use derivative::Derivative;
@@ -18,6 +24,7 @@ use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
     traits::{
         metrics::Metrics,
@@ -27,15 +34,22 @@ use hotshot_types::{
     PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
-use std::fmt::Debug;
-use std::{fmt::Display, sync::Arc};
-use tokio::{spawn, task::JoinHandle};
+use request_response::{network::Bytes, RequestResponse, RequestResponseConfig};
+use tokio::{
+    spawn,
+    sync::mpsc::{channel, Receiver},
+    task::JoinHandle,
+};
 use tracing::{Instrument, Level};
 use url::Url;
 
 use crate::{
-    external_event_handler::{self, ExternalEventHandler},
+    external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
+    request_response::{
+        data_source::DataSource, network::Sender as RequestResponseSender,
+        recipient_source::RecipientSource, request::Request,
+    },
     state_signature::StateSigner,
     static_stake_table_commitment, Node, SeqTypes, SequencerApiVersion,
 };
@@ -50,6 +64,18 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// The consensus handle
     #[derivative(Debug = "ignore")]
     handle: Arc<RwLock<Consensus<N, P, V>>>,
+
+    /// The request-response protocol
+    #[derivative(Debug = "ignore")]
+    #[allow(dead_code)]
+    request_response_protocol: RequestResponse<
+        RequestResponseSender,
+        Receiver<Bytes>,
+        Request,
+        RecipientSource,
+        DataSource,
+        PubKey,
+    >,
 
     /// Context for generating state signatures.
     state_signer: Arc<StateSigner<SequencerApiVersion>>,
@@ -87,7 +113,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: u64,
-        public_api_url: Option<Url>,
         event_consumer: impl PersistenceEventConsumer + 'static,
         _: V,
         marketplace_config: MarketplaceConfig<SeqTypes, Node<N, P>>,
@@ -124,13 +149,16 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         )));
 
         let persistence = Arc::new(persistence);
+        let coordinator =
+            EpochMembershipCoordinator::new(Arc::new(RwLock::new(membership)), config.epoch_height);
+        let membership = coordinator.membership().clone();
 
         let handle = SystemContext::init(
             validator_config.public_key,
             validator_config.private_key.clone(),
             instance_state.node_id,
             config.clone(),
-            Arc::new(async_lock::RwLock::new(membership)),
+            coordinator,
             network.clone(),
             initializer,
             ConsensusMetricsValue::new(metrics),
@@ -145,21 +173,51 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             state_signer = state_signer.with_relay_server(url);
         }
 
-        // Create the roll call info we will be using
-        let roll_call_info = external_event_handler::RollCallInfo { public_api_url };
+        // Create the channel for sending outbound messages from the external event handler
+        let (outbound_message_sender, outbound_message_receiver) = channel(10);
+        let (request_response_sender, request_response_receiver) = channel(10);
+
+        // Configure the request-response protocol
+        let request_response_config = RequestResponseConfig {
+            incoming_request_ttl: Duration::from_secs(40),
+            response_send_timeout: Duration::from_secs(5),
+            request_batch_size: 10,
+            request_batch_interval: Duration::from_secs(3),
+            max_outgoing_responses: 10,
+            response_validate_timeout: Duration::from_secs(1),
+            max_incoming_responses: 5,
+        };
+
+        // Create the request-response protocol
+        let request_response_protocol = RequestResponse::new(
+            request_response_config,
+            RequestResponseSender::new(outbound_message_sender),
+            request_response_receiver,
+            RecipientSource {
+                memberships: membership,
+            },
+            DataSource {},
+        );
 
         // Create the external event handler
         let mut tasks = TaskList::default();
-        let external_event_handler =
-            ExternalEventHandler::new(&mut tasks, network, roll_call_info, pub_key)
-                .await
-                .with_context(|| "Failed to create external event handler")?;
+        let external_event_handler = ExternalEventHandler::<V>::new(
+            &mut tasks,
+            request_response_sender,
+            outbound_message_receiver,
+            network,
+            pub_key,
+            handle.hotshot.upgrade_lock.clone(),
+        )
+        .await
+        .with_context(|| "Failed to create external event handler")?;
 
         Ok(Self::new(
             handle,
             persistence,
             state_signer,
             external_event_handler,
+            request_response_protocol,
             event_streamer,
             instance_state,
             network_config,
@@ -179,6 +237,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler<V>,
+        request_response_protocol: RequestResponse<
+            RequestResponseSender,
+            Receiver<Bytes>,
+            Request,
+            RecipientSource,
+            DataSource,
+            PubKey,
+        >,
         event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<PubKey>,
@@ -194,6 +260,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         let mut ctx = Self {
             handle: Arc::new(RwLock::new(handle)),
             state_signer: Arc::new(state_signer),
+            request_response_protocol,
             tasks: Default::default(),
             detached: false,
             wait_for_orchestrator: None,

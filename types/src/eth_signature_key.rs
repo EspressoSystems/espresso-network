@@ -12,8 +12,7 @@ use ethers::{
     types::{Address, Signature},
     utils::public_key_to_address,
 };
-use hotshot_types::traits::signature_key::BuilderSignatureKey;
-use hotshot_types::traits::signature_key::PrivateSignatureKey;
+use hotshot_types::traits::signature_key::{BuilderSignatureKey, PrivateSignatureKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

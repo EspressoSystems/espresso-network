@@ -58,7 +58,7 @@ impl<TYPES: NodeType> TaskState for RewindTaskState<TYPES> {
             Err(e) => {
                 tracing::error!("Failed to write file {}; error = {}", filename, e);
                 return;
-            }
+            },
         };
 
         for (event_number, event) in self.events.iter().enumerate() {

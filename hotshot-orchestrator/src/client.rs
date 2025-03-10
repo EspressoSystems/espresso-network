@@ -520,7 +520,7 @@ impl OrchestratorClient {
                 Err(err) => {
                     tracing::info!("{err}");
                     sleep(Duration::from_millis(250)).await;
-                }
+                },
             }
         }
     }

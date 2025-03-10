@@ -10,6 +10,17 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::{
+    collections::VecDeque,
+    fmt::{Debug, Display},
+    num::{NonZeroUsize, TryFromIntError},
+};
+
+use hotshot_types::traits::node_implementation::NodeType;
+use serde::{Deserialize, Serialize};
+use tide_disco::StatusCode;
+use time::format_description::well_known::Rfc3339;
+
 use super::{
     errors::{BadQuery, ExplorerAPIError, InvalidLimit, NotFound, QueryError, Unimplemented},
     monetary_value::MonetaryValue,
@@ -17,18 +28,10 @@ use super::{
 };
 use crate::{
     availability::{BlockQueryData, QueryableHeader, QueryablePayload, TransactionHash},
+    node::BlockHash,
+    types::HeightIndexed,
     Header, Payload, Resolvable, Transaction,
 };
-use crate::{node::BlockHash, types::HeightIndexed};
-use hotshot_types::traits::node_implementation::NodeType;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::VecDeque,
-    fmt::{Debug, Display},
-    num::{NonZeroUsize, TryFromIntError},
-};
-use tide_disco::StatusCode;
-use time::format_description::well_known::Rfc3339;
 
 /// BlockIdentifier is an enum that represents multiple ways of referring to
 /// a specific Block.  These use cases are specific to a Block Explorer and
@@ -79,7 +82,7 @@ impl<Types: NodeType> Display for TransactionIdentifier<Types> {
             TransactionIdentifier::Latest => write!(f, "latest"),
             TransactionIdentifier::HeightAndOffset(height, offset) => {
                 write!(f, "{} {}", height, offset)
-            }
+            },
             TransactionIdentifier::Hash(hash) => write!(f, "{}", hash),
         }
     }

@@ -9,11 +9,11 @@ set -euxo pipefail
 
 nix develop .#crossShell --ignore-environment --command bash -c "cargo build --release \
 && cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml \
-&& cargo build --bin espresso-dev-node --release --all-features"
+&& cargo build --bin espresso-dev-node --release --features='testing embedded-db'"
 
 nix develop .#armCrossShell --ignore-environment --command bash -c "cargo build --release \
 && cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml \
-&& cargo build --bin espresso-dev-node --release --all-features"
+&& cargo build --bin espresso-dev-node --release --features='testing embedded-db'"
 
 # The rest of the script doesn't run in a nix shell but we need to know where
 # the binaries are.

@@ -7,18 +7,17 @@
 use std::{marker::PhantomData, sync::Arc, time::SystemTime};
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     data::UpgradeProposal,
+    epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
     simple_certificate::UpgradeCertificate,
     simple_vote::{UpgradeProposalData, UpgradeVote},
     traits::{
-        election::Membership,
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
@@ -47,7 +46,7 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
     pub cur_epoch: Option<TYPES::Epoch>,
 
     /// Membership for Quorum Certs/votes
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// A map of `UpgradeVote` collector tasks
     pub vote_collectors: VoteCollectorsMap<TYPES, UpgradeVote<TYPES>, UpgradeCertificate<TYPES>, V>,
@@ -177,7 +176,12 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                 );
 
                 // We then validate that the proposal was issued by the leader for the view.
-                let view_leader_key = self.membership.read().await.leader(view, self.cur_epoch)?;
+                let view_leader_key = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?
+                    .leader(view)
+                    .await?;
                 ensure!(
                     view_leader_key == *sender,
                     info!(
@@ -213,30 +217,30 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
 
                 tracing::debug!("Sending upgrade vote {:?}", vote.view_number());
                 broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), &tx).await;
-            }
+            },
             HotShotEvent::UpgradeVoteRecv(ref vote) => {
                 tracing::debug!("Upgrade vote recv, Main Task {:?}", vote.view_number());
 
                 // Check if we are the leader.
-                {
-                    let view = vote.view_number();
-                    let membership_reader = self.membership.read().await;
-                    ensure!(
-                        membership_reader.leader(view, self.cur_epoch)? == self.public_key,
-                        debug!(
-                            "We are not the leader for view {} are we leader for next view? {}",
-                            *view,
-                            membership_reader.leader(view + 1, self.cur_epoch)? == self.public_key
-                        )
-                    );
-                }
+                let view = vote.view_number();
+                let epoch_membership = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?;
+                ensure!(
+                    epoch_membership.leader(view).await? == self.public_key,
+                    debug!(
+                        "We are not the leader for view {} are we leader for next view? {}",
+                        *view,
+                        epoch_membership.leader(view + 1).await? == self.public_key
+                    )
+                );
 
                 handle_vote(
                     &mut self.vote_collectors,
                     vote,
                     self.public_key.clone(),
-                    &self.membership,
-                    self.cur_epoch,
+                    &epoch_membership,
                     self.id,
                     &event,
                     &tx,
@@ -244,7 +248,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     EpochTransitionIndicator::NotInTransition,
                 )
                 .await?;
-            }
+            },
             HotShotEvent::ViewChange(new_view, epoch_number) => {
                 if *epoch_number > self.cur_epoch {
                     self.cur_epoch = *epoch_number;
@@ -262,10 +266,14 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     ))?
                     .as_secs();
 
-                let leader = self.membership.read().await.leader(
-                    TYPES::View::new(view + TYPES::UPGRADE_CONSTANTS.propose_offset),
-                    self.cur_epoch,
-                )?;
+                let leader = self
+                    .membership_coordinator
+                    .membership_for_epoch(self.cur_epoch)
+                    .await?
+                    .leader(TYPES::View::new(
+                        view + TYPES::UPGRADE_CONSTANTS.propose_offset,
+                    ))
+                    .await?;
 
                 // We try to form a certificate 5 views before we're leader.
                 if view >= self.start_proposing_view
@@ -320,8 +328,8 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     )
                     .await;
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
         Ok(())
     }

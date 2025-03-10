@@ -1,15 +1,15 @@
-use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
-    Timestamp, Upgrade, UpgradeMode,
-};
-use hotshot_types::traits::states::InstanceState;
-use hotshot_types::HotShotConfig;
 use std::{collections::BTreeMap, sync::Arc};
+
+use hotshot_types::{traits::states::InstanceState, HotShotConfig};
 use vbs::version::Version;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::{StaticVersion, StaticVersionType};
 
 use super::state::ValidatedState;
+use crate::v0::{
+    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
+    Timestamp, Upgrade, UpgradeMode,
+};
 
 /// Represents the immutable state of a node.
 ///
@@ -174,7 +174,7 @@ impl Upgrade {
                 config.stop_proposing_time = u64::MAX;
                 config.start_voting_time = 0;
                 config.stop_voting_time = u64::MAX;
-            }
+            },
             UpgradeMode::Time(t) => {
                 config.start_proposing_time = t.start_proposing_time.unix_timestamp();
                 config.stop_proposing_time = t.stop_proposing_time.unix_timestamp();
@@ -187,7 +187,7 @@ impl Upgrade {
                 config.stop_proposing_view = u64::MAX;
                 config.start_voting_view = 0;
                 config.stop_voting_view = u64::MAX;
-            }
+            },
         }
     }
 }
@@ -204,7 +204,7 @@ pub mod mock {
     use super::*;
     use crate::{
         retain_accounts, BackoffParams, BlockMerkleTree, FeeAccount, FeeMerkleCommitment,
-        FeeMerkleTree,
+        FeeMerkleTree, Leaf2,
     };
 
     #[derive(Debug, Clone, Default)]
@@ -224,6 +224,14 @@ pub mod mock {
 
     #[async_trait]
     impl StateCatchup for MockStateCatchup {
+        async fn try_fetch_leaves(
+            &self,
+            _retry: usize,
+            _height: u64,
+        ) -> anyhow::Result<Vec<Leaf2>> {
+            Err(anyhow::anyhow!("todo"))
+        }
+
         async fn try_fetch_accounts(
             &self,
             _retry: usize,

@@ -9,13 +9,13 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use contract_bindings_ethers::light_client::{LightClient, LightClientErrors};
 use displaydoc::Display;
-use ethers::middleware::{
-    gas_oracle::{GasCategory, GasOracle},
-    signer::SignerMiddlewareError,
-};
 use ethers::{
     core::k256::ecdsa::SigningKey,
-    middleware::SignerMiddleware,
+    middleware::{
+        gas_oracle::{GasCategory, GasOracle},
+        signer::SignerMiddlewareError,
+        SignerMiddleware,
+    },
     providers::{Http, Middleware, Provider, ProviderError},
     signers::{LocalWallet, Signer, Wallet},
     types::{transaction::eip2718::TypedTransaction, Address, U256},
@@ -42,8 +42,7 @@ use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
 use jf_signature::constants::CS_ID_SCHNORR;
-use sequencer_utils::blocknative::BlockNative;
-use sequencer_utils::deployer::is_proxy_contract;
+use sequencer_utils::{blocknative::BlockNative, deployer::is_proxy_contract};
 use serde::Deserialize;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
@@ -155,12 +154,12 @@ async fn init_stake_table_from_sequencer(
                 Err(e) => {
                     tracing::error!("Failed to parse the network config: {e}");
                     sleep(Duration::from_secs(5)).await;
-                }
+                },
             },
             Err(e) => {
                 tracing::error!("Failed to fetch the network config: {e}");
                 sleep(Duration::from_secs(5)).await;
-            }
+            },
         }
     };
 
@@ -288,7 +287,7 @@ pub async fn read_contract_state(
         Err(e) => {
             tracing::error!("unable to read finalized_state from contract: {}", e);
             return Err(ProverError::ContractError(e.into()));
-        }
+        },
     };
     let st_state: ParsedStakeTableState = match contract.genesis_stake_table_state().call().await {
         Ok(s) => s.into(),
@@ -298,7 +297,7 @@ pub async fn read_contract_state(
                 e
             );
             return Err(ProverError::ContractError(e.into()));
-        }
+        },
     };
 
     Ok((state.into(), st_state.into()))
@@ -330,10 +329,10 @@ pub async fn submit_state_and_proof(
                         priority_fee
                     );
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!("!! BlockNative Price Oracle failed: {}", e);
-            }
+            },
         }
     }
 

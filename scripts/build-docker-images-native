@@ -51,7 +51,7 @@ case $KERNEL in
     CARGO_TARGET_DIR=target
     cargo build --release
     # espresso-dev-node requires embedded-db feature to build so we build it separately
-    cargo build --bin espresso-dev-node --release --all-features
+    cargo build --bin espresso-dev-node --release --features 'testing embedded-db'
     # building sequencer-sqlite binary
     cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml
     ;;

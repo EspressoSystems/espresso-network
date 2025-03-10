@@ -282,10 +282,10 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
                 match res {
                     Ok(()) => {
                         trace!(?key, "Delivered message to remote");
-                    }
+                    },
                     Err(e) => {
                         warn!(?e, ?key, "Error sending broadcast message to node");
-                    }
+                    },
                 }
             }
         }
@@ -336,10 +336,10 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
                 match res {
                     Ok(()) => {
                         trace!(?key, "Delivered message to remote");
-                    }
+                    },
                     Err(e) => {
                         warn!(?e, ?key, "Error sending broadcast message to node");
-                    }
+                    },
                 }
             }
         }
@@ -375,7 +375,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
                     Ok(()) => {
                         trace!(?recipient, "Delivered message to remote");
                         Ok(())
-                    }
+                    },
                     Err(e) => Err(NetworkError::MessageSendError(format!(
                         "error sending direct message to node: {e}",
                     ))),

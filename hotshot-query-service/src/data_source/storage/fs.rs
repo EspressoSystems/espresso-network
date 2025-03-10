@@ -12,13 +12,35 @@
 
 #![cfg(feature = "file-system-data-source")]
 
+use std::{
+    collections::{
+        hash_map::{Entry, HashMap},
+        BTreeMap,
+    },
+    hash::Hash,
+    ops::{Bound, Deref, RangeBounds},
+    path::Path,
+};
+
+use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use async_trait::async_trait;
+use atomic_store::{AtomicStore, AtomicStoreLoader, PersistenceError};
+use committable::Committable;
+use futures::future::Future;
+use hotshot_types::{
+    data::{VidCommitment, VidShare},
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+};
+use serde::{de::DeserializeOwned, Serialize};
+use snafu::OptionExt;
+
 use super::{
     ledger_log::{Iter, LedgerLog},
     pruning::{PruneStorage, PrunedHeightStorage, PrunerConfig},
+    sql::MigrateTypes,
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, PayloadMetadata,
     UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
 };
-
 use crate::{
     availability::{
         data_source::{BlockId, LeafId},
@@ -33,23 +55,7 @@ use crate::{
     status::HasMetrics,
     types::HeightIndexed,
     ErrorSnafu, Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
-    VidCommitment, VidShare,
 };
-use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use async_trait::async_trait;
-use atomic_store::{AtomicStore, AtomicStoreLoader, PersistenceError};
-use committable::Committable;
-use futures::future::Future;
-use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
-use serde::{de::DeserializeOwned, Serialize};
-use snafu::OptionExt;
-use std::collections::{
-    hash_map::{Entry, HashMap},
-    BTreeMap,
-};
-use std::hash::Hash;
-use std::ops::{Bound, Deref, RangeBounds};
-use std::path::Path;
 
 const CACHED_LEAVES_COUNT: usize = 100;
 const CACHED_BLOCKS_COUNT: usize = 100;
@@ -85,10 +91,10 @@ where
             BlockId::Number(n) => Ok(n),
             BlockId::Hash(h) => {
                 Ok(*self.index_by_block_hash.get(&h).context(NotFoundSnafu)? as usize)
-            }
+            },
             BlockId::PayloadHash(h) => {
                 Ok(*self.index_by_payload_hash.get(&h).context(NotFoundSnafu)? as usize)
-            }
+            },
         }
     }
 
@@ -131,6 +137,16 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     type Pruner = ();
+}
+
+#[async_trait]
+impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
+where
+    Payload<Types>: QueryablePayload<Types>,
+{
+    async fn migrate_types(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 impl<Types: NodeType> FileSystemStorage<Types>
@@ -392,11 +408,11 @@ where
                 iter.nth(n - 1);
             }
             n
-        }
+        },
         Bound::Excluded(n) => {
             iter.nth(n);
             n + 1
-        }
+        },
         Bound::Unbounded => 0,
     };
 
@@ -649,10 +665,10 @@ fn update_index_by_hash<H: Eq + Hash, P: Ord>(index: &mut HashMap<H, P>, hash: H
                 // Overwrite the existing entry if the new object was sequenced first.
                 e.insert(pos);
             }
-        }
+        },
         Entry::Vacant(e) => {
             e.insert(pos);
-        }
+        },
     }
 }
 
@@ -759,7 +775,7 @@ where
                 // entry in `index_by_time` has a non-empty list associated with it, so this
                 // indexing is safe.
                 blocks[0]
-            }
+            },
         } as usize;
 
         let mut res = TimeWindowQueryData::default();

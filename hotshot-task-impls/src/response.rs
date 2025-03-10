@@ -7,14 +7,13 @@
 use std::{sync::Arc, time::Duration};
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use committable::Committable;
 use hotshot_types::{
     consensus::{Consensus, LockedConsensusState, OuterConsensus},
     data::VidDisperseShare,
+    epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
     traits::{
-        election::Membership,
         network::DataRequest,
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
@@ -36,7 +35,7 @@ pub struct NetworkResponseState<TYPES: NodeType, V: Versions> {
     consensus: LockedConsensusState<TYPES>,
 
     /// Quorum membership for checking if requesters have state
-    membership: Arc<RwLock<TYPES::Membership>>,
+    membership: EpochMembershipCoordinator<TYPES>,
 
     /// This replicas public key
     pub_key: TYPES::SignatureKey,
@@ -55,7 +54,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
     /// Create the network request state with the info it needs
     pub fn new(
         consensus: LockedConsensusState<TYPES>,
-        membership: Arc<RwLock<TYPES::Membership>>,
+        membership: EpochMembershipCoordinator<TYPES>,
         pub_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
         id: u64,
@@ -112,7 +111,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                                 )
                                 .await;
                             }
-                        }
+                        },
                         HotShotEvent::QuorumProposalRequestRecv(req, signature) => {
                             // Make sure that this request came from who we think it did
                             if !req.key.validate(signature, req.commit().as_ref()) {
@@ -138,16 +137,16 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                                 )
                                 .await;
                             }
-                        }
+                        },
                         HotShotEvent::Shutdown => {
                             return;
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
-                }
+                },
                 Err(e) => {
                     tracing::error!("Failed to receive event. {:?}", e);
-                }
+                },
             }
         }
     }
@@ -175,7 +174,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
             OuterConsensus::new(Arc::clone(&self.consensus)),
             view,
             target_epoch,
-            Arc::clone(&self.membership),
+            self.membership.clone(),
             &self.private_key,
             &self.upgrade_lock,
         )
@@ -188,7 +187,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                 OuterConsensus::new(Arc::clone(&self.consensus)),
                 view,
                 target_epoch,
-                Arc::clone(&self.membership),
+                self.membership.clone(),
                 &self.private_key,
                 &self.upgrade_lock,
             )
@@ -210,7 +209,10 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
         sender: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
     ) -> bool {
-        self.membership.read().await.has_stake(sender, epoch)
+        let Ok(memb) = self.membership.membership_for_epoch(epoch).await else {
+            return false;
+        };
+        memb.has_stake(sender).await
     }
 }
 

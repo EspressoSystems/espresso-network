@@ -1,5 +1,7 @@
 //! Sequencer-specific API options and initialization.
 
+use std::sync::Arc;
+
 use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
@@ -22,7 +24,6 @@ use hotshot_types::traits::{
     network::ConnectedNetwork,
     node_implementation::Versions,
 };
-use std::sync::Arc;
 use tide_disco::{listener::RateLimitListener, method::ReadState, App, Url};
 use vbs::version::StaticVersionType;
 
@@ -274,7 +275,25 @@ impl Options {
         app.register_module("status", status_api)?;
 
         // Initialize availability and node APIs (these both use the same data source).
-        app.register_module("availability", endpoints::availability()?)?;
+
+        // Note: We initialize two versions of the availability module: `availability/v0` and `availability/v1`.
+        // - `availability/v0/leaf/0` returns the old `Leaf1` type for backward compatibility.
+        // - `availability/v1/leaf/0` returns the new `Leaf2` type
+
+        // initialize the availability module for API version V0.
+        // This ensures compatibility for nodes that expect `Leaf1` for leaf endpoints
+        app.register_module(
+            "availability",
+            endpoints::availability("0.0.1".parse().unwrap())?,
+        )?;
+
+        // initialize the availability module for API version V1.
+        // This enables support for the new `Leaf2` type
+        app.register_module(
+            "availability",
+            endpoints::availability("1.0.0".parse().unwrap())?,
+        )?;
+
         app.register_module("node", endpoints::node()?)?;
 
         // Initialize submit API

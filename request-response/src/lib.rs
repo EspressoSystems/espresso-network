@@ -10,7 +10,6 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use data_source::DataSource;
-use derive_builder::Builder;
 use derive_more::derive::Deref;
 use hotshot_types::traits::signature_key::SignatureKey;
 use message::{Message, RequestMessage, ResponseMessage};
@@ -87,39 +86,39 @@ pub trait Serializable: Sized {
 }
 
 /// The underlying configuration for the request-response protocol
-#[derive(Clone, Builder)]
+#[derive(Clone)]
 pub struct RequestResponseConfig {
     /// The timeout for incoming requests. Do not respond to a request after this threshold
     /// has passed.
-    incoming_request_ttl: Duration,
+    pub incoming_request_ttl: Duration,
     /// The maximum amount of time we will spend trying to both derive a response for a request and
     /// send the response over the wire.
-    response_send_timeout: Duration,
+    pub response_send_timeout: Duration,
     /// The maximum amount of time we will spend trying to validate a response. This is used to prevent
     /// an attack where a malicious participant sends us a bunch of requests that take a long time to
     /// validate.
-    response_validate_timeout: Duration,
+    pub response_validate_timeout: Duration,
     /// The batch size for outgoing requests. This is the number of request messages that we will
     /// send out at a time for a single request before waiting for the [`request_batch_interval`].
-    request_batch_size: usize,
+    pub request_batch_size: usize,
     /// The time to wait (per request) between sending out batches of request messages
-    request_batch_interval: Duration,
+    pub request_batch_interval: Duration,
     /// The maximum (global) number of outgoing responses that can be in flight at any given time
-    max_outgoing_responses: usize,
+    pub max_outgoing_responses: usize,
     /// The maximum (global) number of incoming responses that can be processed at any given time.
     /// We need this because responses coming in need to be validated [asynchronously] that they
     /// satisfy the request they are responding to
-    max_incoming_responses: usize,
+    pub max_incoming_responses: usize,
 }
 
 /// A protocol that allows for request-response communication. Is cheaply cloneable, so there is no
 /// need to wrap it in an `Arc`
-#[derive(Clone, Deref)]
+#[derive(Deref)]
 pub struct RequestResponse<
     S: Sender<K>,
     R: Receiver,
     Req: Request,
-    RS: RecipientSource<K>,
+    RS: RecipientSource<Req, K>,
     DS: DataSource<Req>,
     K: SignatureKey + 'static,
 > {
@@ -130,11 +129,30 @@ pub struct RequestResponse<
     _receiving_task_handle: Arc<AbortOnDropHandle<()>>,
 }
 
+/// We need to manually implement the `Clone` trait for this type because deriving
+/// `Deref` will cause an issue where it tries to clone the inner field instead
 impl<
         S: Sender<K>,
         R: Receiver,
         Req: Request,
-        RS: RecipientSource<K>,
+        RS: RecipientSource<Req, K>,
+        DS: DataSource<Req>,
+        K: SignatureKey + 'static,
+    > Clone for RequestResponse<S, R, Req, RS, DS, K>
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            _receiving_task_handle: Arc::clone(&self._receiving_task_handle),
+        }
+    }
+}
+
+impl<
+        S: Sender<K>,
+        R: Receiver,
+        Req: Request,
+        RS: RecipientSource<Req, K>,
         DS: DataSource<Req>,
         K: SignatureKey + 'static,
     > RequestResponse<S, R, Req, RS, DS, K>
@@ -186,14 +204,14 @@ pub struct RequestResponseInner<
     S: Sender<K>,
     R: Receiver,
     Req: Request,
-    RS: RecipientSource<K>,
+    RS: RecipientSource<Req, K>,
     DS: DataSource<Req>,
     K: SignatureKey + 'static,
 > {
     /// The configuration of the protocol
     config: RequestResponseConfig,
     /// The sender to use for the protocol
-    sender: S,
+    pub sender: S,
     /// The recipient source to use for the protocol
     recipient_source: RS,
     /// The data source to use for the protocol
@@ -207,7 +225,7 @@ impl<
         S: Sender<K>,
         R: Receiver,
         Req: Request,
-        RS: RecipientSource<K>,
+        RS: RecipientSource<Req, K>,
         DS: DataSource<Req>,
         K: SignatureKey + 'static,
     > RequestResponseInner<S, R, Req, RS, DS, K>
@@ -303,7 +321,7 @@ impl<
             // that we don't always send to the same recipients in the same order
             let mut recipients = self
                 .recipient_source
-                .get_recipients_for(&request_message.request)
+                .get_expected_responders(&request_message.request)
                 .await;
             recipients.shuffle(&mut rand::thread_rng());
 
@@ -388,24 +406,24 @@ impl<
                         Err(e) => {
                             warn!("Received invalid message: {e}");
                             continue;
-                        }
+                        },
                     };
 
                     // Handle the message based on its type
                     match message {
                         Message::Request(request_message) => {
                             self.handle_request(request_message, &mut outgoing_responses);
-                        }
+                        },
                         Message::Response(response_message) => {
                             self.handle_response(response_message, &mut incoming_responses);
-                        }
+                        },
                     }
-                }
+                },
                 // An error here means the receiver will _NEVER_ receive any more messages
                 Err(e) => {
                     error!("Request/response receive task exited: {e}");
                     return;
-                }
+                },
             }
         }
     }
@@ -617,8 +635,8 @@ mod tests {
 
     // Implement the [`RecipientSource`] trait for the [`TestSender`] type
     #[async_trait]
-    impl RecipientSource<BLSPubKey> for TestSender {
-        async fn get_recipients_for<R: Request>(&self, _request: &R) -> Vec<BLSPubKey> {
+    impl RecipientSource<TestRequest, BLSPubKey> for TestSender {
+        async fn get_expected_responders(&self, _request: &TestRequest) -> Vec<BLSPubKey> {
             // Get all the participants in the network
             self.network.keys().copied().collect()
         }
@@ -671,14 +689,14 @@ mod tests {
     }
 
     #[async_trait]
-    impl DataSource<Vec<u8>> for TestDataSource {
-        async fn derive_response_for(&self, request: &Vec<u8>) -> Result<Vec<u8>> {
+    impl DataSource<TestRequest> for TestDataSource {
+        async fn derive_response_for(&self, request: &TestRequest) -> Result<Vec<u8>> {
             // Return a response if we hit the hit rate
             if self.has_data && Instant::now() >= self.data_available_time {
                 if self.take_data && !self.taken.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     return Err(anyhow::anyhow!("data already taken"));
                 }
-                Ok(blake3::hash(request).as_bytes().to_vec())
+                Ok(blake3::hash(&request.0).as_bytes().to_vec())
             } else {
                 Err(anyhow::anyhow!("did not have the data"))
             }
@@ -687,16 +705,15 @@ mod tests {
 
     /// Create and return a default protocol configuration
     fn default_protocol_config() -> RequestResponseConfig {
-        RequestResponseConfigBuilder::create_empty()
-            .incoming_request_ttl(Duration::from_secs(40))
-            .response_send_timeout(Duration::from_secs(40))
-            .request_batch_size(10)
-            .request_batch_interval(Duration::from_millis(100))
-            .max_outgoing_responses(10)
-            .response_validate_timeout(Duration::from_secs(1))
-            .max_incoming_responses(5)
-            .build()
-            .expect("failed to build config")
+        RequestResponseConfig {
+            incoming_request_ttl: Duration::from_secs(40),
+            response_send_timeout: Duration::from_secs(40),
+            request_batch_size: 10,
+            request_batch_interval: Duration::from_millis(100),
+            max_outgoing_responses: 10,
+            response_validate_timeout: Duration::from_secs(1),
+            max_incoming_responses: 5,
+        }
     }
 
     /// Create fully connected test networks with `num_participants` participants
@@ -805,10 +822,10 @@ mod tests {
                     .push(Arc::clone(&protocol._receiving_task_handle));
 
                 // Create a random request
-                let request = vec![rand::thread_rng().gen(); 100];
+                let request = TestRequest(vec![rand::thread_rng().gen(); 100]);
 
                 // Get the hash of the request
-                let request_hash = blake3::hash(&request).as_bytes().to_vec();
+                let request_hash = blake3::hash(&request.0).as_bytes().to_vec();
 
                 // Create a new request message
                 let request = RequestMessage::new_signed(&public_key, &private_key, &request)
@@ -924,7 +941,7 @@ mod tests {
         let one = Arc::new(participants.remove(0));
 
         // Create the request that they should all be able to join on
-        let request = vec![rand::thread_rng().gen(); 100];
+        let request = TestRequest(vec![rand::thread_rng().gen(); 100]);
 
         // Create a join set to wait for all the tasks to finish
         let mut join_set = JoinSet::new();

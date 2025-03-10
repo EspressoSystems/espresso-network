@@ -42,7 +42,7 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> TestTaskState
     async fn handle_event(&mut self, (event, id): (Self::Event, usize)) -> Result<()> {
         match event.as_ref() {
             // all the view sync events
-            HotShotEvent::ViewSyncTimeout(_, _, _)
+            HotShotEvent::ViewSyncTimeout(..)
             | HotShotEvent::ViewSyncPreCommitVoteRecv(_)
             | HotShotEvent::ViewSyncCommitVoteRecv(_)
             | HotShotEvent::ViewSyncFinalizeVoteRecv(_)
@@ -52,12 +52,12 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> TestTaskState
             | HotShotEvent::ViewSyncPreCommitCertificateRecv(_)
             | HotShotEvent::ViewSyncCommitCertificateRecv(_)
             | HotShotEvent::ViewSyncFinalizeCertificateRecv(_)
-            | HotShotEvent::ViewSyncPreCommitCertificateSend(_, _)
-            | HotShotEvent::ViewSyncCommitCertificateSend(_, _)
-            | HotShotEvent::ViewSyncFinalizeCertificateSend(_, _)
+            | HotShotEvent::ViewSyncPreCommitCertificateSend(..)
+            | HotShotEvent::ViewSyncCommitCertificateSend(..)
+            | HotShotEvent::ViewSyncFinalizeCertificateSend(..)
             | HotShotEvent::ViewSyncTrigger(_) => {
                 self.hit_view_sync.insert(id);
-            }
+            },
             _ => (),
         }
 
@@ -75,7 +75,7 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> TestTaskState
                         hit_view_sync: self.hit_view_sync.clone(),
                     }))
                 }
-            }
+            },
         }
     }
 }

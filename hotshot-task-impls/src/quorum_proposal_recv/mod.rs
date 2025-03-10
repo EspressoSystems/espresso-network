@@ -17,13 +17,17 @@ use hotshot_task::task::{Task, TaskState};
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus},
     data::{EpochNumber, Leaf, ViewChangeEvidence2},
+    epoch_membership::{self, EpochMembership, EpochMembershipCoordinator},
     event::Event,
     message::UpgradeLock,
     simple_certificate::UpgradeCertificate,
+    simple_vote::HasEpoch,
     traits::{
+        block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
     },
+    utils::option_epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::{bail, Result};
@@ -58,7 +62,7 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
     pub cur_epoch: Option<TYPES::Epoch>,
 
     /// Membership for Quorum Certs/votes
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership: EpochMembershipCoordinator<TYPES>,
 
     /// View timeout from config.
     pub timeout: u64,
@@ -99,7 +103,7 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     pub(crate) consensus: OuterConsensus<TYPES>,
 
     /// Membership for Quorum Certs/votes
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership: EpochMembership<TYPES>,
 
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
@@ -145,12 +149,23 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     tracing::error!("Throwing away old proposal");
                     return;
                 }
+                let proposal_epoch = option_epoch_from_block_number::<TYPES>(
+                    proposal.data.proposal.epoch().is_some(),
+                    proposal.data.block_header().block_number(),
+                    self.epoch_height,
+                );
+                let Ok(epoch_membership) =
+                    self.membership.membership_for_epoch(proposal_epoch).await
+                else {
+                    tracing::warn!("No Stake table for epoch = {:?}", proposal_epoch);
+                    return;
+                };
                 let validation_info = ValidationInfo::<TYPES, I, V> {
                     id: self.id,
                     public_key: self.public_key.clone(),
                     private_key: self.private_key.clone(),
                     consensus: self.consensus.clone(),
-                    membership: Arc::clone(&self.membership),
+                    membership: epoch_membership,
                     output_event_stream: self.output_event_stream.clone(),
                     storage: Arc::clone(&self.storage),
                     upgrade_lock: self.upgrade_lock.clone(),
@@ -165,10 +180,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 )
                 .await
                 {
-                    Ok(()) => {}
-                    Err(e) => debug!(?e, "Failed to validate the proposal"),
+                    Ok(()) => {},
+                    Err(e) => error!(?e, "Failed to validate the proposal"),
                 }
-            }
+            },
             HotShotEvent::ViewChange(view, epoch) => {
                 if *epoch > self.cur_epoch {
                     self.cur_epoch = *epoch;
@@ -183,8 +198,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 // to enter view V + 1.
                 let oldest_view_to_keep = TYPES::View::new(view.saturating_sub(1));
                 self.cancel_tasks(oldest_view_to_keep);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }

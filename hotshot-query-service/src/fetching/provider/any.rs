@@ -10,6 +10,12 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::{fmt::Debug, sync::Arc};
+
+use async_trait::async_trait;
+use derivative::Derivative;
+use hotshot_types::traits::node_implementation::NodeType;
+
 use super::{Provider, Request};
 use crate::{
     availability::LeafQueryData,
@@ -17,11 +23,6 @@ use crate::{
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     Payload, VidCommon,
 };
-use async_trait::async_trait;
-use derivative::Derivative;
-use hotshot_types::traits::node_implementation::NodeType;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 /// Blanket trait combining [`Debug`] and [`Provider`].
 ///
@@ -191,7 +192,7 @@ where
                     providers.len()
                 );
                 continue;
-            }
+            },
         }
     }
 
@@ -201,6 +202,11 @@ where
 // These tests run the `postgres` Docker image, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
+    use futures::stream::StreamExt;
+    use portpicker::pick_unused_port;
+    use tide_disco::App;
+    use vbs::version::StaticVersionType;
+
     use super::*;
     use crate::{
         availability::{define_api, AvailabilityDataSource, UpdateAvailabilityData},
@@ -215,10 +221,6 @@ mod test {
         types::HeightIndexed,
         ApiState, Error,
     };
-    use futures::stream::StreamExt;
-    use portpicker::pick_unused_port;
-    use tide_disco::App;
-    use vbs::version::StaticVersionType;
 
     type Provider = AnyProvider<MockTypes>;
 
@@ -234,7 +236,12 @@ mod test {
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
-            define_api(&Default::default(), MockBase::instance()).unwrap(),
+            define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "1.0.0".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap();
         let _server = BackgroundTask::spawn(

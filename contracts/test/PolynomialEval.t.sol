@@ -31,6 +31,7 @@ contract PolynomialEval_newEvalDomain_Test is Test {
     }
 
     /// @dev Test revert if domainSize is not among {2^16 ~ 2^20, 2^5}
+    /// forge-config: default.allow_internal_expect_revert = true
     function testFuzz_unsupportedDomainSize_reverts(uint256 domainSize) external {
         vm.assume(
             domainSize != 2 ** 16 && domainSize != 2 ** 17 && domainSize != 2 ** 18

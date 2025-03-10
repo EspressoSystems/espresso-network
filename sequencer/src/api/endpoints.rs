@@ -13,11 +13,12 @@ use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
     merklized_state::{
-        self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence,
+        self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
-    node, ApiState, Error,
+    node,
+    node::NodeDataSource,
+    ApiState, Error,
 };
-use hotshot_query_service::{merklized_state::Snapshot, node::NodeDataSource};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{
@@ -28,7 +29,6 @@ use hotshot_types::{
 use jf_merkle_tree::MerkleTreeScheme;
 use serde::{de::Error as _, Deserialize, Serialize};
 use snafu::OptionExt;
-
 use tagged_base64::TaggedBase64;
 use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
 use vbs::version::{StaticVersion, StaticVersionType};
@@ -91,6 +91,7 @@ type AvailabilityApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, availabil
 // Snafu has been replaced by `this_error` everywhere.
 // However, the query service still uses snafu
 pub(super) fn availability<N, P, D, V: Versions>(
+    api_ver: semver::Version,
 ) -> Result<AvailabilityApi<N, P, D, V, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
@@ -105,6 +106,7 @@ where
     let mut api = availability::define_api::<AvailState<N, P, D, _>, SeqTypes, _>(
         &options,
         SequencerApiVersion::instance(),
+        api_ver,
     )?;
 
     api.get("getnamespaceproof", move |req, state| {
@@ -377,6 +379,18 @@ where
 
             state
                 .get_chain_config(commitment)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
+    .get("leafchain", |req, state| {
+        async move {
+            let height = req
+                .integer_param("height")
+                .map_err(Error::from_request_error)?;
+            state
+                .get_leaf_chain(height)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }

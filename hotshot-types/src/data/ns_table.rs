@@ -17,7 +17,7 @@ const NS_ID_BYTE_LEN: usize = 4;
 /// If the namespace table is invalid, it returns a default single entry namespace table.
 /// For details, please refer to `block/full_payload/ns_table.rs` in the `sequencer` crate.
 #[allow(clippy::single_range_in_vec_init)]
-pub(crate) fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>> {
+pub fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range<usize>> {
     let mut result = vec![];
     if bytes.len() < NUM_NSS_BYTE_LEN
         || (bytes.len() - NUM_NSS_BYTE_LEN) % (NS_OFFSET_BYTE_LEN + NS_ID_BYTE_LEN) != 0
@@ -29,8 +29,13 @@ pub(crate) fn parse_ns_table(payload_byte_len: usize, bytes: &[u8]) -> Vec<Range
     if num_entries
         != bytes.len().saturating_sub(NUM_NSS_BYTE_LEN)
             / NS_ID_BYTE_LEN.saturating_add(NS_OFFSET_BYTE_LEN)
+        || (num_entries == 0 && payload_byte_len != 0)
     {
         tracing::warn!("Failed to parse the metadata as namespace table. Use a single namespace table instead.");
+        return vec![(0..payload_byte_len)];
+    }
+    // Early breaks for empty payload and namespace table
+    if num_entries == 0 {
         return vec![(0..payload_byte_len)];
     }
     let mut l = 0;

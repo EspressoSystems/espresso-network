@@ -7,13 +7,11 @@
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 use std::{collections::BTreeSet, fmt::Debug, num::NonZeroU64};
 
-use async_trait::async_trait;
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
 use crate::{drb::DrbResult, PeerConfig};
 
-#[async_trait]
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
@@ -125,21 +123,44 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Returns the threshold required to upgrade the network protocol
     fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> NonZeroU64;
 
+    /// Returns if the stake table is available for the current Epoch
+    fn has_epoch(&self, epoch: TYPES::Epoch) -> bool;
+
+    /// Gets the validated block header and epoch number of the epoch root
+    /// at the given block height
+    fn get_epoch_root_and_drb(
+        &self,
+        _block_height: u64,
+        _epoch_height: u64,
+        _epoch: TYPES::Epoch,
+    ) -> impl std::future::Future<Output = anyhow::Result<(TYPES::BlockHeader, DrbResult)>> + Send
+    {
+        async {
+            anyhow::bail!("Not implemented");
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     /// Handles notifications that a new epoch root has been created
     /// Is called under a read lock to the Membership. Return a callback
     /// with Some to have that callback invoked under a write lock.
     ///
     /// #3967 REVIEW NOTE: this is only called if epoch is Some. Is there any reason to do otherwise?
-    async fn add_epoch_root(
+    fn add_epoch_root(
         &self,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        None
+    ) -> impl std::future::Future<Output = Option<Box<dyn FnOnce(&mut Self) + Send>>> + Send {
+        async { None }
     }
 
     /// Called to notify the Membership when a new DRB result has been calculated.
     /// Observes the same semantics as add_epoch_root
     fn add_drb_result(&mut self, _epoch: TYPES::Epoch, _drb_result: DrbResult);
+
+    /// Called to notify the Membership that Epochs are enabled.
+    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
+    /// when this is called. The value of initial_drb_result should be used for DRB
+    /// calculations for epochs (epoch+1) and earlier.
+    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult);
 }

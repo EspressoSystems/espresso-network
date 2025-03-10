@@ -146,11 +146,7 @@ impl NsTable {
 
     /// Read subslice range for the `index`th namespace from the namespace
     /// table.
-    pub(crate) fn ns_range(
-        &self,
-        index: &NsIndex,
-        payload_byte_len: &PayloadByteLen,
-    ) -> NsPayloadRange {
+    pub fn ns_range(&self, index: &NsIndex, payload_byte_len: &PayloadByteLen) -> NsPayloadRange {
         let end = self
             .read_ns_offset_unchecked(index)
             .min(payload_byte_len.as_usize());

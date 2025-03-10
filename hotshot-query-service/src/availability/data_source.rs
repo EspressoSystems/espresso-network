@@ -10,6 +10,23 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::{
+    cmp::Ordering,
+    ops::{Bound, RangeBounds},
+};
+
+use async_trait::async_trait;
+use derivative::Derivative;
+use derive_more::{Display, From};
+use futures::{
+    future::Future,
+    stream::{BoxStream, StreamExt},
+};
+use hotshot_types::{
+    data::{VidCommitment, VidShare},
+    traits::node_implementation::NodeType,
+};
+
 use super::{
     fetch::Fetch,
     query_data::{
@@ -18,19 +35,7 @@ use super::{
         VidCommonQueryData,
     },
 };
-use crate::{types::HeightIndexed, Header, Payload, VidCommitment, VidShare};
-use async_trait::async_trait;
-use derivative::Derivative;
-use derive_more::{Display, From};
-use futures::{
-    future::Future,
-    stream::{BoxStream, StreamExt},
-};
-use hotshot_types::traits::node_implementation::NodeType;
-use std::{
-    cmp::Ordering,
-    ops::{Bound, RangeBounds},
-};
+use crate::{types::HeightIndexed, Header, Payload};
 
 #[derive(Derivative, From, Display)]
 #[derivative(Ord = "feature_allow_slow_enum")]

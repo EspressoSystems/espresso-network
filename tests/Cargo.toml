@@ -18,5 +18,6 @@ ethers = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 surf-disco = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 vbs = { workspace = true }

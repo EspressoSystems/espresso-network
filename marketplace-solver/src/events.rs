@@ -59,7 +59,7 @@ pub async fn handle_events(
         match event.event {
             hotshot::types::EventType::ViewFinished { view_number } => {
                 tracing::debug!("received view finished event {view_number:?}")
-            }
+            },
             _ => (),
         }
     }
@@ -69,6 +69,8 @@ pub async fn handle_events(
 
 #[cfg(any(test, feature = "testing"))]
 pub mod mock {
+    use std::{sync::Arc, time::Duration};
+
     use async_lock::RwLock;
     use espresso_types::SeqTypes;
     use hotshot::rand::{self};
@@ -83,7 +85,6 @@ pub mod mock {
     };
     use portpicker::pick_unused_port;
     use rand::{rngs::OsRng, RngCore};
-    use std::{sync::Arc, time::Duration};
     use tide_disco::{App, Url};
     use tokio::{spawn, task::JoinHandle, time::sleep};
     use vbs::version::{StaticVersion, StaticVersionType};
@@ -184,8 +185,7 @@ pub mod mock {
 mod test {
     use espresso_types::SeqTypes;
     use futures::StreamExt as _;
-    use hotshot::helpers::initialize_logging;
-    use hotshot::types::Event;
+    use hotshot::{helpers::initialize_logging, types::Event};
     use hotshot_events_service::events_source::StartupInfo;
     use surf_disco::Client;
 

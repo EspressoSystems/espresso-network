@@ -6,6 +6,8 @@
 
 //! elections used for consensus
 
+/// Dummy Membership which enforces that we must be caught up to use
+pub mod dummy_catchup_membership;
 /// leader completely randomized every view
 pub mod randomized_committee;
 

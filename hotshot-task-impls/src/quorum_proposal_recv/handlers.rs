@@ -14,6 +14,7 @@ use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposal, QuorumProposalWrapper},
+    epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::QuorumCertificate,
     simple_vote::HasEpoch,
@@ -102,7 +103,7 @@ fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
     view: TYPES::View,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
-    membership: Arc<RwLock<TYPES::Membership>>,
+    membership: EpochMembershipCoordinator<TYPES>,
     consensus: OuterConsensus<TYPES>,
     sender_public_key: TYPES::SignatureKey,
     sender_private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -173,7 +174,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
         &justify_qc,
         maybe_next_epoch_justify_qc.as_ref(),
         &validation_info.consensus,
-        &validation_info.membership,
+        &validation_info.membership.coordinator,
         &validation_info.upgrade_lock,
     )
     .await?;
@@ -200,7 +201,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
             justify_qc.view_number(),
             event_sender.clone(),
             event_receiver.clone(),
-            Arc::clone(&validation_info.membership),
+            validation_info.membership.coordinator.clone(),
             OuterConsensus::new(Arc::clone(&validation_info.consensus.inner_consensus)),
             // Note that we explicitly use the node key here instead of the provided key in the signature.
             // This is because the key that we receive is for the prior leader, so the payload would be routed
@@ -220,7 +221,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
             } else {
                 bail!("Parent state not found! Consensus internally inconsistent");
             }
-        }
+        },
         None => None,
     };
 

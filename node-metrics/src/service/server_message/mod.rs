@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use super::{client_id::ClientId, data_state::NodeIdentity};
 use bitvec::vec::BitVec;
 use espresso_types::SeqTypes;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
 use serde::{Deserialize, Serialize};
+
+use super::{client_id::ClientId, data_state::NodeIdentity};
 
 /// [ServerMessage] represents the messages that the server can send to the
 /// client for a response.

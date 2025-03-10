@@ -41,7 +41,7 @@ impl ToFields<FieldType> for QCVerKey {
                     FieldType::from_le_bytes_mod_order(&bytes[31..62]),
                     FieldType::from_le_bytes_mod_order(&bytes[62..]),
                 ]
-            }
+            },
             Err(_) => unreachable!(),
         }
     }

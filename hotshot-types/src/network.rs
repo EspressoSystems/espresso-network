@@ -210,7 +210,7 @@ impl<TYPES: NodeType> NetworkConfig<TYPES> {
             Ok(data) => data,
             Err(e) => {
                 return Err(NetworkConfigError::ReadFromFileError(e));
-            }
+            },
         };
 
         // deserialize
@@ -257,7 +257,7 @@ impl<TYPES: NodeType> NetworkConfig<TYPES> {
             Ok(data) => data,
             Err(e) => {
                 return Err(NetworkConfigError::SerializeError(e));
-            }
+            },
         };
 
         // write to file

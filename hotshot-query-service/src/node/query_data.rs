@@ -10,11 +10,11 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use crate::types::HeightIndexed;
 use derivative::Derivative;
 use serde::{Deserialize, Serialize};
 
 pub use crate::availability::{BlockHash, BlockId};
+use crate::types::HeightIndexed;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub struct SyncStatus {

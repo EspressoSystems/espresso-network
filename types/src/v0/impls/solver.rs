@@ -1,10 +1,8 @@
 use committable::{Commitment, Committable};
 use hotshot::types::SignatureKey;
 
-use crate::v0::utils::Update;
-
 use super::v0_99::{RollupRegistrationBody, RollupUpdatebody};
-use crate::v0::utils::Update::Set;
+use crate::v0::utils::{Update, Update::Set};
 
 impl Committable for RollupRegistrationBody {
     fn tag() -> String {
@@ -54,7 +52,7 @@ impl Committable for RollupUpdatebody {
                 comm = comm
                     .u64_field("reserve_url", 2)
                     .var_size_bytes(url.as_str().as_ref())
-            }
+            },
             Set(None) => comm = comm.u64_field("reserve_url", 1),
             Update::Skip => comm = comm.u64_field("reserve_url", 0),
         }

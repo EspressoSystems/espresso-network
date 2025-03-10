@@ -70,3 +70,14 @@ This can happen if the node missed a protocol upgrade.
 
 Returns the chain config -- this includes parameters such as `max_block_size`, `chain_id`, `base_fee`, and `fee_recipient`.
 """
+
+[route.leafchain]
+PATH = ["/:height/leafchain"]
+":height" = "Integer"
+DOC = """
+
+This Endpoint fetches a leaf chain which decides a specified block height.  This endpoint should be used
+For catching up the stake table, where `:height` is the block height of the epoch root you want to catchup to
+
+Returns a list of leaves which includes `:height` as the last leaf and should prove the block with `:height` was decided.  
+"""

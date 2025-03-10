@@ -50,19 +50,19 @@ impl DHTBootstrapTask {
                     Some(InputEvent::BootstrapFinished) => {
                         tracing::debug!("Bootstrap finished");
                         self.in_progress = false;
-                    }
+                    },
                     Some(InputEvent::ShutdownBootstrap) => {
                         tracing::info!("ShutdownBootstrap received, shutting down");
                         break;
-                    }
+                    },
                     Some(InputEvent::StartBootstrap) => {
                         tracing::warn!("Trying to start bootstrap that's already in progress");
                         continue;
-                    }
+                    },
                     None => {
                         tracing::debug!("Bootstrap channel closed, exiting loop");
                         break;
-                    }
+                    },
                 }
             } else if let Ok(maybe_event) = timeout(Duration::from_secs(120), self.rx.next()).await
             {
@@ -70,18 +70,18 @@ impl DHTBootstrapTask {
                     Some(InputEvent::StartBootstrap) => {
                         tracing::debug!("Start bootstrap in bootstrap task");
                         self.bootstrap();
-                    }
+                    },
                     Some(InputEvent::ShutdownBootstrap) => {
                         tracing::debug!("ShutdownBootstrap received, shutting down");
                         break;
-                    }
+                    },
                     Some(InputEvent::BootstrapFinished) => {
                         tracing::debug!("not in progress got bootstrap finished");
-                    }
+                    },
                     None => {
                         tracing::debug!("Bootstrap channel closed, exiting loop");
                         break;
-                    }
+                    },
                 }
             } else {
                 tracing::debug!("Start bootstrap in bootstrap task after timeout");

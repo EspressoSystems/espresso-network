@@ -126,7 +126,7 @@ where
                 self.head_total_stake -= self.head.stake_amount[*pos];
                 self.head.stake_amount[*pos] = U256::zero();
                 Ok(())
-            }
+            },
             None => Err(StakeTableError::KeyNotFound),
         }
     }
@@ -306,7 +306,7 @@ where
                 self.head_total_stake -= old_value;
                 self.head_total_stake += value;
                 Ok(old_value)
-            }
+            },
             None => Err(StakeTableError::KeyNotFound),
         }
     }

@@ -445,8 +445,9 @@ interface FeeContract {
     clippy::empty_structs_with_brackets
 )]
 pub mod FeeContract {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     /// The creation / init bytecode of the contract.
     ///
     /// ```text
@@ -474,6 +475,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct AddressEmptyCode {
+        #[allow(missing_docs)]
         pub target: alloy::sol_types::private::Address,
     }
     #[allow(
@@ -494,7 +496,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -558,7 +560,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -618,7 +620,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -660,6 +662,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ERC1967InvalidImplementation {
+        #[allow(missing_docs)]
         pub implementation: alloy::sol_types::private::Address,
     }
     #[allow(
@@ -680,7 +683,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -746,7 +749,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -806,7 +809,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -866,7 +869,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -926,7 +929,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -986,7 +989,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -1046,7 +1049,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -1106,7 +1109,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -1148,6 +1151,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct OwnableInvalidOwner {
+        #[allow(missing_docs)]
         pub owner: alloy::sol_types::private::Address,
     }
     #[allow(
@@ -1168,7 +1172,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -1214,6 +1218,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct OwnableUnauthorizedAccount {
+        #[allow(missing_docs)]
         pub account: alloy::sol_types::private::Address,
     }
     #[allow(
@@ -1234,7 +1239,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -1298,7 +1303,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -1340,6 +1345,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct UUPSUnsupportedProxiableUUID {
+        #[allow(missing_docs)]
         pub slot: alloy::sol_types::private::FixedBytes<32>,
     }
     #[allow(
@@ -1360,7 +1366,7 @@ pub mod FeeContract {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {}
+                >(_) => {},
             }
         }
         #[automatically_derived]
@@ -2050,7 +2056,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2095,6 +2101,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct UPGRADE_INTERFACE_VERSIONReturn {
+        #[allow(missing_docs)]
         pub _0: alloy::sol_types::private::String,
     }
     #[allow(
@@ -2116,7 +2123,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2145,7 +2152,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2201,12 +2208,14 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct balancesCall {
+        #[allow(missing_docs)]
         pub user: alloy::sol_types::private::Address,
     }
     ///Container type for the return parameters of the [`balances(address)`](balancesCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct balancesReturn {
+        #[allow(missing_docs)]
         pub amount: alloy::sol_types::private::primitives::aliases::U256,
     }
     #[allow(
@@ -2228,7 +2237,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2257,7 +2266,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2317,6 +2326,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct depositCall {
+        #[allow(missing_docs)]
         pub user: alloy::sol_types::private::Address,
     }
     ///Container type for the return parameters of the [`deposit(address)`](depositCall) function.
@@ -2342,7 +2352,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2371,7 +2381,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2435,8 +2445,11 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct getVersionReturn {
+        #[allow(missing_docs)]
         pub majorVersion: u8,
+        #[allow(missing_docs)]
         pub minorVersion: u8,
+        #[allow(missing_docs)]
         pub patchVersion: u8,
     }
     #[allow(
@@ -2458,7 +2471,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2491,7 +2504,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2555,6 +2568,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct initializeCall {
+        #[allow(missing_docs)]
         pub multisig: alloy::sol_types::private::Address,
     }
     ///Container type for the return parameters of the [`initialize(address)`](initializeCall) function.
@@ -2580,7 +2594,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2609,7 +2623,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2673,6 +2687,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct maxDepositAmountReturn {
+        #[allow(missing_docs)]
         pub _0: alloy::sol_types::private::primitives::aliases::U256,
     }
     #[allow(
@@ -2694,7 +2709,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2723,7 +2738,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2783,6 +2798,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct minDepositAmountReturn {
+        #[allow(missing_docs)]
         pub _0: alloy::sol_types::private::primitives::aliases::U256,
     }
     #[allow(
@@ -2804,7 +2820,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2833,7 +2849,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2893,6 +2909,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ownerReturn {
+        #[allow(missing_docs)]
         pub _0: alloy::sol_types::private::Address,
     }
     #[allow(
@@ -2914,7 +2931,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -2943,7 +2960,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3003,6 +3020,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct proxiableUUIDReturn {
+        #[allow(missing_docs)]
         pub _0: alloy::sol_types::private::FixedBytes<32>,
     }
     #[allow(
@@ -3024,7 +3042,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3053,7 +3071,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3132,7 +3150,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3161,7 +3179,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3217,6 +3235,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct transferOwnershipCall {
+        #[allow(missing_docs)]
         pub newOwner: alloy::sol_types::private::Address,
     }
     ///Container type for the return parameters of the [`transferOwnership(address)`](transferOwnershipCall) function.
@@ -3242,7 +3261,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3271,7 +3290,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3331,7 +3350,9 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct upgradeToAndCallCall {
+        #[allow(missing_docs)]
         pub newImplementation: alloy::sol_types::private::Address,
+        #[allow(missing_docs)]
         pub data: alloy::sol_types::private::Bytes,
     }
     ///Container type for the return parameters of the [`upgradeToAndCall(address,bytes)`](upgradeToAndCallCall) function.
@@ -3363,7 +3384,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3395,7 +3416,7 @@ pub mod FeeContract {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {}
+                    >(_) => {},
                 }
             }
             #[automatically_derived]
@@ -3456,17 +3477,29 @@ pub mod FeeContract {
     };
     ///Container for all the [`FeeContract`](self) function calls.
     pub enum FeeContractCalls {
+        #[allow(missing_docs)]
         UPGRADE_INTERFACE_VERSION(UPGRADE_INTERFACE_VERSIONCall),
+        #[allow(missing_docs)]
         balances(balancesCall),
+        #[allow(missing_docs)]
         deposit(depositCall),
+        #[allow(missing_docs)]
         getVersion(getVersionCall),
+        #[allow(missing_docs)]
         initialize(initializeCall),
+        #[allow(missing_docs)]
         maxDepositAmount(maxDepositAmountCall),
+        #[allow(missing_docs)]
         minDepositAmount(minDepositAmountCall),
+        #[allow(missing_docs)]
         owner(ownerCall),
+        #[allow(missing_docs)]
         proxiableUUID(proxiableUUIDCall),
+        #[allow(missing_docs)]
         renounceOwnership(renounceOwnershipCall),
+        #[allow(missing_docs)]
         transferOwnership(transferOwnershipCall),
+        #[allow(missing_docs)]
         upgradeToAndCall(upgradeToAndCallCall),
     }
     #[automatically_derived]
@@ -3502,28 +3535,28 @@ pub mod FeeContract {
             match self {
                 Self::UPGRADE_INTERFACE_VERSION(_) => {
                     <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::SELECTOR
-                }
+                },
                 Self::balances(_) => <balancesCall as alloy_sol_types::SolCall>::SELECTOR,
                 Self::deposit(_) => <depositCall as alloy_sol_types::SolCall>::SELECTOR,
                 Self::getVersion(_) => <getVersionCall as alloy_sol_types::SolCall>::SELECTOR,
                 Self::initialize(_) => <initializeCall as alloy_sol_types::SolCall>::SELECTOR,
                 Self::maxDepositAmount(_) => {
                     <maxDepositAmountCall as alloy_sol_types::SolCall>::SELECTOR
-                }
+                },
                 Self::minDepositAmount(_) => {
                     <minDepositAmountCall as alloy_sol_types::SolCall>::SELECTOR
-                }
+                },
                 Self::owner(_) => <ownerCall as alloy_sol_types::SolCall>::SELECTOR,
                 Self::proxiableUUID(_) => <proxiableUUIDCall as alloy_sol_types::SolCall>::SELECTOR,
                 Self::renounceOwnership(_) => {
                     <renounceOwnershipCall as alloy_sol_types::SolCall>::SELECTOR
-                }
+                },
                 Self::transferOwnership(_) => {
                     <transferOwnershipCall as alloy_sol_types::SolCall>::SELECTOR
-                }
+                },
                 Self::upgradeToAndCall(_) => {
                     <upgradeToAndCallCall as alloy_sol_types::SolCall>::SELECTOR
-                }
+                },
             }
         }
         #[inline]
@@ -3702,40 +3735,40 @@ pub mod FeeContract {
                     <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_encoded_size(
                         inner,
                     )
-                }
+                },
                 Self::balances(inner) => {
                     <balancesCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::deposit(inner) => {
                     <depositCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::getVersion(inner) => {
                     <getVersionCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::initialize(inner) => {
                     <initializeCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::maxDepositAmount(inner) => {
                     <maxDepositAmountCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::minDepositAmount(inner) => {
                     <minDepositAmountCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::owner(inner) => {
                     <ownerCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::proxiableUUID(inner) => {
                     <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::renounceOwnership(inner) => {
                     <renounceOwnershipCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::transferOwnership(inner) => {
                     <transferOwnershipCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
                 Self::upgradeToAndCall(inner) => {
                     <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                }
+                },
             }
         }
         #[inline]
@@ -3745,59 +3778,74 @@ pub mod FeeContract {
                     <UPGRADE_INTERFACE_VERSIONCall as alloy_sol_types::SolCall>::abi_encode_raw(
                         inner, out,
                     )
-                }
+                },
                 Self::balances(inner) => {
                     <balancesCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::deposit(inner) => {
                     <depositCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::getVersion(inner) => {
                     <getVersionCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::initialize(inner) => {
                     <initializeCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::maxDepositAmount(inner) => {
                     <maxDepositAmountCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::minDepositAmount(inner) => {
                     <minDepositAmountCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::owner(inner) => {
                     <ownerCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::proxiableUUID(inner) => {
                     <proxiableUUIDCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::renounceOwnership(inner) => {
                     <renounceOwnershipCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::transferOwnership(inner) => {
                     <transferOwnershipCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::upgradeToAndCall(inner) => {
                     <upgradeToAndCallCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                }
+                },
             }
         }
     }
     ///Container for all the [`FeeContract`](self) custom errors.
     pub enum FeeContractErrors {
+        #[allow(missing_docs)]
         AddressEmptyCode(AddressEmptyCode),
+        #[allow(missing_docs)]
         DepositTooLarge(DepositTooLarge),
+        #[allow(missing_docs)]
         DepositTooSmall(DepositTooSmall),
+        #[allow(missing_docs)]
         ERC1967InvalidImplementation(ERC1967InvalidImplementation),
+        #[allow(missing_docs)]
         ERC1967NonPayable(ERC1967NonPayable),
+        #[allow(missing_docs)]
         FailedInnerCall(FailedInnerCall),
+        #[allow(missing_docs)]
         FunctionDoesNotExist(FunctionDoesNotExist),
+        #[allow(missing_docs)]
         InvalidInitialization(InvalidInitialization),
+        #[allow(missing_docs)]
         InvalidUserAddress(InvalidUserAddress),
+        #[allow(missing_docs)]
         NoFunctionCalled(NoFunctionCalled),
+        #[allow(missing_docs)]
         NotInitializing(NotInitializing),
+        #[allow(missing_docs)]
         OwnableInvalidOwner(OwnableInvalidOwner),
+        #[allow(missing_docs)]
         OwnableUnauthorizedAccount(OwnableUnauthorizedAccount),
+        #[allow(missing_docs)]
         UUPSUnauthorizedCallContext(UUPSUnauthorizedCallContext),
+        #[allow(missing_docs)]
         UUPSUnsupportedProxiableUUID(UUPSUnsupportedProxiableUUID),
     }
     #[automatically_derived]
@@ -3836,49 +3884,49 @@ pub mod FeeContract {
             match self {
                 Self::AddressEmptyCode(_) => {
                     <AddressEmptyCode as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::DepositTooLarge(_) => {
                     <DepositTooLarge as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::DepositTooSmall(_) => {
                     <DepositTooSmall as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::ERC1967InvalidImplementation(_) => {
                     <ERC1967InvalidImplementation as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::ERC1967NonPayable(_) => {
                     <ERC1967NonPayable as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::FailedInnerCall(_) => {
                     <FailedInnerCall as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::FunctionDoesNotExist(_) => {
                     <FunctionDoesNotExist as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::InvalidInitialization(_) => {
                     <InvalidInitialization as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::InvalidUserAddress(_) => {
                     <InvalidUserAddress as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::NoFunctionCalled(_) => {
                     <NoFunctionCalled as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::NotInitializing(_) => {
                     <NotInitializing as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::OwnableInvalidOwner(_) => {
                     <OwnableInvalidOwner as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::OwnableUnauthorizedAccount(_) => {
                     <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::UUPSUnauthorizedCallContext(_) => {
                     <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
                 Self::UUPSUnsupportedProxiableUUID(_) => {
                     <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::SELECTOR
-                }
+                },
             }
         }
         #[inline]
@@ -4095,57 +4143,57 @@ pub mod FeeContract {
             match self {
                 Self::AddressEmptyCode(inner) => {
                     <AddressEmptyCode as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::DepositTooLarge(inner) => {
                     <DepositTooLarge as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::DepositTooSmall(inner) => {
                     <DepositTooSmall as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::ERC1967InvalidImplementation(inner) => {
                     <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_encoded_size(
                         inner,
                     )
-                }
+                },
                 Self::ERC1967NonPayable(inner) => {
                     <ERC1967NonPayable as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::FailedInnerCall(inner) => {
                     <FailedInnerCall as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::FunctionDoesNotExist(inner) => {
                     <FunctionDoesNotExist as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::InvalidInitialization(inner) => {
                     <InvalidInitialization as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::InvalidUserAddress(inner) => {
                     <InvalidUserAddress as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::NoFunctionCalled(inner) => {
                     <NoFunctionCalled as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::NotInitializing(inner) => {
                     <NotInitializing as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::OwnableInvalidOwner(inner) => {
                     <OwnableInvalidOwner as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                }
+                },
                 Self::OwnableUnauthorizedAccount(inner) => {
                     <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::abi_encoded_size(
                         inner,
                     )
-                }
+                },
                 Self::UUPSUnauthorizedCallContext(inner) => {
                     <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_encoded_size(
                         inner,
                     )
-                }
+                },
                 Self::UUPSUnsupportedProxiableUUID(inner) => {
                     <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_encoded_size(
                         inner,
                     )
-                }
+                },
             }
         }
         #[inline]
@@ -4153,67 +4201,73 @@ pub mod FeeContract {
             match self {
                 Self::AddressEmptyCode(inner) => {
                     <AddressEmptyCode as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::DepositTooLarge(inner) => {
                     <DepositTooLarge as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::DepositTooSmall(inner) => {
                     <DepositTooSmall as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::ERC1967InvalidImplementation(inner) => {
                     <ERC1967InvalidImplementation as alloy_sol_types::SolError>::abi_encode_raw(
                         inner, out,
                     )
-                }
+                },
                 Self::ERC1967NonPayable(inner) => {
                     <ERC1967NonPayable as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::FailedInnerCall(inner) => {
                     <FailedInnerCall as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::FunctionDoesNotExist(inner) => {
                     <FunctionDoesNotExist as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::InvalidInitialization(inner) => {
                     <InvalidInitialization as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::InvalidUserAddress(inner) => {
                     <InvalidUserAddress as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::NoFunctionCalled(inner) => {
                     <NoFunctionCalled as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::NotInitializing(inner) => {
                     <NotInitializing as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::OwnableInvalidOwner(inner) => {
                     <OwnableInvalidOwner as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                }
+                },
                 Self::OwnableUnauthorizedAccount(inner) => {
                     <OwnableUnauthorizedAccount as alloy_sol_types::SolError>::abi_encode_raw(
                         inner, out,
                     )
-                }
+                },
                 Self::UUPSUnauthorizedCallContext(inner) => {
                     <UUPSUnauthorizedCallContext as alloy_sol_types::SolError>::abi_encode_raw(
                         inner, out,
                     )
-                }
+                },
                 Self::UUPSUnsupportedProxiableUUID(inner) => {
                     <UUPSUnsupportedProxiableUUID as alloy_sol_types::SolError>::abi_encode_raw(
                         inner, out,
                     )
-                }
+                },
             }
         }
     }
     ///Container for all the [`FeeContract`](self) events.
     pub enum FeeContractEvents {
+        #[allow(missing_docs)]
         Deposit(Deposit),
+        #[allow(missing_docs)]
         Initialized(Initialized),
+        #[allow(missing_docs)]
         Log(Log),
+        #[allow(missing_docs)]
         OwnershipTransferred(OwnershipTransferred),
+        #[allow(missing_docs)]
         Upgrade(Upgrade),
+        #[allow(missing_docs)]
         Upgraded(Upgraded),
     }
     #[automatically_derived]
@@ -4270,31 +4324,31 @@ pub mod FeeContract {
                 Some(<Deposit as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
                     <Deposit as alloy_sol_types::SolEvent>::decode_raw_log(topics, data, validate)
                         .map(Self::Deposit)
-                }
+                },
                 Some(<Initialized as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
                     <Initialized as alloy_sol_types::SolEvent>::decode_raw_log(
                         topics, data, validate,
                     )
                     .map(Self::Initialized)
-                }
+                },
                 Some(<Log as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
                     <Log as alloy_sol_types::SolEvent>::decode_raw_log(topics, data, validate)
                         .map(Self::Log)
-                }
+                },
                 Some(<OwnershipTransferred as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
                     <OwnershipTransferred as alloy_sol_types::SolEvent>::decode_raw_log(
                         topics, data, validate,
                     )
                     .map(Self::OwnershipTransferred)
-                }
+                },
                 Some(<Upgrade as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
                     <Upgrade as alloy_sol_types::SolEvent>::decode_raw_log(topics, data, validate)
                         .map(Self::Upgrade)
-                }
+                },
                 Some(<Upgraded as alloy_sol_types::SolEvent>::SIGNATURE_HASH) => {
                     <Upgraded as alloy_sol_types::SolEvent>::decode_raw_log(topics, data, validate)
                         .map(Self::Upgraded)
-                }
+                },
                 _ => alloy_sol_types::private::Err(alloy_sol_types::Error::InvalidLog {
                     name: <Self as alloy_sol_types::SolEventInterface>::NAME,
                     log: alloy_sol_types::private::Box::new(
@@ -4314,11 +4368,11 @@ pub mod FeeContract {
                 Self::Deposit(inner) => alloy_sol_types::private::IntoLogData::to_log_data(inner),
                 Self::Initialized(inner) => {
                     alloy_sol_types::private::IntoLogData::to_log_data(inner)
-                }
+                },
                 Self::Log(inner) => alloy_sol_types::private::IntoLogData::to_log_data(inner),
                 Self::OwnershipTransferred(inner) => {
                     alloy_sol_types::private::IntoLogData::to_log_data(inner)
-                }
+                },
                 Self::Upgrade(inner) => alloy_sol_types::private::IntoLogData::to_log_data(inner),
                 Self::Upgraded(inner) => alloy_sol_types::private::IntoLogData::to_log_data(inner),
             }
@@ -4328,15 +4382,15 @@ pub mod FeeContract {
                 Self::Deposit(inner) => alloy_sol_types::private::IntoLogData::into_log_data(inner),
                 Self::Initialized(inner) => {
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
-                }
+                },
                 Self::Log(inner) => alloy_sol_types::private::IntoLogData::into_log_data(inner),
                 Self::OwnershipTransferred(inner) => {
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
-                }
+                },
                 Self::Upgrade(inner) => alloy_sol_types::private::IntoLogData::into_log_data(inner),
                 Self::Upgraded(inner) => {
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
-                }
+                },
             }
         }
     }

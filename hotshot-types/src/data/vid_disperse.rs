@@ -6,21 +6,22 @@
 
 //! This module provides types for VID disperse related data structures.
 
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, sync::Arc};
+use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData};
 
-use async_lock::RwLock;
 use hotshot_utils::anytrace::*;
 use jf_vid::{VidDisperse as JfVidDisperse, VidScheme};
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 
+use super::ns_table::parse_ns_table;
 use crate::{
+    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     impl_has_epoch,
     message::Proposal,
     simple_vote::HasEpoch,
     traits::{
-        block_contents::EncodeBytes, election::Membership, node_implementation::NodeType,
-        signature_key::SignatureKey, BlockPayload,
+        block_contents::EncodeBytes, node_implementation::NodeType, signature_key::SignatureKey,
+        BlockPayload,
     },
     vid::{
         advz::{advz_scheme, ADVZCommitment, ADVZCommon, ADVZScheme, ADVZShare},
@@ -28,8 +29,6 @@ use crate::{
     },
     vote::HasViewNumber,
 };
-
-use super::ns_table::parse_ns_table;
 
 impl_has_epoch!(
     ADVZDisperse<TYPES>,
@@ -67,14 +66,16 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
     async fn from_membership(
         view_number: TYPES::View,
         mut vid_disperse: JfVidDisperse<ADVZScheme>,
-        membership: &Arc<RwLock<TYPES::Membership>>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
     ) -> Self {
         let shares = membership
-            .read()
+            .membership_for_epoch(target_epoch)
             .await
-            .committee_members(view_number, target_epoch)
+            .unwrap()
+            .committee_members(view_number)
+            .await
             .iter()
             .map(|node| (node.clone(), vid_disperse.shares.remove(0)))
             .collect();
@@ -97,12 +98,17 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
     #[allow(clippy::panic)]
     pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
-        membership: &Arc<RwLock<TYPES::Membership>>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
     ) -> Result<Self> {
-        let num_nodes = membership.read().await.total_nodes(target_epoch);
+        let num_nodes = membership
+            .membership_for_epoch(target_epoch)
+            .await?
+            .total_nodes()
+            .await;
+
         let txns = payload.encode();
 
         let vid_disperse = spawn_blocking(move || advz_scheme(num_nodes).disperse(&txns))
@@ -274,15 +280,14 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         view_number: TYPES::View,
         commit: AvidMCommitment,
         shares: &[AvidMShare],
-        membership: &Arc<RwLock<TYPES::Membership>>,
+        membership: &EpochMembership<TYPES>,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
     ) -> Self {
         let payload_byte_len = shares[0].payload_byte_len();
         let shares = membership
-            .read()
+            .committee_members(view_number)
             .await
-            .committee_members(view_number, target_epoch)
             .iter()
             .zip(shares)
             .map(|(node, share)| (node.clone(), share.clone()))
@@ -307,13 +312,14 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
     #[allow(clippy::single_range_in_vec_init)]
     pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
-        membership: &Arc<RwLock<TYPES::Membership>>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<Self> {
-        let num_nodes = membership.read().await.total_nodes(target_epoch);
+        let target_mem = membership.membership_for_epoch(target_epoch).await?;
+        let num_nodes = target_mem.total_nodes().await;
 
         let txns = payload.encode();
         let num_txns = txns.len();
@@ -333,7 +339,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         .context(|err| error!("Failed to calculate VID disperse. Error: {}", err))?;
 
         Ok(
-            Self::from_membership(view, commit, &shares, membership, target_epoch, data_epoch)
+            Self::from_membership(view, commit, &shares, &target_mem, target_epoch, data_epoch)
                 .await,
         )
     }

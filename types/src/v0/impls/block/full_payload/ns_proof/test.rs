@@ -1,8 +1,7 @@
 use futures::future;
-use hotshot::helpers::initialize_logging;
-use hotshot::traits::BlockPayload;
-use hotshot_query_service::VidCommitment;
+use hotshot::{helpers::initialize_logging, traits::BlockPayload};
 use hotshot_types::{
+    data::VidCommitment,
     traits::EncodeBytes,
     vid::advz::{advz_scheme, ADVZScheme},
 };
@@ -87,7 +86,7 @@ async fn ns_proof() {
             let (ns_proof_txs, ns_proof_ns_id) = ns_proof
                 .verify(
                     block.ns_table(),
-                    &hotshot_query_service::VidCommitment::V0(vid.commit),
+                    &VidCommitment::V0(vid.commit),
                     &vid.common,
                 )
                 .unwrap_or_else(|| panic!("namespace {} proof verification failure", ns_id));
