@@ -422,7 +422,8 @@ mod test {
             &TestInstanceState::default(),
         )
         .await;
-        let common = VidCommonQueryData::new(leaf.header().clone(), Some(disperse.common));
+        let common =
+            VidCommonQueryData::new(leaf.header().clone(), crate::VidCommon::V0(disperse.common));
         ds.append(BlockInfo::new(leaf, None, Some(common.clone()), None))
             .await
             .unwrap();
