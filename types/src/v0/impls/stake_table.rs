@@ -2,6 +2,7 @@ use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     num::NonZeroU64,
+    ops::Add,
     sync::Arc,
 };
 
@@ -37,7 +38,9 @@ use itertools::Itertools;
 use thiserror::Error;
 
 use super::{
-    traits::StateCatchup, v0_3::{DAMembers, Delegator, StakeTable, StakerConfig}, Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes
+    traits::StateCatchup,
+    v0_3::{DAMembers, Delegator, StakeTable, StakerConfig},
+    Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes,
 };
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
@@ -57,6 +60,7 @@ pub fn from_l1_events(
     undelegated: Vec<(Undelegated, Log)>,
 ) -> IndexMap<Address, StakerConfig<BLSPubKey>> {
     // TODO: return RESULT
+    // TODO: Handle consensus keys update event
     let mut st_map = BTreeMap::new();
     for (reg, log) in registered {
         st_map.insert(
@@ -104,7 +108,6 @@ pub fn from_l1_events(
     }
 
     let mut validators = IndexMap::new();
-
     for staker in st_map.values() {
         match staker {
             StakeTableChange::Add(staker) => {
@@ -129,8 +132,8 @@ pub fn from_l1_events(
                     },
                 );
             },
-            StakeTableChange::Remove(staker) => {
-                validators.shift_remove(&staker.validator);
+            StakeTableChange::Remove(exit) => {
+                validators.shift_remove(&exit.validator);
             },
         }
     }
@@ -292,6 +295,7 @@ struct EpochCommittee {
     /// Keys for nodes participating in the network
     stake_table: IndexMap<PubKey, PeerConfig<PubKey>>,
     staker_config: IndexMap<Address, StakerConfig<BLSPubKey>>,
+    address_mapping: HashMap<BLSPubKey, Address>,
 }
 
 impl EpochCommittees {
@@ -305,9 +309,11 @@ impl EpochCommittees {
         epoch: EpochNumber,
         stakers: IndexMap<Address, StakerConfig<BLSPubKey>>,
     ) {
+        let mut address_mapping = HashMap::new();
         let stake_table = stakers
             .values()
             .map(|v| {
+                address_mapping.insert(v.stake_table_key, v.account);
                 (
                     v.stake_table_key,
                     PeerConfig {
@@ -327,6 +333,7 @@ impl EpochCommittees {
                 eligible_leaders: self.non_epoch_committee.eligible_leaders.clone(),
                 stake_table,
                 staker_config: stakers,
+                address_mapping: HashMap::new(),
             },
         );
     }
@@ -341,6 +348,27 @@ impl EpochCommittees {
             .context("state for found")?
             .staker_config
             .clone())
+    }
+
+    pub fn address(&self, epoch: &Epoch, bls_key: BLSPubKey) -> anyhow::Result<Address> {
+        let mapping = self
+            .state
+            .get(epoch)
+            .context("state for found")?
+            .address_mapping
+            .clone();
+
+        Ok(mapping.get(&bls_key).unwrap().clone())
+    }
+
+    pub fn get_leader_staker_config(
+        &self,
+        epoch: &Epoch,
+        key: BLSPubKey,
+    ) -> anyhow::Result<StakerConfig<BLSPubKey>> {
+        let address = self.address(&epoch, key)?;
+        let validators = self.validators(epoch)?;
+        Ok(validators.get(&address).unwrap().clone())
     }
 
     // We need a constructor to match our concrete type.
@@ -413,6 +441,7 @@ impl EpochCommittees {
                 .map(|x| (PubKey::public_key(&x.stake_table_entry), x.clone()))
                 .collect(),
             staker_config: Default::default(),
+            address_mapping: HashMap::new(),
         };
         map.insert(Epoch::genesis(), epoch_committee.clone());
         // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1

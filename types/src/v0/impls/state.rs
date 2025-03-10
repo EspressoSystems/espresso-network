@@ -2,13 +2,14 @@ use std::ops::Add;
 
 use anyhow::bail;
 use committable::{Commitment, Committable};
-use ethers::types::Address;
+use ethers::types::{Address, Reward};
 use ethers_conv::ToAlloy;
+use hotshot::types::BLSPubKey;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
-    data::{BlockError, ViewNumber},
+    data::{BlockError, EpochNumber, ViewNumber},
     traits::{
-        block_contents::BlockHeader, node_implementation::ConsensusTime,
+        block_contents::BlockHeader, election::Membership, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
 };
@@ -23,11 +24,14 @@ use num_traits::CheckedSub;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::Version;
+use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    auction::ExecutionError, fee_info::FeeError, instance_state::NodeState, BlockMerkleCommitment,
-    BlockSize, FeeMerkleCommitment, L1Client,
+    auction::ExecutionError,
+    fee_info::FeeError,
+    instance_state::NodeState,
+    v0_1::{RewardAccount, RewardAmount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
+    BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
     traits::StateCatchup,
@@ -132,6 +136,7 @@ pub struct ValidatedState {
     pub block_merkle_tree: BlockMerkleTree,
     /// Frontier of [`FeeMerkleTree`]
     pub fee_merkle_tree: FeeMerkleTree,
+    pub reward_merkle_tree: RewardMerkleTree,
     /// Configuration [`Header`] proposals will be validated against.
     pub chain_config: ResolvableChainConfig,
 }
@@ -153,11 +158,18 @@ impl Default for ValidatedState {
         )
         .unwrap();
 
+        let reward_merkle_tree = RewardMerkleTree::from_kv_set(
+            REWARD_MERKLE_TREE_HEIGHT,
+            Vec::<(RewardAccount, RewardAmount)>::new(),
+        )
+        .unwrap();
+
         let chain_config = ResolvableChainConfig::from(ChainConfig::default());
 
         Self {
             block_merkle_tree,
             fee_merkle_tree,
+            reward_merkle_tree,
             chain_config,
         }
     }
@@ -618,6 +630,9 @@ impl ValidatedState {
             block_merkle_tree: BlockMerkleTree::from_commitment(
                 self.block_merkle_tree.commitment(),
             ),
+            reward_merkle_tree: RewardMerkleTree::from_commitment(
+                self.reward_merkle_tree.commitment(),
+            ),
             chain_config: ResolvableChainConfig::from(self.chain_config.commit()),
         }
     }
@@ -796,6 +811,21 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
+        let membership = instance.membership.read().await;
+
+        if version >= EpochVersion::version() {
+            let height = proposed_header.block_number();
+            let epoch_height = instance.epoch_height.unwrap();
+            let epoch = EpochNumber::new(height % epoch_height);
+
+            let leader: BLSPubKey = membership
+                .leader(ViewNumber::new(height), Some(epoch))
+                .unwrap();
+
+            let validator = membership.get_leader_staker_config(&epoch, leader).unwrap();
+            // apply rewards
+        }
+
         Ok((validated_state, delta))
     }
 
@@ -959,9 +989,18 @@ impl HotShotState<SeqTypes> for ValidatedState {
             BlockMerkleTree::from_commitment(block_header.block_merkle_tree_root())
         };
 
+        let reward_merkle_tree = if block_header.block_merkle_tree_root().size() == 0 {
+            // If the commitment tells us that the tree is supposed to be empty, it is convenient to
+            // just create an empty tree, rather than a commitment-only tree.
+            RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT)
+        } else {
+            RewardMerkleTree::from_commitment(block_header.block_merkle_tree_root())
+        };
+
         Self {
             fee_merkle_tree,
             block_merkle_tree,
+            reward_merkle_tree,
             chain_config: block_header.chain_config(),
         }
     }

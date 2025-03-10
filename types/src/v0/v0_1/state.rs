@@ -1,14 +1,16 @@
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use derive_more::{Add, Display, From, Into, Mul, Sub};
+use ethers::{abi::Address, types::U256};
+use jf_merkle_tree::{MerkleTreeScheme, UniversalMerkleTreeScheme};
+use serde::{Deserialize, Serialize};
+
 use super::{FeeAccount, FeeAmount};
 use crate::Header;
 use committable::Commitment;
-use derive_more::derive::{Add, Display, From, Into, Mul, Sub};
-use ethers::types::{Address, U256};
 use jf_merkle_tree::{
     prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
-    MerkleTreeScheme,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -94,3 +96,31 @@ pub const SUPPLY: u64 = 1000000000;
 pub const INFLATION: u64 = 300;
 pub const ANNUAL_INFLATION: u64 = SUPPLY * INFLATION / 100;
 pub const BLOCKS_PER_YEAR: u64 = 365 * 24 * 60 * 60 / 2;
+
+#[derive(Clone, Debug, Default)]
+pub struct RewardInfo {
+    pub account: RewardAccount,
+    pub amount: RewardAmount,
+}
+
+/// A proof of the balance of an account in the fee ledger.
+///
+/// If the account of interest does not exist in the fee state, this is a Merkle non-membership
+/// proof, and the balance is implicitly zero. Otherwise, this is a normal Merkle membership proof.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RewardAccountProof {
+    pub account: Address,
+    pub proof: RewardMerkleProof,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum RewardMerkleProof {
+    Presence(<RewardMerkleTree as MerkleTreeScheme>::MembershipProof),
+    Absence(<RewardMerkleTree as UniversalMerkleTreeScheme>::NonMembershipProof),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RewardAccountQueryData {
+    pub balance: U256,
+    pub proof: RewardAccountProof,
+}
