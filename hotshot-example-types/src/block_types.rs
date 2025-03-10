@@ -15,6 +15,7 @@ use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
     data::VidCommitment,
     data::{BlockError, Leaf2},
+    light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
         node_implementation::NodeType,
@@ -387,6 +388,14 @@ impl<
 
     fn get_auction_results(&self) -> Option<TYPES::AuctionResult> {
         Some(TYPES::AuctionResult { urls: vec![] })
+    }
+
+    fn get_light_client_state(&self) -> anyhow::Result<LightClientState> {
+        LightClientState::new(
+            self.block_number,
+            self.block_number,
+            self.payload_commitment.as_ref(),
+        )
     }
 }
 

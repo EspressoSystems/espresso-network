@@ -18,20 +18,22 @@ use either::Either::{Left, Right};
 use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::{
-        DaCertificate2, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
-        TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate2,
+        DaCertificate2, ExtendedQuorumCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate2,
         ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote2, NextEpochQuorumVote2, QuorumVote, QuorumVote2, TimeoutVote2, UpgradeVote,
-        ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
+        DaVote2, ExtendedQuorumVote, NextEpochQuorumVote2, QuorumVote, QuorumVote2, TimeoutVote2,
+        UpgradeVote, ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
     },
     utils::EpochTransitionIndicator,
-    vote::{Certificate, HasViewNumber, Vote, VoteAccumulator},
+    vote::{
+        Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote, VoteAccumulator,
+    },
 };
 use hotshot_utils::anytrace::*;
 
@@ -698,5 +700,217 @@ impl<TYPES: NodeType, V: Versions>
     }
     fn filter(event: Arc<HotShotEvent<TYPES>>) -> bool {
         matches!(event.as_ref(), HotShotEvent::ViewSyncFinalizeVoteRecv(_))
+    }
+}
+
+/// A map for extended quorum vote collectors
+pub type ExtendedQuorumVoteCollectorsMap<TYPES, V> =
+    BTreeMap<<TYPES as NodeType>::View, ExtendedQuorumVoteCollectionTaskState<TYPES, V>>;
+
+pub struct ExtendedQuorumVoteCollectionTaskState<TYPES: NodeType, V: Versions> {
+    // pub vote_task_state:
+    //     VoteCollectionTaskState<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>,
+    // pub light_client_task_state: LightClientStateUpdateVoteCollectionTaskState<TYPES>,
+    /// Public key for this node.
+    pub public_key: TYPES::SignatureKey,
+
+    /// Membership for voting
+    pub membership: Arc<RwLock<TYPES::Membership>>,
+
+    /// accumulator for quorum votes
+    pub accumulator:
+        Option<VoteAccumulator<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>>,
+
+    /// accumulator for light client state update votes
+    pub state_vote_accumulator: Option<LightClientStateUpdateVoteAccumulator<TYPES>>,
+
+    /// The view which we are collecting votes for
+    pub view: TYPES::View,
+
+    /// The epoch which we are collecting votes for
+    pub epoch: Option<TYPES::Epoch>,
+
+    /// Node id
+    pub id: u64,
+}
+
+// Handlers for extended quorum vote accumulators
+impl<TYPES: NodeType, V: Versions> ExtendedQuorumVoteCollectionTaskState<TYPES, V> {
+    /// Take one vote and accumulate it. Returns the certs once formed.
+    async fn handle_vote_event(
+        &mut self,
+        event: Arc<HotShotEvent<TYPES>>,
+        sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    ) -> Result<Option<ExtendedQuorumCertificate<TYPES>>> {
+        match event.as_ref() {
+            HotShotEvent::ExtendedQuorumVoteRecv(vote) => {
+                self.accumulate_vote(vote, self.epoch, sender).await
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Accumulate a vote and return the certificates if formed
+    async fn accumulate_vote(
+        &mut self,
+        vote: &ExtendedQuorumVote<TYPES>,
+        sender_epoch: Option<TYPES::Epoch>,
+        event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
+    ) -> Result<Option<ExtendedQuorumCertificate<TYPES>>> {
+        let ExtendedQuorumVote { vote, state_vote } = vote;
+
+        ensure!(
+            vote.leader(&*self.membership.read().await, self.epoch)? == self.public_key,
+            info!("Received vote for a view in which we were not the leader.")
+        );
+
+        ensure!(
+            vote.view_number() == self.view,
+            error!(
+                "Vote view does not match! vote view is {} current view is {}. This vote should not have been passed to this accumulator.",
+                *vote.view_number(),
+                *self.view
+            )
+        );
+
+        let accumulator = self.accumulator.as_mut().context(warn!(
+            "No accumulator to handle extended quorum vote with. This shouldn't happen."
+        ))?;
+
+        let state_vote_accumulator = self.state_vote_accumulator.as_mut().context(warn!(
+            "No accumulator to handle light client state update vote with. This shouldn't happen."
+        ))?;
+
+        let key = vote.signing_key();
+        let epoch = state_vote.epoch;
+        let membership_reader = self.membership.read().await;
+        let stake_table_entry =
+            QuorumCertificate2::<TYPES>::stake_table_entry(&*membership_reader, &key, Some(epoch))
+                .ok_or(error!("Invalid signing key: {:?}", key))?;
+        let stake_table =
+            QuorumCertificate2::<TYPES>::stake_table(&*membership_reader, Some(epoch));
+        let threshold = QuorumCertificate2::<TYPES>::threshold(&*membership_reader, Some(epoch));
+        drop(membership_reader);
+
+        match (
+            accumulator
+                .accumulate(vote, &self.membership, sender_epoch)
+                .await,
+            state_vote_accumulator.accumulate(
+                epoch,
+                state_vote,
+                &stake_table_entry.state_ver_key,
+                &stake_table,
+                threshold.into(),
+            ),
+        ) {
+            (None, None) => Ok(None),
+            (Some(cert), Some(state_cert)) => {
+                tracing::debug!("Certificate Formed! {:?}", cert);
+
+                let eqc = ExtendedQuorumCertificate {
+                    qc: cert,
+                    state_cert,
+                };
+                broadcast_event(
+                    Arc::new(HotShotEvent::ExtendedQcFormed(Left(eqc.clone()))),
+                    event_stream,
+                )
+                .await;
+                self.accumulator = None;
+
+                Ok(Some(eqc))
+            }
+            _ => Err(error!(
+                "Only one certificate formed during epoch transition, this should not happen."
+            )),
+        }
+    }
+}
+
+async fn create_extended_quorum_vote_accumulator<TYPES: NodeType, V: Versions>(
+    info: &AccumulatorInfo<TYPES>,
+    event: Arc<HotShotEvent<TYPES>>,
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    upgrade_lock: UpgradeLock<TYPES, V>,
+) -> Result<ExtendedQuorumVoteCollectionTaskState<TYPES, V>> {
+    let new_accumulator =
+        VoteAccumulator::<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V> {
+            vote_outcomes: HashMap::new(),
+            signers: HashMap::new(),
+            phantom: PhantomData,
+            upgrade_lock,
+        };
+    let state_vote_accumulator = LightClientStateUpdateVoteAccumulator {
+        vote_outcomes: HashMap::new(),
+    };
+
+    let mut state = ExtendedQuorumVoteCollectionTaskState::<TYPES, V> {
+        membership: Arc::clone(&info.membership),
+        public_key: info.public_key.clone(),
+        accumulator: Some(new_accumulator),
+        state_vote_accumulator: Some(state_vote_accumulator),
+        view: info.view,
+        epoch: info.epoch,
+        id: info.id,
+    };
+
+    state.handle_vote_event(Arc::clone(&event), sender).await?;
+
+    Ok(state)
+}
+
+/// A helper function that handles extended quorum vote collection
+///
+/// # Errors
+/// If we fail to handle the vote
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_extended_quorum_vote<TYPES: NodeType, V: Versions>(
+    collectors: &mut ExtendedQuorumVoteCollectorsMap<TYPES, V>,
+    vote: &ExtendedQuorumVote<TYPES>,
+    public_key: TYPES::SignatureKey,
+    membership: &Arc<RwLock<TYPES::Membership>>,
+    epoch: Option<TYPES::Epoch>,
+    id: u64,
+    event: &Arc<HotShotEvent<TYPES>>,
+    event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
+    upgrade_lock: &UpgradeLock<TYPES, V>,
+) -> Result<()> {
+    match collectors.entry(vote.view_number()) {
+        Entry::Vacant(entry) => {
+            tracing::debug!("Starting vote handle for view {:?}", vote.view_number());
+            let info = AccumulatorInfo {
+                public_key,
+                membership: Arc::clone(membership),
+                view: vote.view_number(),
+                epoch,
+                id,
+            };
+            let collector = create_extended_quorum_vote_accumulator(
+                &info,
+                Arc::clone(event),
+                event_stream,
+                upgrade_lock.clone(),
+            )
+            .await?;
+
+            entry.insert(collector);
+
+            Ok(())
+        }
+        Entry::Occupied(mut entry) => {
+            // handle the vote, and garbage collect if the vote collector is finished
+            if entry
+                .get_mut()
+                .handle_vote_event(Arc::clone(event), event_stream)
+                .await?
+                .is_some()
+            {
+                entry.remove();
+                *collectors = collectors.split_off(&vote.view_number());
+            }
+
+            Ok(())
+        }
     }
 }

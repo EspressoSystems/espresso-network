@@ -21,13 +21,14 @@ use primitive_types::U256;
 use tracing::error;
 
 use crate::{
+    light_client::LightClientState,
     message::UpgradeLock,
-    simple_certificate::Threshold,
-    simple_vote::{VersionedVoteData, Voteable},
+    simple_certificate::{LightClientStateUpdateCertificate, Threshold},
+    simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
-        signature_key::{SignatureKey, StakeTableEntryType},
+        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
     },
     PeerConfig, StakeTableEntries,
 };
@@ -92,7 +93,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     fn stake_table<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
         epoch: Option<TYPES::Epoch>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>>;
+    ) -> Vec<PeerConfig<TYPES>>;
 
     /// Get Total Nodes from Membership implementation.
     fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
@@ -105,7 +106,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
         membership: &MEMBERSHIP,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
+    ) -> Option<PeerConfig<TYPES>>;
 
     /// Get the commitment which was voted on
     fn data(&self) -> &Self::Voteable;
@@ -253,3 +254,72 @@ impl<
 
 /// Mapping of commitments to vote tokens by key.
 type VoteMap2<COMMITMENT, PK, SIG> = HashMap<COMMITMENT, (U256, BTreeMap<PK, (SIG, COMMITMENT)>)>;
+
+/// Accumulator for light client state update vote
+#[allow(clippy::type_complexity)]
+pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
+    pub vote_outcomes: HashMap<
+        LightClientState,
+        (
+            U256,
+            HashMap<
+                TYPES::StateSignatureKey,
+                <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+            >,
+        ),
+    >,
+}
+
+impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
+    /// Add a vote to the total accumulated votes for the given epoch.
+    /// Returns the accumulator or the certificate if we
+    /// have accumulated enough votes to exceed the threshold for creating a certificate.
+    pub fn accumulate(
+        &mut self,
+        epoch: TYPES::Epoch,
+        vote: &LightClientStateUpdateVote<TYPES>,
+        key: &TYPES::StateSignatureKey,
+        stake_table: &[PeerConfig<TYPES>],
+        threshold: U256,
+    ) -> Option<LightClientStateUpdateCertificate<TYPES>> {
+        // Find the signer
+        if let Some(key_index) = stake_table
+            .iter()
+            .position(|config| &config.state_ver_key == key)
+        {
+            // Verify the vote validity
+            let state_msg = (&vote.light_client_state).into();
+            if !key.verify_state_sig(&vote.signature, &state_msg) {
+                error!("Invalid light client state update vote {:?}", vote);
+                return None;
+            }
+            let (total_stake_casted, vote_map) = self
+                .vote_outcomes
+                .entry(vote.light_client_state.clone())
+                .or_insert_with(|| (U256::from(0), HashMap::new()));
+
+            // Check for duplicate vote
+            if vote_map.contains_key(key) {
+                tracing::warn!("Duplicate vote (key: {:?}, vote: {:?})", key, vote);
+                return None;
+            }
+
+            *total_stake_casted += stake_table[key_index].stake_table_entry.stake();
+            vote_map.insert(key.clone(), vote.signature.clone());
+
+            if *total_stake_casted >= threshold {
+                return Some(LightClientStateUpdateCertificate {
+                    epoch,
+                    light_client_state: vote.light_client_state.clone(),
+                    signatures: Vec::from_iter(
+                        vote_map.iter().map(|(k, v)| (k.clone(), v.clone())),
+                    ),
+                });
+            }
+            None
+        } else {
+            error!("Light client state update vote with invalid key {:?}", key);
+            None
+        }
+    }
+}

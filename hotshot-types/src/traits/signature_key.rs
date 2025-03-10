@@ -409,4 +409,7 @@ pub trait StateSignatureKey:
         signature: &Self::StateSignature,
         state: &LightClientStateMsg,
     ) -> bool;
+
+    /// Generate a new key pair
+    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey);
 }

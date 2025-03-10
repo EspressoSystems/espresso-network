@@ -15,7 +15,6 @@ use hotshot_task::{
     dependency_task::{DependencyTask, HandleDepOutput},
     task::TaskState,
 };
-use hotshot_types::StakeTableEntries;
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
     data::{Leaf2, QuorumProposalWrapper},
@@ -33,6 +32,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
 };
+use hotshot_types::{traits::signature_key::StateSignatureKey, StakeTableEntries};
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
 use tracing::instrument;
@@ -98,6 +98,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Signature key for light client state
+    pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -282,6 +285,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             vid_share,
             false,
             self.epoch_height,
+            &self.state_private_key,
         )
         .await
         {
@@ -338,6 +342,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Signature key for light client state
+    pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -443,6 +450,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 id: self.id,
                 epoch_height: self.epoch_height,
                 consensus_metrics: Arc::clone(&self.consensus_metrics),
+                state_private_key: self.state_private_key.clone(),
             },
         );
         self.vote_dependencies
@@ -784,6 +792,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             updated_vid,
             is_vote_leaf_extended,
             self.epoch_height,
+            &self.state_private_key,
         )
         .await
         .context(|e| debug!("Failed to submit vote; error = {}", e))

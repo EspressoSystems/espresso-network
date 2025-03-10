@@ -14,7 +14,7 @@ use crate::{
     event::Event,
     traits::{
         node_implementation::{NodeImplementation, NodeType},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
     },
 };
 
@@ -33,6 +33,11 @@ pub trait ConsensusApi<TYPES: NodeType, I: NodeImplementation<TYPES>>: Send + Sy
 
     /// Get a reference to the private key.
     fn private_key(&self) -> &<TYPES::SignatureKey as SignatureKey>::PrivateKey;
+
+    /// Get a reference to the light client signing key.
+    fn state_private_key(
+        &self,
+    ) -> &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey;
 
     /// Notify the system of an event within `hotshot-consensus`.
     async fn send_event(&self, event: Event<TYPES>);

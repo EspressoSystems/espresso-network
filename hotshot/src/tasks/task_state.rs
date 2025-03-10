@@ -232,6 +232,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
         Self {
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
+            state_private_key: handle.state_private_key().clone(),
             consensus: OuterConsensus::new(consensus),
             instance_state: handle.hotshot.instance_state(),
             latest_voted_view: handle.cur_view().await,
@@ -315,6 +316,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             network: Arc::clone(&handle.hotshot.network),
             membership: Arc::clone(&handle.hotshot.memberships),
             vote_collectors: BTreeMap::default(),
+            extended_quorum_vote_collectors: BTreeMap::default(),
             next_epoch_vote_collectors: BTreeMap::default(),
             timeout_vote_collectors: BTreeMap::default(),
             cur_view: handle.cur_view().await,

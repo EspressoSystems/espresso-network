@@ -19,7 +19,7 @@ use hotshot_types::StakeTableEntries;
 use hotshot_types::{
     consensus::OuterConsensus,
     message::UpgradeLock,
-    simple_certificate::{QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{ExtendedQuorumCertificate, QuorumCertificate2, UpgradeCertificate},
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
@@ -553,7 +553,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let keep_view = TYPES::View::new(view.saturating_sub(1));
                 self.cancel_tasks(keep_view);
             }
-            HotShotEvent::HighQcSend(qc, ..) | HotShotEvent::ExtendedQcSend(qc, ..) => {
+            HotShotEvent::HighQcSend(qc, ..)
+            | HotShotEvent::ExtendedQcSend(ExtendedQuorumCertificate { qc, .. }, ..) => {
                 ensure!(qc.view_number() > self.highest_qc.view_number());
                 let cert_epoch_number = qc.data.epoch;
 

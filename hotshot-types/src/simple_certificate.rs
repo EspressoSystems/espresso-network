@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     data::serialize_signature2,
+    light_client::LightClientState,
     message::UpgradeLock,
     simple_vote::{
         DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
@@ -32,7 +33,7 @@ use crate::{
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType, Versions},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
     },
     vote::{Certificate, HasViewNumber},
     PeerConfig, StakeTableEntries,
@@ -193,7 +194,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
         membership: &MEMBERSHIP,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<PeerConfig<TYPES>> {
         membership.da_stake(pub_key, epoch)
     }
 
@@ -201,7 +202,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     fn stake_table<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
         epoch: Option<TYPES::Epoch>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Vec<PeerConfig<TYPES>> {
         membership.da_stake_table(epoch)
     }
     /// Proxy's to `Membership.da_total_nodes`
@@ -282,7 +283,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
         membership: &MEMBERSHIP,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<PeerConfig<TYPES>> {
         membership.da_stake(pub_key, epoch)
     }
 
@@ -290,7 +291,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     fn stake_table<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
         epoch: Option<TYPES::Epoch>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Vec<PeerConfig<TYPES>> {
         membership.da_stake_table(epoch)
     }
     /// Proxy's to `Membership.da_total_nodes`
@@ -380,14 +381,14 @@ impl<
         membership: &MEMBERSHIP,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<PeerConfig<TYPES>> {
         membership.stake(pub_key, epoch)
     }
 
     fn stake_table<MEMBERSHIP: Membership<TYPES>>(
         membership: &MEMBERSHIP,
         epoch: Option<TYPES::Epoch>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Vec<PeerConfig<TYPES>> {
         membership.stake_table(epoch)
     }
 
@@ -788,3 +789,73 @@ pub type ViewSyncFinalizeCertificate2<TYPES> =
 /// Type alias for a `UpgradeCertificate`, which is a `SimpleCertificate` of `UpgradeProposalData`
 pub type UpgradeCertificate<TYPES> =
     SimpleCertificate<TYPES, UpgradeProposalData<TYPES>, UpgradeThreshold>;
+
+/// Type for light client state update certificate
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+pub struct LightClientStateUpdateCertificate<TYPES: NodeType> {
+    /// The epoch of the light client state
+    pub epoch: TYPES::Epoch,
+    /// Light client state for epoch transition
+    pub light_client_state: LightClientState,
+    /// Signatures to the light client state
+    pub signatures: Vec<(
+        TYPES::StateSignatureKey,
+        <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+    )>,
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for LightClientStateUpdateCertificate<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        TYPES::View::new(self.light_client_state.view_number)
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for LightClientStateUpdateCertificate<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        Some(self.epoch)
+    }
+}
+
+impl<TYPES: NodeType> LightClientStateUpdateCertificate<TYPES> {
+    pub fn genesis() -> Self {
+        Self {
+            epoch: TYPES::Epoch::genesis(),
+            light_client_state: Default::default(),
+            signatures: vec![],
+        }
+    }
+}
+
+/// Type for light client state update certificate
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+#[serde(bound = "QuorumCertificate2<TYPES>: Serialize + for<'a> Deserialize<'a>")]
+pub struct ExtendedQuorumCertificate<TYPES: NodeType> {
+    /// The quorum certificate
+    pub qc: QuorumCertificate2<TYPES>,
+    /// The light client state update certificate
+    pub state_cert: LightClientStateUpdateCertificate<TYPES>,
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for ExtendedQuorumCertificate<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.qc.view_number()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for ExtendedQuorumCertificate<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.qc.epoch()
+    }
+}
+
+impl<TYPES: NodeType> ExtendedQuorumCertificate<TYPES> {
+    pub async fn genesis<V: Versions>(
+        validated_state: &TYPES::ValidatedState,
+        instance_state: &TYPES::InstanceState,
+    ) -> Self {
+        Self {
+            qc: QuorumCertificate2::<TYPES>::genesis::<V>(validated_state, instance_state).await,
+            state_cert: LightClientStateUpdateCertificate::<TYPES>::genesis(),
+        }
+    }
+}

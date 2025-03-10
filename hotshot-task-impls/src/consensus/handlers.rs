@@ -10,7 +10,8 @@ use async_broadcast::{Receiver, Sender};
 use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
-    simple_vote::{HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
+    simple_certificate::ExtendedQuorumCertificate,
+    simple_vote::{ExtendedQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
@@ -28,7 +29,7 @@ use crate::{
     consensus::Versions,
     events::HotShotEvent,
     helpers::{broadcast_event, wait_for_next_epoch_qc},
-    vote_collection::handle_vote,
+    vote_collection::{handle_extended_quorum_vote, handle_vote},
 };
 
 /// Handle a `QuorumVoteRecv` event.
@@ -107,6 +108,76 @@ pub(crate) async fn handle_quorum_vote_recv<
     Ok(())
 }
 
+/// Handle a `ExtendedQuorumVoteRecv` event.
+pub(crate) async fn handle_extended_quorum_vote_recv<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
+    vote: &ExtendedQuorumVote<TYPES>,
+    event: Arc<HotShotEvent<TYPES>>,
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+) -> Result<()> {
+    let in_transition = task_state
+        .consensus
+        .read()
+        .await
+        .is_high_qc_for_last_block();
+    let we_are_leader = task_state
+        .membership
+        .read()
+        .await
+        .leader(vote.view_number() + 1, vote.vote.data.epoch)?
+        == task_state.public_key;
+    ensure!(
+        in_transition && we_are_leader,
+        info!(
+            "We should be the leader and in epoch transition for view {:?}",
+            vote.view_number() + 1
+        )
+    );
+
+    handle_extended_quorum_vote(
+        &mut task_state.extended_quorum_vote_collectors,
+        vote,
+        task_state.public_key.clone(),
+        &task_state.membership,
+        vote.vote.data.epoch,
+        task_state.id,
+        &event,
+        sender,
+        &task_state.upgrade_lock,
+    )
+    .await?;
+
+    if let Some(vote_epoch) = vote.epoch() {
+        // If the vote sender belongs to the next epoch, collect it separately to form the second QC
+        let has_stake = task_state
+            .membership
+            .read()
+            .await
+            .has_stake(&vote.vote.signing_key(), Some(vote_epoch + 1));
+        if has_stake {
+            handle_vote(
+                &mut task_state.next_epoch_vote_collectors,
+                &vote.vote.clone().into(),
+                task_state.public_key.clone(),
+                &task_state.membership,
+                vote.vote.data.epoch,
+                task_state.id,
+                &event,
+                sender,
+                &task_state.upgrade_lock,
+                EpochTransitionIndicator::InTransition,
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Handle a `TimeoutVoteRecv` event.
 pub(crate) async fn handle_timeout_vote_recv<
     TYPES: NodeType,
@@ -169,6 +240,8 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
 
     let consensus_reader = task_state.consensus.read().await;
     let high_qc = consensus_reader.high_qc().clone();
+    // The light client state update cert will be formed along with the eqc.
+    let state_cert = consensus_reader.state_cert().clone();
     let is_eqc = consensus_reader.is_leaf_extended(high_qc.data.leaf_commit);
     drop(consensus_reader);
 
@@ -190,9 +263,13 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             high_qc.epoch(),
             task_state.id
         );
+        let eqc = ExtendedQuorumCertificate {
+            qc: high_qc,
+            state_cert,
+        };
         broadcast_event(
             Arc::new(HotShotEvent::ExtendedQcSend(
-                high_qc,
+                eqc,
                 next_epoch_high_qc,
                 task_state.public_key.clone(),
             )),

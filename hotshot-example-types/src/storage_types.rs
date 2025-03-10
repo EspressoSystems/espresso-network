@@ -21,7 +21,10 @@ use hotshot_types::{
     },
     event::HotShotAction,
     message::Proposal,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        UpgradeCertificate,
+    },
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         storage::Storage,
@@ -56,6 +59,7 @@ pub struct TestStorageState<TYPES: NodeType> {
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
     action: TYPES::View,
     epoch: Option<TYPES::Epoch>,
+    state_cert: Option<hotshot_types::simple_certificate::LightClientStateUpdateCertificate<TYPES>>,
 }
 
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
@@ -73,6 +77,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             high_qc2: None,
             action: TYPES::View::genesis(),
             epoch: None,
+            state_cert: None,
         }
     }
 }
@@ -135,6 +140,10 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
     }
     pub async fn vids_cloned(&self) -> VidShares2<TYPES> {
         self.inner.read().await.vid2.clone()
+    }
+
+    pub async fn state_cert_cloned(&self) -> Option<LightClientStateUpdateCertificate<TYPES>> {
+        self.inner.read().await.state_cert.clone()
     }
 }
 

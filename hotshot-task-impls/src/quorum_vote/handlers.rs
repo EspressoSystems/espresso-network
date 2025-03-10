@@ -16,12 +16,14 @@ use hotshot_types::{
     drb::{compute_drb_result, DrbResult},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    simple_vote::{HasEpoch, QuorumData2, QuorumVote2},
+    simple_vote::{
+        ExtendedQuorumVote, HasEpoch, LightClientStateUpdateVote, QuorumData2, QuorumVote2,
+    },
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
         ValidatedState,
     },
@@ -628,6 +630,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
     epoch_height: u64,
+    state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 ) -> Result<()> {
     let epoch_number = option_epoch_from_block_number::<TYPES>(
         leaf.with_epoch,
@@ -677,8 +680,28 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     if extended_vote {
         tracing::debug!("sending extended vote to everybody",);
+        // TODO(Chengyu): add light client state
+        let light_client_state = leaf
+            .block_header()
+            .get_light_client_state()
+            .wrap()
+            .context(error!("Failed to generate light client state"))?;
+        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
+            state_private_key,
+            &(&light_client_state).into(),
+        )
+        .wrap()
+        .context(error!("Failed to sign the light client state"))?;
+        let state_vote = LightClientStateUpdateVote {
+            epoch: epoch_number.unwrap(),
+            light_client_state,
+            signature,
+        };
         broadcast_event(
-            Arc::new(HotShotEvent::ExtendedQuorumVoteSend(vote)),
+            Arc::new(HotShotEvent::ExtendedQuorumVoteSend(ExtendedQuorumVote {
+                vote,
+                state_vote,
+            })),
             &sender,
         )
         .await;

@@ -229,4 +229,13 @@ impl StateSignatureKey for SchnorrPubKey {
     ) -> bool {
         SchnorrSignatureScheme::verify(&(), self, state, signature).is_ok()
     }
+
+    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey) {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&seed);
+        hasher.update(&index.to_le_bytes());
+        let new_seed = *hasher.finalize().as_bytes();
+        let kp = jf_signature::schnorr::KeyPair::generate(&mut ChaCha20Rng::from_seed(new_seed));
+        (kp.ver_key(), kp.sign_key())
+    }
 }

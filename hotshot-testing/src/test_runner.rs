@@ -31,7 +31,7 @@ use hotshot_types::{
     consensus::ConsensusMetricsValue,
     constants::EVENT_CHANNEL_SIZE,
     data::Leaf2,
-    simple_certificate::QuorumCertificate2,
+    simple_certificate::{LightClientStateUpdateCertificate, QuorumCertificate2},
     traits::{
         election::Membership,
         network::ConnectedNetwork,
@@ -196,6 +196,7 @@ where
             async_delay_config: launcher.metadata.async_delay_config,
             restart_contexts: HashMap::new(),
             channel_generator: launcher.resource_generators.channel_generator,
+            state_cert: LightClientStateUpdateCertificate::<TYPES>::genesis(),
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I, V>>::new(
             spinning_task_state,
@@ -591,18 +592,20 @@ where
         network: Network<TYPES, I>,
         memberships: TYPES::Membership,
         initializer: HotShotInitializer<TYPES>,
-        config: HotShotConfig<TYPES::SignatureKey>,
-        validator_config: ValidatorConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
+        validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> Arc<SystemContext<TYPES, I, V>> {
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
         let public_key = validator_config.public_key.clone();
+        let state_private_key = validator_config.state_private_key.clone();
 
         SystemContext::new(
             public_key,
             private_key,
+            state_private_key,
             node_id,
             config,
             Arc::new(RwLock::new(memberships)),
@@ -624,8 +627,8 @@ where
         network: Network<TYPES, I>,
         memberships: Arc<RwLock<TYPES::Membership>>,
         initializer: HotShotInitializer<TYPES>,
-        config: HotShotConfig<TYPES::SignatureKey>,
-        validator_config: ValidatorConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
+        validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
         marketplace_config: MarketplaceConfig<TYPES, I>,
         internal_channel: (
@@ -637,10 +640,12 @@ where
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
         let public_key = validator_config.public_key.clone();
+        let state_private_key = validator_config.state_private_key.clone();
 
         SystemContext::new_from_channels(
             public_key,
             private_key,
+            state_private_key,
             node_id,
             config,
             memberships,
@@ -676,7 +681,7 @@ pub struct LateNodeContextParameters<TYPES: NodeType, I: TestableNodeImplementat
     pub memberships: TYPES::Membership,
 
     /// The config associated with this node.
-    pub config: HotShotConfig<TYPES::SignatureKey>,
+    pub config: HotShotConfig<TYPES>,
 
     /// The marketplace config for this node.
     pub marketplace_config: MarketplaceConfig<TYPES, I>,

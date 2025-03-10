@@ -76,7 +76,14 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
             return;
         };
-        match form_light_client_state(leaf) {
+        let view_number = leaf.view_number().u64();
+        let block_height = leaf.height();
+        let mut block_comm_root_bytes = vec![];
+        if let Err(e) = leaf.block_comm_root().serialize(&mut block_comm_root_bytes) {
+            tracing::error!("Error serializing block commitment root: {:?}", e);
+            return;
+        }
+        match LightClientState::new(view_number, block_height, &block_comm_root_bytes) {
             Ok(state) => {
                 let signature = self.sign_new_state(&state).await;
                 tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);
@@ -135,34 +142,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         );
         signature
     }
-}
-
-fn hash_bytes_to_field(bytes: &[u8]) -> Result<CircuitField, RescueError> {
-    // make sure that `mod_order` won't happen.
-    let bytes_len = ((<CircuitField as PrimeField>::MODULUS_BIT_SIZE + 7) / 8 - 1) as usize;
-    let elem = bytes
-        .chunks(bytes_len)
-        .map(CircuitField::from_le_bytes_mod_order)
-        .collect::<Vec<_>>();
-    Ok(VariableLengthRescueCRHF::<_, 1>::evaluate(elem)?[0])
-}
-
-fn form_light_client_state(leaf: &Leaf2) -> anyhow::Result<LightClientState> {
-    let header = leaf.block_header();
-    let mut block_comm_root_bytes = vec![];
-    header
-        .block_merkle_tree_root()
-        .serialize_compressed(&mut block_comm_root_bytes)?;
-
-    let mut fee_ledger_comm_bytes = vec![];
-    header
-        .fee_merkle_tree_root()
-        .serialize_compressed(&mut fee_ledger_comm_bytes)?;
-    Ok(LightClientState {
-        view_number: leaf.view_number().u64() as usize,
-        block_height: leaf.height() as usize,
-        block_comm_root: hash_bytes_to_field(&block_comm_root_bytes)?,
-    })
 }
 
 /// A rolling in-memory storage for the most recent light client state signatures.
