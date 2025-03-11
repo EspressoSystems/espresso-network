@@ -16,10 +16,9 @@ contract LightClientMock is LC {
     constructor(
         LC.LightClientState memory genesis,
         LC.StakeTableState memory genesisStakeTableState,
-        uint32 maxHistorySeconds,
-        uint64 blocksPerEpoch
+        uint32 maxHistorySeconds
     ) LC() {
-        _initializeState(genesis, genesisStakeTableState, maxHistorySeconds, blocksPerEpoch);
+        _initializeState(genesis, genesisStakeTableState, maxHistorySeconds);
     }
 
     /// @dev Directly mutate finalizedState variable for test
@@ -28,36 +27,22 @@ contract LightClientMock is LC {
     }
 
     /// @dev override the production-implementation with test VK.
-    function verifyProof(
-        LC.LightClientState memory state,
-        StakeTableState memory nextStakeTable,
-        IPlonkVerifier.PlonkProof memory proof
-    ) internal view override {
+    function verifyProof(LC.LightClientState memory state, IPlonkVerifier.PlonkProof memory proof)
+        internal
+        view
+        override
+    {
         IPlonkVerifier.VerifyingKey memory vk = VkLib.getVk();
 
         // Prepare the public input
-        uint256[11] memory publicInput;
+        uint256[7] memory publicInput;
         publicInput[0] = uint256(state.viewNum);
         publicInput[1] = uint256(state.blockHeight);
         publicInput[2] = BN254.ScalarField.unwrap(state.blockCommRoot);
-        publicInput[3] = BN254.ScalarField.unwrap(votingStakeTableState.blsKeyComm);
-        publicInput[4] = BN254.ScalarField.unwrap(votingStakeTableState.schnorrKeyComm);
-        publicInput[5] = BN254.ScalarField.unwrap(votingStakeTableState.amountComm);
-        publicInput[6] = votingStakeTableState.threshold;
-
-        if (isLastBlockInEpoch(state.blockHeight)) {
-            // during epoch change: use the next stake table
-            publicInput[7] = BN254.ScalarField.unwrap(nextStakeTable.blsKeyComm);
-            publicInput[8] = BN254.ScalarField.unwrap(nextStakeTable.schnorrKeyComm);
-            publicInput[9] = BN254.ScalarField.unwrap(nextStakeTable.amountComm);
-            publicInput[10] = nextStakeTable.threshold;
-        } else {
-            // use the previous stake table, effectively force nextStakeTable == votingStakeTable
-            publicInput[7] = BN254.ScalarField.unwrap(votingStakeTableState.blsKeyComm);
-            publicInput[8] = BN254.ScalarField.unwrap(votingStakeTableState.schnorrKeyComm);
-            publicInput[9] = BN254.ScalarField.unwrap(votingStakeTableState.amountComm);
-            publicInput[10] = votingStakeTableState.threshold;
-        }
+        publicInput[3] = BN254.ScalarField.unwrap(genesisStakeTableState.blsKeyComm);
+        publicInput[4] = BN254.ScalarField.unwrap(genesisStakeTableState.schnorrKeyComm);
+        publicInput[5] = BN254.ScalarField.unwrap(genesisStakeTableState.amountComm);
+        publicInput[6] = genesisStakeTableState.threshold;
 
         if (!PlonkVerifier.verify(vk, publicInput, proof)) {
             revert InvalidProof();
@@ -93,9 +78,5 @@ contract LightClientMock is LC {
         return hotShotDown
             ? blockNumber - frozenL1Height > threshold
             : super.lagOverEscapeHatchThreshold(blockNumber, threshold);
-    }
-
-    function setBlocksPerEpoch(uint64 newBlocksPerEpoch) public {
-        _blocksPerEpoch = newBlocksPerEpoch;
     }
 }

@@ -10,42 +10,24 @@ import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 
 // Target contract
 import { LightClient as LC } from "../src/LightClient.sol";
-import { LightClientCommonTest } from "./LightClient.t.sol";
+import { LightClientCommonTest } from "./LightClientV2.t.sol";
 
 contract LightClientBench is LightClientCommonTest {
-    LC.LightClientState state;
-    LC.StakeTableState nextStakeTable;
-    V.PlonkProof proof;
-
-    function setUp() public {
+    constructor() {
         init();
-        // Generating a few consecutive states and proofs
-        string[] memory cmds = new string[](3);
-        cmds[0] = "diff-test";
-        cmds[1] = "mock-consecutive-finalized-states";
-        cmds[2] = vm.toString(STAKE_TABLE_CAPACITY / 2);
-
-        bytes memory result = vm.ffi(cmds);
-        (
-            LC.LightClientState[] memory states,
-            LC.StakeTableState[] memory nextStakeTables,
-            V.PlonkProof[] memory proofs
-        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
-
-        state = states[0];
-        proof = proofs[0];
-        nextStakeTable = nextStakeTables[0];
     }
 
     /// @dev for benchmarking purposes only
     function testCorrectUpdateBench() external {
         vm.pauseGasMetering();
-        LC.LightClientState memory st = state;
-        LC.StakeTableState memory nextSTState = nextStakeTable;
-        V.PlonkProof memory pf = proof;
+        (
+            LC.LightClientState memory newState,
+            LC.StakeTableState memory nextStakeTable,
+            V.PlonkProof memory newProof
+        ) = genStateProof();
 
-        vm.prank(permissionedProver);
+        vm.prank(prover);
         vm.resumeGasMetering();
-        lc.newFinalizedState(st, nextSTState, pf);
+        lc.newFinalizedState(newState, nextStakeTable, newProof);
     }
 }
