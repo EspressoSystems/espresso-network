@@ -256,8 +256,9 @@ pub mod mock {
 
     use super::*;
     use crate::{
-        retain_accounts, BackoffParams, BlockMerkleTree, FeeAccount, FeeMerkleCommitment,
-        FeeMerkleTree, Leaf2,
+        retain_accounts,
+        v0_1::{RewardAccount, RewardMerkleCommitment, RewardMerkleTree},
+        BackoffParams, BlockMerkleTree, FeeAccount, FeeMerkleCommitment, FeeMerkleTree, Leaf2,
     };
 
     #[derive(Debug, Clone, Default)]
@@ -332,6 +333,18 @@ pub mod mock {
             _commitment: Commitment<ChainConfig>,
         ) -> anyhow::Result<ChainConfig> {
             Ok(ChainConfig::default())
+        }
+
+        async fn try_fetch_reward_accounts(
+            &self,
+            _retry: usize,
+            _instance: &NodeState,
+            _height: u64,
+            _view: ViewNumber,
+            _reward_merkle_tree_root: RewardMerkleCommitment,
+            _accounts: &[RewardAccount],
+        ) -> anyhow::Result<RewardMerkleTree> {
+            anyhow::bail!("unimplemented")
         }
 
         fn backoff(&self) -> &BackoffParams {

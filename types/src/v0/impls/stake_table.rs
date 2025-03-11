@@ -6,14 +6,16 @@ use std::{
     sync::Arc,
 };
 
-use alloy::{primitives::Address, rpc::types::Log};
+use alloy::{
+    primitives::{Address, U256},
+    rpc::types::Log,
+};
 use anyhow::Context;
 use async_trait::async_trait;
 use contract_bindings_alloy::{
     permissionedstaketable::PermissionedStakeTable::StakersUpdated,
     staketable::StakeTable::{Delegated, Undelegated, ValidatorExit, ValidatorRegistered},
 };
-use ethers::types::U256;
 use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::{BLSPubKey, SignatureKey as _};
 use hotshot_contract_adapter::stake_table::{
@@ -126,7 +128,7 @@ pub fn from_l1_events(
                         account,
                         stake_table_key: staker,
                         state_ver_key,
-                        stake: 0,
+                        stake: U256::from(0_u64),
                         commission,
                         delegators: HashMap::default(),
                     },
@@ -143,16 +145,14 @@ pub fn from_l1_events(
             DelegationChange::Add(delegator) => {
                 let account = delegator.delegator;
                 let validator = delegator.validator;
-                let amount = delegator.amount.to_ethers().as_u64();
+                let amount = delegator.amount;
 
                 // TODO: return error if the validator is not in the stake table
                 if let Some(validator_entry) = validators.get_mut(&validator) {
                     // Increase stake
                     validator_entry.stake += amount;
                     // Add delegator to the set
-                    validator_entry
-                        .delegators
-                        .insert((account, validator), amount);
+                    validator_entry.delegators.insert(account, amount);
                 }
             },
             DelegationChange::Remove(undelegated) => {
@@ -164,25 +164,21 @@ pub fn from_l1_events(
                     // error if stake < undelegated.amount
                     validator_entry.stake = validator_entry
                         .stake
-                        .checked_sub(undelegated.amount.to_ethers().as_u64())
+                        .checked_sub(undelegated.amount)
                         .unwrap();
 
                     // decrease delegator stake
 
                     let delegator_stake = validator_entry
                         .delegators
-                        .get_mut(&(undelegated.delegator, undelegated.validator))
+                        .get_mut(&undelegated.delegator)
                         .unwrap();
 
-                    *delegator_stake = delegator_stake
-                        .checked_sub(undelegated.amount.to_ethers().as_u64())
-                        .unwrap();
+                    *delegator_stake = delegator_stake.checked_sub(undelegated.amount).unwrap();
 
-                    if *delegator_stake == 0 {
+                    if delegator_stake.is_zero() {
                         // if delegator stake is 0, remove from set
-                        validator_entry
-                            .delegators
-                            .remove(&(undelegated.delegator, undelegated.validator));
+                        validator_entry.delegators.remove(&undelegated.delegator);
                     }
                 }
             },
@@ -319,7 +315,7 @@ impl EpochCommittees {
                     PeerConfig {
                         stake_table_entry: BLSPubKey::stake_table_entry(
                             &v.stake_table_key,
-                            v.stake,
+                            v.stake.to_ethers().as_u64(),
                         ),
                         state_ver_key: v.state_ver_key.clone(),
                     },
@@ -384,21 +380,27 @@ impl EpochCommittees {
         // For each eligible leader, get the stake table entry
         let eligible_leaders: Vec<_> = committee_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| {
+                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
+            })
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| {
+                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
+            })
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let da_members: Vec<_> = da_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| {
+                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
+            })
             .cloned()
             .collect();
 
@@ -571,14 +573,14 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Check if a node has stake in the committee
     fn has_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> bool {
         self.stake(pub_key, epoch)
-            .map(|x| x.stake_table_entry.stake() > U256::zero())
+            .map(|x| x.stake_table_entry.stake() > ethers::types::U256::zero())
             .unwrap_or_default()
     }
 
     /// Check if a node has stake in the committee
     fn has_da_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> bool {
         self.da_stake(pub_key, epoch)
-            .map(|x| x.stake_table_entry.stake() > U256::zero())
+            .map(|x| x.stake_table_entry.stake() > ethers::types::U256::zero())
             .unwrap_or_default()
     }
 

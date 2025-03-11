@@ -2,8 +2,8 @@ use std::ops::Add;
 
 use anyhow::bail;
 use committable::{Commitment, Committable};
-use ethers::types::{Address, Reward};
-use ethers_conv::ToAlloy;
+use ethers::types::{Address, Reward, U256};
+use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
@@ -30,7 +30,11 @@ use super::{
     auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
-    v0_1::{RewardAccount, RewardAmount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
+    reward,
+    v0_1::{
+        block_reward, RewardAccount, RewardAmount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT,
+    },
+    v0_3::StakerConfig,
     BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
@@ -209,6 +213,22 @@ impl ValidatedState {
             .collect()
     }
 
+    pub fn forgotten_reward_accounts(
+        &self,
+        accounts: impl IntoIterator<Item = RewardAccount>,
+    ) -> Vec<RewardAccount> {
+        accounts
+            .into_iter()
+            .unique()
+            .filter(|account| {
+                self.reward_merkle_tree
+                    .lookup(*account)
+                    .expect_not_in_memory()
+                    .is_ok()
+            })
+            .collect()
+    }
+
     /// Check if the merkle tree is available
     pub fn need_to_fetch_blocks_mt_frontier(&self) -> bool {
         let num_leaves = self.block_merkle_tree.num_leaves();
@@ -265,6 +285,80 @@ impl ValidatedState {
             self.charge_fee(fee_info, recipient)?;
             delta.fees_delta.extend([fee_info.account, recipient]);
         }
+        Ok(())
+    }
+
+    pub fn distribute_rewards(
+        &mut self,
+        delta: &mut Delta,
+        staker_config: StakerConfig<BLSPubKey>,
+    ) -> anyhow::Result<()> {
+        let commission = staker_config.commission;
+
+        let leader_reward =
+            RewardAmount::from((U256::from(commission) * block_reward().0) / U256::from(10_000));
+        let mut reward_state = self.reward_merkle_tree.clone();
+        reward_state = reward_state.persistent_update_with(
+            RewardAccount(staker_config.account.to_ethers()),
+            |balance| {
+                let balance = balance.copied();
+
+                match balance.unwrap_or_default().0.checked_add(leader_reward.0) {
+                    Some(updated) => Some(updated.into()),
+                    None => {
+                        tracing::warn!(
+                            "overflowed reward balance for account {}",
+                            staker_config.account
+                        );
+                        balance
+                    },
+                }
+            },
+        )?;
+
+        let total_stake = staker_config.stake;
+
+        for (delegator_address, delegator_stake) in staker_config.delegators.iter() {
+            let delegator_reward = RewardAmount::from(
+                delegator_stake.to_ethers() * U256::from(100) / total_stake.to_ethers(),
+            );
+            reward_state = reward_state.persistent_update_with(
+                RewardAccount(delegator_address.to_ethers()),
+                |balance| {
+                    let balance = balance.copied();
+
+                    match balance
+                        .unwrap_or_default()
+                        .0
+                        .checked_add(delegator_reward.0)
+                    {
+                        Some(updated) => Some(updated.into()),
+                        None => {
+                            tracing::warn!(
+                                "overflowed reward balance for account {}",
+                                delegator_address
+                            );
+                            balance
+                        },
+                    }
+                },
+            )?;
+        }
+
+        self.reward_merkle_tree = reward_state;
+
+        delta
+            .rewards_delta
+            .insert(RewardAccount(staker_config.account.to_ethers()));
+
+        delta.rewards_delta.extend(
+            staker_config
+                .delegators
+                .keys()
+                .map(|delegator_address| RewardAccount(delegator_address.to_ethers()))
+                .collect::<Vec<_>>(),
+        );
+
         Ok(())
     }
     /// Charge a fee to an account, transferring the funds to the fee recipient account.
@@ -813,6 +907,7 @@ impl ValidatedState {
 
         let membership = instance.membership.read().await;
 
+        // TODO: make a function for this
         if version >= EpochVersion::version() {
             let height = proposed_header.block_number();
             let epoch_height = instance.epoch_height.unwrap();
@@ -823,7 +918,48 @@ impl ValidatedState {
                 .unwrap();
 
             let validator = membership.get_leader_staker_config(&epoch, leader).unwrap();
+            let mut reward_accounts = vec![validator.account.to_ethers().into()];
+            let delegators = validator
+                .delegators
+                .keys()
+                .cloned()
+                .into_iter()
+                .map(|a| a.to_ethers().into())
+                .collect::<Vec<RewardAccount>>();
+
+            reward_accounts.extend(delegators.clone());
+            let missing_reward_accts = self.forgotten_reward_accounts(reward_accounts);
+
+            if !missing_reward_accts.is_empty() {
+                tracing::info!(
+                    parent_height,
+                    ?parent_view,
+                    ?missing_reward_accts,
+                    "fetching missing accounts from peers"
+                );
+
+                let missing_account_proofs = peers
+                    .fetch_reward_accounts(
+                        instance,
+                        parent_height,
+                        parent_view,
+                        validated_state.fee_merkle_tree.commitment(),
+                        missing_reward_accts,
+                    )
+                    .await?;
+
+                for proof in missing_account_proofs.iter() {
+                    proof
+                        .remember(&mut validated_state.reward_merkle_tree)
+                        .expect("proof previously verified");
+                }
+            }
+
             // apply rewards
+
+            validated_state
+                .distribute_rewards(&mut delta, validator)
+                .unwrap();
         }
 
         Ok((validated_state, delta))

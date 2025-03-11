@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::PubKey;
-use alloy::primitives::{map::HashSet, Address};
+use alloy::primitives::{map::HashSet, Address, U256};
 use derive_more::derive::{From, Into};
 use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::stake_table::NodeInfoJf;
@@ -32,10 +32,10 @@ pub struct StakerConfig<KEY: SignatureKey> {
     /// the peer's state public key
     pub state_ver_key: StateVerKey,
     /// the peer's stake
-    pub stake: u64,
+    pub stake: U256,
     // commission
     pub commission: u16,
-    pub delegators: HashMap<(Address, Address), u64>,
+    pub delegators: HashMap<Address, U256>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, std::hash::Hash, Clone, Debug, PartialEq, Eq)]
@@ -43,5 +43,5 @@ pub struct StakerConfig<KEY: SignatureKey> {
 pub struct Delegator {
     pub address: Address,
     pub validator: Address,
-    pub stake: u64,
+    pub stake: U256,
 }

@@ -16,6 +16,7 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Delta {
     pub fees_delta: HashSet<FeeAccount>,
+    pub rewards_delta: HashSet<RewardAccount>,
 }
 
 pub const BLOCK_MERKLE_TREE_HEIGHT: usize = 32;
@@ -86,16 +87,21 @@ pub struct RewardAccount(pub Address);
 #[display("{_0}")]
 pub struct RewardAmount(pub U256);
 
-fn block_reward(_block_height: u64) -> RewardAmount {
-    // rewards per year
-    let reward: u64 = ANNUAL_INFLATION / BLOCKS_PER_YEAR;
-    U256::from(reward).into()
+// This function is used to calculate the reward for a block
+// It does not currently take block height into account
+// The reward is currently fixed at 1.902 tokens at 3% inflation per block
+pub fn block_reward() -> RewardAmount {
+    U256::from(REWARD_PER_BLOCK).into()
 }
 
-pub const SUPPLY: u64 = 1000000000;
-pub const INFLATION: u64 = 300;
-pub const ANNUAL_INFLATION: u64 = SUPPLY * INFLATION / 100;
-pub const BLOCKS_PER_YEAR: u64 = 365 * 24 * 60 * 60 / 2;
+// 1 billion tokens with 18 decimals
+const TOTAL_SUPPLY: u128 = 1_000_000_000 * 10_u128.pow(18);
+const INFLATION_RATE: u128 = 300; // 3% in basis points
+const BLOCK_TIME_SECONDS: u128 = 2;
+const SECONDS_PER_YEAR: u128 = 60 * 60 * 24 * 365;
+const BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / BLOCK_TIME_SECONDS;
+
+const REWARD_PER_BLOCK: u128 = ((TOTAL_SUPPLY * INFLATION_RATE) / BLOCKS_PER_YEAR) as u128 / 10000;
 
 #[derive(Clone, Debug, Default)]
 pub struct RewardInfo {

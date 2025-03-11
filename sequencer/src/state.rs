@@ -70,7 +70,10 @@ async fn store_state_update(
         block_merkle_tree,
         ..
     } = state;
-    let Delta { fees_delta } = delta;
+    let Delta {
+        fees_delta,
+        rewards_delta,
+    } = delta;
 
     // Insert fee merkle tree nodes
     for delta in fees_delta {
