@@ -270,6 +270,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 // Optimistically calculate and update VID if we know that the primary network is down.
                 if self.network.is_primary_down() {
+                    let my_id = self.id;
                     let consensus =
                         OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
                     let pk = self.private_key.clone();
@@ -286,6 +287,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                         bail!("Not calculating VID, the node doesn't belong to the current epoch or the next epoch.");
                     };
 
+                    tracing::debug!(
+                        "Primary network is down. Optimistically calculate own VID share."
+                    );
                     let membership = membership.clone();
                     spawn(async move {
                         Consensus::calculate_and_update_vid::<V>(
@@ -309,6 +313,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                                     .or_else(|| epoch_map.get(&epoch_number.map(|e| e + 1)))
                             })
                         {
+                            tracing::debug!(
+                                "Primary network is down. Calculated own VID share, my id {:?}",
+                                my_id
+                            );
                             broadcast_event(
                                 Arc::new(HotShotEvent::VidShareRecv(
                                     public_key.clone(),

@@ -285,6 +285,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
                         &da_committee_for_view,
                         &public_key,
                         view,
+                        my_id,
                     )
                     .await
                     {
@@ -307,6 +308,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
     /// Handles main logic for the Request / Response of a vid share
     /// Make the request to get VID share to a DA member and wait for the response.
     /// Returns true if response received, otherwise false
+    #[allow(clippy::too_many_arguments)]
     async fn handle_vid_request_task(
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
         receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -315,7 +317,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         da_committee_for_view: &BTreeSet<<TYPES as NodeType>::SignatureKey>,
         public_key: &<TYPES as NodeType>::SignatureKey,
         view: TYPES::View,
+        id: u64,
     ) -> bool {
+        tracing::debug!("Sending VidRequestSend {:?}, my id {:?}", data_request, id);
         // First send request to a random DA member for the view
         broadcast_event(
             HotShotEvent::VidRequestSend(
@@ -338,6 +342,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         // Check if we got a result, if not we timed out
         if let Ok(Some(event)) = result {
             if let HotShotEvent::VidResponseRecv(sender_pub_key, proposal) = event.as_ref() {
+                tracing::debug!("Received VidResponseRecv {:?}, my id {:?}", proposal, id);
                 broadcast_event(
                     Arc::new(HotShotEvent::VidShareRecv(
                         sender_pub_key.clone(),
@@ -398,6 +403,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
             || consensus_reader.cur_view() > *view;
         if cancel {
             if let Some(vid_share) = maybe_vid_share {
+                tracing::debug!(
+                    "Canceling vid request but first send own vid share: {:?}",
+                    vid_share
+                );
                 broadcast_event(
                     Arc::new(HotShotEvent::VidShareRecv(
                         public_key.clone(),
