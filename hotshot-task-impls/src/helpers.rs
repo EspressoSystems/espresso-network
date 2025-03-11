@@ -22,13 +22,16 @@ use hotshot_types::{
     event::{Event, EventType, LeafInfo},
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        UpgradeCertificate,
+    },
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
         storage::Storage,
         BlockPayload, ValidatedState,
     },
@@ -40,6 +43,7 @@ use hotshot_types::{
     StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
+use primitive_types::U256;
 use tokio::time::timeout;
 use tracing::instrument;
 
@@ -994,5 +998,45 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
             .await
             .context(|e| warn!("Invalid next epoch certificate: {}", e))?;
     }
+    Ok(())
+}
+
+/// Validates qc's signatures and, if provided, validates next_epoch_qc's signatures and whether it
+/// corresponds to the provided high_qc.
+pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
+    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    membership_coordinator: &EpochMembershipCoordinator<TYPES>,
+) -> Result<()> {
+    let epoch_membership = membership_coordinator
+        .membership_for_epoch(state_cert.epoch())
+        .await?;
+
+    let membership_stake_table = epoch_membership.stake_table().await;
+    let membership_success_threshold = epoch_membership.success_threshold().await;
+
+    let mut state_key_map = HashMap::new();
+    membership_stake_table.into_iter().for_each(|config| {
+        state_key_map.insert(
+            config.state_ver_key.clone(),
+            config.stake_table_entry.stake(),
+        );
+    });
+
+    let mut accumulated_stake = U256::zero();
+    let state_msg = (&state_cert.light_client_state).into();
+    for (key, sig) in state_cert.signatures.iter() {
+        if let Some(stake) = state_key_map.get(key) {
+            accumulated_stake += *stake;
+            if !key.verify_state_sig(sig, &state_msg) {
+                bail!("Invalid light client state update certificate signature");
+            }
+        } else {
+            bail!("Invalid light client state update certificate signature");
+        }
+    }
+    if accumulated_stake < U256::from(membership_success_threshold.get()) {
+        bail!("Light client state update certificate does not meet the success threshold");
+    }
+
     Ok(())
 }

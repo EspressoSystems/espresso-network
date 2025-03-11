@@ -32,7 +32,10 @@ use self::handlers::{
 };
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, validate_qc_and_next_epoch_qc},
+    helpers::{
+        broadcast_event, validate_light_client_state_update_certificate,
+        validate_qc_and_next_epoch_qc,
+    },
     vote_collection::{ExtendedQuorumVoteCollectorsMap, VoteCollectorsMap},
 };
 
@@ -176,10 +179,23 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     return Ok(());
                 }
 
-                // TODO(Chengyu): verify the light client state in epoch transition qc.
+                if let Err(e) = validate_light_client_state_update_certificate(
+                    &eqc.state_cert,
+                    &self.membership_coordinator,
+                )
+                .await
+                {
+                    tracing::error!(
+                        "Received invalid light client state update certificate: {}",
+                        e
+                    );
+                    return Ok(());
+                }
 
                 let mut consensus_writer = self.consensus.write().await;
-                let high_qc_updated = consensus_writer.update_high_qc(eqc.qc.clone()).is_ok();
+                let high_qc_updated = consensus_writer
+                    .update_high_qc_and_state_cert(eqc.qc.clone(), eqc.state_cert.clone())
+                    .is_ok();
                 let next_high_qc_updated = consensus_writer
                     .update_next_epoch_high_qc(next_epoch_high_qc.clone())
                     .is_ok();

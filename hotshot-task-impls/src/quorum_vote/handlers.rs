@@ -742,7 +742,6 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     if extended_vote {
         tracing::debug!("sending extended vote to everybody",);
-        // TODO(Chengyu): add light client state
         let light_client_state = leaf
             .block_header()
             .get_light_client_state()
