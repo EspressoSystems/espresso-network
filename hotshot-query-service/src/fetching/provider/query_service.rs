@@ -15,7 +15,7 @@ use committable::Committable;
 use futures::try_join;
 use hotshot_types::{
     data::{ns_table, VidCommitment},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
+    traits::{node_implementation::NodeType, EncodeBytes},
     vid::{
         advz::{advz_scheme, ADVZScheme},
         avidm::{init_avidm_param, AvidMScheme},
@@ -30,7 +30,7 @@ use crate::{
     availability::{LeafQueryData, PayloadQueryData, VidCommonQueryData},
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
-    Error, Header, Payload, VidCommon,
+    Error, Payload, VidCommon,
 };
 
 /// Data availability provider backed by another instance of this query service.
@@ -93,22 +93,7 @@ where
                         }
                     },
                     VidCommon::V1(common) => {
-                        let header = self
-                            .client
-                            .get::<Header<Types>>(&format!(
-                                "availability/header/{}",
-                                payload.height()
-                            ))
-                            .send()
-                            .await
-                            .ok()?;
                         let bytes = payload.data().encode();
-                        let metadata = header.metadata().encode();
-
-                        if header.payload_commitment() != req.0 {
-                            tracing::error!(?req, ?header, "received inconsistent payload");
-                            return None;
-                        }
                         // Initialize AVIDM parameters
                         let avidm_param = match init_avidm_param(common.total_weights) {
                             Ok(param) => param,
@@ -122,7 +107,7 @@ where
                         let commit = match AvidMScheme::commit(
                             &avidm_param,
                             &bytes,
-                            ns_table::parse_ns_table(bytes.len(), &metadata),
+                            ns_table::parse_ns_table(bytes.len(), &bytes),
                         ) {
                             Ok(commit) => VidCommitment::V1(commit),
                             Err(err) => {
