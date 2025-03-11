@@ -114,7 +114,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
     async fn update_high_qc2(&self, high_qc: QuorumCertificate2<TYPES>) -> Result<()> {
         self.update_high_qc(high_qc.to_qc()).await
     }
-    /// Udpate the light client state update certificate in storage.
+    /// Update the light client state update certificate in storage.
     async fn update_state_cert(
         &self,
         state_cert: LightClientStateUpdateCertificate<TYPES>,
