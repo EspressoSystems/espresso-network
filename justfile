@@ -136,7 +136,7 @@ build-docker-images:
 
 # generate rust bindings for contracts, the ethers bindings are deprecated,
 # please only add alloy bindings for new contracts.
-ETHERS_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$|^StakeTable$"
+ETHERS_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$"
 ALLOY_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$|^StakeTable$|^EspToken$"
 gen-bindings:
     # Update the git submodules
