@@ -1286,13 +1286,12 @@ mod api_tests {
                     .send()
                     .await
                     .unwrap();
-
+                let hotshot_query_service::VidCommon::V0(common) = &vid_common.common().clone()
+                else {
+                    panic!("Failed to get vid V0 for namespace");
+                };
                 ns_proof
-                    .verify(
-                        header.ns_table(),
-                        &header.payload_commitment(),
-                        &vid_common.common().clone().unwrap(),
-                    )
+                    .verify(header.ns_table(), &header.payload_commitment(), common)
                     .unwrap();
             } else {
                 // Namespace proof should be present if ns_id exists in ns_table
@@ -1415,6 +1414,7 @@ mod api_tests {
                 recipient_key: pubkey,
                 epoch: Some(EpochNumber::new(0)),
                 target_epoch: Some(EpochNumber::new(0)),
+                common: avidm_param.clone(),
             };
             persistence
                 .append_vid2(&share.to_proposal(&privkey).unwrap())
