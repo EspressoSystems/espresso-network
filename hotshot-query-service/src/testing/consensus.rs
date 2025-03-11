@@ -46,7 +46,7 @@ use tokio::{
 use tracing::{info_span, Instrument};
 use url::Url;
 
-use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes, MockVersions};
+use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
 use crate::{
     availability::{AvailabilityDataSource, UpdateAvailabilityData},
     data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource},
@@ -194,7 +194,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             config,
                             memberships,
                             network,
-                            HotShotInitializer::from_genesis::<MockVersions>(
+                            HotShotInitializer::from_genesis::<V>(
                                 TestInstanceState::default(),
                                 0,
                                 0,
