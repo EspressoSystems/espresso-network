@@ -3,13 +3,16 @@ use std::{collections::HashMap, io::Write, ops::Deref, sync::Arc, time::Duration
 use alloy::{
     contract::RawCallBuilder,
     network::{Ethereum, EthereumWallet},
+    primitives::U256,
     providers::ProviderBuilder,
     signers::Signer as _,
     transports::Transport,
 };
 use anyhow::{ensure, Context};
 use clap::{builder::OsStr, Parser, ValueEnum};
-use contract_bindings_alloy::{esptoken::EspToken, feecontract::FeeContract};
+use contract_bindings_alloy::{
+    esptoken::EspToken, feecontract::FeeContract, staketable::StakeTable,
+};
 use contract_bindings_ethers::{
     erc1967_proxy::ERC1967Proxy,
     light_client::{LightClient, LIGHTCLIENT_ABI},
@@ -127,6 +130,18 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.permissioned_stake_table {
             m.insert(Contract::PermissonedStakeTable, addr);
+        }
+        if let Some(addr) = deployed.esp_token {
+            m.insert(Contract::EspToken, addr);
+        }
+        if let Some(addr) = deployed.esp_token_proxy {
+            m.insert(Contract::EspTokenProxy, addr);
+        }
+        if let Some(addr) = deployed.stake_table {
+            m.insert(Contract::StakeTable, addr);
+        }
+        if let Some(addr) = deployed.stake_table_proxy {
+            m.insert(Contract::StakeTableProxy, addr);
         }
         Self(m)
     }
@@ -347,7 +362,14 @@ pub async fn deploy(
     permissioned_prover: Option<Address>,
     mut contracts: Contracts,
     initial_stake_table: Option<Vec<NodeInfo>>,
+    exit_escrow_period: Option<Duration>,
 ) -> anyhow::Result<Contracts> {
+    if should_deploy(ContractGroup::StakeTable, &only) && exit_escrow_period.is_none() {
+        anyhow::bail!(
+            "a value for the 'exit escrow period' must be provided to deploy the StakeTable"
+        );
+    };
+
     let provider = Provider::<Http>::try_from(l1url.to_string())?.interval(l1_interval);
     let chain_id = provider.get_chainid().await?.as_u64();
     let wallet = MnemonicBuilder::<English>::default()
@@ -537,9 +559,9 @@ pub async fn deploy(
         // confirm that the implementation address is the address of the fee contract deployed above
         if !is_proxy_contract(&provider, token_proxy_address.to_ethers())
             .await
-            .expect("Failed to determine if fee contract is a proxy")
+            .expect("Failed to determine if ESP token is a proxy")
         {
-            panic!("Fee contract's address is not a proxy");
+            panic!("ESP token contract address is not a proxy");
         }
 
         // Instantiate a wrapper with the proxy address and fee contract ABI.
@@ -551,7 +573,7 @@ pub async fn deploy(
             tracing::info!(
                 ?token_proxy_address,
                 ?owner,
-                "transferring fee contract proxy ownership to multisig",
+                "transferring ESP token proxy ownership to multisig",
             );
             let _ = proxy.transferOwnership(owner.to_alloy()).send().await?;
         }
@@ -559,7 +581,70 @@ pub async fn deploy(
 
     // `StakeTable.sol`
     if should_deploy(ContractGroup::StakeTable, &only) {
-        todo!()
+        let stake_table_address = contracts
+            .deploy_tx_alloy(
+                Contract::StakeTable,
+                StakeTable::deploy_builder(l1_alloy.clone()),
+            )
+            .await?;
+        let stake_table = StakeTable::new(stake_table_address, l1_alloy.clone());
+        let token_proxy = contracts
+            .get_contract_address(Contract::EspTokenProxy)
+            .context("no ESP token address")?
+            .to_alloy();
+        let lc_proxy = contracts
+            .get_contract_address(Contract::LightClientProxy)
+            .context("no light client address")?
+            .to_alloy();
+        let exit_escrow_period = U256::from(
+            exit_escrow_period
+                .context("no exit escrow period")?
+                .as_secs(),
+        );
+        let data = stake_table
+            .initialize(
+                token_proxy,
+                lc_proxy,
+                exit_escrow_period,
+                // TODO: token recipient
+                deployer.to_alloy(),
+            )
+            .calldata()
+            .clone();
+        let stake_table_proxy_address = contracts
+            .deploy_tx_alloy(
+                Contract::StakeTableProxy,
+                contract_bindings_alloy::erc1967proxy::ERC1967Proxy::deploy_builder(
+                    l1_alloy.clone(),
+                    stake_table_address,
+                    data,
+                ),
+            )
+            .await?;
+
+        // confirm that the implementation address is the address of the fee contract deployed above
+        if !is_proxy_contract(&provider, stake_table_proxy_address.to_ethers())
+            .await
+            .expect("Failed to determine if stake table contract is a proxy")
+        {
+            panic!("Stake table contract address is not a proxy");
+        }
+
+        // Instantiate a wrapper with the proxy address and fee contract ABI.
+        let proxy = contract_bindings_alloy::esptoken::EspToken::new(
+            stake_table_proxy_address,
+            l1_alloy.clone(),
+        );
+
+        // Transfer ownership to the multisig wallet if provided.
+        if let Some(owner) = multisig_address {
+            tracing::info!(
+                ?stake_table_proxy_address,
+                ?owner,
+                "transferring stake table proxy ownership to multisig",
+            );
+            let _ = proxy.transferOwnership(owner.to_alloy()).send().await?;
+        }
     }
 
     Ok(contracts)
