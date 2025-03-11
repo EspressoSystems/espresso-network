@@ -1048,7 +1048,7 @@ impl SequencerPersistence for Persistence {
         let mut tx = self.db.write().await?;
         tx.upsert(
             "epoch_drb_and_root",
-            ["epoch", "drb_result"],
+            ["epoch", "stake"],
             ["epoch"],
             [(epoch.u64() as i64, stake_table_bytes)],
         )
