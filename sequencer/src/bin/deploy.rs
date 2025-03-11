@@ -1,8 +1,7 @@
 use std::{fs::File, io::stdout, path::PathBuf, time::Duration};
 
 use clap::Parser;
-use espresso_types::parse_duration;
-use espresso_types::SeqTypes;
+use espresso_types::{parse_duration, SeqTypes};
 use ethers::types::Address;
 use futures::FutureExt;
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;

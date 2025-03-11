@@ -22,7 +22,6 @@ mod tests {
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use hotshot::types::SignatureKey;
     use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
-
     use hotshot_example_types::{
         auction_results_provider_types::TestAuctionResult,
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},

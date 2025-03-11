@@ -11,9 +11,8 @@ use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 use vec1::Vec1;
 
-use crate::PubKey;
-
 use super::SeqTypes;
+use crate::PubKey;
 
 /// This struct defines the public Hotshot validator configuration.
 /// Private key and state key pairs are excluded for security reasons.
