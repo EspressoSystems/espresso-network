@@ -122,7 +122,7 @@ impl<Types> Provider<Types, VidCommonRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: VidCommonRequest) -> VidCommon {
+    async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
         any_fetch(&self.vid_common_providers, req).await
     }
 }

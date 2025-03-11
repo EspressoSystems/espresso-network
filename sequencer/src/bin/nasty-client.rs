@@ -39,6 +39,7 @@ use hotshot_query_service::{
     metrics::PrometheusMetrics,
     node::TimeWindowQueryData,
     types::HeightIndexed,
+    VidCommon,
 };
 use hotshot_types::traits::{
     block_contents::BlockHeader,
@@ -1149,15 +1150,14 @@ impl ResourceManager<BlockQueryData<SeqTypes>> {
             ns_proof.proof.is_some(),
             format!("missing namespace proof for {block}:{ns}")
         );
+        let VidCommon::V0(common) = &vid_common.common().clone() else {
+            panic!("Failed to get vid V0 for namespace");
+        };
         ensure!(
             ns_proof
                 .proof
                 .unwrap()
-                .verify(
-                    header.ns_table(),
-                    &header.payload_commitment(),
-                    &vid_common.common().clone().unwrap(),
-                )
+                .verify(header.ns_table(), &header.payload_commitment(), common,)
                 .is_some(),
             format!("failure to verify namespace proof for {block}:{ns}")
         );

@@ -36,7 +36,7 @@ use crate::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryablePayload, UpdateAvailabilityData,
         VidCommonQueryData,
     },
-    Payload,
+    Payload, VidCommon,
 };
 
 /// An extension trait for types which implement the update trait for each API module.
@@ -123,12 +123,15 @@ where
                     Some(VidDisperseShare::V0(share)) => (
                         Some(VidCommonQueryData::new(
                             leaf2.block_header().clone(),
-                            Some(share.common.clone()),
+                            VidCommon::V0(share.common.clone()),
                         )),
                         Some(VidShare::V0(share.share.clone())),
                     ),
                     Some(VidDisperseShare::V1(share)) => (
-                        Some(VidCommonQueryData::new(leaf2.block_header().clone(), None)),
+                        Some(VidCommonQueryData::new(
+                            leaf2.block_header().clone(),
+                            VidCommon::V1(share.common.clone()),
+                        )),
                         Some(VidShare::V1(share.share.clone())),
                     ),
                     None => {
@@ -186,7 +189,10 @@ fn genesis_vid<Types: NodeType>(
                 commit
             );
             Ok((
-                VidCommonQueryData::new(leaf.block_header().clone(), Some(disperse.common)),
+                VidCommonQueryData::new(
+                    leaf.block_header().clone(),
+                    VidCommon::V0(disperse.common),
+                ),
                 VidShare::V0(disperse.shares.remove(0)),
             ))
         },
@@ -206,7 +212,7 @@ fn genesis_vid<Types: NodeType>(
             );
 
             Ok((
-                VidCommonQueryData::new(leaf.block_header().clone(), None),
+                VidCommonQueryData::new(leaf.block_header().clone(), VidCommon::V1(avidm_param)),
                 VidShare::V1(shares.remove(0)),
             ))
         },

@@ -12,6 +12,7 @@ pub type AvidMScheme = vid::avid_m::namespaced::NsAvidMScheme;
 pub type AvidMParam = vid::avid_m::namespaced::NsAvidMParam;
 pub type AvidMCommitment = vid::avid_m::namespaced::NsAvidMCommit;
 pub type AvidMShare = vid::avid_m::namespaced::NsAvidMShare;
+pub type AvidMCommon = AvidMParam;
 
 pub fn init_avidm_param(num_storage_nodes: usize) -> Result<AvidMParam> {
     let recovery_threshold = 1 << num_storage_nodes.ilog2();
