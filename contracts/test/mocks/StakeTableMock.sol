@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import { StakeTable } from "../../src/StakeTable.sol";
-import { LightClientMock } from "./LightClientMock.sol";
+import { LightClientV2Mock } from "./LightClientV2Mock.sol";
 
 contract StakeTableMock is StakeTable {
     constructor(
@@ -38,6 +38,6 @@ contract StakeTableMock is StakeTable {
     }
 
     function mockUpdateHotShotBlocksPerEpoch(uint64 newHotShotBlocksPerEpoch) public {
-        LightClientMock(address(lightClient)).setBlocksPerEpoch(newHotShotBlocksPerEpoch);
+        LightClientV2Mock(address(lightClient)).setBlocksPerEpoch(newHotShotBlocksPerEpoch);
     }
 }
