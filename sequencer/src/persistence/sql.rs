@@ -1037,6 +1037,7 @@ impl SequencerPersistence for Persistence {
             })
             .transpose()
     }
+
     async fn store_stake(
         &self,
         epoch: EpochNumber,
