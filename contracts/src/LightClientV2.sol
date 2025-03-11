@@ -40,6 +40,7 @@ contract LightClientV2 is LightClient, PlonkVerifierV2, VkLib {
     function getVersion()
         public
         pure
+        virtual
         override
         returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
     {
@@ -49,7 +50,7 @@ contract LightClientV2 is LightClient, PlonkVerifierV2, VkLib {
     /// @dev override the V1's to disable calling it
     function newFinalizedState(LightClientState memory, IPlonkVerifier.PlonkProof memory)
         external
-        virtual
+        pure
         override
     {
         revert DeprecatedApi();
@@ -111,7 +112,7 @@ contract LightClientV2 is LightClient, PlonkVerifierV2, VkLib {
             emit NewEpoch(newEpoch + 1);
         }
 
-        updateStateHistory(uint64(block.number), uint64(block.timestamp), newState);
+        updateStateHistory(uint64(currentBlockNumber()), uint64(block.timestamp), newState);
 
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
     }
@@ -160,7 +161,7 @@ contract LightClientV2 is LightClient, PlonkVerifierV2, VkLib {
 
     /// @notice Returns the current epoch according the latest update on finalizedState
     /// @return current epoch (computed from the last known hotshot block number)
-    function currentEpoch() public view returns (uint64) {
+    function currentEpoch() public view virtual returns (uint64) {
         return epochFromBlockNumber(finalizedState.blockHeight, _blocksPerEpoch);
     }
 
@@ -169,6 +170,7 @@ contract LightClientV2 is LightClient, PlonkVerifierV2, VkLib {
     function epochFromBlockNumber(uint64 blockNum, uint64 blocksPerEpoch)
         public
         pure
+        virtual
         returns (uint64)
     {
         if (blocksPerEpoch == 0) {
@@ -183,7 +185,7 @@ contract LightClientV2 is LightClient, PlonkVerifierV2, VkLib {
     }
 
     /// @notice Decide if a block height is the last block in an epoch
-    function isLastBlockInEpoch(uint64 blockHeight) public view returns (bool) {
+    function isLastBlockInEpoch(uint64 blockHeight) public view virtual returns (bool) {
         if (blockHeight == 0) {
             return false;
         } else {
