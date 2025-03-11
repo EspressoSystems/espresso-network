@@ -280,23 +280,42 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidMDisperse<TYPES> {
 }
 
 /// The target total stake to scale to for VID.
-pub const VID_TARGET_TOTAL_STAKE: u32 = 10000;
+const VID_TARGET_TOTAL_STAKE: u32 = 1000;
 
-pub fn approximate_weights<TYPES: NodeType>(
+/// The weights and total weight used in VID calculations
+struct Weights {
+    // weights, in stake table order
+    weights: Vec<u32>,
+
+    // total weight
+    total_weight: usize,
+}
+
+fn approximate_weights<TYPES: NodeType>(
     stake_table: Vec<PeerConfig<TYPES::SignatureKey>>,
-) -> Vec<u32> {
+) -> Weights {
     let total_stake = stake_table.iter().fold(U256::zero(), |acc, entry| {
         acc + entry.stake_table_entry.stake()
     });
 
+    let mut total_weight: usize = 0;
+
     // don't attempt to scale if the total stake is small enough
     if total_stake <= U256::from(VID_TARGET_TOTAL_STAKE) {
-        stake_table
+        let weights = stake_table
             .iter()
             .map(|entry| entry.stake_table_entry.stake().as_u32())
-            .collect()
+            .collect();
+
+        // Note: this panics if `total_stake` exceeds `usize::MAX`, but this shouldn't happen.
+        total_weight = total_stake.as_usize();
+
+        Weights {
+            weights,
+            total_weight,
+        }
     } else {
-        stake_table
+        let weights = stake_table
             .iter()
             .map(|entry| {
                 let weight: U256 = ((entry.stake_table_entry.stake()
@@ -304,11 +323,19 @@ pub fn approximate_weights<TYPES: NodeType>(
                     / total_stake)
                     + 1;
 
+                // Note: this panics if `weight` exceeds `usize::MAX`, but this shouldn't happen.
+                total_weight += weight.as_usize();
+
                 // Note: this panics if `weight` exceeds `u32::MAX`, but this shouldn't happen
                 // and would likely cause a stack overflow in the VID calculation anyway
                 weight.as_u32()
             })
-            .collect()
+            .collect();
+
+        Weights {
+            weights,
+            total_weight,
+        }
     }
 }
 
@@ -366,21 +393,24 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<Self> {
         let target_mem = membership.membership_for_epoch(target_epoch).await?;
-        let num_nodes = target_mem.total_nodes().await;
+        let stake_table = target_mem.stake_table().await;
+        let approximate_weights = approximate_weights::<TYPES>(stake_table);
 
         let txns = payload.encode();
         let num_txns = txns.len();
 
-        let avidm_param = init_avidm_param(num_nodes)?;
+        let avidm_param = init_avidm_param(approximate_weights.total_weight)?;
         let common = avidm_param.clone();
-
-        let stake_table = target_mem.stake_table().await;
-        let weights = approximate_weights::<TYPES>(stake_table);
 
         let ns_table = parse_ns_table(num_txns, &metadata.encode());
         let ns_table_clone = ns_table.clone();
         let (commit, shares) = spawn_blocking(move || {
-            AvidMScheme::ns_disperse(&avidm_param, &weights, &txns, ns_table_clone)
+            AvidMScheme::ns_disperse(
+                &avidm_param,
+                &approximate_weights.weights,
+                &txns,
+                ns_table_clone,
+            )
         })
         .await
         .wrap()
