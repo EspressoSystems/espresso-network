@@ -484,7 +484,7 @@ impl<Types: NodeType> VidCommonQueryData<Types> {
             .disperse(bytes)
             .unwrap();
 
-        Self::new(leaf.block_header().clone(), Some(disperse.common))
+        Self::new(leaf.block_header().clone(), VidCommon::V0(disperse.common))
     }
 
     pub fn block_hash(&self) -> BlockHash<Types> {

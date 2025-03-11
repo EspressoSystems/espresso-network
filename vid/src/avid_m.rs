@@ -112,7 +112,7 @@ pub struct AvidMShare {
 }
 
 /// Public parameters of the AVID-M scheme.
-#[derive(Clone, Debug, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AvidMParam {
     /// Total weights of all storage nodes
     pub total_weights: usize,
