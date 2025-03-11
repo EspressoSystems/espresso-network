@@ -21,7 +21,6 @@ use hotshot_types::{
         node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
     },
-    utils::option_epoch_from_block_number,
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -33,7 +32,7 @@ use self::handlers::{
 };
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, validate_qc_and_next_epoch_qc, wait_for_next_epoch_qc},
+    helpers::{broadcast_event, validate_qc_and_next_epoch_qc},
     vote_collection::{ExtendedQuorumVoteCollectorsMap, VoteCollectorsMap},
 };
 
@@ -126,6 +125,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::debug!("Failed to handle QuorumVoteRecv event; error = {e}");
                 }
             },
+            HotShotEvent::ExtendedQuorumVoteRecv(ref vote) => {
+                if let Err(e) =
+                    handle_extended_quorum_vote_recv(vote, Arc::clone(&event), &sender, self).await
+                {
+                    tracing::debug!("Failed to handle ExtendedQuorumVoteRecv event; error = {e}");
+                }
+            },
             HotShotEvent::TimeoutVoteRecv(ref vote) => {
                 if let Err(e) =
                     handle_timeout_vote_recv(vote, Arc::clone(&event), &sender, self).await
@@ -146,33 +152,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 if let Err(e) = handle_timeout(*view_number, *epoch, &sender, self).await {
                     tracing::debug!("Failed to handle Timeout event; error = {e}");
                 }
-            },
-            HotShotEvent::ExtendedQc2Formed(eqc) => {
-                let cert_view = eqc.view_number();
-                let cert_block_number = self
-                    .consensus
-                    .read()
-                    .await
-                    .saved_leaves()
-                    .get(&eqc.data.leaf_commit)
-                    .context(error!(
-                        "Could not find the leaf for the eQC. It shouldn't happen."
-                    ))?
-                    .height();
-
-                let cert_epoch = option_epoch_from_block_number::<TYPES>(
-                    true,
-                    cert_block_number,
-                    self.epoch_height,
-                );
-                // Transition to the new epoch by sending ViewChange
-                let next_epoch = cert_epoch.map(|x| x + 1);
-                tracing::info!("Entering new epoch: {:?}", next_epoch);
-                broadcast_event(
-                    Arc::new(HotShotEvent::ViewChange(cert_view + 1, next_epoch)),
-                    &sender,
-                )
-                .await;
             },
             HotShotEvent::ExtendedQcRecv(eqc, next_epoch_high_qc, _) => {
                 if !self

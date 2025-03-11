@@ -295,7 +295,7 @@ where
 
 #[derive(Debug, Deserialize)]
 pub struct PublishHotShotConfig {
-    pub known_nodes_with_stake: Vec<PeerConfig<BLSPubKey>>,
+    pub known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
 }
 
 #[derive(Debug, Deserialize)]

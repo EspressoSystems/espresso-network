@@ -43,7 +43,8 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -1910,6 +1911,39 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         tx.commit().await
+    }
+
+    async fn add_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let state_cert_bytes = bincode::serialize(&state_cert)
+            .context("serializing light client state update certificate")?;
+
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "state_cert",
+            ["epoch", "state_cert"],
+            ["epoch"],
+            [(state_cert.epoch.u64() as i64, state_cert_bytes)],
+        )
+        .await?;
+        tx.commit().await
+    }
+
+    async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>> {
+        let row = self
+            .db
+            .read()
+            .await?
+            .fetch_one("SELECT state_cert, MAX(epoch) from state_cert GROUP BY epoch")
+            .await?;
+        if let Some(data) = row.get::<Option<Vec<u8>>, _>("state_cert") {
+            bincode::deserialize(&data)
+                .context("deserializing light client state update certificate")
+        } else {
+            Ok(LightClientStateUpdateCertificate::genesis())
+        }
     }
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {

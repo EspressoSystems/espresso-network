@@ -13,7 +13,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{ensure, Context, Result};
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
@@ -510,41 +509,54 @@ pub(super) async fn handle_eqc_formed<
     leaf_commit: Commitment<Leaf2<TYPES>>,
     task_state: &QuorumProposalTaskState<TYPES, I, V>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-) {
-    if !task_state.upgrade_lock.epochs_enabled(cert_view).await {
-        tracing::debug!("QC2 formed but epochs not enabled. Do nothing");
-        return;
-    }
-    if !task_state
-        .consensus
-        .read()
-        .await
-        .is_leaf_extended(leaf_commit)
-    {
-        tracing::debug!("We formed QC but not eQC. Do nothing");
-        return;
-    }
+    epoch_height: u64,
+) -> Result<()> {
+    ensure!(
+        task_state.upgrade_lock.epochs_enabled(cert_view).await,
+        debug!("QC2 formed but epochs not enabled. Do nothing")
+    );
+    ensure!(
+        task_state
+            .consensus
+            .read()
+            .await
+            .is_leaf_extended(leaf_commit),
+        debug!("We formed QC but not eQC. Do nothing")
+    );
 
     let consensus_reader = task_state.consensus.read().await;
     let current_epoch_qc = consensus_reader.high_qc();
+    let cert_view = current_epoch_qc.view_number();
+    let cert_block_number = consensus_reader
+        .saved_leaves()
+        .get(&current_epoch_qc.data.leaf_commit)
+        .context(error!(
+            "Could not find the leaf for the eQC. It shouldn't happen."
+        ))?
+        .height();
+
     let Some(next_epoch_qc) = consensus_reader.next_epoch_high_qc() else {
-        tracing::debug!("We formed the eQC but we don't have the next epoch eQC at all.");
-        return;
+        return Err(debug!(
+            "We formed the eQC but we don't have the next epoch eQC at all."
+        ));
     };
     if current_epoch_qc.view_number() != next_epoch_qc.view_number()
         || current_epoch_qc.data != *next_epoch_qc.data
     {
-        tracing::debug!(
+        return Err(debug!(
             "We formed the eQC but the current and next epoch QCs do not correspond to each other."
-        );
-        return;
+        ));
     }
-    let current_epoch_qc_clone = current_epoch_qc.clone();
     drop(consensus_reader);
 
+    let cert_epoch = option_epoch_from_block_number::<TYPES>(true, cert_block_number, epoch_height);
+    // Transition to the new epoch by sending ViewChange
+    let next_epoch = cert_epoch.map(|x| x + 1);
+    tracing::info!("Entering new epoch: {:?}", next_epoch);
     broadcast_event(
-        Arc::new(HotShotEvent::ExtendedQc2Formed(current_epoch_qc_clone)),
+        Arc::new(HotShotEvent::ViewChange(cert_view + 1, next_epoch)),
         event_sender,
     )
     .await;
+    Ok(())
 }

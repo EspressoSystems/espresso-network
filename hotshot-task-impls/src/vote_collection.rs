@@ -692,9 +692,7 @@ impl<TYPES: NodeType, V: Versions> ExtendedQuorumVoteCollectionTaskState<TYPES, 
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<Option<ExtendedQuorumCertificate<TYPES>>> {
         match event.as_ref() {
-            HotShotEvent::ExtendedQuorumVoteRecv(vote) => {
-                self.accumulate_vote(vote, self.epoch, sender).await
-            },
+            HotShotEvent::ExtendedQuorumVoteRecv(vote) => self.accumulate_vote(vote, sender).await,
             _ => Ok(None),
         }
     }
@@ -703,7 +701,6 @@ impl<TYPES: NodeType, V: Versions> ExtendedQuorumVoteCollectionTaskState<TYPES, 
     async fn accumulate_vote(
         &mut self,
         vote: &ExtendedQuorumVote<TYPES>,
-        sender_epoch: Option<TYPES::Epoch>,
         event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<Option<ExtendedQuorumCertificate<TYPES>>> {
         let ExtendedQuorumVote { vote, state_vote } = vote;

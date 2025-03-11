@@ -823,6 +823,18 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         Ok(())
     }
 
+    /// Update the light client state update certificate if given a newer one.
+    /// # Errors
+    /// Can return an error when the provided state_cert is not newer than the existing entry.
+    pub fn update_high_qc_and_state_cert(
+        &mut self,
+        high_qc: QuorumCertificate2<TYPES>,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
+    ) -> Result<()> {
+        self.update_high_qc(high_qc)?;
+        self.update_state_cert(state_cert)
+    }
+
     /// Add a new entry to the vid_shares map.
     pub fn update_vid_shares(
         &mut self,

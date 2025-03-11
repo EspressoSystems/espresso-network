@@ -10275,6 +10275,7 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-contract-adapter",
+ "hotshot-example-types",
  "hotshot-types",
  "log-panics",
  "portpicker",

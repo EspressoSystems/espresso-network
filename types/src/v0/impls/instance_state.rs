@@ -7,7 +7,7 @@ use vbs::version::{StaticVersion, StaticVersionType};
 
 use super::state::ValidatedState;
 use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
+    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, SeqTypes,
     Timestamp, Upgrade, UpgradeMode,
 };
 
@@ -163,7 +163,7 @@ impl Default for NodeState {
 impl InstanceState for NodeState {}
 
 impl Upgrade {
-    pub fn set_hotshot_config_parameters(&self, config: &mut HotShotConfig<PubKey>) {
+    pub fn set_hotshot_config_parameters(&self, config: &mut HotShotConfig<SeqTypes>) {
         match &self.mode {
             UpgradeMode::View(v) => {
                 config.start_proposing_view = v.start_proposing_view;

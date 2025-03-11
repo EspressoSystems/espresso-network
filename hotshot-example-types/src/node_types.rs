@@ -131,6 +131,7 @@ impl NodeType for TestTypesEpochCatchupTypes {
     type InstanceState = TestInstanceState;
     type Membership = DummyCatchupCommittee<TestTypesEpochCatchupTypes>;
     type BuilderSignatureKey = BuilderKey;
+    type StateSignatureKey = SchnorrPubKey;
 }
 
 #[derive(

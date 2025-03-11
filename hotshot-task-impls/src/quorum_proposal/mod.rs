@@ -448,10 +448,68 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                         .wrap()
                         .context(error!("Failed to update high QC in storage!"))?;
 
-                    handle_eqc_formed(qc.view_number(), qc.data.leaf_commit, self, &event_sender)
-                        .await;
-
                     let view_number = qc.view_number() + 1;
+                    self.create_dependency_task_if_new(
+                        view_number,
+                        epoch_number,
+                        event_receiver,
+                        event_sender,
+                        Arc::clone(&event),
+                        epoch_transition_indicator,
+                    )
+                    .await?;
+                },
+            },
+            HotShotEvent::ExtendedQcFormed(cert) => match cert {
+                either::Right(timeout_cert) => {
+                    let view_number = timeout_cert.view_number + 1;
+                    self.create_dependency_task_if_new(
+                        view_number,
+                        epoch_number,
+                        event_receiver,
+                        event_sender,
+                        Arc::clone(&event),
+                        epoch_transition_indicator,
+                    )
+                    .await?;
+                },
+                either::Left(eqc) => {
+                    // Only update if the qc is from a newer view
+                    if eqc.qc.view_number() <= self.consensus.read().await.high_qc().view_number {
+                        tracing::trace!(
+                            "Received a QC for a view that was not > than our current high QC"
+                        );
+                    }
+                    self.consensus
+                        .write()
+                        .await
+                        .update_high_qc_and_state_cert(eqc.qc.clone(), eqc.state_cert.clone())
+                        .wrap()
+                        .context(error!(
+                            "Failed to update high QC or state certificate in internal consensus state!"
+                        ))?;
+
+                    // Then update the high QC and the state certificate in storage
+                    self.storage
+                        .write()
+                        .await
+                        .update_high_qc2_and_state_cert(eqc.qc.clone(), eqc.state_cert.clone())
+                        .await
+                        .wrap()
+                        .context(error!(
+                            "Failed to update high QC or state certificate in storage!"
+                        ))?;
+
+                    handle_eqc_formed(
+                        eqc.qc.view_number(),
+                        eqc.qc.data.leaf_commit,
+                        self,
+                        &event_sender,
+                        self.epoch_height,
+                    )
+                    .await?;
+
+                    let view_number = eqc.qc.view_number() + 1;
                     self.create_dependency_task_if_new(
                         view_number,
                         epoch_number,
@@ -622,8 +680,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     next_epoch_qc.data.leaf_commit,
                     self,
                     &event_sender,
+                    self.epoch_height,
                 )
-                .await;
+                .await?;
             },
             _ => {},
         }

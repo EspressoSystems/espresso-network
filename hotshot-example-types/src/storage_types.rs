@@ -322,6 +322,25 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
+    async fn update_state_cert(
+        &self,
+        state_cert: hotshot_types::simple_certificate::LightClientStateUpdateCertificate<TYPES>,
+    ) -> Result<()> {
+        if self.should_return_err {
+            bail!("Failed to update state_cert to storage");
+        }
+        Self::run_delay_settings_from_config(&self.delay_config).await;
+        let mut inner = self.inner.write().await;
+        if let Some(ref current_state_cert) = inner.state_cert {
+            if state_cert.epoch > current_state_cert.epoch {
+                inner.state_cert = Some(state_cert);
+            }
+        } else {
+            inner.state_cert = Some(state_cert);
+        }
+        Ok(())
+    }
+
     async fn update_next_epoch_high_qc2(
         &self,
         new_next_epoch_high_qc: hotshot_types::simple_certificate::NextEpochQuorumCertificate2<

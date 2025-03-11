@@ -2,34 +2,29 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use ark_ff::PrimeField;
-use ark_serialize::CanonicalSerialize;
 use async_lock::RwLock;
-use espresso_types::Leaf2;
 use hotshot::types::{Event, EventType};
 use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
     event::LeafInfo,
     light_client::{
-        CircuitField, LightClientState, StateSignature, StateSignatureRequestBody,
+        CircuitField, LightClientState, StateSignKey, StateSignature, StateSignatureRequestBody,
         StateSignatureScheme, StateVerKey,
     },
     signature_key::BLSPubKey,
     traits::{
-        node_implementation::ConsensusTime,
+        block_contents::BlockHeader,
         signature_key::StakeTableEntryType,
         stake_table::{SnapshotVersion, StakeTableScheme as _},
     },
     PeerConfig,
 };
-use jf_crhf::CRHF;
-use jf_rescue::{crhf::VariableLengthRescueCRHF, RescueError};
 use jf_signature::SignatureScheme;
 use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::{SeqTypes, StateKeyPair};
+use crate::SeqTypes;
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;
@@ -39,8 +34,11 @@ const SIGNATURE_STORAGE_CAPACITY: usize = 100;
 
 #[derive(Debug)]
 pub struct StateSigner<ApiVer: StaticVersionType> {
-    /// Key pair for signing a new light client state
-    key_pair: StateKeyPair,
+    /// Key for signing a new light client state
+    sign_key: StateSignKey,
+
+    /// Key for verifying a light client state
+    ver_key: StateVerKey,
 
     /// The most recent light client state signatures
     signatures: RwLock<StateSignatureMemStorage>,
@@ -54,9 +52,14 @@ pub struct StateSigner<ApiVer: StaticVersionType> {
 }
 
 impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
-    pub fn new(key_pair: StateKeyPair, stake_table_comm: StakeTableCommitmentType) -> Self {
+    pub fn new(
+        sign_key: StateSignKey,
+        ver_key: StateVerKey,
+        stake_table_comm: StakeTableCommitmentType,
+    ) -> Self {
         Self {
-            key_pair,
+            sign_key,
+            ver_key,
             stake_table_comm,
             signatures: Default::default(),
             relay_server_client: Default::default(),
@@ -76,21 +79,14 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
             return;
         };
-        let view_number = leaf.view_number().u64();
-        let block_height = leaf.height();
-        let mut block_comm_root_bytes = vec![];
-        if let Err(e) = leaf.block_comm_root().serialize(&mut block_comm_root_bytes) {
-            tracing::error!("Error serializing block commitment root: {:?}", e);
-            return;
-        }
-        match LightClientState::new(view_number, block_height, &block_comm_root_bytes) {
+        match leaf.block_header().get_light_client_state() {
             Ok(state) => {
                 let signature = self.sign_new_state(&state).await;
                 tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);
 
                 if let Some(client) = &self.relay_server_client {
                     let request_body = StateSignatureRequestBody {
-                        key: self.key_pair.ver_key(),
+                        key: self.ver_key.clone(),
                         state,
                         signature,
                     };
@@ -120,18 +116,13 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
     /// Sign the light client state at given height and store it.
     async fn sign_new_state(&self, state: &LightClientState) -> StateSignature {
         let msg: [CircuitField; 3] = state.into();
-        let signature = StateSignatureScheme::sign(
-            &(),
-            self.key_pair.sign_key_ref(),
-            msg,
-            &mut rand::thread_rng(),
-        )
-        .unwrap();
+        let signature =
+            StateSignatureScheme::sign(&(), &self.sign_key, msg, &mut rand::thread_rng()).unwrap();
         let mut pool_guard = self.signatures.write().await;
         pool_guard.push(
-            state.block_height as u64,
+            state.block_height,
             StateSignatureRequestBody {
-                key: self.key_pair.ver_key(),
+                key: self.ver_key.clone(),
                 state: state.clone(),
                 signature: signature.clone(),
             },
@@ -170,7 +161,7 @@ pub type StakeTableCommitmentType = (CircuitField, CircuitField, CircuitField);
 
 /// Helper function for stake table commitment
 pub fn static_stake_table_commitment(
-    known_nodes_with_stakes: &[PeerConfig<BLSPubKey>],
+    known_nodes_with_stakes: &[PeerConfig<SeqTypes>],
     capacity: usize,
 ) -> (CircuitField, CircuitField, CircuitField) {
     let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(capacity);

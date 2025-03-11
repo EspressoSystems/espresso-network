@@ -81,8 +81,8 @@ impl StakeTables {
                 StakeTableChange::Remove(_) => None,
             });
 
-        let mut consensus_stake_table: Vec<PeerConfig<PubKey>> = vec![];
-        let mut da_members: Vec<PeerConfig<PubKey>> = vec![];
+        let mut consensus_stake_table: Vec<PeerConfig<SeqTypes>> = vec![];
+        let mut da_members: Vec<PeerConfig<SeqTypes>> = vec![];
         for node in currently_staking {
             consensus_stake_table.push(node.clone().into());
             if node.da {
@@ -143,19 +143,19 @@ struct Committee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
-    eligible_leaders: Vec<PeerConfig<PubKey>>,
+    eligible_leaders: Vec<PeerConfig<SeqTypes>>,
 
     /// Keys for nodes participating in the network
-    stake_table: Vec<PeerConfig<PubKey>>,
+    stake_table: Vec<PeerConfig<SeqTypes>>,
 
     /// Keys for DA members
-    da_members: Vec<PeerConfig<PubKey>>,
+    da_members: Vec<PeerConfig<SeqTypes>>,
 
     /// Stake entries indexed by public key, for efficient lookup.
-    indexed_stake_table: HashMap<PubKey, PeerConfig<PubKey>>,
+    indexed_stake_table: HashMap<PubKey, PeerConfig<SeqTypes>>,
 
     /// DA entries indexed by public key, for efficient lookup.
-    indexed_da_members: HashMap<PubKey, PeerConfig<PubKey>>,
+    indexed_da_members: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
 impl EpochCommittees {
@@ -219,8 +219,8 @@ impl EpochCommittees {
     pub fn new_stake(
         // TODO remove `new` from trait and rename this to `new`.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        committee_members: Vec<PeerConfig<PubKey>>,
-        da_members: Vec<PeerConfig<PubKey>>,
+        committee_members: Vec<PeerConfig<SeqTypes>>,
+        da_members: Vec<PeerConfig<SeqTypes>>,
         instance_state: &NodeState,
         epoch_size: u64,
     ) -> Self {
@@ -312,14 +312,14 @@ impl Membership<SeqTypes> for EpochCommittees {
     fn new(
         // TODO remove `new` from trait and remove this fn as well.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        _committee_members: Vec<PeerConfig<PubKey>>,
-        _da_members: Vec<PeerConfig<PubKey>>,
+        _committee_members: Vec<PeerConfig<SeqTypes>>,
+        _da_members: Vec<PeerConfig<SeqTypes>>,
     ) -> Self {
         panic!("This function has been replaced with new_stake()");
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
+    fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<SeqTypes>> {
         if let Some(st) = self.state(&epoch) {
             st.stake_table.clone()
         } else {
@@ -327,7 +327,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
     }
     /// Get the stake table for the current view
-    fn da_stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
+    fn da_stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<SeqTypes>> {
         if let Some(sc) = self.state(&epoch) {
             sc.da_members.clone()
         } else {
@@ -376,14 +376,14 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the stake table entry for a public key
-    fn stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
+    fn stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<SeqTypes>> {
         // Only return the stake if it is above zero
         self.state(&epoch)
             .and_then(|h| h.indexed_stake_table.get(pub_key).cloned())
     }
 
     /// Get the DA stake table entry for a public key
-    fn da_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
+    fn da_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<SeqTypes>> {
         // Only return the stake if it is above zero
         self.state(&epoch)
             .and_then(|h| h.indexed_da_members.get(pub_key).cloned())
