@@ -75,11 +75,10 @@ test-all:
     cargo nextest run --locked --release --workspace --verbose --profile all
 
 test-integration:
-	@echo 'NOTE that demo-native must be running for this test to succeed.'
-	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run --all-features --nocapture --profile integration smoke
+	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
+
 test-integration-mp:
-    @echo 'NOTE that demo-native-mp must be running for this test to succeed.'
-    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run --all-features --nocapture --profile integration
+    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
 
 clippy:
     @echo 'features: "embedded-db"'

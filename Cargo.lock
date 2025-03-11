@@ -11398,6 +11398,7 @@ dependencies = [
  "futures",
  "reqwest 0.12.12",
  "surf-disco",
+ "tempfile",
  "tokio",
  "vbs",
 ]

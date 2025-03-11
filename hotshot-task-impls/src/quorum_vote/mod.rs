@@ -541,9 +541,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     .is_leaf_forming_eqc(proposal.data.justify_qc().data.leaf_commit);
 
                 if version >= V::Epochs::VERSION && is_justify_qc_forming_eqc {
-                    let _ = self
-                        .handle_eqc_voting(proposal, parent_leaf, event_sender, event_receiver)
-                        .await;
+                    self.handle_eqc_voting(proposal, parent_leaf, event_sender, event_receiver)
+                        .await?;
                 } else {
                     self.create_dependency_task_if_new(
                         proposal.data.view_number(),

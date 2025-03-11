@@ -326,7 +326,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     async fn try_fetch_leaves(&self, retry: usize, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         self.fetch(retry, |client| async move {
             let leaf = client
-                .get::<Vec<Leaf2>>(&format!("catchup/leaf-chain/{}", height))
+                .get::<Vec<Leaf2>>(&format!("catchup/{}/leafchain", height))
                 .send()
                 .await?;
             anyhow::Ok(leaf)

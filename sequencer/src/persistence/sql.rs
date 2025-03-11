@@ -1955,7 +1955,7 @@ impl SequencerPersistence for Persistence {
 #[async_trait]
 impl Provider<SeqTypes, VidCommonRequest> for Persistence {
     #[tracing::instrument(skip(self))]
-    async fn fetch(&self, req: VidCommonRequest) -> VidCommon {
+    async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
         let mut tx = match self.db.read().await {
             Ok(tx) => tx,
             Err(err) => {
@@ -1989,9 +1989,8 @@ impl Provider<SeqTypes, VidCommonRequest> for Persistence {
             };
 
         match share.data {
-            VidDisperseShare::V0(vid) => Some(vid.common),
-            // TODO (abdul): V1 VID does not have common field
-            _ => None,
+            VidDisperseShare::V0(vid) => Some(VidCommon::V0(vid.common)),
+            VidDisperseShare::V1(vid) => Some(VidCommon::V1(vid.common)),
         }
     }
 }
@@ -2292,6 +2291,7 @@ mod test {
             recipient_key: pubkey,
             epoch: None,
             target_epoch: None,
+            common: avidm_param.clone(),
         }
         .to_proposal(&privkey)
         .unwrap()
@@ -2364,7 +2364,7 @@ mod test {
 
         // Fetch it as if we were rebuilding an archive.
         assert_eq!(
-            None,
+            Some(VidCommon::V1(avidm_param)),
             storage
                 .fetch(VidCommonRequest(VidCommitment::V1(
                     vid_share.data.payload_commitment
@@ -2432,6 +2432,7 @@ mod test {
             recipient_key: pubkey,
             epoch: None,
             target_epoch: None,
+            common: avidm_param,
         }
         .to_proposal(&privkey)
         .unwrap()
