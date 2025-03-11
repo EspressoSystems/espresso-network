@@ -501,7 +501,7 @@ cross_tests!(
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
-          next_view_timeout: 2000,
+          next_view_timeout: 5000,
           ..Default::default()
       };
       let mut metadata = TestDescription::default().set_num_nodes(20,20);
