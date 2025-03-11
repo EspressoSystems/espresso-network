@@ -701,4 +701,50 @@ contract LightClient_LivenessDetectionTest is LightClientCommonTest {
 }
 
 /// @dev Ensure production-deployed V1 can be upgraded to V2 properly
-contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest { }
+contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest {
+    string SEPOLIA_RPC_URL = "https://0xrpc.io/sep";
+    address proxy = 0x303872BB82a191771321d4828888920100d0b3e4;
+
+    function test_ForkTest_UpgradeToV2() public {
+        // create fork on Sepolia on which we have deployed LightClient
+        // proxy: https://sepolia.etherscan.io/address/0x303872bb82a191771321d4828888920100d0b3e4
+        vm.createSelectFork(SEPOLIA_RPC_URL, 7844940); // March 6th, 2025
+        assertEq(block.number, 7844940);
+        (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion) = LC(proxy).getVersion();
+        assertEq(majorVersion, 1);
+        assertEq(minorVersion, 0);
+        assertEq(patchVersion, 0);
+        (
+            uint256 genesisThreshold,
+            BN254.ScalarField genesisBlsKeyComm,
+            BN254.ScalarField genesisSchnorrKeyComm,
+            BN254.ScalarField genesisAmountComm
+        ) = LC(proxy).genesisStakeTableState();
+
+        // first deploy LCV2
+        LC lcv2 = new LCV2();
+        bytes memory lcv2InitData =
+            abi.encodeWithSignature("initializeV2(uint64)", BLOCKS_PER_EPOCH);
+        // upgrade V1 to V2 and initialize LCV2
+        admin = LC(proxy).owner();
+        vm.prank(admin);
+        LC(proxy).upgradeToAndCall(address(lcv2), lcv2InitData);
+
+        // test LCV2 is successfully in effect
+        (majorVersion, minorVersion, patchVersion) = LCV2(proxy).getVersion();
+        assertEq(majorVersion, 2);
+        assertEq(minorVersion, 0);
+        assertEq(patchVersion, 0);
+        assertEq(LCV2(proxy)._blocksPerEpoch(), BLOCKS_PER_EPOCH);
+        (
+            uint256 threshold,
+            BN254.ScalarField blsKeyComm,
+            BN254.ScalarField schnorrKeyComm,
+            BN254.ScalarField amountComm
+        ) = LCV2(proxy).votingStakeTableState();
+        assertEq(threshold, genesisThreshold);
+        assertEq(blsKeyComm, genesisBlsKeyComm);
+        assertEq(schnorrKeyComm, genesisSchnorrKeyComm);
+        assertEq(amountComm, genesisAmountComm);
+    }
+}
