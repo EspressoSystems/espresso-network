@@ -33,7 +33,10 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
-    traits::{election::Membership, network::Topic, signature_key::SignatureKey as _},
+    traits::{
+        election::Membership, network::Topic, node_implementation::Versions,
+        signature_key::SignatureKey as _,
+    },
     HotShotConfig, PeerConfig,
 };
 use tokio::{
@@ -54,15 +57,15 @@ use crate::{
     SignatureKey,
 };
 
-struct MockNode<D: DataSourceLifeCycle> {
-    hotshot: SystemContextHandle<MockTypes, MockNodeImpl, MockVersions>,
+struct MockNode<D: DataSourceLifeCycle, V: Versions> {
+    hotshot: SystemContextHandle<MockTypes, MockNodeImpl, V>,
     data_source: D,
     storage: D::Storage,
 }
 
-pub struct MockNetwork<D: DataSourceLifeCycle> {
+pub struct MockNetwork<D: DataSourceLifeCycle, V: Versions> {
     tasks: Vec<BackgroundTask>,
-    nodes: Vec<MockNode<D>>,
+    nodes: Vec<MockNode<D, V>>,
     pub_keys: Vec<BLSPubKey>,
 }
 
@@ -73,7 +76,7 @@ pub type MockSqlDataSource = SqlDataSource<MockTypes, NoFetching>;
 
 pub const NUM_NODES: usize = 2;
 
-impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
+impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
     pub async fn init() -> Self {
         Self::init_with_config(|_| {}, false).await
     }
@@ -237,8 +240,8 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
     }
 }
 
-impl<D: DataSourceLifeCycle> MockNetwork<D> {
-    pub fn handle(&self) -> &SystemContextHandle<MockTypes, MockNodeImpl, MockVersions> {
+impl<D: DataSourceLifeCycle, V: Versions> MockNetwork<D, V> {
+    pub fn handle(&self) -> &SystemContextHandle<MockTypes, MockNodeImpl, V> {
         &self.nodes[0].hotshot
     }
 
@@ -281,7 +284,7 @@ impl<D: DataSourceLifeCycle> MockNetwork<D> {
     }
 }
 
-impl<D: DataSourceLifeCycle> MockNetwork<D> {
+impl<D: DataSourceLifeCycle, V: Versions> MockNetwork<D, V> {
     pub async fn start(&mut self) {
         // Spawn the update tasks.
         for (i, node) in self.nodes.iter_mut().enumerate() {
@@ -310,7 +313,7 @@ impl<D: DataSourceLifeCycle> MockNetwork<D> {
     }
 }
 
-impl<D: DataSourceLifeCycle> Drop for MockNetwork<D> {
+impl<D: DataSourceLifeCycle, V: Versions> Drop for MockNetwork<D, V> {
     fn drop(&mut self) {
         if let Ok(handle) = Handle::try_current() {
             block_in_place(move || handle.block_on(self.shut_down_impl()));
@@ -335,7 +338,7 @@ pub trait DataSourceLifeCycle: Clone + Send + Sync + Sized + 'static {
     }
 
     /// Setup runs after setting up the network but before starting a test.
-    async fn setup(_network: &mut MockNetwork<Self>) {}
+    async fn setup<V: Versions>(_network: &mut MockNetwork<Self, V>) {}
 }
 
 pub trait TestableDataSource:
