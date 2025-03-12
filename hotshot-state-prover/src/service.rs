@@ -311,10 +311,9 @@ pub async fn submit_state_and_proof(
     // prepare the input the contract call and the tx itself
     let proof: ParsedPlonkProof = proof.into();
     let new_state: ParsedLightClientState = public_input.lc_state.into();
-    let next_stake_table: ParsedStakeTableState = public_input.next_st_state.into();
+    let _next_stake_table: ParsedStakeTableState = public_input.next_st_state.into();
 
-    let mut tx =
-        contract.new_finalized_state(new_state.into(), next_stake_table.into(), proof.into());
+    let mut tx = contract.new_finalized_state(new_state.into(), proof.into());
 
     // only use gas oracle for mainnet
     if contract.client_ref().get_chainid().await?.as_u64() == 1 {

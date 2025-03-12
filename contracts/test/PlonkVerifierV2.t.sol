@@ -276,7 +276,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
             mstore(add(start, mul(nthField, 0x20)), invalidField)
         }
 
-        vm.expectRevert("Bn254: invalid G1 point");
+        vm.expectRevert("Bn254: invalid scalar field");
         verifier.validateProof(proof);
     }
 }
