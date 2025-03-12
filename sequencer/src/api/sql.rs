@@ -318,13 +318,41 @@ async fn load_reward_accounts<Mode: TransactionMode>(
         .context(format!("leaf {height} not available"))?;
     let header = leaf.header();
 
-    let root = header.reward_merkle_tree_root().context("not found")?;
+    let Some(merkle_root) = header.reward_merkle_tree_root() else {
+        bail!("reward merkle tree root not available");
+    };
 
-    let mut snapshot = RewardMerkleTree::from_commitment(root);
+    let mut snapshot = RewardMerkleTree::from_commitment(merkle_root);
+    for account in accounts {
+        let proof = tx
+            .get_path(
+                Snapshot::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::Index(
+                    header.height(),
+                ),
+                *account,
+            )
+            .await
+            .context(format!(
+                "fetching reward account {account}; height {}",
+                header.height()
+            ))?;
+        match proof.proof.first().context(format!(
+            "empty proof for reward account {account}; height {}",
+            header.height()
+        ))? {
+            MerkleNode::Leaf { pos, elem, .. } => {
+                snapshot.remember(*pos, *elem, proof)?;
+            },
+            MerkleNode::Empty => {
+                snapshot.non_membership_remember(*account, proof)?;
+            },
+            _ => {
+                bail!("Invalid proof");
+            },
+        }
+    }
 
-    bail!("unimplemented");
-
-    // Ok((snapshot, leaf.leaf().clone()))
+    Ok((snapshot, leaf.leaf().clone()))
 }
 
 async fn load_accounts<Mode: TransactionMode>(

@@ -1,17 +1,18 @@
+use std::collections::HashSet;
+
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use committable::Commitment;
 use derive_more::{Add, Display, From, Into, Mul, Sub};
 use ethers::{abi::Address, types::U256};
-use jf_merkle_tree::{MerkleTreeScheme, UniversalMerkleTreeScheme};
+use jf_merkle_tree::{
+    prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
+    universal_merkle_tree::UniversalMerkleTree,
+    MerkleTreeScheme, UniversalMerkleTreeScheme,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{FeeAccount, FeeAmount};
 use crate::Header;
-use committable::Commitment;
-use jf_merkle_tree::{
-    prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
-    universal_merkle_tree::UniversalMerkleTree,
-};
-use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Delta {
@@ -35,12 +36,13 @@ pub type FeeMerkleTree =
     UniversalMerkleTree<FeeAmount, Sha3Digest, FeeAccount, FEE_MERKLE_TREE_ARITY, Sha3Node>;
 pub type FeeMerkleCommitment = <FeeMerkleTree as MerkleTreeScheme>::Commitment;
 
+// TODO: Update JELLYFISH crate to use KECCACK256
 pub type RewardMerkleTree = UniversalMerkleTree<
     RewardAmount,
-    Keccak256Digest,
+    Sha3Digest,
     RewardAccount,
     REWARD_MERKLE_TREE_ARITY,
-    Keccak256Node,
+    Sha3Node,
 >;
 pub type RewardMerkleCommitment = <RewardMerkleTree as MerkleTreeScheme>::Commitment;
 
