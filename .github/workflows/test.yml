@@ -51,13 +51,20 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        run: cargo nextest archive --locked --workspace --archive-file nextest-archive-postgres.tar.zst
+        run: cargo nextest archive --locked --workspace --timings --archive-file nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-postgres
           path: nextest-archive-postgres.tar.zst
+
+      - name: Preview Cargo Timings
+        run:
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: ./target/cargo-timings/cargo-timing.html
+
 
   build-test-artifacts-sqlite:
     name: Build test artifacts (sqlite)
@@ -86,13 +93,20 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --archive-file nextest-archive-sqlite.tar.zst
+        run: cargo nextest archive --locked --features "embedded-db testing" --timings --workspace --archive-file nextest-archive-sqlite.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-sqlite
           path: nextest-archive-sqlite.tar.zst
+
+      - name: Preview Cargo Timings
+        run:
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: ./target/cargo-timings/cargo-timing.html
+
 
   build-test-bins:
     name: Build test binaries
