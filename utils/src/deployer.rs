@@ -3,13 +3,16 @@ use std::{collections::HashMap, io::Write, ops::Deref, sync::Arc, time::Duration
 use alloy::{
     contract::RawCallBuilder,
     network::{Ethereum, EthereumWallet},
+    primitives::U256,
     providers::ProviderBuilder,
     signers::Signer as _,
     transports::Transport,
 };
 use anyhow::{ensure, Context};
 use clap::{builder::OsStr, Parser, ValueEnum};
-use contract_bindings_alloy::feecontract::FeeContract;
+use contract_bindings_alloy::{
+    esptoken::EspToken, feecontract::FeeContract, staketable::StakeTable,
+};
 use contract_bindings_ethers::{
     erc1967_proxy::ERC1967Proxy,
     light_client::{LightClient, LIGHTCLIENT_ABI},
@@ -54,6 +57,22 @@ pub struct DeployedContracts {
     /// Use an already-deployed PermissonedStakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::PermissonedStakeTable)]
     permissioned_stake_table: Option<Address>,
+
+    /// Use an already-deployed EspToken.sol instead of deploying a new one.
+    #[clap(long, env = Contract::EspToken)]
+    esp_token: Option<Address>,
+
+    /// Use an already-deployed EspToken.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::EspTokenProxy)]
+    esp_token_proxy: Option<Address>,
+
+    /// Use an already-deployed StakeTable.sol instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTable)]
+    stake_table: Option<Address>,
+
+    /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTableProxy)]
+    stake_table_proxy: Option<Address>,
 }
 
 /// An identifier for a particular contract.
@@ -71,6 +90,14 @@ pub enum Contract {
     FeeContractProxy,
     #[display("ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS")]
     PermissonedStakeTable,
+    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS")]
+    EspToken,
+    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS")]
+    EspTokenProxy,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS")]
+    StakeTable,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
+    StakeTableProxy,
 }
 
 impl From<Contract> for OsStr {
@@ -103,6 +130,18 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.permissioned_stake_table {
             m.insert(Contract::PermissonedStakeTable, addr);
+        }
+        if let Some(addr) = deployed.esp_token {
+            m.insert(Contract::EspToken, addr);
+        }
+        if let Some(addr) = deployed.esp_token_proxy {
+            m.insert(Contract::EspTokenProxy, addr);
+        }
+        if let Some(addr) = deployed.stake_table {
+            m.insert(Contract::StakeTable, addr);
+        }
+        if let Some(addr) = deployed.stake_table_proxy {
+            m.insert(Contract::StakeTableProxy, addr);
         }
         Self(m)
     }
@@ -323,7 +362,14 @@ pub async fn deploy(
     permissioned_prover: Option<Address>,
     mut contracts: Contracts,
     initial_stake_table: Option<Vec<NodeInfo>>,
+    exit_escrow_period: Option<Duration>,
 ) -> anyhow::Result<Contracts> {
+    if should_deploy(ContractGroup::StakeTable, &only) && exit_escrow_period.is_none() {
+        anyhow::bail!(
+            "a value for the 'exit escrow period' must be provided to deploy the StakeTable"
+        );
+    };
+
     let provider = Provider::<Http>::try_from(l1url.to_string())?.interval(l1_interval);
     let chain_id = provider.get_chainid().await?.as_u64();
     let wallet = MnemonicBuilder::<English>::default()
@@ -482,6 +528,125 @@ pub async fn deploy(
         }
     }
 
+    // `EspToken.sol`
+    if should_deploy(ContractGroup::EspToken, &only) {
+        let token_address = contracts
+            .deploy_tx_alloy(
+                Contract::EspToken,
+                EspToken::deploy_builder(l1_alloy.clone()),
+            )
+            .await?;
+        let token = EspToken::new(token_address, l1_alloy.clone());
+        let data = token
+            .initialize(
+                deployer.to_alloy(),
+                // TODO: token recipient
+                deployer.to_alloy(),
+            )
+            .calldata()
+            .clone();
+        let token_proxy_address = contracts
+            .deploy_tx_alloy(
+                Contract::EspTokenProxy,
+                contract_bindings_alloy::erc1967proxy::ERC1967Proxy::deploy_builder(
+                    l1_alloy.clone(),
+                    token_address,
+                    data,
+                ),
+            )
+            .await?;
+
+        // confirm that the implementation address is the address of the fee contract deployed above
+        if !is_proxy_contract(&provider, token_proxy_address.to_ethers())
+            .await
+            .expect("Failed to determine if ESP token is a proxy")
+        {
+            panic!("ESP token contract address is not a proxy");
+        }
+
+        // Instantiate a wrapper with the proxy address and fee contract ABI.
+        let proxy =
+            contract_bindings_alloy::esptoken::EspToken::new(token_proxy_address, l1_alloy.clone());
+
+        // Transfer ownership to the multisig wallet if provided.
+        if let Some(owner) = multisig_address {
+            tracing::info!(
+                ?token_proxy_address,
+                ?owner,
+                "transferring ESP token proxy ownership to multisig",
+            );
+            let _ = proxy.transferOwnership(owner.to_alloy()).send().await?;
+        }
+    }
+
+    // `StakeTable.sol`
+    if should_deploy(ContractGroup::StakeTable, &only) {
+        let stake_table_address = contracts
+            .deploy_tx_alloy(
+                Contract::StakeTable,
+                StakeTable::deploy_builder(l1_alloy.clone()),
+            )
+            .await?;
+        let stake_table = StakeTable::new(stake_table_address, l1_alloy.clone());
+        let token_proxy = contracts
+            .get_contract_address(Contract::EspTokenProxy)
+            .context("no ESP token address")?
+            .to_alloy();
+        let lc_proxy = contracts
+            .get_contract_address(Contract::LightClientProxy)
+            .context("no light client address")?
+            .to_alloy();
+        let exit_escrow_period = U256::from(
+            exit_escrow_period
+                .context("no exit escrow period")?
+                .as_secs(),
+        );
+        let data = stake_table
+            .initialize(
+                token_proxy,
+                lc_proxy,
+                exit_escrow_period,
+                // TODO: token recipient
+                deployer.to_alloy(),
+            )
+            .calldata()
+            .clone();
+        let stake_table_proxy_address = contracts
+            .deploy_tx_alloy(
+                Contract::StakeTableProxy,
+                contract_bindings_alloy::erc1967proxy::ERC1967Proxy::deploy_builder(
+                    l1_alloy.clone(),
+                    stake_table_address,
+                    data,
+                ),
+            )
+            .await?;
+
+        // confirm that the implementation address is the address of the fee contract deployed above
+        if !is_proxy_contract(&provider, stake_table_proxy_address.to_ethers())
+            .await
+            .expect("Failed to determine if stake table contract is a proxy")
+        {
+            panic!("Stake table contract address is not a proxy");
+        }
+
+        // Instantiate a wrapper with the proxy address and fee contract ABI.
+        let proxy = contract_bindings_alloy::esptoken::EspToken::new(
+            stake_table_proxy_address,
+            l1_alloy.clone(),
+        );
+
+        // Transfer ownership to the multisig wallet if provided.
+        if let Some(owner) = multisig_address {
+            tracing::info!(
+                ?stake_table_proxy_address,
+                ?owner,
+                "transferring stake table proxy ownership to multisig",
+            );
+            let _ = proxy.transferOwnership(owner.to_alloy()).send().await?;
+        }
+    }
+
     Ok(contracts)
 }
 
@@ -516,6 +681,8 @@ pub enum ContractGroup {
     FeeContract,
     LightClient,
     PermissionedStakeTable,
+    EspToken,
+    StakeTable,
 }
 
 // Link with LightClient's bytecode artifacts. We include the unlinked bytecode for the contract

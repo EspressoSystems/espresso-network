@@ -1,18 +1,25 @@
 pragma solidity ^0.8.0;
 
 import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { UUPSUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 import { AbstractStakeTable } from "./interfaces/AbstractStakeTable.sol";
 import { LightClient } from "../src/LightClient.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { InitializedAt } from "./InitializedAt.sol";
 
 using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 
 /// @title Implementation of the Stake Table interface
-contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
+contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
+    /// @notice upgrade event when the proxy updates the implementation it's pointing to
+    event Upgrade(address implementation);
+
     /// Error raised when a user tries to register a validator with the same address
     error ValidatorAlreadyRegistered();
 
@@ -99,21 +106,54 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
     /// evidence to be submitted.
     uint256 public exitEscrowPeriod;
 
-    address public admin;
+    /// @notice since the constructor initializes storage on this contract we disable it
+    /// @dev storage is on the proxy contract since it calls this contract via delegatecall
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
-    /// TODO change constructor to initialize function when we make the contract upgradeable
-    constructor(
+    function initialize(
         address _tokenAddress,
         address _lightClientAddress,
         uint256 _exitEscrowPeriod,
         address _initialOwner
-    ) Ownable(_initialOwner) InitializedAt() {
+    ) public initializer {
+        __Ownable_init(_initialOwner);
+        __UUPSUpgradeable_init();
+        initializeAtBlock();
+
+        initializeState(_tokenAddress, _lightClientAddress, _exitEscrowPeriod);
+    }
+
+    function initializeState(
+        address _tokenAddress,
+        address _lightClientAddress,
+        uint256 _exitEscrowPeriod
+    ) internal {
         // TODO ensure address not zero
         tokenAddress = _tokenAddress;
         // TODO ensure address not zero
         lightClient = LightClient(_lightClientAddress);
         exitEscrowPeriod = _exitEscrowPeriod;
-        admin = msg.sender;
+    }
+
+    /// @notice Use this to get the implementation contract version
+    /// @return majorVersion The major version of the contract
+    /// @return minorVersion The minor version of the contract
+    /// @return patchVersion The patch version of the contract
+    function getVersion()
+        public
+        pure
+        virtual
+        returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
+    {
+        return (1, 0, 0);
+    }
+
+    /// @notice only the owner can authorize an upgrade
+    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
+        emit Upgrade(newImplementation);
     }
 
     /// @dev Computes a hash value of some G2 point.
@@ -249,13 +289,14 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
 
     /// @notice Withdraw undelegated funds
     function claimWithdrawal(address validator) external virtual override {
-        if (block.timestamp < undelegations[validator][msg.sender].unlocksAt) {
-            revert PrematureWithdrawal();
-        }
-
+        // If entries are missing at any of the levels of the mapping this will return zero
         uint256 amount = undelegations[validator][msg.sender].amount;
         if (amount == 0) {
             revert NothingToWithdraw();
+        }
+
+        if (block.timestamp < undelegations[validator][msg.sender].unlocksAt) {
+            revert PrematureWithdrawal();
         }
 
         // Mark funds as spent

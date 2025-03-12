@@ -4,8 +4,10 @@ pragma solidity ^0.8.0;
 import { StakeTable } from "../../src/StakeTable.sol";
 
 contract StakeTableMock is StakeTable {
-    constructor(address token, address lightClient, uint256 escrowPeriod, address initialOwner)
-        StakeTable(token, lightClient, escrowPeriod, initialOwner)
-    // solhint-disable-next-line no-empty-blocks
-    { }
+    constructor(address _tokenAddress, address _lightClientAddress, uint256 _exitEscrowPeriod)
+        StakeTable()
+    {
+        initializeAtBlock();
+        initializeState(_tokenAddress, _lightClientAddress, _exitEscrowPeriod);
+    }
 }

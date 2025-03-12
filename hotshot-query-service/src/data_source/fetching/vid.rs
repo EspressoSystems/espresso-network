@@ -39,7 +39,7 @@ use crate::{
     },
     fetching::{self, request, Callback},
     types::HeightIndexed,
-    Header, Payload, QueryResult,
+    Header, Payload, QueryResult, VidCommon,
 };
 
 pub(super) type VidCommonFetcher<Types, S, P> =
@@ -239,17 +239,16 @@ impl<Types: NodeType, S, P> PartialOrd for VidCommonCallback<Types, S, P> {
     }
 }
 
-impl<Types: NodeType, S, P> Callback<hotshot_types::vid::advz::ADVZCommon>
-    for VidCommonCallback<Types, S, P>
+impl<Types: NodeType, S, P> Callback<VidCommon> for VidCommonCallback<Types, S, P>
 where
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
-    async fn run(self, common: hotshot_types::vid::advz::ADVZCommon) {
+    async fn run(self, common: VidCommon) {
         tracing::info!("fetched VID common {:?}", self.header.payload_commitment());
-        let common = VidCommonQueryData::new(self.header, Some(common));
+        let common = VidCommonQueryData::new(self.header, common);
         self.fetcher.store_and_notify(common).await;
     }
 }

@@ -40,6 +40,7 @@ members = [
     "marketplace-solver",
     "node-metrics",
     "request-response",
+    "staking-cli",
     "sequencer",
     "tests",
     "types",
@@ -213,7 +214,7 @@ serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "^1.0.113"
 tempfile = "3.10"
 toml = "0.8"
-url = "2.3"
+url = { version = "2.3", features = [ "serde" ] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "8.3", features = ["git", "gitcl"] }

@@ -1,0 +1,30 @@
+[package]
+name = "staking-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+alloy.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+clap-serde = "0.5.1"
+clap-serde-derive = "0.2.1"
+contract-bindings-alloy.workspace = true
+derive_more.workspace = true
+directories = "6.0.0"
+escargot = "0.5.13"
+espresso-types = { version = "0.1.0", path = "../types" }
+git-version = "0.3.9"
+hotshot-types.workspace = true
+rust_decimal = "1.36.0"
+serde.workspace = true
+sysinfo = "0.33.1"
+tagged-base64.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -212,10 +212,11 @@ jobs:
         version: [02,99]
         include:
           - version: 02
-            compose: "-f process-compose.yaml"
+            test-name: test_native_demo_basic
 
           - version: 99
-            compose: "-f process-compose.yaml -f process-compose-mp.yml"
+            test-name: test_native_demo_upgrade
+
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
@@ -242,9 +243,6 @@ jobs:
       - name: Install process-compose
         run: nix profile install nixpkgs#process-compose
 
-      - name: Run Demo-Native ${{matrix.version}}
-        run: bash -x scripts/demo-native ${{matrix.compose}} --tui=false > ${{ env.PC_LOGS }} 2>&1 &
-
       - name: Test Integration
         env:
           RUST_LOG: debug
@@ -252,7 +250,7 @@ jobs:
           INTEGRATION_TEST_SEQUENCER_VERSION: ${{ matrix.version }}
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
-          --workspace-remap $PWD $(if [ "${{ matrix.version }}" == "2" ]; then echo " smoke"; fi)
+          --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 10
 
       - name: Show end of logs

@@ -75,11 +75,10 @@ test-all:
     cargo nextest run --locked --release --workspace --verbose --profile all
 
 test-integration:
-	@echo 'NOTE that demo-native must be running for this test to succeed.'
-	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run --all-features --nocapture --profile integration smoke
+	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
+
 test-integration-mp:
-    @echo 'NOTE that demo-native-mp must be running for this test to succeed.'
-    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run --all-features --nocapture --profile integration
+    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
 
 clippy:
     @echo 'features: "embedded-db"'
@@ -134,14 +133,16 @@ dev-sequencer:
 build-docker-images:
     scripts/build-docker-images-native
 
-# generate rust bindings for contracts
-REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$|^StakeTable$"
+# generate rust bindings for contracts, the ethers bindings are deprecated,
+# please only add alloy bindings for new contracts.
+ETHERS_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$"
+ALLOY_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$|^StakeTable$|^EspToken$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
     # Generate the ethers bindings
-    nix develop .#legacyFoundry -c forge bind --contracts ./contracts/src/ --ethers --crate-name contract-bindings-ethers --bindings-path contract-bindings-ethers --select "{{REGEXP}}" --overwrite --force
+    nix develop .#legacyFoundry -c forge bind --contracts ./contracts/src/ --ethers --crate-name contract-bindings-ethers --bindings-path contract-bindings-ethers --select "{{ETHERS_REGEXP}}" --overwrite --force
 
     # Foundry doesn't include bytecode in the bindings for LightClient.sol, since it links with
     # libraries. However, this bytecode is still needed to link and deploy the contract. Copy it to
@@ -158,7 +159,7 @@ gen-bindings:
 
     # Generate the alloy bindings
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0x5fbdb2315678afecb367f032d93f642f64180aa3 --alloy --contracts ./contracts/src/ --crate-name contract-bindings-alloy --bindings-path contract-bindings-alloy --select "{{REGEXP}}" --overwrite --force
+    forge bind --skip test --skip script --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0x5fbdb2315678afecb367f032d93f642f64180aa3 --alloy --contracts ./contracts/src/ --crate-name contract-bindings-alloy --bindings-path contract-bindings-alloy --select "{{ALLOY_REGEXP}}" --overwrite --force
 
     # For some reason `alloy` likes to use the wrong version of itself in `contract-bindings`.
     # Use the workspace version.

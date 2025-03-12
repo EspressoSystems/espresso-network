@@ -447,7 +447,11 @@ use task::BackgroundTask;
 use tide_disco::{method::ReadState, App, StatusCode};
 use vbs::version::StaticVersionType;
 
-pub type VidCommon = Option<hotshot_types::vid::advz::ADVZCommon>;
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub enum VidCommon {
+    V0(hotshot_types::vid::advz::ADVZCommon),
+    V1(hotshot_types::vid::avidm::AvidMCommon),
+}
 
 pub type Payload<Types> = <Types as NodeType>::BlockPayload;
 pub type Header<Types> = <Types as NodeType>::BlockHeader;
