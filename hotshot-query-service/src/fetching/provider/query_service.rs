@@ -595,7 +595,6 @@ mod test {
         let test_common = &leaves[3];
 
         // Make requests for missing data that should _not_ trigger an active fetch:
-        tracing::error!("requesting unfetchable resources");
         let mut fetches = vec![];
         // * An unknown leaf hash.
         fetches.push(data_source.get_leaf(test_leaf.hash()).await.map(ignore));
@@ -661,7 +660,6 @@ mod test {
             tracing::info!("checking fetch {i} is unresolved");
             fetch.try_resolve().unwrap_err();
         }
-        tracing::error!("all fetches are unresolved");
 
         // Now we will actually fetch the missing data. First, since our node is not really
         // connected to consensus, we need to give it a leaf after the range of interest so it
@@ -673,11 +671,8 @@ mod test {
             .await
             .unwrap();
 
-        tracing::error!("requesting fetchable resources");
-        tracing::error!("requesting leaf {:?}", test_leaf);
         let req_leaf = data_source.get_leaf(test_leaf.height() as usize).await;
         let req_block = data_source.get_block(test_block.height() as usize).await;
-        tracing::error!("block fetched");
         let req_payload = data_source
             .get_payload(test_payload.height() as usize)
             .await;
@@ -706,7 +701,6 @@ mod test {
             .get_block(test_block.height() as usize)
             .await
             .await;
-        tracing::error!("trying to resolve payload");
         let payload = data_source
             .get_payload(test_payload.height() as usize)
             .await
@@ -757,7 +751,6 @@ mod test {
         // since fetching a leaf does not necessarily fetch the corresponding block. We can fetch by
         // hash now, since the presence of the corresponding leaf allows us to confirm that a block
         // with this hash exists, and trigger a fetch for it.
-        tracing::error!("fetching block by hash");
         provider.unblock().await;
         {
             let block = data_source.get_block(test_leaf.block_hash()).await.await;
@@ -767,7 +760,6 @@ mod test {
         // Test a similar scenario, but with payload instead of block: we are aware of
         // `leaves.last()` but not the corresponding payload, but we can fetch that payload by block
         // hash.
-        tracing::error!("fetching payload by hash");
         {
             let leaf = leaves.last().unwrap();
             let payload = data_source.get_payload(leaf.block_hash()).await.await;
