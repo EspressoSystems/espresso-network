@@ -702,13 +702,13 @@ contract LightClient_LivenessDetectionTest is LightClientCommonTest {
 
 /// @dev Ensure production-deployed V1 can be upgraded to V2 properly
 contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest {
-    string SEPOLIA_RPC_URL = "https://0xrpc.io/sep";
+    string sepoliaRpcUrl = "https://0xrpc.io/sep";
     address proxy = 0x303872BB82a191771321d4828888920100d0b3e4;
 
     function test_ForkTest_UpgradeToV2() public {
         // create fork on Sepolia on which we have deployed LightClient
         // proxy: https://sepolia.etherscan.io/address/0x303872bb82a191771321d4828888920100d0b3e4
-        vm.createSelectFork(SEPOLIA_RPC_URL, 7844940); // March 6th, 2025
+        vm.createSelectFork(sepoliaRpcUrl, 7844940); // March 6th, 2025
         assertEq(block.number, 7844940);
         (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion) = LC(proxy).getVersion();
         assertEq(majorVersion, 1);

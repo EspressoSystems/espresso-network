@@ -12,7 +12,7 @@ contract PolynomialEvalV2 {
 
     /// @dev a Radix 2 Evaluation Domain
     struct EvalDomain {
-        uint256 logSize; // log_2(self.size)
+        uint256 logSize; // log_2(domain.size)
         uint256 sizeInv; // Inverse of the size in the field
         uint256[11] elements; // 1, g, g^2, ..., g^10
     }
@@ -92,14 +92,14 @@ contract PolynomialEvalV2 {
 
     // This evaluates the vanishing polynomial for this domain at zeta.
     // For multiplicative subgroups, this polynomial is
-    // `z(X) = X^self.size - 1`.
-    function evaluateVanishingPoly(EvalDomain memory self, uint256 zeta)
+    // `z(X) = X^domain.size - 1`.
+    function evaluateVanishingPoly(EvalDomain memory domain, uint256 zeta)
         public
         pure
         returns (uint256 res)
     {
         uint256 p = BN254.R_MOD;
-        uint256 logSize = self.logSize;
+        uint256 logSize = domain.logSize;
 
         assembly {
             switch zeta
@@ -117,7 +117,7 @@ contract PolynomialEvalV2 {
     /// @dev Evaluate the lagrange polynomial at point `zeta` given the vanishing polynomial
     /// evaluation `vanish_eval`.
     function evaluateLagrangeOne(
-        EvalDomain memory self,
+        EvalDomain memory domain,
         BN254.ScalarField zeta,
         BN254.ScalarField vanishEval
     ) public view returns (BN254.ScalarField res) {
@@ -132,10 +132,10 @@ contract PolynomialEvalV2 {
 
         uint256 p = BN254.R_MOD;
         uint256 divisor;
-        uint256 vanishEvalMulSizeInv = self.sizeInv;
+        uint256 vanishEvalMulSizeInv = domain.sizeInv;
 
         // =========================
-        // lagrange_1_eval = vanish_eval / self.size / (zeta - 1)
+        // lagrange_1_eval = vanish_eval / domain.size / (zeta - 1)
         // =========================
         assembly {
             vanishEvalMulSizeInv := mulmod(vanishEval, vanishEvalMulSizeInv, p)
@@ -152,7 +152,7 @@ contract PolynomialEvalV2 {
 
     /// @dev Evaluate public input polynomial at point `zeta`.
     function evaluatePiPoly(
-        EvalDomain memory self,
+        EvalDomain memory domain,
         uint256[11] memory pi,
         uint256 zeta,
         uint256 vanishingPolyEval
@@ -165,7 +165,7 @@ contract PolynomialEvalV2 {
                 if (zeta == group) {
                     return pi[i];
                 }
-                group = mulmod(group, self.elements[1], p);
+                group = mulmod(group, domain.elements[1], p);
             }
             return 0;
         }
@@ -211,7 +211,7 @@ contract PolynomialEvalV2 {
         // suffix = [dcb, dc, d, 1]
         assembly {
             let suffixPtr := add(suffix, mul(10, 0x20))
-            let localDomainElementsPtr := add(mload(add(self, 0x40)), mul(10, 0x20))
+            let localDomainElementsPtr := add(mload(add(domain, 0x40)), mul(10, 0x20))
             let currentElementSuffix := 1
 
             // Last element of suffix is set to 1
@@ -240,7 +240,7 @@ contract PolynomialEvalV2 {
             let currentElementPrefix := 1
             let suffixPtr := suffix
             let piPtr := pi
-            let localDomainElementsPtr := mload(add(self, 0x40))
+            let localDomainElementsPtr := mload(add(domain, 0x40))
 
             // Compute the sum term \sum_{i=0}^{length} currentElementPrefix * suffix[i] * pi[i] *
             // g^i
@@ -275,7 +275,7 @@ contract PolynomialEvalV2 {
 
         assembly {
             // Final computation
-            let nInverted := mload(add(self, 0x20)) // 1/n
+            let nInverted := mload(add(domain, 0x20)) // 1/n
             // (vanishingPolyEval / ( n * fullProduct )) * sum
             res := mulmod(vanishingPolyEval, nInverted, p)
             res := mulmod(res, invertedProduct, p)
@@ -284,17 +284,17 @@ contract PolynomialEvalV2 {
     }
 
     /// @dev compute the EvalData for a given domain and a challenge zeta
-    function evalDataGen(EvalDomain memory self, uint256 zeta, uint256[11] memory publicInput)
+    function evalDataGen(EvalDomain memory domain, uint256 zeta, uint256[11] memory publicInput)
         public
         view
         virtual
         returns (EvalData memory evalData)
     {
-        evalData.vanishEval = BN254.ScalarField.wrap(evaluateVanishingPoly(self, zeta));
+        evalData.vanishEval = BN254.ScalarField.wrap(evaluateVanishingPoly(domain, zeta));
         evalData.lagrangeOne =
-            evaluateLagrangeOne(self, BN254.ScalarField.wrap(zeta), evalData.vanishEval);
+            evaluateLagrangeOne(domain, BN254.ScalarField.wrap(zeta), evalData.vanishEval);
         evalData.piEval = BN254.ScalarField.wrap(
-            evaluatePiPoly(self, publicInput, zeta, BN254.ScalarField.unwrap(evalData.vanishEval))
+            evaluatePiPoly(domain, publicInput, zeta, BN254.ScalarField.unwrap(evalData.vanishEval))
         );
     }
 }
