@@ -4,12 +4,11 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{marker::PhantomData, sync::Arc};
-
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
+use hotshot_types::data::vid_disperse::vid_total_weight;
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
     data::{vid_commitment, DaProposal2, PackedBundle},
@@ -30,6 +29,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use sha2::{Digest, Sha256};
+use std::{marker::PhantomData, sync::Arc};
 use tokio::{spawn, task::spawn_blocking};
 use tracing::instrument;
 
@@ -181,12 +181,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                         view_number, epoch_number
                     )
                 );
-                let num_nodes = membership.total_nodes().await;
-                let next_epoch_num_nodes = if epoch_number.is_some() {
-                    membership.next_epoch().await?.total_nodes().await
-                } else {
-                    num_nodes
-                };
+                let total_weight =
+                    vid_total_weight::<TYPES>(membership.stake_table().await, epoch_number);
+
+                let mut next_epoch_total_weight = total_weight;
+                if epoch_number.is_some() {
+                    next_epoch_total_weight = vid_total_weight::<TYPES>(
+                        membership.next_epoch().await?.stake_table().await,
+                        epoch_number.map(|epoch| epoch + 1),
+                    );
+                }
 
                 let version = self.upgrade_lock.version_infallible(view_number).await;
 
@@ -195,7 +199,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let metadata = proposal.data.metadata.encode();
                 let metadata_clone = metadata.clone();
                 let payload_commitment = spawn_blocking(move || {
-                    vid_commitment::<V>(&txns, &metadata, num_nodes, version)
+                    vid_commitment::<V>(&txns, &metadata, total_weight, version)
                 })
                 .await;
                 let payload_commitment = payload_commitment.unwrap();
@@ -208,7 +212,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                         vid_commitment::<V>(
                             &txns_clone,
                             &metadata_clone,
-                            next_epoch_num_nodes,
+                            next_epoch_total_weight,
                             version,
                         )
                     })

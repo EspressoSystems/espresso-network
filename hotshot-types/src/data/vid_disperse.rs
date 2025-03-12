@@ -242,8 +242,8 @@ impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
     /// # Errors
     /// Verification fail
     #[allow(clippy::result_unit_err)]
-    pub fn verify_share(&self, total_nodes: usize) -> std::result::Result<(), ()> {
-        advz_scheme(total_nodes)
+    pub fn verify_share(&self, total_weight: usize) -> std::result::Result<(), ()> {
+        advz_scheme(total_weight)
             .verify_share(&self.share, &self.common, &self.payload_commitment)
             .unwrap_or(Err(()))
     }
@@ -291,9 +291,23 @@ struct Weights {
     total_weight: usize,
 }
 
-fn approximate_weights<TYPES: NodeType>(
+pub fn vid_total_weight<TYPES: NodeType>(
     stake_table: Vec<PeerConfig<TYPES::SignatureKey>>,
-) -> Weights {
+    epoch: Option<TYPES::Epoch>,
+) -> usize {
+    if epoch.is_none() {
+        stake_table
+            .iter()
+            .fold(U256::zero(), |acc, entry| {
+                acc + entry.stake_table_entry.stake()
+            })
+            .as_usize()
+    } else {
+        approximate_weights(stake_table).total_weight
+    }
+}
+
+fn approximate_weights<Key: SignatureKey>(stake_table: Vec<PeerConfig<Key>>) -> Weights {
     let total_stake = stake_table.iter().fold(U256::zero(), |acc, entry| {
         acc + entry.stake_table_entry.stake()
     });
@@ -394,7 +408,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
     ) -> Result<Self> {
         let target_mem = membership.membership_for_epoch(target_epoch).await?;
         let stake_table = target_mem.stake_table().await;
-        let approximate_weights = approximate_weights::<TYPES>(stake_table);
+        let approximate_weights = approximate_weights(stake_table);
 
         let txns = payload.encode();
         let num_txns = txns.len();
@@ -560,8 +574,8 @@ impl<TYPES: NodeType> VidDisperseShare2<TYPES> {
     ///
     /// # Errors
     #[allow(clippy::result_unit_err)]
-    pub fn verify_share(&self, total_nodes: usize) -> std::result::Result<(), ()> {
-        let avidm_param = init_avidm_param(total_nodes).map_err(|_| ())?;
+    pub fn verify_share(&self, total_weight: usize) -> std::result::Result<(), ()> {
+        let avidm_param = init_avidm_param(total_weight).map_err(|_| ())?;
         AvidMScheme::verify_share(&avidm_param, &self.payload_commitment, &self.share)
             .unwrap_or(Err(()))
     }
