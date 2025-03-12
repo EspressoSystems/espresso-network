@@ -17,7 +17,7 @@ use hotshot_types::{
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
-        node_implementation::NodeType,
+        node_implementation::{ConsensusTime, NodeType},
         BlockPayload, ValidatedState,
     },
     utils::BuilderCommitment,
@@ -405,9 +405,9 @@ impl<
         Some(TYPES::AuctionResult { urls: vec![] })
     }
 
-    fn get_light_client_state(&self) -> anyhow::Result<LightClientState> {
+    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState> {
         LightClientState::new(
-            self.block_number,
+            view.u64(),
             self.block_number,
             self.payload_commitment.as_ref(),
         )

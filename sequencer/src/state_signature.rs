@@ -79,7 +79,10 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
             return;
         };
-        match leaf.block_header().get_light_client_state() {
+        match leaf
+            .block_header()
+            .get_light_client_state(leaf.view_number())
+        {
             Ok(state) => {
                 let signature = self.sign_new_state(&state).await;
                 tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);

@@ -744,7 +744,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         tracing::debug!("sending extended vote to everybody",);
         let light_client_state = leaf
             .block_header()
-            .get_light_client_state()
+            .get_light_client_state(view_number)
             .wrap()
             .context(error!("Failed to generate light client state"))?;
         let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(

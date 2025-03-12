@@ -217,5 +217,5 @@ pub trait BlockHeader<TYPES: NodeType>:
     fn get_auction_results(&self) -> Option<TYPES::AuctionResult>;
 
     /// Get the light client state
-    fn get_light_client_state(&self) -> anyhow::Result<LightClientState>;
+    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState>;
 }
