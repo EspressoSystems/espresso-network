@@ -14,22 +14,6 @@ pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
     Ok(TaggedBase64::parse(s)?.try_into()?)
 }
 
-// #[derive(Clone, Debug, From, Error)]
-// #[error("failed to parse commission. {msg}")]
-// pub struct ParseCommissionError {
-//     msg: String,
-// }
-
-// pub fn commission_parser(s: &str) -> Result<u16, ParseCommissionError> {
-//     let commission = s.parse()?;
-//     if commission > 10000 {
-//         return Err(ParseCommissionError {
-//             msg: "Commission must be between 0 (0.00%) and 10000 (100.00%)".to_string(),
-//         });
-//     }
-//     Ok(commission)
-// }
-
 #[derive(Debug, Clone)]
 pub struct Commission(u64);
 
