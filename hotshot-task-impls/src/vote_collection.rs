@@ -748,12 +748,13 @@ impl<TYPES: NodeType, V: Versions> ExtendedQuorumVoteCollectionTaskState<TYPES, 
         ) {
             (None, None) => Ok(None),
             (Some(cert), Some(state_cert)) => {
-                tracing::debug!("Certificate Formed! {:?}", cert);
-
                 let eqc = ExtendedQuorumCertificate {
                     qc: cert,
                     state_cert,
                 };
+
+                tracing::debug!("Certificate Formed! {:?}", eqc);
+
                 broadcast_event(
                     Arc::new(HotShotEvent::ExtendedQcFormed(Left(eqc.clone()))),
                     event_stream,
@@ -819,7 +820,10 @@ pub async fn handle_extended_quorum_vote<TYPES: NodeType, V: Versions>(
 ) -> Result<()> {
     match collectors.entry(vote.view_number()) {
         Entry::Vacant(entry) => {
-            tracing::debug!("Starting vote handle for view {:?}", vote.view_number());
+            tracing::debug!(
+                "Starting extended quorum vote handle for view {:?}",
+                vote.view_number()
+            );
             let info = AccumulatorInfo {
                 public_key,
                 membership: membership.clone(),
