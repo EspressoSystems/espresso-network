@@ -14,10 +14,11 @@ use async_trait::async_trait;
 use committable::Committable;
 use futures::try_join;
 use hotshot_types::{
-    data::{VidCommitment},
-    traits::{node_implementation::NodeType, EncodeBytes},
+    data::{ns_table, VidCommitment},
+    traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
     vid::{
         advz::{advz_scheme, ADVZScheme},
+        avidm::{init_avidm_param, AvidMScheme},
         // avidm::{init_avidm_param, AvidMScheme},
     },
 };
@@ -30,7 +31,7 @@ use crate::{
     availability::{LeafQueryData, PayloadQueryData, VidCommonQueryData},
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
-    Error, Payload, VidCommon,
+    Error, Header, Payload, VidCommon,
 };
 
 /// Data availability provider backed by another instance of this query service.
@@ -92,35 +93,47 @@ where
                             return None;
                         }
                     },
-                    VidCommon::V1(_common) => {
-                        //     let bytes = payload.data().encode();
-                        //     // Initialize AVIDM parameters
-                        //     let avidm_param = match init_avidm_param(common.total_weights) {
-                        //         Ok(param) => param,
-                        //         Err(err) => {
-                        //             tracing::error!(%err, "unable to initialize AVIDM parameters");
-                        //             return None;
-                        //         },
-                        //     };
+                    VidCommon::V1(common) => {
+                        let bytes = payload.data().encode();
+                        // Initialize AVIDM parameters
+                        let avidm_param = match init_avidm_param(common.total_weights) {
+                            Ok(param) => param,
+                            Err(err) => {
+                                tracing::error!(%err, "unable to initialize AVIDM parameters");
+                                return None;
+                            },
+                        };
 
-                        //     // Calculate AVIDM commitment
-                        //     let commit = match AvidMScheme::commit(
-                        //         &avidm_param,
-                        //         &bytes,
-                        //         ns_table::parse_ns_table(bytes.len(), &bytes),
-                        //     ) {
-                        //         Ok(commit) => VidCommitment::V1(commit),
-                        //         Err(err) => {
-                        //             tracing::error!(%err, "unable to compute AVIDM commitment");
-                        //             return None;
-                        //         },
-                        //     };
+                        let header = self
+                            .client
+                            .get::<Header<Types>>(&format!(
+                                "availability/header/{}",
+                                payload.height()
+                            ))
+                            .send()
+                            .await
+                            .ok()?;
 
-                        //     // Compare calculated commitment with requested commitment
-                        //     if commit != req.0 {
-                        //         tracing::error!("commitment type mismatch for AVIDM check");
-                        //         return None;
-                        //     }
+                        let metadata = header.metadata().encode();
+
+                        // Calculate AVIDM commitment
+                        let commit = match AvidMScheme::commit(
+                            &avidm_param,
+                            &bytes,
+                            ns_table::parse_ns_table(bytes.len(), &metadata),
+                        ) {
+                            Ok(commit) => VidCommitment::V1(commit),
+                            Err(err) => {
+                                tracing::error!(%err, "unable to compute AVIDM commitment");
+                                return None;
+                            },
+                        };
+
+                        // Compare calculated commitment with requested commitment
+                        if commit != req.0 {
+                            tracing::error!("commitment type mismatch for AVIDM check");
+                            return None;
+                        }
                     },
                 }
 
@@ -524,7 +537,7 @@ mod test {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_fetch_on_request_epoch_version() {
         // This test verifies that our provider can handle fetching things by their hashes,
         // specifically focused on epoch version transitions
