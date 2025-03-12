@@ -68,23 +68,45 @@ mod test {
             ("0.000", 0),
             ("0.01", 1),
             ("1", 100),
+            ("2", 200),
             ("1.000000", 100),
             ("1.2", 120),
             ("12.34", 1234),
+            ("100", 10000),
             ("100.0", 10000),
             ("100.00", 10000),
             ("100.000", 10000),
         ];
         for (input, expected) in cases {
-            assert_eq!(parse_commission(input).unwrap().to_evm(), expected);
+            let parsed = parse_commission(input).unwrap().to_evm();
+            assert_eq!(
+                parsed, expected,
+                "input: {input}, parsed: {parsed} != expected {expected}"
+            );
         }
 
         let failure_cases = [
-            "-1", "-0.001", ".001", "100.01", "100.1", "1000", "fooo", "0.0.", "0.123", "0.1234",
+            /// negative
+            "-1",
+            "-0.001",
+            /// too many decimals
+            "0.123",
+            "0.1234",
             "99.999",
+            ".001",
+            /// too large
+            "100.01",
+            "100.1",
+            "1000",
+            /// not a number
+            "fooo",
+            "0.0.",
         ];
         for input in failure_cases {
-            assert!(parse_commission(input).is_err());
+            assert!(
+                parse_commission(input).is_err(),
+                "input: {input} did not fail"
+            );
         }
     }
 }
