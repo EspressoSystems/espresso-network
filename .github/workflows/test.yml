@@ -62,7 +62,7 @@ jobs:
       - name: Preview Cargo Timings
         uses: rossjrw/pr-preview-action@v1
         with:
-          source-dir: ./target/cargo-timings/cargo-timing.html
+          source-dir: ./target/cargo-timings/
 
 
   build-test-artifacts-sqlite:
@@ -103,7 +103,7 @@ jobs:
       - name: Preview Cargo Timings
         uses: rossjrw/pr-preview-action@v1
         with:
-          source-dir: ./target/cargo-timings/cargo-timing.html
+          source-dir: ./target/cargo-timings/
 
 
   build-test-bins:
@@ -122,7 +122,7 @@ jobs:
 
       - name: Build Bins
         run: |
-          cargo build --locked --profile test --bins
+          cargo build --locked --profile test --bins --timings
           cargo build --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
         timeout-minutes: 60
 
@@ -155,6 +155,12 @@ jobs:
             target/debug/node-metrics
             target/debug/dev-rollup
             target/debug/sequencer-sqlite
+
+      - name: Preview Cargo Timings
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: ./target/cargo-timings/
+
 
   test-postgres:
     needs: build-test-artifacts-postgres
