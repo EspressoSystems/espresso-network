@@ -532,6 +532,7 @@ where
     }
 
     async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        tracing::error!("insert_block: {:?}, {:?}", block.height(), block.payload_hash());
         let height = block.height();
 
         // Ignore the block if it is below the pruned height. This can happen if, for instance, the

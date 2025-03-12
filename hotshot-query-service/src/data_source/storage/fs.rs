@@ -622,6 +622,7 @@ where
     }
 
     async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        tracing::error!("insert_block: {:?}, {:?}", block.height(), block.payload_hash());
         if !self
             .inner
             .block_storage
