@@ -19,6 +19,7 @@ clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types", features = ["testing"] }
 ethers = { workspace = true }
+ethers-conv = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
@@ -38,7 +39,6 @@ sequencer-utils = { path = "../utils", optional = true }
 surf = "2.3.1"
 surf-disco = { workspace = true }
 tempfile = { workspace = true, optional = true }
-ethers-conv = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

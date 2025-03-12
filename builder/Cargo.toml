@@ -13,6 +13,7 @@ clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types" }
 ethers = { workspace = true }
+ethers-conv = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
@@ -31,7 +32,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
-ethers-conv = { workspace = true }
 vec1 = { workspace = true }
 
 [dev-dependencies]

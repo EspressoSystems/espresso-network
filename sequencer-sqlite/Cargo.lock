@@ -3533,6 +3533,7 @@ dependencies = [
  "anyhow",
  "ark-serialize 0.4.2",
  "async-broadcast",
+ "async-lock 3.4.0",
  "async-trait",
  "base64-bytes",
  "bincode",
