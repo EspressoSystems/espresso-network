@@ -1356,7 +1356,7 @@ mod api_tests {
         let avidm_param = init_avidm_param(2).unwrap();
         let weights = vec![1u32; 2];
 
-        let ns_table = parse_ns_table(payload.byte_len().as_usize(), &payload.encode());
+        let ns_table = parse_ns_table(payload.byte_len().as_usize(), &payload.ns_table().encode());
         let (payload_commitment, shares) =
             AvidMScheme::ns_disperse(&avidm_param, &weights, &payload_bytes_arc, ns_table).unwrap();
 

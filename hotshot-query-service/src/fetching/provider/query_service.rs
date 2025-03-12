@@ -14,11 +14,11 @@ use async_trait::async_trait;
 use committable::Committable;
 use futures::try_join;
 use hotshot_types::{
-    data::{ns_table, VidCommitment},
+    data::{VidCommitment},
     traits::{node_implementation::NodeType, EncodeBytes},
     vid::{
         advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
+        // avidm::{init_avidm_param, AvidMScheme},
     },
 };
 use jf_vid::VidScheme;
