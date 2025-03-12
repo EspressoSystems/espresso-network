@@ -1025,7 +1025,7 @@ impl SequencerPersistence for Persistence {
             .read()
             .await?
             .fetch_optional(
-                query("SELECT stake FROM epoch_drb_and_root WHERE epoch = ?1")
+                query("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
                     .bind(epoch.u64() as i64),
             )
             .await?;
