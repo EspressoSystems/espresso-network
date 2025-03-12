@@ -12,6 +12,16 @@
 //! provides a healthcheck endpoint as well as a prometheus endpoint which provides metrics like the
 //! count of various types of actions performed and the number of open streams.
 
+use std::{
+    borrow::Cow,
+    cmp::max,
+    collections::{BTreeMap, HashMap},
+    fmt::Debug,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use anyhow::{bail, ensure, Context};
 use async_lock::RwLock;
 use clap::Parser;
@@ -29,6 +39,7 @@ use hotshot_query_service::{
     metrics::PrometheusMetrics,
     node::TimeWindowQueryData,
     types::HeightIndexed,
+    VidCommon,
 };
 use hotshot_types::traits::{
     block_contents::BlockHeader,
@@ -41,15 +52,6 @@ use rand::{seq::SliceRandom, RngCore};
 use sequencer::{api::endpoints::NamespaceProofQueryData, SequencerApiVersion};
 use sequencer_utils::logging;
 use serde::de::DeserializeOwned;
-use std::{
-    borrow::Cow,
-    cmp::max,
-    collections::{BTreeMap, HashMap},
-    fmt::Debug,
-    pin::Pin,
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use strum::{EnumDiscriminants, VariantArray};
 use surf_disco::{error::ClientError, socket, Error, StatusCode, Url};
 use tide_disco::{error::ServerError, App};
@@ -520,7 +522,7 @@ impl<T: Queryable> ResourceManager<T> {
                 Ok(res) if i == 0 => {
                     // Succeeded on the first try, get on with it.
                     return Ok(res);
-                }
+                },
                 Ok(res) => {
                     // Succeeded after at least one failure; retry a number of additional times to
                     // be sure the endpoint is healed.
@@ -531,14 +533,14 @@ impl<T: Queryable> ResourceManager<T> {
                         )?;
                     }
                     return Ok(res);
-                }
+                },
                 Err(err) if i < self.cfg.max_retries => {
                     tracing::warn!("failed, will retry: {err:#}");
                     i += 1;
-                }
+                },
                 Err(err) => {
                     return Err(err).context("failed too many times");
-                }
+                },
             }
         }
     }
@@ -674,7 +676,7 @@ impl<T: Queryable> ResourceManager<T> {
                         obj.height()
                     );
                 }
-            }
+            },
             Err(_) if to - from > limit => {
                 tracing::info!(
                     limit,
@@ -682,10 +684,10 @@ impl<T: Queryable> ResourceManager<T> {
                     to,
                     "range query exceeding limit failed as expected"
                 );
-            }
+            },
             Err(err) => {
                 return Err(err).context("error in range query");
-            }
+            },
         }
 
         self.metrics.query_range_actions[&T::RESOURCE].add(1);
@@ -800,7 +802,7 @@ impl<T: Queryable> ResourceManager<T> {
                             );
                         }
                         break obj;
-                    }
+                    },
                     Err(err) if refreshed.elapsed() >= self.cfg.web_socket_timeout => {
                         // Streams are allowed to fail if the connection is too old. Warn about it,
                         // but refresh the connection and try again.
@@ -818,7 +820,7 @@ impl<T: Queryable> ResourceManager<T> {
                             "{} stream refreshed due to connection reset",
                             Self::singular(),
                         );
-                    }
+                    },
                     Err(err) => {
                         // Errors on a relatively fresh connection are not allowed. Close the stream
                         // since it is apparently in a bad state, and return an error.
@@ -830,7 +832,7 @@ impl<T: Queryable> ResourceManager<T> {
                             Self::singular(),
                             refreshed.elapsed()
                         ));
-                    }
+                    },
                 }
             };
 
@@ -944,11 +946,11 @@ impl ResourceManager<Header> {
                 // The block state at height 0 is empty, so to have a valid query just adjust to
                 // querying at height 1. At height 1, the only valid index to query is 0.
                 (1, 0)
-            }
+            },
             block => {
                 // At any other height, all indices between 0 and `block - 1` are valid to query.
                 (block, index % (block - 1))
-            }
+            },
         };
 
         // Get the header of the state snapshot we're going to query and the block commitment we're
@@ -1148,15 +1150,14 @@ impl ResourceManager<BlockQueryData<SeqTypes>> {
             ns_proof.proof.is_some(),
             format!("missing namespace proof for {block}:{ns}")
         );
+        let VidCommon::V0(common) = &vid_common.common().clone() else {
+            panic!("Failed to get vid V0 for namespace");
+        };
         ensure!(
             ns_proof
                 .proof
                 .unwrap()
-                .verify(
-                    header.ns_table(),
-                    &header.payload_commitment(),
-                    &vid_common.common().clone().unwrap(),
-                )
+                .verify(header.ns_table(), &header.payload_commitment(), common,)
                 .is_some(),
             format!("failure to verify namespace proof for {block}:{ns}")
         );
@@ -1344,7 +1345,7 @@ impl Client {
                     Resource::Payloads => self.payloads.close_stream(id).await,
                 };
                 Ok(())
-            }
+            },
             Action::PollStream {
                 resource,
                 id,
@@ -1357,16 +1358,16 @@ impl Client {
             },
             Action::QueryWindow { from, duration } => {
                 self.headers.query_window(from, duration).await
-            }
+            },
             Action::QueryNamespace { block, namespace } => {
                 self.blocks.query_namespace(block, namespace).await
-            }
+            },
             Action::QueryBlockState { block, index } => {
                 self.headers.query_block_state(block, index).await
-            }
+            },
             Action::QueryFeeState { block, builder } => {
                 self.headers.query_fee_state(block, builder).await
-            }
+            },
         }
     }
 }

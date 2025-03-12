@@ -1,15 +1,17 @@
 use std::{num::NonZeroUsize, time::Duration};
 
 use anyhow::Context;
+use hotshot_types::{
+    network::{
+        BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
+    },
+    HotShotConfig, PeerConfig, ValidatorConfig,
+};
+use serde::{Deserialize, Serialize};
+use tide_disco::Url;
 use vec1::Vec1;
 
 use crate::PubKey;
-use hotshot_types::network::{
-    BuilderType, CombinedNetworkConfig, Libp2pConfig, RandomBuilderConfig,
-};
-use hotshot_types::{network::NetworkConfig, HotShotConfig, PeerConfig, ValidatorConfig};
-use serde::{Deserialize, Serialize};
-use tide_disco::Url;
 
 /// This struct defines the public Hotshot validator configuration.
 /// Private key and state key pairs are excluded for security reasons.

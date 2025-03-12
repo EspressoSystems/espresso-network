@@ -4,6 +4,11 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
+};
+
 use hotshot_types::{
     drb::DrbResult,
     traits::{
@@ -15,10 +20,6 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::Result;
 use primitive_types::U256;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
-};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 
@@ -239,6 +240,10 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     fn upgrade_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
         NonZeroU64::new(((self.stake_table.len() as u64 * 9) / 10) + 1).unwrap()
     }
+    fn has_epoch(&self, _epoch: TYPES::Epoch) -> bool {
+        true
+    }
+
     fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}
 
     fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {}

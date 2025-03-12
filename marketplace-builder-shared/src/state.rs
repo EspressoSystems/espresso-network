@@ -4,10 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
-    block::{BuilderStateId, ParentBlockReferences, ReceivedTransaction},
-    utils::RotatingSet,
-};
 use async_broadcast::Receiver;
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable};
@@ -15,6 +11,11 @@ use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{DaProposal2, Leaf2, QuorumProposalWrapper},
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
+};
+
+use crate::{
+    block::{BuilderStateId, ParentBlockReferences, ReceivedTransaction},
+    utils::RotatingSet,
 };
 
 #[derive(derive_more::Debug, Clone)]
@@ -208,7 +209,7 @@ where
 
                     self.txn_queue.write().await.insert(txn);
                     queue_empty = false;
-                }
+                },
 
                 Err(async_broadcast::TryRecvError::Empty)
                 | Err(async_broadcast::TryRecvError::Closed) => {
@@ -216,12 +217,12 @@ where
                     // If it's closed that's a big problem and we should
                     // probably indicate it as such.
                     break;
-                }
+                },
 
                 Err(async_broadcast::TryRecvError::Overflowed(lost)) => {
                     tracing::warn!("Missed {lost} transactions due to backlog");
                     continue;
-                }
+                },
             }
         }
         queue_empty

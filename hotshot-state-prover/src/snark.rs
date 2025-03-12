@@ -107,10 +107,9 @@ mod tests {
     use ark_bn254::Bn254;
     use ark_ec::pairing::Pairing;
     use ark_ed_on_bn254::EdwardsConfig as Config;
-    use ark_std::UniformRand;
     use ark_std::{
         rand::{CryptoRng, RngCore},
-        One,
+        One, UniformRand,
     };
     use hotshot_types::{
         light_client::LightClientState,

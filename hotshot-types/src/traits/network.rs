@@ -17,7 +17,6 @@ use std::{
     time::Duration,
 };
 
-use async_lock::RwLock;
 use async_trait::async_trait;
 use dyn_clone::DynClone;
 use futures::{future::join_all, Future};
@@ -30,7 +29,10 @@ use thiserror::Error;
 use tokio::{sync::mpsc::error::TrySendError, time::sleep};
 
 use super::{node_implementation::NodeType, signature_key::SignatureKey};
-use crate::{data::ViewNumber, message::SequencingMessage, BoxSyncFuture};
+use crate::{
+    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::SequencingMessage,
+    BoxSyncFuture,
+};
 
 /// Centralized server specific errors
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -263,7 +265,7 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
         &'a self,
         _view: u64,
         _epoch: Option<u64>,
-        _membership: Arc<RwLock<TYPES::Membership>>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
     ) where
         TYPES: NodeType<SignatureKey = K> + 'a,
     {

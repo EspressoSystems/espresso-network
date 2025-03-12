@@ -73,23 +73,55 @@
 //! different request for the same object, one that permitted an active fetch. Or it may have been
 //! fetched [proactively](#proactive-fetching).
 
+use std::{
+    cmp::{max, min},
+    fmt::{Debug, Display},
+    iter::repeat_with,
+    marker::PhantomData,
+    ops::{Bound, Range, RangeBounds},
+    sync::Arc,
+    time::Duration,
+};
+
+use anyhow::{bail, Context};
+use async_lock::Semaphore;
+use async_trait::async_trait;
+use backoff::{backoff::Backoff, ExponentialBackoff, ExponentialBackoffBuilder};
+use derivative::Derivative;
+use futures::{
+    channel::oneshot,
+    future::{self, join_all, BoxFuture, Either, Future, FutureExt},
+    stream::{self, BoxStream, StreamExt},
+};
+use hotshot_types::{
+    data::VidShare,
+    traits::{
+        metrics::{Gauge, Metrics},
+        node_implementation::NodeType,
+    },
+};
+use jf_merkle_tree::{prelude::MerkleProof, MerkleTreeScheme};
+use tagged_base64::TaggedBase64;
+use tokio::{spawn, time::sleep};
+use tracing::Instrument;
+
 use super::{
     notifier::Notifier,
     storage::{
         pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
+        sql::MigrateTypes,
         Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
         MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
         UpdateAvailabilityStorage,
     },
     Transaction, VersionedDataSource,
 };
-use crate::availability::HeaderQueryData;
 use crate::{
     availability::{
-        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-        LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload,
-        TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
-        VidCommonQueryData,
+        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream,
+        HeaderQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
+        QueryablePayload, TransactionHash, TransactionQueryData, UpdateAvailabilityData,
+        VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
     fetching::{self, request, Provider},
@@ -101,35 +133,8 @@ use crate::{
     status::{HasMetrics, StatusDataSource},
     task::BackgroundTask,
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult, VidShare,
+    Header, Payload, QueryError, QueryResult,
 };
-use anyhow::{bail, Context};
-use async_lock::Semaphore;
-use async_trait::async_trait;
-use backoff::{backoff::Backoff, ExponentialBackoff, ExponentialBackoffBuilder};
-use derivative::Derivative;
-use futures::{
-    channel::oneshot,
-    future::{self, join_all, BoxFuture, Either, Future, FutureExt},
-    stream::{self, BoxStream, StreamExt},
-};
-use hotshot_types::traits::{
-    metrics::{Gauge, Metrics},
-    node_implementation::NodeType,
-};
-use jf_merkle_tree::{prelude::MerkleProof, MerkleTreeScheme};
-use std::sync::Arc;
-use std::{
-    cmp::{max, min},
-    fmt::{Debug, Display},
-    iter::repeat_with,
-    marker::PhantomData,
-    ops::{Bound, Range, RangeBounds},
-    time::Duration,
-};
-use tagged_base64::TaggedBase64;
-use tokio::{spawn, time::sleep};
-use tracing::Instrument;
 
 mod block;
 mod header;
@@ -369,7 +374,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    S: PruneStorage + VersionedDataSource + HasMetrics + 'static,
+    S: PruneStorage + VersionedDataSource + HasMetrics + MigrateTypes<Types> + 'static,
     for<'a> S::ReadOnly<'a>:
         AvailabilityStorage<Types> + PrunedHeightStorage + NodeStorage<Types> + AggregatesStorage,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
@@ -463,15 +468,15 @@ where
             match storage.prune(&mut pruner).await {
                 Ok(Some(height)) => {
                     tracing::warn!("Pruned to height {height}");
-                }
+                },
                 Ok(None) => {
                     tracing::warn!("pruner run complete.");
                     break;
-                }
+                },
                 Err(e) => {
                     tracing::error!("pruner run failed: {e:?}");
                     break;
-                }
+                },
             }
         }
     }
@@ -482,7 +487,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + PruneStorage + HasMetrics + 'static,
+    S: VersionedDataSource + PruneStorage + HasMetrics + MigrateTypes<Types> + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
     for<'a> S::ReadOnly<'a>:
         AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage + AggregatesStorage,
@@ -510,6 +515,13 @@ where
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
         let fetcher = Arc::new(Fetcher::new(builder).await?);
+
+        // Migrate the old types to new PoS types
+        // This is a one-time operation that should be done before starting the data source
+        // It migrates leaf1 storage to leaf2
+        // and vid to vid2
+        fetcher.storage.migrate_types().await?;
+
         let scanner = if proactive_fetching && !leaf_only {
             Some(BackgroundTask::spawn(
                 "proactive scanner",
@@ -966,7 +978,7 @@ where
                     ?req,
                     "unable to fetch object; spawning a task to retry: {err:#}"
                 );
-            }
+            },
         }
 
         // We'll use this channel to get the object back if we successfully load it on retry.
@@ -994,14 +1006,14 @@ where
                             tracing::info!(?req, "object was ready after retries");
                             send.send(obj).ok();
                             break;
-                        }
+                        },
                         Ok(None) => {
                             // The object was not immediately available after all, but we have
                             // successfully spawned a fetch for it if possible. The spawned fetch
                             // will notify the original request once it completes.
                             tracing::info!(?req, "spawned fetch after retries");
                             break;
-                        }
+                        },
                         Err(err) => {
                             tracing::warn!(
                                 ?req,
@@ -1012,7 +1024,7 @@ where
                             if let Some(next_delay) = backoff.next_backoff() {
                                 delay = next_delay;
                             }
-                        }
+                        },
                     }
                 }
             }
@@ -1047,12 +1059,12 @@ where
                 tracing::debug!(?req, "object missing from local storage, will try to fetch");
                 self.fetch::<T>(&mut tx, req).await?;
                 Ok(None)
-            }
+            },
             Err(err) => {
                 // An error occurred while querying the database. We don't know if we need to fetch
                 // the object or not. Return an error so we can try again.
                 bail!("failed to fetch resource {req:?} from local storage: {err:#}");
-            }
+            },
         }
     }
 
@@ -1213,13 +1225,13 @@ where
                         None => passive(T::Request::from(chunk.start + i), passive_fetch),
                     })
                     .collect();
-            }
+            },
             Err(err) => {
                 tracing::warn!(
                     ?chunk,
                     "unable to fetch chunk; spawning a task to retry: {err:#}"
                 );
-            }
+            },
         }
 
         // We'll use these channels to get the objects back that we successfully load on retry.
@@ -1261,7 +1273,7 @@ where
                                     }
                                 }
                                 break;
-                            }
+                            },
                             Err(err) => {
                                 tracing::warn!(
                                     ?chunk,
@@ -1272,7 +1284,7 @@ where
                                 if let Some(next_delay) = backoff.next_backoff() {
                                     delay = next_delay;
                                 }
-                            }
+                            },
                         }
                     }
                 }
@@ -1421,7 +1433,7 @@ where
                             backoff = min(2 * backoff, max_backoff);
                             metrics.backoff.set(backoff.as_secs() as usize);
                             continue;
-                        }
+                        },
                     };
                     let heights = match Heights::load(&mut tx).await {
                         Ok(heights) => heights,
@@ -1432,7 +1444,7 @@ where
                             backoff = min(2 * backoff, max_backoff);
                             metrics.backoff.set(backoff.as_secs() as usize);
                             continue;
-                        }
+                        },
                     };
                     metrics.retries.set(0);
                     break heights;
@@ -1566,7 +1578,7 @@ where
                         tracing::error!("unable to open read tx: {err:#}");
                         sleep(Duration::from_secs(5)).await;
                         continue;
-                    }
+                    },
                 };
                 match tx.load_prev_aggregate().await {
                     Ok(agg) => break agg,
@@ -1574,7 +1586,7 @@ where
                         tracing::error!("unable to load previous aggregate: {err:#}");
                         sleep(Duration::from_secs(5)).await;
                         continue;
-                    }
+                    },
                 }
             };
 
@@ -1618,7 +1630,7 @@ where
                     match res {
                         Ok(()) => {
                             break;
-                        }
+                        },
                         Err(err) => {
                             tracing::warn!(
                                 num_blocks,
@@ -1626,7 +1638,7 @@ where
                                 "failed to update aggregates for chunk: {err:#}"
                             );
                             sleep(Duration::from_secs(1)).await;
-                        }
+                        },
                     }
                 }
                 metrics.height.set(height as usize);
@@ -2190,7 +2202,7 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
                     "error loading resource from local storage, will try to fetch: {err:#}"
                 );
                 None
-            }
+            },
         }
     }
 }
@@ -2309,7 +2321,7 @@ where
                     //   dropped. If this happens, things are very broken in any case, and it is
                     //   better to panic loudly than simply block forever.
                     panic!("notifier dropped without satisfying request {req:?}");
-                }
+                },
             }
         })
         .boxed(),

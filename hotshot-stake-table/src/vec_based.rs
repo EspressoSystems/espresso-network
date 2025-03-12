@@ -8,8 +8,10 @@
 
 use ark_std::{collections::HashMap, hash::Hash, rand::SeedableRng};
 use digest::crypto_common::rand_core::CryptoRngCore;
-use hotshot_types::light_client::GenericStakeTableState;
-use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme};
+use hotshot_types::{
+    light_client::GenericStakeTableState,
+    traits::stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme},
+};
 use jf_crhf::CRHF;
 use jf_rescue::{crhf::VariableLengthRescueCRHF, RescueParameter};
 use primitive_types::{U256, U512};
@@ -127,7 +129,7 @@ where
                 self.head_total_stake -= self.head.stake_amount[*pos];
                 self.head.stake_amount[*pos] = U256::zero();
                 Ok(())
-            }
+            },
             None => Err(StakeTableError::KeyNotFound),
         }
     }
@@ -307,7 +309,7 @@ where
                 self.head_total_stake -= old_value;
                 self.head_total_stake += value;
                 Ok(old_value)
-            }
+            },
             None => Err(StakeTableError::KeyNotFound),
         }
     }

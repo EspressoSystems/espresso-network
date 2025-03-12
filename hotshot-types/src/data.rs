@@ -31,6 +31,7 @@ use vid_disperse::{ADVZDisperse, ADVZDisperseShare, AvidMDisperse, VidDisperseSh
 
 use crate::{
     drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
     impl_has_epoch, impl_has_none_epoch,
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
@@ -372,7 +373,7 @@ impl From<AvidMShare> for VidShare {
     }
 }
 
-mod ns_table;
+pub mod ns_table;
 pub mod vid_disperse;
 
 /// VID dispersal data
@@ -428,7 +429,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     #[allow(clippy::panic)]
     pub async fn calculate_vid_disperse<V: Versions>(
         payload: &TYPES::BlockPayload,
-        membership: &Arc<RwLock<TYPES::Membership>>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
@@ -504,13 +505,13 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
                     .into_iter()
                     .map(|share| Self::V0(share))
                     .collect()
-            }
+            },
             VidDisperse::V1(vid_disperse) => {
                 VidDisperseShare2::<TYPES>::from_vid_disperse(vid_disperse)
                     .into_iter()
                     .map(|share| Self::V1(share))
                     .collect()
-            }
+            },
         }
     }
 
@@ -671,10 +672,10 @@ impl<TYPES: NodeType> ViewChangeEvidence<TYPES> {
         match self {
             ViewChangeEvidence::Timeout(timeout_cert) => {
                 ViewChangeEvidence2::Timeout(timeout_cert.to_tc2())
-            }
+            },
             ViewChangeEvidence::ViewSync(view_sync_cert) => {
                 ViewChangeEvidence2::ViewSync(view_sync_cert.to_vsc2())
-            }
+            },
         }
     }
 }
@@ -704,10 +705,10 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => {
                 ViewChangeEvidence::Timeout(timeout_cert.to_tc())
-            }
+            },
             ViewChangeEvidence2::ViewSync(view_sync_cert) => {
                 ViewChangeEvidence::ViewSync(view_sync_cert.to_vsc())
-            }
+            },
         }
     }
 }
@@ -1241,7 +1242,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
             //   - if the parent didn't have a certificate, but we see one now, it just means that we have begun an upgrade: again, this is always fine.
-            (None | Some(_), None) => {}
+            (None | Some(_), None) => {},
             // If we no longer see a cert, we have to make sure that we either:
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
@@ -1251,13 +1252,13 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
                     || (self.view_number() > parent_cert.data.decide_by && decided_upgrade_certificate_read.is_none()),
                        "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
                 );
-            }
+            },
             // If we both have a certificate, they should be identical.
             // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
             // I think this is a fairly lax restriction.
             (Some(cert), Some(parent_cert)) => {
                 ensure!(cert == parent_cert, "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate.");
-            }
+            },
         }
 
         // This check should be added once we sort out the genesis leaf/justify_qc issue.
@@ -1620,7 +1621,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
             //   - if the parent didn't have a certificate, but we see one now, it just means that we have begun an upgrade: again, this is always fine.
-            (None | Some(_), None) => {}
+            (None | Some(_), None) => {},
             // If we no longer see a cert, we have to make sure that we either:
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
@@ -1630,13 +1631,13 @@ impl<TYPES: NodeType> Leaf<TYPES> {
                     || (self.view_number() > parent_cert.data.decide_by && decided_upgrade_certificate_read.is_none()),
                        "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
                 );
-            }
+            },
             // If we both have a certificate, they should be identical.
             // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
             // I think this is a fairly lax restriction.
             (Some(cert), Some(parent_cert)) => {
                 ensure!(cert == parent_cert, "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate.");
-            }
+            },
         }
 
         // This check should be added once we sort out the genesis leaf/justify_qc issue.

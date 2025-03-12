@@ -1,13 +1,15 @@
 //! This file implements the namespaced AvidM scheme.
 
+use std::ops::Range;
+
+use jf_merkle_tree::MerkleTreeScheme;
+use serde::{Deserialize, Serialize};
+
 use super::{AvidMCommit, AvidMShare, RawAvidMShare};
 use crate::{
     avid_m::{AvidMScheme, MerkleTree},
     VidError, VidResult, VidScheme,
 };
-use jf_merkle_tree::MerkleTreeScheme;
-use serde::{Deserialize, Serialize};
-use std::ops::Range;
 
 /// Dummy struct for namespaced AvidM scheme
 pub struct NsAvidMScheme;

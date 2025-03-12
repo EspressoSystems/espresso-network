@@ -358,7 +358,7 @@ where
                         local_addr,
                         send_back_addr,
                     }
-                }
+                },
 
                 // We need to re-map the other events because we changed the type of the upgrade
                 TransportEvent::AddressExpired {
@@ -377,7 +377,7 @@ where
                 },
                 TransportEvent::ListenerError { listener_id, error } => {
                     TransportEvent::ListenerError { listener_id, error }
-                }
+                },
                 TransportEvent::NewAddress {
                     listener_id,
                     listen_addr,

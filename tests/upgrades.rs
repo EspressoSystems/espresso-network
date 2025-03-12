@@ -1,13 +1,23 @@
-use crate::common::TestConfig;
 use anyhow::Result;
 use espresso_types::{FeeVersion, MarketplaceVersion};
 use futures::{future::join_all, StreamExt};
 use vbs::version::StaticVersionType;
 
+use crate::{
+    common::{NativeDemo, TestConfig},
+    smoke::assert_native_demo_works,
+};
+
 const SEQUENCER_BLOCKS_TIMEOUT: u64 = 200;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_upgrade() -> Result<()> {
+async fn test_native_demo_upgrade() -> Result<()> {
+    let _demo = NativeDemo::run(Some(
+        "-f process-compose.yaml -f process-compose-mp.yml".to_string(),
+    ))?;
+
+    assert_native_demo_works().await?;
+
     dotenvy::dotenv()?;
 
     let testing = TestConfig::new().await.unwrap();

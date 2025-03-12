@@ -10,9 +10,10 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::{future::IntoFuture, time::Duration};
+
 use futures::future::{BoxFuture, FutureExt};
 use snafu::{Error, ErrorCompat, IntoError, NoneError, OptionExt};
-use std::{future::IntoFuture, time::Duration};
 use tokio::time::timeout;
 
 /// An in-progress request to fetch some data.

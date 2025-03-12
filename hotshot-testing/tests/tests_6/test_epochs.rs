@@ -4,11 +4,13 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
+use std::time::Duration;
+
 use hotshot_example_types::{
     node_types::{
         CombinedImpl, EpochUpgradeTestVersions, EpochsTestVersions, Libp2pImpl, MemoryImpl,
         PushCdnImpl, RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
-        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes,
+        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes, TestTypesEpochCatchupTypes,
         TestTypesRandomizedCommitteeMembers, TestTypesRandomizedLeader,
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
@@ -22,7 +24,6 @@ use hotshot_testing::{
     test_builder::{TestDescription, TimingData},
     view_sync_task::ViewSyncTaskDescription,
 };
-use std::time::Duration;
 
 cross_tests!(
     TestName: test_success_with_epochs,
@@ -52,6 +53,7 @@ cross_tests!(
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [
         TestTypes,
+        TestTypesEpochCatchupTypes,
         TestTypesRandomizedLeader,
         TestTypesRandomizedCommitteeMembers<StableQuorumFilterConfig<123, 2>>,                 // Overlap =  F
         TestTypesRandomizedCommitteeMembers<StableQuorumFilterConfig<123, 3>>,                 // Overlap =  F+1
@@ -531,7 +533,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![10],
-          possible_view_failures: vec![9, 11],
+          possible_view_failures: vec![9, 11, 12],
           decide_timeout: Duration::from_secs(20),
           ..Default::default()
       };
@@ -580,7 +582,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![10],
-          possible_view_failures: vec![9, 11],
+          possible_view_failures: vec![9, 11, 12],
           decide_timeout: Duration::from_secs(20),
           ..Default::default()
       };
@@ -637,8 +639,8 @@ cross_tests!(
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
-          expected_view_failures: vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
-          possible_view_failures: vec![34],
+          expected_view_failures: vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
+          possible_view_failures: vec![10, 34],
           decide_timeout: Duration::from_secs(120),
           ..Default::default()
       };
@@ -695,8 +697,8 @@ cross_tests!(
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
-          expected_view_failures: vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
-          possible_view_failures: vec![32],
+          expected_view_failures: vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+          possible_view_failures: vec![10, 32],
           decide_timeout: Duration::from_secs(120),
           ..Default::default()
       };

@@ -8,6 +8,7 @@
 
 use std::{
     fmt::{self, Debug, Display, Formatter},
+    future::Future,
     hash::Hash,
     marker::PhantomData,
     num::NonZeroU64,
@@ -22,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     data::serialize_signature2,
+    epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_vote::{
         DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
@@ -30,7 +32,6 @@ use crate::{
         ViewSyncPreCommitData2, Voteable,
     },
     traits::{
-        election::Membership,
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
@@ -41,10 +42,7 @@ use crate::{
 /// Trait which allows use to inject different threshold calculations into a Certificate type
 pub trait Threshold<TYPES: NodeType> {
     /// Calculate a threshold based on the membership
-    fn threshold<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> u64;
+    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = u64> + Send;
 }
 
 /// Defines a threshold which is 2f + 1 (Amount needed for Quorum)
@@ -52,11 +50,8 @@ pub trait Threshold<TYPES: NodeType> {
 pub struct SuccessThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for SuccessThreshold {
-    fn threshold<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> u64 {
-        membership.success_threshold(epoch).into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
+        membership.success_threshold().await.into()
     }
 }
 
@@ -65,11 +60,8 @@ impl<TYPES: NodeType> Threshold<TYPES> for SuccessThreshold {
 pub struct OneHonestThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for OneHonestThreshold {
-    fn threshold<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> u64 {
-        membership.failure_threshold(epoch).into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
+        membership.failure_threshold().await.into()
     }
 }
 
@@ -78,11 +70,8 @@ impl<TYPES: NodeType> Threshold<TYPES> for OneHonestThreshold {
 pub struct UpgradeThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for UpgradeThreshold {
-    fn threshold<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> u64 {
-        membership.upgrade_threshold(epoch).into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
+        membership.upgrade_threshold().await.into()
     }
 }
 
@@ -189,33 +178,25 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
         .context(|e| warn!("Signature check failed: {}", e))
     }
     /// Proxy's to `Membership.stake`
-    fn stake_table_entry<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
+    async fn stake_table_entry(
+        membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
     ) -> Option<PeerConfig<TYPES::SignatureKey>> {
-        membership.da_stake(pub_key, epoch)
+        membership.da_stake(pub_key).await
     }
 
     /// Proxy's to `Membership.da_stake_table`
-    fn stake_table<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+    async fn stake_table(
+        membership: &EpochMembership<TYPES>,
     ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
-        membership.da_stake_table(epoch)
+        membership.da_stake_table().await
     }
     /// Proxy's to `Membership.da_total_nodes`
-    fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> usize {
-        membership.da_total_nodes(epoch)
+    async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
+        membership.da_total_nodes().await
     }
-    fn threshold<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> u64 {
-        membership.da_success_threshold(epoch).into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
+        membership.da_success_threshold().await.into()
     }
     fn data(&self) -> &Self::Voteable {
         &self.data
@@ -278,33 +259,25 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
         .context(|e| warn!("Signature check failed: {}", e))
     }
     /// Proxy's to `Membership.stake`
-    fn stake_table_entry<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
+    async fn stake_table_entry(
+        membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
     ) -> Option<PeerConfig<TYPES::SignatureKey>> {
-        membership.da_stake(pub_key, epoch)
+        membership.da_stake(pub_key).await
     }
 
     /// Proxy's to `Membership.da_stake_table`
-    fn stake_table<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+    async fn stake_table(
+        membership: &EpochMembership<TYPES>,
     ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
-        membership.da_stake_table(epoch)
+        membership.da_stake_table().await
     }
     /// Proxy's to `Membership.da_total_nodes`
-    fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> usize {
-        membership.da_total_nodes(epoch)
+    async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
+        membership.da_total_nodes().await
     }
-    fn threshold<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> u64 {
-        membership.da_success_threshold(epoch).into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
+        membership.da_success_threshold().await.into()
     }
     fn data(&self) -> &Self::Voteable {
         &self.data
@@ -369,34 +342,26 @@ impl<
         .wrap()
         .context(|e| warn!("Signature check failed: {}", e))
     }
-    fn threshold<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> u64 {
-        THRESHOLD::threshold(membership, epoch)
+    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
+        THRESHOLD::threshold(membership).await
     }
 
-    fn stake_table_entry<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
+    async fn stake_table_entry(
+        membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
     ) -> Option<PeerConfig<TYPES::SignatureKey>> {
-        membership.stake(pub_key, epoch)
+        membership.stake(pub_key).await
     }
 
-    fn stake_table<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
+    async fn stake_table(
+        membership: &EpochMembership<TYPES>,
     ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
-        membership.stake_table(epoch)
+        membership.stake_table().await
     }
 
     /// Proxy's to `Membership.total_nodes`
-    fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> usize {
-        membership.total_nodes(epoch)
+    async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
+        membership.total_nodes().await
     }
 
     fn data(&self) -> &Self::Voteable {
@@ -467,15 +432,14 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
     /// Returns an error when the upgrade certificate is invalid.
     pub async fn validate<V: Versions>(
         upgrade_certificate: &Option<Self>,
-        membership: &RwLock<TYPES::Membership>,
+        membership: &EpochMembership<TYPES>,
         epoch: Option<TYPES::Epoch>,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
+        ensure!(epoch == membership.epoch(), "Epochs don't match!");
         if let Some(ref cert) = upgrade_certificate {
-            let membership_reader = membership.read().await;
-            let membership_stake_table = membership_reader.stake_table(epoch);
-            let membership_upgrade_threshold = membership_reader.upgrade_threshold(epoch);
-            drop(membership_reader);
+            let membership_stake_table = membership.stake_table().await;
+            let membership_upgrade_threshold = membership.upgrade_threshold().await;
 
             cert.is_valid_cert(
                 StakeTableEntries::<TYPES>::from(membership_stake_table).0,

@@ -23,6 +23,7 @@ pub use crate::utils::{View, ViewInner};
 use crate::{
     data::{Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseShare},
     drb::DrbSeedsAndResults,
+    epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
     event::{HotShotAction, LeafInfo},
     message::{Proposal, UpgradeLock},
@@ -588,7 +589,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
                 // because the leader of view n + 1 may propose to the DA (and we would vote)
                 // before the leader of view n.
                 return true;
-            }
+            },
             _ => return true,
         };
         if view > *old_view {
@@ -921,6 +922,10 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.saved_leaves.get(&leaf).unwrap().clone()
     }
 
+    pub fn undecided_leaves(&self) -> Vec<Leaf2<TYPES>> {
+        self.saved_leaves.values().cloned().collect::<Vec<_>>()
+    }
+
     /// Gets the validated state with the given view number, if in the state map.
     #[must_use]
     pub fn state(&self, view_number: TYPES::View) -> Option<&Arc<TYPES::ValidatedState>> {
@@ -962,7 +967,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         consensus: OuterConsensus<TYPES>,
         view: <TYPES as NodeType>::View,
         target_epoch: Option<<TYPES as NodeType>::Epoch>,
-        membership: Arc<RwLock<TYPES::Membership>>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Option<()> {
@@ -977,7 +982,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
         let vid = VidDisperse::calculate_vid_disperse::<V>(
             &payload_with_metadata.payload,
-            &membership,
+            &membership_coordinator,
             view,
             target_epoch,
             epoch,

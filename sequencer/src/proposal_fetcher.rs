@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_channel::{Receiver, Sender};
@@ -19,7 +19,6 @@ use hotshot_types::{
     },
     utils::{View, ViewInner},
 };
-use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tracing::Instrument;
 
@@ -184,10 +183,10 @@ where
                     let leaf = proposal.data.justify_qc().data.leaf_commit;
                     self.request((view, leaf)).await;
                     return Ok(());
-                }
+                },
                 Err(err) => {
                     tracing::info!("proposal missing from storage; fetching from network: {err:#}");
-                }
+                },
             }
 
             let future = self.consensus.read().await.request_proposal(view, leaf)?;
@@ -196,7 +195,7 @@ where
                 .context("timed out fetching proposal")?
                 .context("error fetching proposal")?;
             self.persistence
-                .append_quorum_proposal(&proposal)
+                .append_quorum_proposal2(&proposal)
                 .await
                 .context("error saving fetched proposal")?;
 

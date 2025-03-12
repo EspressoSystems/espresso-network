@@ -52,6 +52,7 @@ async-lock = { workspace = true }
 async-once-cell = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
+byteorder = "1"
 
 # CDN imports
 cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = ["global-permits"] }
@@ -101,6 +102,8 @@ priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
+request-response = { path = "../request-response" }
+semver = { workspace = true }
 sequencer-utils = { path = "../utils" }
 serde = { workspace = true }
 serde_json = { workspace = true }

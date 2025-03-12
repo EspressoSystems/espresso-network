@@ -340,8 +340,10 @@ where
 mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_std::UniformRand;
-    use hotshot_types::light_client::LightClientState;
-    use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableScheme};
+    use hotshot_types::{
+        light_client::LightClientState,
+        traits::stake_table::{SnapshotVersion, StakeTableScheme},
+    };
     use jf_relation::Circuit;
     use jf_signature::{
         schnorr::{SchnorrSignatureScheme, Signature},

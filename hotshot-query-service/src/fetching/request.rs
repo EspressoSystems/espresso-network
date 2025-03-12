@@ -12,15 +12,15 @@
 
 //! Requests for fetching resources.
 
+use std::{fmt::Debug, hash::Hash};
+
+use derive_more::{From, Into};
+use hotshot_types::{data::VidCommitment, traits::node_implementation::NodeType};
+
 use crate::{
     availability::{LeafHash, LeafQueryData, QcHash},
-    Payload, VidCommitment,
+    Payload, VidCommon,
 };
-use derive_more::{From, Into};
-use hotshot_types::traits::node_implementation::NodeType;
-
-use std::fmt::Debug;
-use std::hash::Hash;
 
 /// A request for a resource.
 pub trait Request<Types>: Copy + Debug + Eq + Hash + Send {
@@ -41,7 +41,7 @@ impl<Types: NodeType> Request<Types> for PayloadRequest {
 pub struct VidCommonRequest(pub VidCommitment);
 
 impl<Types: NodeType> Request<Types> for VidCommonRequest {
-    type Response = hotshot_types::vid::advz::ADVZCommon;
+    type Response = VidCommon;
 }
 
 /// A request for a leaf with a given height.

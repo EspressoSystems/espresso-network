@@ -11,5 +11,6 @@ extend-exclude = [
   "contract-bindings-alloy",
   "contract-bindings-ethers",
   "node-metrics/src/api/node_validator/v0/example_prometheus_metrics_output.txt",
-  "hotshot-orchestrator/run-config.toml"
+  "hotshot-orchestrator/run-config.toml",
+  "hotshot-macros/src/lib.rs"
 ]

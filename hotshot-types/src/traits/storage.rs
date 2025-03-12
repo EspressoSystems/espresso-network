@@ -18,12 +18,12 @@ use committable::Commitment;
 use super::node_implementation::NodeType;
 use crate::{
     consensus::{CommitmentMap, View},
-    data::VidCommitment,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidDisperseShare,
+        QuorumProposalWrapper, VidCommitment, VidDisperseShare,
     },
+    drb::DrbResult,
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -54,7 +54,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
                     _pd: std::marker::PhantomData,
                 })
                 .await
-            }
+            },
             VidDisperseShare::V1(share) => {
                 self.append_vid2(&Proposal {
                     data: share.clone(),
@@ -62,7 +62,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
                     _pd: std::marker::PhantomData,
                 })
                 .await
-            }
+            },
         }
     }
     /// Add a proposal to the stored DA proposals.
@@ -155,13 +155,15 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
     ) -> Result<()>;
     /// Migrate leaves from `Leaf` to `Leaf2`, and proposals from `QuorumProposal` to `QuorumProposal2`
-    async fn migrate_consensus(
-        &self,
-        _convert_leaf: fn(Leaf<TYPES>) -> Leaf2<TYPES>,
-        _convert_proposal: fn(
-            Proposal<TYPES, QuorumProposal<TYPES>>,
-        ) -> Proposal<TYPES, QuorumProposal2<TYPES>>,
-    ) -> Result<()> {
+    async fn migrate_consensus(&self) -> Result<()> {
         Ok(())
     }
+    /// Add a drb result
+    async fn add_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
+    /// Add an epoch block header
+    async fn add_epoch_root(
+        &self,
+        epoch: TYPES::Epoch,
+        block_header: TYPES::BlockHeader,
+    ) -> Result<()>;
 }

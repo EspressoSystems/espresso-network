@@ -1,15 +1,13 @@
-use std::sync::Arc;
+use std::{cmp::Ordering, collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use committable::Commitment;
-use committable::Committable;
-use espresso_types::config::PublicNetworkConfig;
-use espresso_types::traits::SequencerPersistence;
+use committable::{Commitment, Committable};
 use espresso_types::{
-    v0::traits::StateCatchup, v0_99::ChainConfig, BackoffParams, BlockMerkleTree, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState,
+    config::PublicNetworkConfig, traits::SequencerPersistence, v0::traits::StateCatchup,
+    v0_99::ChainConfig, BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof,
+    FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState,
 };
 use futures::future::{Future, FutureExt, TryFuture, TryFutureExt};
 use hotshot_types::{
@@ -25,15 +23,13 @@ use itertools::Itertools;
 use jf_merkle_tree::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
-use std::{cmp::Ordering, collections::HashMap, fmt::Display, time::Duration};
 use surf_disco::Request;
 use tide_disco::error::ServerError;
 use tokio::time::timeout;
 use url::Url;
 use vbs::version::StaticVersionType;
 
-use crate::api::BlocksFrontier;
-use crate::PubKey;
+use crate::{api::BlocksFrontier, PubKey};
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
@@ -75,7 +71,7 @@ pub(crate) async fn local_and_remote(
         Err(err) => {
             tracing::warn!("not using local catchup: {err:#}");
             Arc::new(remote)
-        }
+        },
     }
 }
 
@@ -164,15 +160,15 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                     requests.insert(id, true);
                     res = Ok(t);
                     break;
-                }
+                },
                 Ok(Err(err)) => {
                     tracing::warn!(id, ?score, peer = %client.url, "error from peer: {err:#}");
                     requests.insert(id, false);
-                }
+                },
                 Err(_) => {
                     tracing::warn!(id, ?score, peer = %client.url, ?timeout_dur, "request timed out");
                     requests.insert(id, false);
-                }
+                },
             }
         }
 
@@ -327,6 +323,16 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         })
         .await
     }
+    async fn try_fetch_leaves(&self, retry: usize, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        self.fetch(retry, |client| async move {
+            let leaf = client
+                .get::<Vec<Leaf2>>(&format!("catchup/{}/leafchain", height))
+                .send()
+                .await?;
+            anyhow::Ok(leaf)
+        })
+        .await
+    }
 
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
@@ -399,6 +405,15 @@ pub(crate) trait CatchupStorage: Sync {
             bail!("chain config catchup is not supported for this data source");
         }
     }
+
+    fn get_leaf_chain(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>> {
+        async {
+            bail!("leaf chain catchup is not supported for this data source");
+        }
+    }
 }
 
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
@@ -435,6 +450,9 @@ where
     ) -> anyhow::Result<ChainConfig> {
         self.inner().get_chain_config(commitment).await
     }
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        self.inner().get_leaf_chain(height).await
+    }
 }
 
 #[derive(Debug)]
@@ -454,6 +472,9 @@ impl<T> StateCatchup for SqlStateCatchup<T>
 where
     T: CatchupStorage + Send + Sync,
 {
+    async fn try_fetch_leaves(&self, _retry: usize, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        self.db.get_leaf_chain(height).await
+    }
     // TODO: add a test for the account proof validation
     // issue # 2102 (https://github.com/EspressoSystems/espresso-sequencer/issues/2102)
     #[tracing::instrument(skip(self, _retry, instance))]
@@ -560,6 +581,9 @@ impl NullStateCatchup {
 
 #[async_trait]
 impl StateCatchup for NullStateCatchup {
+    async fn try_fetch_leaves(&self, _retry: usize, _height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        bail!("state catchup is didabled")
+    }
     async fn try_fetch_accounts(
         &self,
         _retry: usize,

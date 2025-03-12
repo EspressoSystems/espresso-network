@@ -2,8 +2,8 @@
 use std::collections::BTreeMap;
 
 use hotshot::traits::BlockPayload;
-use hotshot_query_service::{availability::QueryablePayload, VidCommitment};
-use hotshot_types::{traits::EncodeBytes, vid::advz::advz_scheme};
+use hotshot_query_service::availability::QueryablePayload;
+use hotshot_types::{data::VidCommitment, traits::EncodeBytes, vid::advz::advz_scheme};
 use jf_vid::VidScheme;
 use rand::RngCore;
 use sequencer_utils::test_utils::setup_test;

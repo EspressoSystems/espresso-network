@@ -2,40 +2,35 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use async_broadcast::broadcast;
-use committable::Commitment;
-use committable::Committable;
-use hotshot_example_types::block_types::{TestBlockHeader, TestBlockPayload, TestTransaction};
+use committable::{Commitment, Committable};
 use hotshot_example_types::{
+    block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     node_types::{TestTypes, TestVersions},
     state_types::{TestInstanceState, TestValidatedState},
 };
-use hotshot_types::data::DaProposal2;
-use hotshot_types::data::ViewNumber;
-use hotshot_types::data::{QuorumProposal2, QuorumProposalWrapper};
-use hotshot_types::event::LeafInfo;
-use hotshot_types::simple_certificate::QuorumCertificate2;
-use hotshot_types::simple_vote::QuorumData2;
-use hotshot_types::traits::block_contents::GENESIS_VID_NUM_STORAGE_NODES;
-use hotshot_types::traits::node_implementation::Versions;
-use hotshot_types::traits::EncodeBytes;
-use hotshot_types::vid::advz::advz_scheme;
 use hotshot_types::{
-    data::{random_commitment, vid_commitment, Leaf, Leaf2},
+    data::{
+        random_commitment, vid_commitment, DaProposal2, Leaf, Leaf2, QuorumProposal2,
+        QuorumProposalWrapper, ViewNumber,
+    },
+    event::LeafInfo,
     message::UpgradeLock,
-    simple_certificate::QuorumCertificate,
-    simple_vote::VersionedVoteData,
-    traits::node_implementation::{ConsensusTime, NodeType},
-    traits::BlockPayload,
+    simple_certificate::{QuorumCertificate, QuorumCertificate2},
+    simple_vote::{QuorumData2, VersionedVoteData},
+    traits::{
+        block_contents::GENESIS_VID_NUM_STORAGE_NODES,
+        node_implementation::{ConsensusTime, NodeType, Versions},
+        BlockPayload, EncodeBytes,
+    },
     utils::BuilderCommitment,
+    vid::advz::advz_scheme,
 };
 use jf_vid::VidScheme;
 use rand::{distributions::Standard, thread_rng, Rng};
 use vbs::version::StaticVersionType;
 
-use crate::block::ParentBlockReferences;
-use crate::state::BuilderState;
-
 use super::constants::{TEST_CHANNEL_BUFFER_SIZE, TEST_NUM_NODES_IN_VID_COMPUTATION};
+use crate::{block::ParentBlockReferences, state::BuilderState};
 
 pub fn transaction() -> TestTransaction {
     TestTransaction::new(

@@ -19,8 +19,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::version::Version;
 
 use crate::{
-    data::VidCommitment,
-    data::{Leaf, Leaf2},
+    data::{Leaf, Leaf2, VidCommitment},
     message::UpgradeLock,
     traits::{
         node_implementation::{NodeType, Versions},

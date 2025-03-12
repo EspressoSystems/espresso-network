@@ -45,7 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
         with:
-          prefix-key: v2-rust
+          prefix-key: v2-rust-${{ hashFiles('flake.*') }}
 
       - name: Check toolchain versions
         run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions

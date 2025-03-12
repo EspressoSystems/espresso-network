@@ -109,13 +109,13 @@ pub fn run_builder_source<TYPES, Source>(
             match event {
                 BuilderChange::Up if handle.is_none() => {
                     handle = Some(start_builder(url.clone(), source.clone()));
-                }
+                },
                 BuilderChange::Down => {
                     if let Some(handle) = handle.take() {
                         handle.abort();
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     });
@@ -153,13 +153,13 @@ pub fn run_builder_source_0_1<TYPES, Source>(
             match event {
                 BuilderChange::Up if handle.is_none() => {
                     handle = Some(start_builder(url.clone(), source.clone()));
-                }
+                },
                 BuilderChange::Down => {
                     if let Some(handle) = handle.take() {
                         handle.abort();
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     });

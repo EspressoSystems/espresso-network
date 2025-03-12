@@ -44,7 +44,7 @@ async fn test_quorum_vote_task_success() {
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
 
@@ -110,7 +110,7 @@ async fn test_quorum_vote_task_miss_dependency() {
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
 
@@ -193,7 +193,7 @@ async fn test_quorum_vote_task_incorrect_dependency() {
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
 

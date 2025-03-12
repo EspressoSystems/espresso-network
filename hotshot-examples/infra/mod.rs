@@ -54,6 +54,7 @@ use hotshot_testing::block_builder::{
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf, TestableLeaf},
+    epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     network::{BuilderType, NetworkConfig, NetworkConfigFile, NetworkConfigSource},
     traits::{
@@ -388,13 +389,14 @@ pub trait RunDa<
             // TODO: we need to pass a valid fallback builder url here somehow
             fallback_builder_url: config.config.builder_urls.first().clone(),
         };
+        let epoch_height = config.config.epoch_height;
 
         SystemContext::init(
             pk,
             sk,
             config.node_index,
             config.config,
-            membership,
+            EpochMembershipCoordinator::new(membership, epoch_height),
             Arc::from(network),
             initializer,
             ConsensusMetricsValue::default(),
@@ -439,13 +441,13 @@ pub trait RunDa<
             match event_stream.next().await {
                 None => {
                     panic!("Error! Event stream completed before consensus ended.");
-                }
+                },
                 Some(Event { event, .. }) => {
                     match event {
                         EventType::Error { error } => {
                             error!("Error in consensus: {:?}", error);
                             // TODO what to do here
-                        }
+                        },
                         EventType::Decide {
                             leaf_chain,
                             qc: _,
@@ -512,27 +514,27 @@ pub trait RunDa<
                                 warn!("Leaf chain is greater than 1 with len {}", leaf_chain.len());
                             }
                             // when we make progress, submit new events
-                        }
+                        },
                         EventType::ReplicaViewTimeout { view_number } => {
                             warn!("Timed out as a replicas in view {:?}", view_number);
-                        }
+                        },
                         EventType::ViewTimeout { view_number } => {
                             warn!("Timed out in view {:?}", view_number);
-                        }
-                        _ => {} // mostly DA proposal
+                        },
+                        _ => {}, // mostly DA proposal
                     }
-                }
+                },
             }
         }
+        // Panic if we don't have the genesis epoch, there is no recovery from that
         let num_eligible_leaders = context
             .hotshot
-            .memberships
-            .read()
+            .membership_coordinator
+            .membership_for_epoch(genesis_epoch_from_version::<V, TYPES>())
             .await
-            .committee_leaders(
-                TYPES::View::genesis(),
-                genesis_epoch_from_version::<V, TYPES>(),
-            )
+            .unwrap()
+            .committee_leaders(TYPES::View::genesis())
+            .await
             .len();
         let consensus_lock = context.hotshot.consensus();
         let consensus_reader = consensus_lock.read().await;
@@ -1090,11 +1092,11 @@ where
                 })
                 .collect();
             bind_address = Url::parse(&format!("http://0.0.0.0:{port}")).unwrap();
-        }
+        },
         Some(ref addr) => {
             bind_address = Url::parse(&format!("http://{addr}")).expect("Valid URL");
             advertise_urls = vec![bind_address.clone()];
-        }
+        },
     }
 
     match run_config.builder {
@@ -1114,7 +1116,7 @@ where
                 .await;
 
             Some(builder_task)
-        }
+        },
         BuilderType::Simple => {
             let builder_task =
                 <SimpleBuilderImplementation as TestBuilderImplementation<TYPES>>::start(
@@ -1130,7 +1132,7 @@ where
                 .await;
 
             Some(builder_task)
-        }
+        },
     }
 }
 

@@ -13,8 +13,7 @@ use std::{
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
-    data::VidCommitment,
-    data::{BlockError, Leaf2},
+    data::{BlockError, Leaf2, VidCommitment},
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
         node_implementation::NodeType,
@@ -294,6 +293,22 @@ impl TestBlockHeader {
             metadata,
             timestamp,
             random,
+        }
+    }
+}
+
+impl Default for TestBlockHeader {
+    fn default() -> Self {
+        let metadata = TestMetadata {
+            num_transactions: 0,
+        };
+        Self {
+            block_number: 0,
+            payload_commitment: Default::default(),
+            builder_commitment: Default::default(),
+            metadata,
+            timestamp: 0,
+            random: 0,
         }
     }
 }

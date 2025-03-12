@@ -2,12 +2,10 @@ use ark_bn254::{Bn254, Fq, Fr, G1Affine, G2Affine};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ed_on_bn254::{EdwardsConfig as EdOnBn254Config, Fq as FqEd254};
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
-use ark_poly::domain::radix2::Radix2EvaluationDomain;
-use ark_poly::EvaluationDomain;
+use ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
 use ark_std::rand::{rngs::StdRng, Rng, SeedableRng};
 use clap::{Parser, ValueEnum};
 use diff_test_bn254::ParsedG2Point;
-
 use ethers::{
     abi::{AbiDecode, AbiEncode, Address},
     types::{Bytes, U256},
@@ -21,15 +19,19 @@ use hotshot_state_prover::mock_ledger::{
 };
 use hotshot_types::utils::epoch_from_block_number;
 use jf_pcs::prelude::Commitment;
-use jf_plonk::proof_system::structs::{Proof, VerifyingKey};
-use jf_plonk::proof_system::PlonkKzgSnark;
 use jf_plonk::{
+    proof_system::{
+        structs::{Proof, VerifyingKey},
+        PlonkKzgSnark,
+    },
     testing_apis::Verifier,
     transcript::{PlonkTranscript, SolidityTranscript},
 };
-use jf_signature::bls_over_bn254::{hash_to_curve, KeyPair as BLSKeyPair, Signature};
-use jf_signature::constants::CS_ID_BLS_BN254;
-use jf_signature::schnorr::KeyPair as SchnorrKeyPair;
+use jf_signature::{
+    bls_over_bn254::{hash_to_curve, KeyPair as BLSKeyPair, Signature},
+    constants::CS_ID_BLS_BN254,
+    schnorr::KeyPair as SchnorrKeyPair,
+};
 use sha3::Keccak256;
 
 #[derive(Parser)]
@@ -108,7 +110,7 @@ fn main() {
                 field_to_u256(domain.group_gen),
             );
             println!("{}", res.encode_hex());
-        }
+        },
         Action::EvalDomainElements => {
             if cli.args.len() != 2 {
                 panic!("Should provide arg1=logSize, arg2=length");
@@ -123,7 +125,7 @@ fn main() {
                 .map(field_to_u256)
                 .collect::<Vec<_>>();
             println!("{}", res.encode_hex());
-        }
+        },
         Action::EvalDataGen => {
             if cli.args.len() != 3 {
                 panic!("Should provide arg1=logSize, arg2=zeta, arg3=publicInput");
@@ -144,7 +146,7 @@ fn main() {
                 field_to_u256(pi_eval),
             );
             println!("{}", res.encode_hex());
-        }
+        },
         Action::TranscriptAppendMsg => {
             if cli.args.len() != 2 {
                 panic!("Should provide arg1=transcript, arg2=message");
@@ -159,7 +161,7 @@ fn main() {
             <SolidityTranscript as PlonkTranscript<Fr>>::append_message(&mut t, &[], &msg).unwrap();
             let res: ParsedTranscript = t.into();
             println!("{}", (res,).encode_hex());
-        }
+        },
         Action::TranscriptAppendField => {
             if cli.args.len() != 2 {
                 panic!("Should provide arg1=transcript, arg2=fieldElement");
@@ -171,7 +173,7 @@ fn main() {
             t.append_field_elem::<Bn254>(&[], &field).unwrap();
             let res: ParsedTranscript = t.into();
             println!("{}", (res,).encode_hex());
-        }
+        },
         Action::TranscriptAppendGroup => {
             if cli.args.len() != 2 {
                 panic!("Should provide arg1=transcript, arg2=groupElement");
@@ -185,7 +187,7 @@ fn main() {
                 .unwrap();
             let res: ParsedTranscript = t.into();
             println!("{}", (res,).encode_hex());
-        }
+        },
         Action::TranscriptGetChal => {
             if cli.args.len() != 1 {
                 panic!("Should provide arg1=transcript");
@@ -199,7 +201,7 @@ fn main() {
             let updated_t: ParsedTranscript = t.into();
             let res = (updated_t, field_to_u256(chal));
             println!("{}", res.encode_hex());
-        }
+        },
         Action::TranscriptAppendVkAndPi => {
             if cli.args.len() != 3 {
                 panic!("Should provide arg1=transcript, arg2=verifyingKey, arg3=publicInput");
@@ -216,7 +218,7 @@ fn main() {
 
             let res: ParsedTranscript = t.into();
             println!("{}", (res,).encode_hex());
-        }
+        },
         Action::TranscriptAppendProofEvals => {
             if cli.args.len() != 1 {
                 panic!("Should provide arg1=transcript");
@@ -238,7 +240,7 @@ fn main() {
             let t_updated: ParsedTranscript = t.into();
             let res = (t_updated, proof_parsed);
             println!("{}", res.encode_hex());
-        }
+        },
         Action::PlonkConstants => {
             let coset_k = coset_k();
             let open_key = open_key();
@@ -256,7 +258,7 @@ fn main() {
                 field_to_u256::<Fq>(open_key.beta_h.y().unwrap().c0),
             );
             println!("{}", res.encode_hex());
-        }
+        },
         Action::PlonkComputeChal => {
             if cli.args.len() != 4 {
                 panic!("Should provide arg1=verifyingKey, arg2=publicInput, arg3=proof, arg4=extraTranscriptInitMsg");
@@ -281,9 +283,9 @@ fn main() {
                 .unwrap()
                 .into();
             println!("{}", (chal,).encode_hex());
-        }
+        },
         Action::PlonkVerify => {
-            let (proof, vk, public_input, _, _): (
+            let (proof, vk, public_input, ..): (
                 Proof<Bn254>,
                 VerifyingKey<Bn254>,
                 Vec<Fr>,
@@ -310,7 +312,7 @@ fn main() {
 
             let res = (vk_parsed, pi_parsed, proof_parsed);
             println!("{}", res.encode_hex());
-        }
+        },
         Action::DummyProof => {
             let mut rng = jf_utils::test_rng();
             if !cli.args.is_empty() {
@@ -319,10 +321,10 @@ fn main() {
             }
             let proof = ParsedPlonkProof::dummy(&mut rng);
             println!("{}", (proof,).encode_hex());
-        }
+        },
         Action::TestOnly => {
             println!("args: {:?}", cli.args);
-        }
+        },
         Action::GenClientWallet => {
             if cli.args.len() != 2 {
                 panic!("Should provide arg1=senderAddress arg2=seed");
@@ -364,7 +366,7 @@ fn main() {
                 sender_address,
             );
             println!("{}", res.encode_hex());
-        }
+        },
         Action::GenRandomG2Point => {
             if cli.args.len() != 1 {
                 panic!("Should provide arg1=exponent");
@@ -376,7 +378,7 @@ fn main() {
             let point_parsed: ParsedG2Point = point.into();
             let res = point_parsed;
             println!("{}", (res.encode_hex()));
-        }
+        },
         Action::MockGenesis => {
             if cli.args.len() != 1 {
                 panic!("Should provide arg1=numInitValidators");
@@ -391,7 +393,7 @@ fn main() {
                 ledger.voting_stake_table_state().into(),
             );
             println!("{}", res.encode_hex());
-        }
+        },
         Action::MockConsecutiveFinalizedStates => {
             if cli.args.len() != 1 {
                 panic!("Should provide arg1=numInitValidators");
@@ -424,7 +426,7 @@ fn main() {
 
             let res = (new_states, next_st_states, proofs);
             println!("{}", res.encode_hex());
-        }
+        },
         Action::MockSkipBlocks => {
             if cli.args.is_empty() || cli.args.len() > 2 {
                 panic!("Should provide arg1=numBlockSkipped,arg2(opt)=requireValidProof");
@@ -458,7 +460,7 @@ fn main() {
                 (state_parsed, next_stake_table, proof_parsed)
             };
             println!("{}", res.encode_hex());
-        }
+        },
         Action::GenBLSHashes => {
             if cli.args.len() != 1 {
                 panic!("Should provide arg1=message");
@@ -478,7 +480,7 @@ fn main() {
 
             let res = (fq_u256, hash_to_curve_elem_parsed);
             println!("{}", res.encode_hex());
-        }
+        },
         Action::GenBLSSig => {
             let mut rng = jf_utils::test_rng();
 
@@ -500,7 +502,7 @@ fn main() {
 
             let res = (vk_parsed, sig_parsed);
             println!("{}", res.encode_hex());
-        }
+        },
         Action::EpochCompute => {
             if cli.args.len() != 2 {
                 panic!("Should provide arg1=blockNum, arg2=blocksPerEpoch");
@@ -510,6 +512,6 @@ fn main() {
 
             let res = epoch_from_block_number(block_num, epoch_height);
             println!("{}", (res,).encode_hex());
-        }
+        },
     };
 }

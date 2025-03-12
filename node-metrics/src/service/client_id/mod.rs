@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign};
+
+use serde::{Deserialize, Serialize};
 
 /// [ClientId] represents the unique identifier for a client that is connected
 /// to the server.
@@ -108,8 +109,10 @@ mod tests {
 
     #[test]
     fn test_hash() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use std::{
+            collections::hash_map::DefaultHasher,
+            hash::{Hash, Hasher},
+        };
 
         let hash_1 = {
             let client_id = ClientId::from_count(1);

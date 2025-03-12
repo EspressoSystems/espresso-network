@@ -24,10 +24,7 @@ use hotshot_testing::{
 use hotshot_types::{
     data::{null_block, PackedBundle, ViewNumber},
     simple_vote::DaData2,
-    traits::{
-        election::Membership,
-        node_implementation::{ConsensusTime, Versions},
-    },
+    traits::node_implementation::{ConsensusTime, Versions},
 };
 use vbs::version::{StaticVersionType, Version};
 
@@ -38,7 +35,7 @@ async fn test_da_task() {
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
     let default_version = Version { major: 0, minor: 0 };
 
     // Make some empty encoded transactions, we just care about having a commitment handy for the
@@ -48,7 +45,12 @@ async fn test_da_task() {
     let payload_commit = hotshot_types::data::vid_commitment::<TestVersions>(
         &encoded_transactions,
         &[],
-        handle.hotshot.memberships.read().await.total_nodes(None),
+        membership
+            .membership_for_epoch(None)
+            .await
+            .unwrap()
+            .total_nodes()
+            .await,
         default_version,
     );
 
@@ -149,7 +151,7 @@ async fn test_da_task_storage_failure() {
 
     // Set the error flag here for the system handle. This causes it to emit an error on append.
     handle.storage().write().await.should_return_err = true;
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
     let default_version = Version { major: 0, minor: 0 };
 
     // Make some empty encoded transactions, we just care about having a commitment handy for the
@@ -159,16 +161,18 @@ async fn test_da_task_storage_failure() {
     let payload_commit = hotshot_types::data::vid_commitment::<TestVersions>(
         &encoded_transactions,
         &[],
-        handle.hotshot.memberships.read().await.total_nodes(None),
+        membership
+            .membership_for_epoch(None)
+            .await
+            .unwrap()
+            .total_nodes()
+            .await,
         default_version,
     );
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(Arc::clone(&membership), node_key_map);
+        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
 
-    let mut proposals = Vec::new();
-    let mut leaders = Vec::new();
-    let mut votes = Vec::new();
     let mut dacs = Vec::new();
     let mut vids = Vec::new();
 

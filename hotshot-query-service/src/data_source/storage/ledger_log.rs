@@ -12,12 +12,12 @@
 
 #![cfg(feature = "file-system-data-source")]
 
+use std::{collections::VecDeque, fmt::Debug};
+
 use atomic_store::{
     append_log, load_store::BincodeLoadStore, AppendLog, AtomicStoreLoader, PersistenceError,
 };
 use serde::{de::DeserializeOwned, Serialize};
-use std::collections::VecDeque;
-use std::fmt::Debug;
 use tracing::{debug, warn};
 
 /// A caching append log for ledger objects.
@@ -262,10 +262,11 @@ impl<T: Serialize + DeserializeOwned + Clone> ExactSizeIterator for Iter<'_, T> 
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::testing::setup_test;
     use atomic_store::AtomicStore;
     use tempfile::TempDir;
+
+    use super::*;
+    use crate::testing::setup_test;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_ledger_log_creation() {

@@ -167,21 +167,21 @@ macro_rules! log {
             match error_level {
                 Level::Trace => {
                     tracing::trace!("{}", error.message);
-                }
+                },
                 Level::Debug => {
                     tracing::debug!("{}", error.message);
-                }
+                },
                 Level::Info => {
                     tracing::info!("{}", error.message);
-                }
+                },
                 Level::Warn => {
                     tracing::warn!("{}", error.message);
-                }
+                },
                 Level::Error => {
                     tracing::error!("{}", error.message);
-                }
+                },
                 // impossible
-                Level::Unspecified => {}
+                Level::Unspecified => {},
             }
         }
     };

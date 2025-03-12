@@ -19,24 +19,34 @@ concurrency:
 
 jobs:
   cargo-features:
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        command:
+          - just check-features-ci
+          - just check-features-ci --tests
     steps:
       - uses: taiki-e/install-action@cargo-hack
+      - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          tool-cache: false
+          dotnet: false
+          haskell: false
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
       # Note: this job doesn't use a cache on purpose because it mostly compiles
       # the crates in this repo over and over again with different feature
-      # combinations. Adding caching would not speed it up much and further
-      # contribute to our cache usage.
-
-      # Includes checks for `--no-default-features` and `--all-features` as well
-      # as each individual feature enabled.
-      - name: Check compilation for feature combinations
+      # combinations. The target directory gets really large. Adding caching
+      # would not speed it up much and further contribute to our cache usage.
+      - name: Check compilation feature combinations
         run: |
-          cargo hack check --feature-powerset --exclude hotshot --exclude hotshot-builder-api --exclude hotshot-task-impls --exclude hotshot-macros --exclude hotshot-events-service --exclude hotshot-utils --exclude hotshot-orchestrator --exclude hotshot-query-service --exclude hotshot-stake-table --exclude hotshot-state-prover --exclude hotshot-task --exclude hotshot-testing --exclude hotshot-types --exclude hotshot-libp2p-networking --exclude hotshot-contract-adapter --exclude hotshot-example-types --exclude vid
-
-      - name: Check compilation for feature combinations (--tests)
-        run: |
-          cargo hack check --feature-powerset --tests --exclude hotshot --exclude hotshot-builder-api --exclude hotshot-task-impls --exclude hotshot-macros --exclude hotshot-events-service --exclude hotshot-utils --exclude hotshot-orchestrator --exclude hotshot-query-service --exclude hotshot-stake-table --exclude hotshot-state-prover --exclude hotshot-task --exclude hotshot-testing --exclude hotshot-types --exclude hotshot-libp2p-networking --exclude hotshot-contract-adapter --exclude hotshot-example-types --exclude vid
+          ${{ matrix.command }}

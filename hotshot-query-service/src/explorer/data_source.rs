@@ -10,6 +10,10 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use async_trait::async_trait;
+use hotshot_types::traits::node_implementation::NodeType;
+use tagged_base64::TaggedBase64;
+
 use super::{
     query_data::{
         BlockDetail, BlockIdentifier, BlockSummary, ExplorerSummary, GetBlockDetailError,
@@ -24,9 +28,6 @@ use crate::{
     availability::{QueryableHeader, QueryablePayload},
     Header, Payload, Transaction,
 };
-use async_trait::async_trait;
-use hotshot_types::traits::node_implementation::NodeType;
-use tagged_base64::TaggedBase64;
 
 /// An interface for querying Data and Statistics from the HotShot Blockchain.
 ///

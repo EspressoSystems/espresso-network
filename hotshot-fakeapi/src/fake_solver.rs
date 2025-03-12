@@ -91,11 +91,11 @@ impl FakeSolverState {
                         status: tide_disco::StatusCode::INTERNAL_SERVER_ERROR,
                         message: "Internal Server Error".to_string(),
                     });
-                }
+                },
                 FakeSolverFaultType::TimeoutFault => {
                     // Sleep for the preconfigured 1 second timeout interval
                     tokio::time::sleep(SOLVER_MAX_TIMEOUT_S).await;
-                }
+                },
             }
         }
 

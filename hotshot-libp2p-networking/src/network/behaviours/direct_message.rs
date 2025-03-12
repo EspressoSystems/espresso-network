@@ -59,7 +59,7 @@ impl DMBehaviour {
             } => {
                 error!("Inbound message failure from {:?}: {:?}", peer, error);
                 None
-            }
+            },
             Event::OutboundFailure {
                 peer,
                 request_id,
@@ -83,7 +83,7 @@ impl DMBehaviour {
                     }
                 }
                 None
-            }
+            },
             Event::Message { message, peer, .. } => match message {
                 Message::Request {
                     request: msg,
@@ -94,7 +94,7 @@ impl DMBehaviour {
                     // receiver, not initiator.
                     // don't track. If we are disconnected, sender will reinitiate
                     Some(NetworkEvent::DirectRequest(msg, peer, channel))
-                }
+                },
                 Message::Response {
                     request_id,
                     response: msg,
@@ -107,12 +107,12 @@ impl DMBehaviour {
                         warn!("Received response for unknown request id {:?}", request_id);
                         None
                     }
-                }
+                },
             },
             e @ Event::ResponseSent { .. } => {
                 debug!("Response sent {:?}", e);
                 None
-            }
+            },
         }
     }
 }

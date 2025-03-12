@@ -428,31 +428,30 @@ pub mod task;
 pub mod testing;
 pub mod types;
 
-pub use error::Error;
-pub use resolvable::Resolvable;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use derive_more::{Deref, From, Into};
+pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
 use hotshot_types::traits::{
     node_implementation::{NodeImplementation, NodeType, Versions},
     BlockPayload,
 };
+pub use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
+pub use resolvable::Resolvable;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use std::sync::Arc;
 use task::BackgroundTask;
 use tide_disco::{method::ReadState, App, StatusCode};
 use vbs::version::StaticVersionType;
 
-pub use hotshot_types::{
-    data::Leaf,
-    data::{VidCommitment, VidShare},
-    simple_certificate::QuorumCertificate,
-};
-
-pub type VidCommon = Option<hotshot_types::vid::advz::ADVZCommon>;
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub enum VidCommon {
+    V0(hotshot_types::vid::advz::ADVZCommon),
+    V1(hotshot_types::vid::avidm::AvidMCommon),
+}
 
 pub type Payload<Types> = <Types as NodeType>::BlockPayload;
 pub type Header<Types> = <Types as NodeType>::BlockHeader;
@@ -543,15 +542,28 @@ where
     ApiVer: StaticVersionType + 'static,
 {
     // Create API modules.
-    let availability_api =
-        availability::define_api(&options.availability, bind_version).map_err(Error::internal)?;
+    let availability_api_v0 = availability::define_api(
+        &options.availability,
+        bind_version,
+        "0.0.1".parse().unwrap(),
+    )
+    .map_err(Error::internal)?;
+
+    let availability_api_v1 = availability::define_api(
+        &options.availability,
+        bind_version,
+        "1.0.0".parse().unwrap(),
+    )
+    .map_err(Error::internal)?;
     let node_api = node::define_api(&options.node, bind_version).map_err(Error::internal)?;
     let status_api = status::define_api(&options.status, bind_version).map_err(Error::internal)?;
 
     // Create app.
     let data_source = Arc::new(data_source);
     let mut app = App::<_, Error>::with_state(ApiState(data_source.clone()));
-    app.register_module("availability", availability_api)
+    app.register_module("availability", availability_api_v0)
+        .map_err(Error::internal)?
+        .register_module("availability", availability_api_v1)
         .map_err(Error::internal)?
         .register_module("node", node_api)
         .map_err(Error::internal)?
@@ -580,6 +592,23 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::{
+        ops::{Bound, RangeBounds},
+        time::Duration,
+    };
+
+    use async_lock::RwLock;
+    use async_trait::async_trait;
+    use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
+    use futures::future::FutureExt;
+    use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
+    use portpicker::pick_unused_port;
+    use surf_disco::Client;
+    use tempfile::TempDir;
+    use testing::mocks::MockBase;
+    use tide_disco::App;
+    use toml::toml;
+
     use super::*;
     use crate::{
         availability::{
@@ -595,19 +624,6 @@ mod test {
             mocks::{MockHeader, MockPayload, MockTypes},
         },
     };
-    use async_lock::RwLock;
-    use async_trait::async_trait;
-    use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
-    use futures::future::FutureExt;
-    use hotshot_types::simple_certificate::QuorumCertificate;
-    use portpicker::pick_unused_port;
-    use std::ops::{Bound, RangeBounds};
-    use std::time::Duration;
-    use surf_disco::Client;
-    use tempfile::TempDir;
-    use testing::mocks::MockBase;
-    use tide_disco::App;
-    use toml::toml;
 
     struct CompositeState {
         store: AtomicStore,
@@ -828,10 +844,10 @@ mod test {
 
         // Mock up some data and add a block to the store.
         let leaf =
-            Leaf::<MockTypes>::genesis::<TestVersions>(&Default::default(), &Default::default())
+            Leaf2::<MockTypes>::genesis::<TestVersions>(&Default::default(), &Default::default())
                 .await;
         let qc =
-            QuorumCertificate::genesis::<TestVersions>(&Default::default(), &Default::default())
+            QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default())
                 .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
@@ -862,7 +878,12 @@ mod test {
         let mut app = App::<_, Error>::with_state(RwLock::new(state));
         app.register_module(
             "availability",
-            availability::define_api(&Default::default(), MockBase::instance()).unwrap(),
+            availability::define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "1.0.0".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap()
         .register_module(

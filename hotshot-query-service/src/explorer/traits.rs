@@ -10,9 +10,10 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::fmt::Debug;
+
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use serde::{de::DeserializeOwned, Serialize};
-use std::fmt::Debug;
 
 /// [ExplorerHeader] is a trait that represents certain extensions to the
 /// [BlockHeader] that are specific to the Block Explorer API.  This trait

@@ -158,12 +158,12 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
                         let _ = S::handle_event(&mut self.state, (input, id))
                             .await
                             .inspect_err(|e| tracing::error!("{e}"));
-                    }
+                    },
                     Ok((Err(e), _id, _)) => {
                         error!("Error from one channel in test task {:?}", e);
                         sleep(Duration::from_millis(4000)).await;
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 };
             }
         })
@@ -202,7 +202,7 @@ pub async fn add_network_message_test_task<
                 Err(e) => {
                     error!("Failed to receive message: {:?}", e);
                     continue;
-                }
+                },
             };
 
             // Deserialize the message
@@ -212,7 +212,7 @@ pub async fn add_network_message_test_task<
                     Err(e) => {
                         tracing::error!("Failed to deserialize message: {:?}", e);
                         continue;
-                    }
+                    },
                 };
 
             // Handle the message

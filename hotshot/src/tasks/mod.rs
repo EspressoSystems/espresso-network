@@ -45,8 +45,9 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
-    ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, HotShotConfig, HotShotInitializer,
-    MarketplaceConfig, NetworkTaskRegistry, SignatureKey, SystemContext, Versions,
+    ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, EpochMembershipCoordinator,
+    HotShotConfig, HotShotInitializer, MarketplaceConfig, NetworkTaskRegistry, SignatureKey,
+    SystemContext, Versions,
 };
 
 /// event for global event stream
@@ -82,7 +83,7 @@ pub fn add_response_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
 ) {
     let state = NetworkResponseState::<TYPES, V>::new(
         handle.hotshot.consensus(),
-        Arc::clone(&handle.memberships),
+        handle.membership_coordinator.clone(),
         handle.public_key().clone(),
         handle.private_key().clone(),
         handle.hotshot.id,
@@ -190,13 +191,12 @@ pub fn add_network_event_task<
 >(
     handle: &mut SystemContextHandle<TYPES, I, V>,
     network: Arc<NET>,
-    membership: Arc<RwLock<TYPES::Membership>>,
 ) {
     let network_state: NetworkEventTaskState<_, V, _, _> = NetworkEventTaskState {
         network,
         view: TYPES::View::genesis(),
         epoch: genesis_epoch_from_version::<V, TYPES>(),
-        membership,
+        membership_coordinator: handle.membership_coordinator.clone(),
         storage: Arc::clone(&handle.storage()),
         consensus: OuterConsensus::new(handle.consensus()),
         upgrade_lock: handle.hotshot.upgrade_lock.clone(),
@@ -280,13 +280,13 @@ pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPE
                     if matches!(event.as_ref(), HotShotEvent::Shutdown) {
                         return;
                     }
-                }
+                },
                 Err(RecvError::Closed) => {
                     return;
-                }
+                },
                 Err(e) => {
                     tracing::error!("Shutdown event monitor channel recv error: {}", e);
-                }
+                },
             }
         }
     }
@@ -322,7 +322,7 @@ where
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES::SignatureKey>,
-        memberships: Arc<RwLock<TYPES::Membership>>,
+        memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
@@ -330,12 +330,13 @@ where
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> SystemContextHandle<TYPES, I, V> {
         let epoch_height = config.epoch_height;
+
         let hotshot = SystemContext::new(
             public_key,
             private_key,
             nonce,
             config,
-            memberships,
+            memberships.clone(),
             network,
             initializer,
             metrics,
@@ -357,7 +358,7 @@ where
             hotshot: Arc::clone(&hotshot),
             storage: Arc::clone(&hotshot.storage),
             network: Arc::clone(&hotshot.network),
-            memberships: Arc::clone(&hotshot.memberships),
+            membership_coordinator: memberships.clone(),
             epoch_height,
         };
 
@@ -517,9 +518,8 @@ where
     /// Adds the `NetworkEventTaskState` tasks possibly modifying them as well.
     fn add_network_event_tasks(&self, handle: &mut SystemContextHandle<TYPES, I, V>) {
         let network = Arc::clone(&handle.network);
-        let memberships = Arc::clone(&handle.memberships);
 
-        self.add_network_event_task(handle, network, memberships);
+        self.add_network_event_task(handle, network);
     }
 
     /// Adds a `NetworkEventTaskState` task. Can be reimplemented to modify its behaviour.
@@ -527,9 +527,8 @@ where
         &self,
         handle: &mut SystemContextHandle<TYPES, I, V>,
         channel: Arc<<I as NodeImplementation<TYPES>>::Network>,
-        membership: Arc<RwLock<TYPES::Membership>>,
     ) {
-        add_network_event_task(handle, channel, membership);
+        add_network_event_task(handle, channel);
     }
 }
 
@@ -562,9 +561,5 @@ pub async fn add_network_message_and_request_receiver_tasks<
 pub fn add_network_event_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     handle: &mut SystemContextHandle<TYPES, I, V>,
 ) {
-    add_network_event_task(
-        handle,
-        Arc::clone(&handle.network),
-        Arc::clone(&handle.memberships),
-    );
+    add_network_event_task(handle, Arc::clone(&handle.network));
 }

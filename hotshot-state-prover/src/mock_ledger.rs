@@ -11,12 +11,12 @@ use ark_std::{
 use ethers::types::U256;
 use hotshot_contract_adapter::jellyfish::{field_to_u256, open_key};
 use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::utils::is_last_block_in_epoch;
 use hotshot_types::{
     light_client::{
         GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
     },
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
+    utils::is_last_block_in_epoch,
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;

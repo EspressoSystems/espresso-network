@@ -2143,48 +2143,48 @@ pub mod light_client_mock {
                 Self::AddressEmptyCode(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::ERC1967InvalidImplementation(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::ERC1967NonPayable(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::FailedInnerCall(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::InsufficientSnapshotHistory(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::InvalidAddress(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::InvalidArgs(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::InvalidHotShotBlockForCommitmentCheck(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::InvalidInitialization(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::InvalidMaxStateHistory(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::InvalidProof(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::MissingLastBlockInEpochUpdate(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::NoChangeRequired(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::NotInitializing(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::OutdatedState(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::OwnableInvalidOwner(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::OwnableUnauthorizedAccount(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::ProverNotPermissioned(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::UUPSUnauthorizedCallContext(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::UUPSUnsupportedProxiableUUID(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::WrongStakeTableUsed(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::RevertString(s) => ::ethers::core::abi::AbiEncode::encode(s),
             }
         }
@@ -2283,7 +2283,7 @@ pub mod light_client_mock {
                 Self::AddressEmptyCode(element) => ::core::fmt::Display::fmt(element, f),
                 Self::ERC1967InvalidImplementation(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::ERC1967NonPayable(element) => ::core::fmt::Display::fmt(element, f),
                 Self::FailedInnerCall(element) => ::core::fmt::Display::fmt(element, f),
                 Self::InsufficientSnapshotHistory(element) => ::core::fmt::Display::fmt(element, f),
@@ -2291,13 +2291,13 @@ pub mod light_client_mock {
                 Self::InvalidArgs(element) => ::core::fmt::Display::fmt(element, f),
                 Self::InvalidHotShotBlockForCommitmentCheck(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::InvalidInitialization(element) => ::core::fmt::Display::fmt(element, f),
                 Self::InvalidMaxStateHistory(element) => ::core::fmt::Display::fmt(element, f),
                 Self::InvalidProof(element) => ::core::fmt::Display::fmt(element, f),
                 Self::MissingLastBlockInEpochUpdate(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::NoChangeRequired(element) => ::core::fmt::Display::fmt(element, f),
                 Self::NotInitializing(element) => ::core::fmt::Display::fmt(element, f),
                 Self::OutdatedState(element) => ::core::fmt::Display::fmt(element, f),
@@ -2307,7 +2307,7 @@ pub mod light_client_mock {
                 Self::UUPSUnauthorizedCallContext(element) => ::core::fmt::Display::fmt(element, f),
                 Self::UUPSUnsupportedProxiableUUID(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::WrongStakeTableUsed(element) => ::core::fmt::Display::fmt(element, f),
                 Self::RevertString(s) => ::core::fmt::Display::fmt(s, f),
             }
@@ -2631,10 +2631,10 @@ pub mod light_client_mock {
                 Self::OwnershipTransferredFilter(element) => ::core::fmt::Display::fmt(element, f),
                 Self::PermissionedProverNotRequiredFilter(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::PermissionedProverRequiredFilter(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::UpgradeFilter(element) => ::core::fmt::Display::fmt(element, f),
                 Self::UpgradedFilter(element) => ::core::fmt::Display::fmt(element, f),
             }
@@ -3469,74 +3469,69 @@ pub mod light_client_mock {
             match self {
                 Self::UpgradeInterfaceVersion(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
-                Self::BlocksPerEpoch(element) => ::ethers::core::abi::AbiEncode::encode(element),
+                },
                 Self::CurrentBlockNumber(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
-                Self::CurrentEpoch(element) => ::ethers::core::abi::AbiEncode::encode(element),
+                },
                 Self::DisablePermissionedProverMode(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
-                Self::EpochFromBlockNumber(element) => {
-                    ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::FinalizedState(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::GenesisStakeTableState(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::GenesisState(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::GetHotShotCommitment(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::GetStateHistoryCount(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::GetVersion(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::Initialize(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::IsLastBlockInEpoch(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::IsPermissionedProverEnabled(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::LagOverEscapeHatchThreshold(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::NewFinalizedState(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::Owner(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::PermissionedProver(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::ProxiableUUID(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::RenounceOwnership(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::SetBlocksPerEpoch(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::SetFinalizedState(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::SetHotShotDownSince(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::SetHotShotUp(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::SetPermissionedProver(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::SetStateHistory(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::SetstateHistoryRetentionPeriod(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::StateHistoryCommitments(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::StateHistoryFirstIndex(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::StateHistoryRetentionPeriod(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::TransferOwnership(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::UpgradeToAndCall(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::VotingStakeTableState(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
             }
         }
     }
@@ -3549,8 +3544,7 @@ pub mod light_client_mock {
                 Self::CurrentEpoch(element) => ::core::fmt::Display::fmt(element, f),
                 Self::DisablePermissionedProverMode(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
-                Self::EpochFromBlockNumber(element) => ::core::fmt::Display::fmt(element, f),
+                },
                 Self::FinalizedState(element) => ::core::fmt::Display::fmt(element, f),
                 Self::GenesisStakeTableState(element) => ::core::fmt::Display::fmt(element, f),
                 Self::GenesisState(element) => ::core::fmt::Display::fmt(element, f),
@@ -3574,7 +3568,7 @@ pub mod light_client_mock {
                 Self::SetStateHistory(element) => ::core::fmt::Display::fmt(element, f),
                 Self::SetstateHistoryRetentionPeriod(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::StateHistoryCommitments(element) => ::core::fmt::Display::fmt(element, f),
                 Self::StateHistoryFirstIndex(element) => ::core::fmt::Display::fmt(element, f),
                 Self::StateHistoryRetentionPeriod(element) => ::core::fmt::Display::fmt(element, f),

@@ -163,13 +163,13 @@ impl<T: Clone + Send + Sync + 'static> Dependency<T> for EventDependency<T> {
                     if (self.match_fn)(&event) {
                         return Some(event);
                     }
-                }
+                },
                 Err(RecvError::Overflowed(n)) => {
                     tracing::error!("Dependency Task overloaded, skipping {} events", n);
-                }
+                },
                 Err(RecvError::Closed) => {
                     return None;
-                }
+                },
             }
         }
     }

@@ -100,7 +100,7 @@ impl<K: Key> StakeTableScheme for StakeTable<K> {
             Some(index) => {
                 let branches = to_merkle_path(*index, self.height);
                 root.simple_lookup(self.height, &branches)
-            }
+            },
             None => Err(StakeTableError::KeyNotFound),
         }
     }
@@ -116,7 +116,7 @@ impl<K: Key> StakeTableScheme for StakeTable<K> {
             Some(index) => {
                 let branches = to_merkle_path(*index, self.height);
                 root.lookup(self.height, &branches)
-            }
+            },
             None => Err(StakeTableError::KeyNotFound),
         }?;
         let amount = *proof.value().ok_or(StakeTableError::KeyNotFound)?;
@@ -149,7 +149,7 @@ impl<K: Key> StakeTableScheme for StakeTable<K> {
                     negative,
                 )?;
                 Ok(value)
-            }
+            },
             None => Err(StakeTableError::KeyNotFound),
         }
     }
@@ -221,7 +221,7 @@ impl<K: Key> StakeTable<K> {
                     value,
                 )?;
                 Ok(old_value)
-            }
+            },
             None => Err(StakeTableError::KeyNotFound),
         }
     }

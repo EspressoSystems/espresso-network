@@ -137,7 +137,7 @@ where
                             .map(Result::unwrap),
                     );
                 }
-            }
+            },
             GenerationStrategy::Random {
                 min_per_view,
                 max_per_view,
@@ -164,7 +164,7 @@ where
 
                     self.txn_nonce += 1;
                 }
-            }
+            },
             GenerationStrategy::Flood {
                 min_tx_size,
                 max_tx_size,
@@ -188,7 +188,7 @@ where
 
                     self.txn_nonce += 1;
                 }
-            }
+            },
         };
     }
 }
@@ -235,7 +235,7 @@ where
                             .publish_transaction_async(txn)
                             .await
                             .expect("Failed to submit transaction to public mempool");
-                    }
+                    },
                     SubmissionEndpoint::Private => {
                         if let Err(e) = private_mempool_client
                             .post::<()>("submit")
@@ -248,17 +248,17 @@ where
                                 // If we can't reach the builder altogether, test should fail
                                 builder::Error::Request(request_error) => {
                                     panic!("Builder API not available: {request_error}")
-                                }
+                                },
                                 // If the builder returns an error, we will re-submit this transaction
                                 // on the next view, so we return it to the queue and break
                                 error => {
                                     tracing::warn!(?error, "Builder API error");
                                     self.txn_queue.push_front(txn);
                                     break;
-                                }
+                                },
                             };
                         }
-                    }
+                    },
                 }
             }
         }

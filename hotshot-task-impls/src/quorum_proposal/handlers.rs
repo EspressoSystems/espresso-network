@@ -16,15 +16,17 @@ use std::{
 use anyhow::{ensure, Context, Result};
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
-use committable::Committable;
+use committable::{Commitment, Committable};
 use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
     consensus::{CommitmentAndMetadata, OuterConsensus},
     data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2},
+    epoch_membership::EpochMembership,
     message::Proposal,
     simple_certificate::{QuorumCertificate2, UpgradeCertificate},
     traits::{
-        block_contents::BlockHeader, election::Membership, node_implementation::NodeType,
+        block_contents::BlockHeader,
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
     },
     utils::{is_last_block_in_epoch, option_epoch_from_block_number},
@@ -38,7 +40,7 @@ use vbs::version::StaticVersionType;
 use crate::{
     events::HotShotEvent,
     helpers::{broadcast_event, parent_leaf_and_state, wait_for_next_epoch_qc},
-    quorum_proposal::{UpgradeLock, Versions},
+    quorum_proposal::{QuorumProposalTaskState, UpgradeLock, Versions},
 };
 
 /// Proposal dependency types. These types represent events that precipitate a proposal.
@@ -81,7 +83,7 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
     pub instance_state: Arc<TYPES::InstanceState>,
 
     /// Membership for Quorum Certs/votes
-    pub membership: Arc<RwLock<TYPES::Membership>>,
+    pub membership: EpochMembership<TYPES>,
 
     /// Our public key
     pub public_key: TYPES::SignatureKey,
@@ -127,11 +129,10 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
     ) -> Option<QuorumCertificate2<TYPES>> {
         while let Ok(event) = rx.recv_direct().await {
             if let HotShotEvent::HighQcRecv(qc, _sender) = event.as_ref() {
-                let membership_reader = self.membership.read().await;
-                let membership_stake_table = membership_reader.stake_table(qc.data.epoch);
-                let membership_success_threshold =
-                    membership_reader.success_threshold(qc.data.epoch);
-                drop(membership_reader);
+                let prev_epoch = qc.data.epoch;
+                let epoch_membership = self.membership.get_new_epoch(prev_epoch).await.ok()?;
+                let membership_stake_table = epoch_membership.stake_table().await;
+                let membership_success_threshold = epoch_membership.success_threshold().await;
 
                 if qc
                     .is_valid_cert(
@@ -207,7 +208,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let (parent_leaf, state) = parent_leaf_and_state(
             &self.sender,
             &self.receiver,
-            Arc::clone(&self.membership),
+            self.membership.coordinator.clone(),
             self.public_key.clone(),
             self.private_key.clone(),
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
@@ -308,16 +309,15 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             self.epoch_height,
         );
 
+        let epoch_membership = self
+            .membership
+            .coordinator
+            .membership_for_epoch(epoch)
+            .await?;
         // Make sure we are the leader for the view and epoch.
         // We might have ended up here because we were in the epoch transition.
-        if self
-            .membership
-            .read()
-            .await
-            .leader(self.view_number, epoch)?
-            != self.public_key
-        {
-            tracing::debug!(
+        if epoch_membership.leader(self.view_number).await? != self.public_key {
+            tracing::warn!(
                 "We are not the leader in the epoch for which we are about to propose. Do not send the quorum proposal."
             );
             return Ok(());
@@ -432,22 +432,22 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                         block_view: *view,
                         auction_result: auction_result.clone(),
                     });
-                }
+                },
                 HotShotEvent::Qc2Formed(cert) => match cert {
                     either::Right(timeout) => {
                         timeout_certificate = Some(timeout.clone());
-                    }
+                    },
                     either::Left(qc) => {
                         parent_qc = Some(qc.clone());
-                    }
+                    },
                 },
                 HotShotEvent::ViewSyncFinalizeCertificateRecv(cert) => {
                     view_sync_finalize_cert = Some(cert.clone());
-                }
+                },
                 HotShotEvent::VidDisperseSend(share, _) => {
                     vid_share = Some(share.clone());
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -499,4 +499,52 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
             tracing::error!("Failed to publish proposal; error = {e:#}");
         }
     }
+}
+
+pub(super) async fn handle_eqc_formed<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
+    cert_view: TYPES::View,
+    leaf_commit: Commitment<Leaf2<TYPES>>,
+    task_state: &QuorumProposalTaskState<TYPES, I, V>,
+    event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+) {
+    if !task_state.upgrade_lock.epochs_enabled(cert_view).await {
+        tracing::debug!("QC2 formed but epochs not enabled. Do nothing");
+        return;
+    }
+    if !task_state
+        .consensus
+        .read()
+        .await
+        .is_leaf_extended(leaf_commit)
+    {
+        tracing::debug!("We formed QC but not eQC. Do nothing");
+        return;
+    }
+
+    let consensus_reader = task_state.consensus.read().await;
+    let current_epoch_qc = consensus_reader.high_qc();
+    let Some(next_epoch_qc) = consensus_reader.next_epoch_high_qc() else {
+        tracing::debug!("We formed the eQC but we don't have the next epoch eQC at all.");
+        return;
+    };
+    if current_epoch_qc.view_number() != next_epoch_qc.view_number()
+        || current_epoch_qc.data != *next_epoch_qc.data
+    {
+        tracing::debug!(
+            "We formed the eQC but the current and next epoch QCs do not correspond to each other."
+        );
+        return;
+    }
+    let current_epoch_qc_clone = current_epoch_qc.clone();
+    drop(consensus_reader);
+
+    broadcast_event(
+        Arc::new(HotShotEvent::ExtendedQc2Formed(current_epoch_qc_clone)),
+        event_sender,
+    )
+    .await;
 }

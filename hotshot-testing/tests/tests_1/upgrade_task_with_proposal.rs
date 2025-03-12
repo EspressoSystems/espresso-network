@@ -82,10 +82,14 @@ async fn test_upgrade_task_with_proposal() {
     let consensus = handle.hotshot.consensus();
     let mut consensus_writer = consensus.write().await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
+    let epoch_1_mem = membership
+        .membership_for_epoch(Some(EpochNumber::new(1)))
+        .await
+        .unwrap();
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(Arc::clone(&membership), node_key_map);
+        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
 
     for view in (&mut generator).take(1).collect::<Vec<_>>().await {
         proposals.push(view.quorum_proposal.clone());
@@ -157,9 +161,8 @@ async fn test_upgrade_task_with_proposal() {
             Qc2Formed(either::Left(genesis_cert.clone())),
             SendPayloadCommitmentAndMetadata(
                 build_payload_commitment::<TestTypes, TestVersions>(
-                    &membership,
+                    &epoch_1_mem,
                     ViewNumber::new(1),
-                    None,
                     version_1,
                 )
                 .await,
@@ -178,9 +181,8 @@ async fn test_upgrade_task_with_proposal() {
             Qc2Formed(either::Left(proposals[1].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
                 build_payload_commitment::<TestTypes, TestVersions>(
-                    &membership,
+                    &epoch_1_mem,
                     ViewNumber::new(2),
-                    None,
                     version_2,
                 )
                 .await,
@@ -198,9 +200,8 @@ async fn test_upgrade_task_with_proposal() {
             Qc2Formed(either::Left(proposals[2].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
                 build_payload_commitment::<TestTypes, TestVersions>(
-                    &membership,
+                    &epoch_1_mem,
                     ViewNumber::new(3),
-                    None,
                     version_3,
                 )
                 .await,

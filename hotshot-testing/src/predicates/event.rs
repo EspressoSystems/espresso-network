@@ -217,7 +217,7 @@ where
             QuorumProposalSend(proposal, _) => {
                 Some(proposal.data.block_header().payload_commitment())
                     == null_block::commitment::<V>(num_storage_nodes)
-            }
+            },
             _ => false,
         });
     Box::new(EventPredicate { check, info })

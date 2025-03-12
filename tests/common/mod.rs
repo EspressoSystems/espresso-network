@@ -1,9 +1,18 @@
-use anyhow::{anyhow, Result};
+use std::{
+    fmt,
+    fs::File,
+    io::{stderr, stdout},
+    path::PathBuf,
+    process::{Child, Command},
+    str::FromStr,
+    time::Duration,
+};
+
+use anyhow::{anyhow, Context, Result};
 use client::SequencerClient;
 use espresso_types::{FeeAmount, FeeVersion, MarketplaceVersion};
 use ethers::prelude::*;
 use futures::future::join_all;
-use std::{fmt, str::FromStr, time::Duration};
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 use vbs::version::StaticVersionType;
@@ -276,4 +285,78 @@ async fn wait_for_service(url: Url, interval: u64, timeout_duration: u64) -> Res
     })
     .await
     .map_err(|e| anyhow!("Wait for service, timeout: ({}) {}", url, e))?
+}
+
+pub struct NativeDemo {
+    _child: Child,
+}
+
+impl Drop for NativeDemo {
+    fn drop(&mut self) {
+        // It would be preferable to send a SIGINT or similar to the process that we started
+        // originally but despite quite some effort this never worked for the process-compose
+        // process started from within the scripts/demo-native script.
+        //
+        // Using `process-compose down` seems to pretty reliably stop the process-compose process
+        // and all the services it started.
+        println!("Terminating process compose");
+        let res = Command::new("process-compose")
+            .arg("down")
+            .stdout(stdout())
+            .stderr(stderr())
+            .spawn()
+            .expect("process-compose runs")
+            .wait()
+            .unwrap();
+        println!("process-compose down exited with: {}", res);
+    }
+}
+
+impl NativeDemo {
+    pub(crate) fn run(process_compose_extra_args: Option<String>) -> anyhow::Result<Self> {
+        // Because we use nextest with the archive feature on CI we need to use the **runtime**
+        // value of CARGO_MANIFEST_DIR.
+        let crate_dir = PathBuf::from(
+            std::env::var("CARGO_MANIFEST_DIR")
+                .expect("CARGO_MANIFEST_DIR is set")
+                .clone(),
+        );
+        let workspace_dir = crate_dir.parent().expect("crate_dir has a parent");
+
+        let mut cmd = Command::new("bash");
+        cmd.arg("scripts/demo-native")
+            .current_dir(workspace_dir)
+            .arg("--tui=false");
+
+        if let Some(args) = process_compose_extra_args {
+            cmd.args(args.split(' '));
+        }
+
+        // Save output to file if PC_LOGS if that's set.
+        let log_path = std::env::var("PC_LOGS").unwrap_or_else(|_| {
+            tempfile::NamedTempFile::new()
+                .expect("tempfile creation succeeds")
+                .into_temp_path()
+                .to_string_lossy()
+                .to_string()
+        });
+
+        println!("Writing native demo logs to file: {}", log_path);
+        let outputs = File::create(log_path).context("unable to create log file")?;
+        cmd.stdout(outputs);
+
+        println!("Spawning: {:?}", cmd);
+        let mut child = cmd.spawn().context("failed to spawn command")?;
+
+        // Wait for three seconds and check if process has already exited so we don't waste time
+        // waiting for results later.
+        std::thread::sleep(Duration::from_secs(3));
+        if let Some(exit_code) = child.try_wait()? {
+            return Err(anyhow!("process-compose exited early with: {}", exit_code));
+        }
+
+        println!("process-compose started ...");
+
+        Ok(Self { _child: child })
+    }
 }

@@ -8,12 +8,11 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
+    future::Future,
     marker::PhantomData,
     num::NonZeroU64,
-    sync::Arc,
 };
 
-use async_lock::RwLock;
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
@@ -21,11 +20,11 @@ use primitive_types::U256;
 use tracing::error;
 
 use crate::{
+    epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::Threshold,
     simple_vote::{VersionedVoteData, Voteable},
     traits::{
-        election::Membership,
         node_implementation::{NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType},
     },
@@ -83,29 +82,21 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     ) -> impl std::future::Future<Output = Result<()>>;
     /// Returns the amount of stake needed to create this certificate
     // TODO: Make this a static ratio of the total stake of `Membership`
-    fn threshold<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> u64;
+    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = u64> + Send;
 
     /// Get  Stake Table from Membership implementation.
-    fn stake_table<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>>;
+    fn stake_table(
+        membership: &EpochMembership<TYPES>,
+    ) -> impl Future<Output = Vec<PeerConfig<TYPES::SignatureKey>>> + Send;
 
     /// Get Total Nodes from Membership implementation.
-    fn total_nodes<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
-        epoch: Option<TYPES::Epoch>,
-    ) -> usize;
+    fn total_nodes(membership: &EpochMembership<TYPES>) -> impl Future<Output = usize> + Send;
 
     /// Get  `StakeTableEntry` from Membership implementation.
-    fn stake_table_entry<MEMBERSHIP: Membership<TYPES>>(
-        membership: &MEMBERSHIP,
+    fn stake_table_entry(
+        membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
+    ) -> impl Future<Output = Option<PeerConfig<TYPES::SignatureKey>>> + Send;
 
     /// Get the commitment which was voted on
     fn data(&self) -> &Self::Voteable;
@@ -164,8 +155,7 @@ impl<
     pub async fn accumulate(
         &mut self,
         vote: &VOTE,
-        membership: &Arc<RwLock<TYPES::Membership>>,
-        epoch: Option<TYPES::Epoch>,
+        membership: EpochMembership<TYPES>,
     ) -> Option<CERT> {
         let key = vote.signing_key();
 
@@ -180,7 +170,7 @@ impl<
             Err(e) => {
                 tracing::warn!("Failed to generate versioned vote data: {e}");
                 return None;
-            }
+            },
         };
 
         if !key.validate(&vote.signature(), vote_commitment.as_ref()) {
@@ -188,12 +178,10 @@ impl<
             return None;
         }
 
-        let membership_reader = membership.read().await;
-        let stake_table_entry = CERT::stake_table_entry(&*membership_reader, &key, epoch)?;
-        let stake_table = CERT::stake_table(&*membership_reader, epoch);
-        let total_nodes = CERT::total_nodes(&*membership_reader, epoch);
-        let threshold = CERT::threshold(&*membership_reader, epoch);
-        drop(membership_reader);
+        let stake_table_entry = CERT::stake_table_entry(&membership, &key).await?;
+        let stake_table = CERT::stake_table(&membership).await;
+        let total_nodes = CERT::total_nodes(&membership).await;
+        let threshold = CERT::threshold(&membership).await;
 
         let vote_node_id = stake_table
             .iter()

@@ -45,10 +45,19 @@ jobs:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' && matrix.test_suites == 'test-ci-rest' }}
+          prefix-key: v0-hotshot
 
       - uses: taiki-e/install-action@just
 
       - uses: taiki-e/install-action@nextest
+
+      - name: Show memory
+        run: free -h
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
 
       - name: Unit and integration tests for all crates in workspace
         run: |
@@ -74,6 +83,7 @@ jobs:
           shared-key: "hotshot-examples"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: v0-hotshot
 
       - uses: taiki-e/install-action@just
 

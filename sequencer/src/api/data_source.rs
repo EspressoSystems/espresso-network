@@ -5,7 +5,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_99::ChainConfig,
-    FeeAccount, FeeAccountProof, FeeMerkleTree, NodeState, PubKey, Transaction,
+    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::Future;
 use hotshot_query_service::{
@@ -15,11 +15,13 @@ use hotshot_query_service::{
     node::NodeDataSource,
     status::StatusDataSource,
 };
-use hotshot_types::traits::node_implementation::NodeType;
 use hotshot_types::{
     data::ViewNumber,
     light_client::StateSignatureRequestBody,
-    traits::{network::ConnectedNetwork, node_implementation::Versions},
+    traits::{
+        network::ConnectedNetwork,
+        node_implementation::{NodeType, Versions},
+    },
     PeerConfig,
 };
 use tide_disco::Url;
@@ -177,6 +179,11 @@ pub(crate) trait CatchupDataSource: Sync {
         &self,
         commitment: Commitment<ChainConfig>,
     ) -> impl Send + Future<Output = anyhow::Result<ChainConfig>>;
+
+    fn get_leaf_chain(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
 }
 
 #[cfg(any(test, feature = "testing"))]

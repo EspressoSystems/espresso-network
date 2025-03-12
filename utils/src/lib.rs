@@ -257,14 +257,14 @@ pub async fn init_signer(provider: &Url, mnemonic: &str, index: u32) -> Option<S
         Err(err) => {
             tracing::error!("error connecting to RPC {}: {}", provider, err);
             return None;
-        }
+        },
     };
     let chain_id = match provider.get_chainid().await {
         Ok(id) => id.as_u64(),
         Err(err) => {
             tracing::error!("error getting chain ID: {}", err);
             return None;
-        }
+        },
     };
     let mnemonic = match MnemonicBuilder::<English>::default()
         .phrase(mnemonic)
@@ -274,14 +274,14 @@ pub async fn init_signer(provider: &Url, mnemonic: &str, index: u32) -> Option<S
         Err(err) => {
             tracing::error!("error building wallet: {}", err);
             return None;
-        }
+        },
     };
     let wallet = match mnemonic.build() {
         Ok(wallet) => wallet,
         Err(err) => {
             tracing::error!("error opening wallet: {}", err);
             return None;
-        }
+        },
     };
     let wallet = wallet.with_chain_id(chain_id);
     Some(SignerMiddleware::new(provider, wallet))
@@ -367,7 +367,7 @@ where
                 tracing::error!("contract revert: {:?}", e);
             }
             return Err(anyhow!("error sending transaction: {:?}", err));
-        }
+        },
     };
 
     let hash = pending.tx_hash();
@@ -382,12 +382,12 @@ where
         Ok(Some(receipt)) => receipt,
         Ok(None) => {
             return Err(anyhow!("contract call {hash:x}: no receipt"));
-        }
+        },
         Err(err) => {
             return Err(anyhow!(
                 "contract call {hash:x}: error getting transaction receipt: {err}"
             ))
-        }
+        },
     };
     if receipt.status != Some(1.into()) {
         return Err(anyhow!("contract call {hash:x}: transaction reverted"));
@@ -418,19 +418,19 @@ async fn wait_for_transaction_to_be_mined<P: JsonRpcClient>(
                 if i >= log_retries {
                     tracing::warn!("contract call {hash:?} (retry {i}/{retries}): error getting transaction status: {err}");
                 }
-            }
+            },
             Ok(None) => {
                 if i >= log_retries {
                     tracing::warn!(
                         "contract call {hash:?} (retry {i}/{retries}): missing from mempool"
                     );
                 }
-            }
+            },
             Ok(Some(tx)) if tx.block_number.is_none() => {
                 if i >= log_retries {
                     tracing::warn!("contract call {hash:?} (retry {i}/{retries}): pending");
                 }
-            }
+            },
             Ok(Some(_)) => return true,
         }
 

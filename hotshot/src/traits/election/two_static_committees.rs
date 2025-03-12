@@ -4,6 +4,12 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
+use std::{
+    cmp::max,
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU64,
+};
+
 use hotshot_types::{
     drb::DrbResult,
     traits::{
@@ -15,11 +21,6 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::Result;
 use primitive_types::U256;
-use std::{
-    cmp::max,
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
-};
 
 /// Tuple type for eligible leaders
 type EligibleLeaders<T> = (
@@ -426,6 +427,9 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
             ))
             .unwrap()
         }
+    }
+    fn has_epoch(&self, _epoch: TYPES::Epoch) -> bool {
+        true
     }
 
     fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}

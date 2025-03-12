@@ -40,6 +40,12 @@ pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
 
 #[cfg(test)]
 pub mod testing {
+    use std::{
+        num::NonZeroUsize,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
@@ -74,18 +80,13 @@ pub mod testing {
         },
         HotShotConfig, PeerConfig, ValidatorConfig,
     };
+    use jf_signature::bls_over_bn254::VerKey;
     use sequencer::{context::Consensus, network, SequencerApiVersion};
-    use std::{
-        num::NonZeroUsize,
-        sync::Arc,
-        time::{Duration, Instant},
-    };
     use surf_disco::Client;
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
-    use jf_signature::bls_over_bn254::VerKey;
 
     #[derive(Clone)]
     pub struct HotShotTestConfig {
@@ -414,10 +415,10 @@ pub mod testing {
         {
             Ok(response) => {
                 tracing::info!("Received txn submitted response : {:?}", response);
-            }
+            },
             Err(e) => {
                 panic!("Error submitting private transaction {:?}", e);
-            }
+            },
         }
 
         let seed = [207_u8; 32];
@@ -514,10 +515,10 @@ pub mod testing {
             Ok(response) => {
                 tracing::info!("Received Builder Key : {:?}", response);
                 assert_eq!(response, builder_pub_key);
-            }
+            },
             Err(e) => {
                 panic!("Error getting builder key {:?}", e);
-            }
+            },
         }
     }
 }

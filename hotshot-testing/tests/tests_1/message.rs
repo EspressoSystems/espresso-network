@@ -6,7 +6,6 @@
 
 #[cfg(test)]
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use committable::Committable;
 use hotshot_example_types::node_types::TestTypes;
@@ -69,19 +68,19 @@ async fn test_certificate2_validity() {
     use hotshot_testing::{helpers::build_system_handle, view_generator::TestViewGenerator};
     use hotshot_types::{
         data::{Leaf, Leaf2},
-        traits::election::Membership,
         vote::Certificate,
     };
 
     hotshot::helpers::initialize_logging();
 
     let node_id = 1;
+
     let (handle, _, _, node_key_map) =
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(Arc::clone(&membership), node_key_map);
+        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -104,10 +103,9 @@ async fn test_certificate2_validity() {
     let qc2 = proposal.data.justify_qc().clone();
     let qc = qc2.clone().to_qc();
 
-    let membership_reader = membership.read().await;
-    let membership_stake_table = membership_reader.stake_table(None);
-    let membership_success_threshold = membership_reader.success_threshold(None);
-    drop(membership_reader);
+    let epoch_mem = membership.membership_for_epoch(None).await.unwrap();
+    let membership_stake_table = epoch_mem.stake_table().await;
+    let membership_success_threshold = epoch_mem.success_threshold().await;
 
     assert!(qc
         .is_valid_cert(

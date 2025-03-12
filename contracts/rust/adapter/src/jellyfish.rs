@@ -13,10 +13,12 @@ use ethers::{
     utils::hex::ToHex,
 };
 use jf_pcs::prelude::Commitment;
-use jf_plonk::constants::KECCAK256_STATE_SIZE;
-use jf_plonk::proof_system::structs::{OpenKey, Proof, ProofEvaluations, VerifyingKey};
-use jf_plonk::testing_apis::Challenges;
-use jf_plonk::transcript::SolidityTranscript;
+use jf_plonk::{
+    constants::KECCAK256_STATE_SIZE,
+    proof_system::structs::{OpenKey, Proof, ProofEvaluations, VerifyingKey},
+    testing_apis::Challenges,
+    transcript::SolidityTranscript,
+};
 use jf_utils::to_bytes;
 use num_bigint::BigUint;
 use num_traits::Num;
