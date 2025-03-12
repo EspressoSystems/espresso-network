@@ -418,7 +418,11 @@ pub(crate) trait CatchupStorage: Sync {
         _height: u64,
         _view: ViewNumber,
         _accounts: &[RewardAccount],
-    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTree, Leaf2)>>;
+    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTree, Leaf2)>> {
+        async {
+            bail!("merklized state catchup is not supported for this data source");
+        }
+    }
 
     /// Get the blocks Merkle tree frontier.
     ///
@@ -476,6 +480,18 @@ where
     ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
         self.inner()
             .get_accounts(instance, height, view, accounts)
+            .await
+    }
+
+    async fn get_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<(RewardMerkleTree, Leaf2)> {
+        self.inner()
+            .get_reward_accounts(instance, height, view, accounts)
             .await
     }
 

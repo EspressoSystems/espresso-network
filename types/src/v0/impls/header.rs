@@ -1078,7 +1078,7 @@ impl BlockHeader<SeqTypes> for Header {
                 .leader(ViewNumber::new(height), Some(epoch))
                 .unwrap();
 
-            let validator = membership.get_leader_staker_config(&epoch, leader).unwrap();
+            let validator = membership.get_validator_config(&epoch, leader).unwrap();
             // apply rewards
         }
 

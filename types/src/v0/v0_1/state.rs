@@ -37,10 +37,10 @@ pub type FeeMerkleCommitment = <FeeMerkleTree as MerkleTreeScheme>::Commitment;
 
 pub type RewardMerkleTree = UniversalMerkleTree<
     RewardAmount,
-    Sha3Digest,
+    Keccak256Digest,
     RewardAccount,
     REWARD_MERKLE_TREE_ARITY,
-    Sha3Node,
+    Keccak256Node,
 >;
 pub type RewardMerkleCommitment = <RewardMerkleTree as MerkleTreeScheme>::Commitment;
 

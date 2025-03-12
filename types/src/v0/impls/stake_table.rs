@@ -357,7 +357,7 @@ impl EpochCommittees {
         Ok(mapping.get(&bls_key).unwrap().clone())
     }
 
-    pub fn get_leader_staker_config(
+    pub fn get_validator_config(
         &self,
         epoch: &Epoch,
         key: BLSPubKey,
