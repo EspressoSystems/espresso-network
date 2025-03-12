@@ -60,7 +60,6 @@ jobs:
           path: nextest-archive-postgres.tar.zst
 
       - name: Preview Cargo Timings
-        run:
         uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: ./target/cargo-timings/cargo-timing.html
@@ -102,7 +101,6 @@ jobs:
           path: nextest-archive-sqlite.tar.zst
 
       - name: Preview Cargo Timings
-        run:
         uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: ./target/cargo-timings/cargo-timing.html
