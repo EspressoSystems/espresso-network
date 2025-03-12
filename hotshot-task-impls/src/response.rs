@@ -84,32 +84,35 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                         HotShotEvent::VidRequestRecv(request, sender) => {
                             let cur_epoch = self.consensus.read().await.cur_epoch();
                             let next_epoch = cur_epoch.map(|epoch| epoch + 1);
-                            let target_epoch = if self.valid_sender(sender, cur_epoch).await {
-                                cur_epoch
-                            } else if self.valid_sender(sender, next_epoch).await {
-                                next_epoch
-                            } else {
-                                // The sender neither belongs to the current nor to the next epoch.
-                                continue;
-                            };
+                            let mut epochs = vec![];
+                            if self.valid_sender(sender, cur_epoch).await {
+                                // The sender belongs to the current epoch.
+                                epochs.push(cur_epoch);
+                            }
+                            if self.valid_sender(sender, next_epoch).await {
+                                // The sender belongs to the next epoch.
+                                epochs.push(next_epoch);
+                            }
                             // Verify request is valid
                             if !valid_signature::<TYPES>(request, sender) {
                                 continue;
                             }
-                            if let Some(proposal) = self
-                                .get_or_calc_vid_share(request.view, target_epoch, sender)
-                                .await
-                            {
-                                broadcast_event(
-                                    HotShotEvent::VidResponseSend(
-                                        self.pub_key.clone(),
-                                        sender.clone(),
-                                        proposal,
+                            for target_epoch in epochs {
+                                if let Some(proposal) = self
+                                    .get_or_calc_vid_share(request.view, target_epoch, sender)
+                                    .await
+                                {
+                                    broadcast_event(
+                                        HotShotEvent::VidResponseSend(
+                                            self.pub_key.clone(),
+                                            sender.clone(),
+                                            proposal,
+                                        )
+                                        .into(),
+                                        &event_sender,
                                     )
-                                    .into(),
-                                    &event_sender,
-                                )
-                                .await;
+                                    .await;
+                                }
                             }
                         },
                         HotShotEvent::QuorumProposalRequestRecv(req, signature) => {
