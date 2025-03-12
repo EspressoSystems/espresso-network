@@ -9,7 +9,7 @@ use derive_more::derive::{From, Into};
 use espresso_types::{
     parse_duration, parse_size, upgrade_commitment_map,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::CombinedStakeTable,
+    v0_3::StakeTables,
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
 };
 use futures::stream::StreamExt;
@@ -1019,7 +1019,7 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<CombinedStakeTable>> {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
         let result = self
             .db
             .read()
@@ -1038,11 +1038,7 @@ impl SequencerPersistence for Persistence {
             .transpose()
     }
 
-    async fn store_stake(
-        &self,
-        epoch: EpochNumber,
-        stake: CombinedStakeTable,
-    ) -> anyhow::Result<()> {
+    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
         let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
 
         let mut tx = self.db.write().await?;
