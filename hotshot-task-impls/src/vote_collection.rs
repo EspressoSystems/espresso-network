@@ -520,11 +520,18 @@ impl<TYPES: NodeType, V: Versions>
                 // #3967 REVIEW NOTE: Should we error if self.epoch is None?
                 self.accumulate_vote(&vote.clone().into(), sender).await
             },
+            HotShotEvent::ExtendedQuorumVoteRecv(vote) => {
+                self.accumulate_vote(&vote.vote.clone().into(), sender)
+                    .await
+            },
             _ => Ok(None),
         }
     }
     fn filter(event: Arc<HotShotEvent<TYPES>>) -> bool {
-        matches!(event.as_ref(), HotShotEvent::QuorumVoteRecv(_))
+        matches!(
+            event.as_ref(),
+            HotShotEvent::QuorumVoteRecv(_) | HotShotEvent::ExtendedQuorumVoteRecv(_)
+        )
     }
 }
 
