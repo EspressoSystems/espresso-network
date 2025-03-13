@@ -22,7 +22,7 @@ use hotshot_types::{
     data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2},
     epoch_membership::EpochMembership,
     message::Proposal,
-    simple_certificate::{QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{ExtendedQuorumCertificate, QuorumCertificate2, UpgradeCertificate},
     traits::{
         block_contents::BlockHeader,
         node_implementation::{NodeImplementation, NodeType},
@@ -127,23 +127,31 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         rx: &mut Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<QuorumCertificate2<TYPES>> {
         while let Ok(event) = rx.recv_direct().await {
-            if let HotShotEvent::HighQcRecv(qc, _sender) = event.as_ref() {
-                let prev_epoch = qc.data.epoch;
-                let epoch_membership = self.membership.get_new_epoch(prev_epoch).await.ok()?;
-                let membership_stake_table = epoch_membership.stake_table().await;
-                let membership_success_threshold = epoch_membership.success_threshold().await;
+            match event.as_ref() {
+                HotShotEvent::HighQcRecv(qc, _)
+                | HotShotEvent::ExtendedQcRecv(
+                    ExtendedQuorumCertificate { qc, state_cert: _ },
+                    _,
+                    _,
+                ) => {
+                    let prev_epoch = qc.data.epoch;
+                    let epoch_membership = self.membership.get_new_epoch(prev_epoch).await.ok()?;
+                    let membership_stake_table = epoch_membership.stake_table().await;
+                    let membership_success_threshold = epoch_membership.success_threshold().await;
 
-                if qc
-                    .is_valid_cert(
-                        StakeTableEntries::<TYPES>::from(membership_stake_table).0,
-                        membership_success_threshold,
-                        &self.upgrade_lock,
-                    )
-                    .await
-                    .is_ok()
-                {
-                    return Some(qc.clone());
-                }
+                    if qc
+                        .is_valid_cert(
+                            StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                            membership_success_threshold,
+                            &self.upgrade_lock,
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        return Some(qc.clone());
+                    }
+                },
+                _ => {},
             }
         }
         None
