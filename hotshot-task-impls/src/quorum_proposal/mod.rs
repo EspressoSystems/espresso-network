@@ -111,12 +111,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     ProposalDependency::Qc => {
                         if let HotShotEvent::Qc2Formed(either::Left(qc)) = event {
                             qc.view_number() + 1
+                        } else if let HotShotEvent::ExtendedQcFormed(either::Left(eqc)) = event {
+                            eqc.qc.view_number() + 1
                         } else {
                             return false;
                         }
                     },
                     ProposalDependency::TimeoutCert => {
                         if let HotShotEvent::Qc2Formed(either::Right(timeout)) = event {
+                            timeout.view_number() + 1
+                        } else if let HotShotEvent::ExtendedQcFormed(either::Right(timeout)) = event
+                        {
                             timeout.view_number() + 1
                         } else {
                             return false;
@@ -229,6 +234,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 Either::Left(_) => {
                     qc_dependency.mark_as_completed(event);
                 },
+            },
+            HotShotEvent::ExtendedQcFormed(eqc) => match eqc {
+                Either::Right(_) => timeout_dependency.mark_as_completed(event),
+                Either::Left(_) => qc_dependency.mark_as_completed(event),
             },
             HotShotEvent::ViewSyncFinalizeCertificateRecv(_) => {
                 view_sync_dependency.mark_as_completed(event);

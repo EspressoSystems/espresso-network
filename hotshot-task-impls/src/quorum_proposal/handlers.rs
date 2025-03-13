@@ -440,6 +440,14 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                         parent_qc = Some(qc.clone());
                     },
                 },
+                HotShotEvent::ExtendedQcFormed(cert) => match cert {
+                    either::Right(timeout) => {
+                        timeout_certificate = Some(timeout.clone());
+                    },
+                    either::Left(eqc) => {
+                        parent_qc = Some(eqc.qc.clone());
+                    },
+                },
                 HotShotEvent::ViewSyncFinalizeCertificateRecv(cert) => {
                     view_sync_finalize_cert = Some(cert.clone());
                 },
