@@ -17,8 +17,7 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
-    data::vid_disperse::vid_total_weight,
-    data::{Leaf2, QuorumProposalWrapper},
+    data::{vid_disperse::vid_total_weight, Leaf2, QuorumProposalWrapper},
     drb::DrbComputation,
     epoch_membership::EpochMembershipCoordinator,
     event::Event,

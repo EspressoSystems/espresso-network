@@ -4,14 +4,15 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
+use std::{marker::PhantomData, sync::Arc};
+
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
-use hotshot_types::data::vid_disperse::vid_total_weight;
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
-    data::{vid_commitment, DaProposal2, PackedBundle},
+    data::{vid_commitment, vid_disperse::vid_total_weight, DaProposal2, PackedBundle},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
@@ -29,7 +30,6 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use sha2::{Digest, Sha256};
-use std::{marker::PhantomData, sync::Arc};
 use tokio::{spawn, task::spawn_blocking};
 use tracing::instrument;
 
