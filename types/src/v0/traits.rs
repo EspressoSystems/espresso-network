@@ -491,8 +491,15 @@ pub trait PersistenceOptions: Clone + Send + Sync + 'static {
 }
 
 #[async_trait]
+/// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
+    /// Load stake table for epoch from storage
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>>;
+
+    /// Load stake tables for storage for latest `n` known epochs
+    async fn load_latest_stake(&self, epochs: u64) -> anyhow::Result<Option<StakeTables>>;
+
+    /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()>;
 }
 
