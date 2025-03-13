@@ -1380,15 +1380,15 @@ impl SequencerPersistence for Persistence {
                     .join(epoch.to_string())
                     .with_extension("txt");
                 let block_header = if block_header_path.is_file() {
-                    let bytes = fs::read(&path).context(format!(
+                    let bytes = fs::read(&block_header_path).context(format!(
                         "reading epoch root block header {}",
-                        path.display()
+                        block_header_path.display()
                     ))?;
                     Some(
                         bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes)
                             .context(format!(
                                 "parsing epoch root block header {}",
-                                path.display()
+                                block_header_path.display()
                             ))?,
                     )
                 } else {
