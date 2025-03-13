@@ -299,11 +299,9 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>, V: Versions> ConsistencyTas
     async fn handle_result(&mut self, result: Result<TestProgress>) {
         match result {
             Ok(TestProgress::Finished) => {
-                tracing::error!("lrzasik: ConsistencyTask received Finished");
                 let _ = self.test_sender.broadcast(TestEvent::Shutdown).await;
             },
             Err(e) => {
-                tracing::error!("lrzasik: ConsistencyTask received error: {:?}", e);
                 self.add_error(e);
                 let _ = self.test_sender.broadcast(TestEvent::Shutdown).await;
             },
