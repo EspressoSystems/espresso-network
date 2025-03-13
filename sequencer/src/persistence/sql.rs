@@ -8,6 +8,7 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
     parse_duration, parse_size,
+    traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::StakeTables,
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
@@ -1011,39 +1012,6 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
-        let result = self
-            .db
-            .read()
-            .await?
-            .fetch_optional(
-                query("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
-                    .bind(epoch.u64() as i64),
-            )
-            .await?;
-
-        result
-            .map(|row| {
-                let bytes: Vec<u8> = row.get("stake");
-                anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
-            })
-            .transpose()
-    }
-
-    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
-        let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_drb_and_root",
-            ["epoch", "stake"],
-            ["epoch"],
-            [(epoch.u64() as i64, stake_table_bytes)],
-        )
-        .await?;
-        tx.commit().await
-    }
-
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
         Ok(self
             .db
@@ -1873,6 +1841,42 @@ impl SequencerPersistence for Persistence {
                 Ok(None) => None,
             })
             .collect()
+    }
+}
+
+#[async_trait]
+impl MembershipPersistence for Persistence {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+        let result = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(
+                query("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
+                    .bind(epoch.u64() as i64),
+            )
+            .await?;
+
+        result
+            .map(|row| {
+                let bytes: Vec<u8> = row.get("stake");
+                anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
+            })
+            .transpose()
+    }
+
+    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
+        let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
+
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "epoch_drb_and_root",
+            ["epoch", "stake"],
+            ["epoch"],
+            [(epoch.u64() as i64, stake_table_bytes)],
+        )
+        .await?;
+        tx.commit().await
     }
 }
 
