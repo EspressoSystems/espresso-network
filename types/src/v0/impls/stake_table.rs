@@ -306,7 +306,7 @@ impl EpochCommittees {
         }
     }
 
-    /// Get the stake tables. Try to load from persistence and fall back to fetching from l1.
+    /// Get the stake table by epoch. Try to load from DB and fall back to fetching from l1.
     async fn get_stake_table(
         &self,
         epoch: Epoch,
