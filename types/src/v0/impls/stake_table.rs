@@ -531,6 +531,14 @@ impl Membership<SeqTypes> for EpochCommittees {
             })
             .ok()?;
 
+        if let Err(e) = self
+            .persistence
+            .store_stake(epoch, stake_tables.clone())
+            .await
+        {
+            tracing::error!(?e, "`add_epoch_root`, error storing stake table");
+        }
+
         Some(Box::new(move |committee: &mut Self| {
             let _ = committee.update_stake_table(epoch, stake_tables);
         }))
