@@ -11,15 +11,15 @@ pub struct PermissionedStakeTableEntry(NodeInfoJf);
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CombinedStakeTable(Vec<PeerConfigKeys<SeqTypes>>);
 
-#[derive(Clone, Debug, From, Into)]
+#[derive(Clone, Debug, From, Into, Serialize, Deserialize)]
 /// NewType to disambiguate DA Membership
 pub struct DAMembers(pub Vec<PeerConfig<SeqTypes>>);
 
-#[derive(Clone, Debug, From, Into)]
+#[derive(Clone, Debug, From, Into, Serialize, Deserialize)]
 /// NewType to disambiguate StakeTable
 pub struct StakeTable(pub Vec<PeerConfig<SeqTypes>>);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StakeTables {
     pub stake_table: StakeTable,
     pub da_members: DAMembers,

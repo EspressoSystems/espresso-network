@@ -126,9 +126,11 @@ impl<TYPES: NodeType> Default for ValidatorConfig<TYPES> {
 #[serde(bound(deserialize = ""))]
 /// structure of peers' config, including public key, stake value, and state key.
 pub struct PeerConfig<TYPES: NodeType> {
-    /// The peer's public key and stake value
+    ////The peer's public key and stake value. The key is the BLS Public Key used to
+    /// verify Stake Holder in the application layer.
     pub stake_table_entry: <TYPES::SignatureKey as SignatureKey>::StakeTableEntry,
-    /// the peer's state public key
+    //// The peer's state public key. This is the Schnorr Public Key used to
+    /// verify HotShot state in the state-prover.
     pub state_ver_key: TYPES::StateSignatureKey,
 }
 
