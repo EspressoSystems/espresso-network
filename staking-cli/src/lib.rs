@@ -1,22 +1,32 @@
 use std::path::PathBuf;
 
 use alloy::{
+    network::EthereumWallet,
     primitives::{Address, U256},
-    signers::local::{
-        coins_bip39::{English, Mnemonic},
-        MnemonicBuilder,
-    },
+    providers::ProviderBuilder,
+    signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
-use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
+pub(crate) use hotshot_types::{
+    light_client::{StateSignKey, StateVerKey},
+    signature_key::{BLSPrivKey, BLSPubKey},
+};
+pub(crate) use jf_signature::{
+    bls_over_bn254::KeyPair as BLSKeyPair, schnorr::KeyPair as SchnorrKeyPair,
+};
 use parse::Commission;
+use registration::register_validator;
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
 use url::Url;
 
+mod claim;
+mod delegation;
 mod parse;
+mod registration;
 
 #[cfg(any(test, feature = "testing"))]
 mod deploy;
@@ -238,13 +248,32 @@ pub async fn main() -> Result<()> {
         _ => {}, // Other commands handled after shared setup.
     }
 
+    let signer = MnemonicBuilder::<English>::default()
+        .phrase(config.mnemonic.as_str())
+        .index(config.account_index)?
+        .build()?;
+    let account = signer.address();
+    let wallet = EthereumWallet::from(signer);
+    let provider = ProviderBuilder::new()
+        .with_recommended_fillers()
+        .wallet(wallet)
+        .on_http(config.rpc_url.clone());
+    let stake_table = StakeTableInstance::new(config.stake_table_address, provider.clone());
+
     match config.commands {
         Commands::Info => todo!(),
         Commands::RegisterValidator {
             consensus_private_key,
             state_private_key,
             commission,
-        } => todo!(),
+        } => register_validator(
+            provider,
+            stake_table,
+            commission,
+            account,
+            (consensus_private_key).into(),
+            (&state_private_key).into(),
+        ),
         Commands::DeregisterValidator {} => todo!(),
         Commands::Delegate {
             validator_address,
@@ -257,17 +286,20 @@ pub async fn main() -> Result<()> {
         Commands::ClaimWithdrawal => todo!(),
         _ => unreachable!(),
     };
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::process::{Command, Output};
+    use std::{
+        process::{Command, Output},
+        time::Duration,
+    };
 
     use anyhow::Result;
 
     use super::*;
+    use crate::deploy::TestSystem;
 
     trait AssertSuccess {
         fn assert_success(&self) -> &Self;
@@ -326,6 +358,22 @@ mod tests {
 
         assert!(!config_path.exists());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_register_validator() -> Result<()> {
+        let exit_escrow_period = Duration::from_secs(60);
+        let system = TestSystem::deploy(exit_escrow_period).await?;
+        // TODO: how to get url out of anvil
+        // cmd()
+        //     .arg("register-validator")
+        //     .arg("--mnemonic")
+        //     .arg(DEV_MNEMONIC)
+        //     .arg("--rpc-url")
+        //     .arg(system.rpc_url.to_string())
+        //     .output()?
+        //     .assert_success();
         Ok(())
     }
 }

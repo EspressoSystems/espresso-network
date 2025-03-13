@@ -14,12 +14,25 @@ pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
     Ok(TaggedBase64::parse(s)?.try_into()?)
 }
 
-#[derive(Debug, Clone)]
-pub struct Commission(u64);
+#[derive(Debug, Copy, Clone)]
+pub struct Commission(u16);
 
 impl Commission {
-    pub fn to_evm(&self) -> u64 {
+    pub fn to_evm(&self) -> u16 {
         self.0
+    }
+}
+
+impl TryFrom<u64> for Commission {
+    type Error = ParseCommissionError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        if value > 10000 {
+            return Err("Commission must be between 0 (0.00%) and 100 (100.00%)"
+                .to_string()
+                .into());
+        }
+        Ok(Self(value as u16))
     }
 }
 
@@ -50,7 +63,7 @@ pub fn parse_commission(s: &str) -> Result<Commission, ParseCommissionError> {
     Ok(Commission(
         dec.checked_mul(hundred)
             .expect("multiplication succeeds")
-            .to_u64()
+            .to_u16()
             .expect("conversion to u64 succeeds"),
     ))
 }

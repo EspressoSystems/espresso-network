@@ -4,9 +4,14 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
+[features]
+testing = []
+
+
 [dependencies]
 alloy.workspace = true
 anyhow.workspace = true
+ark-ec.workspace = true
 clap.workspace = true
 clap-serde = "0.5.1"
 clap-serde-derive = "0.2.1"
@@ -15,8 +20,12 @@ derive_more.workspace = true
 directories = "6.0.0"
 escargot = "0.5.13"
 espresso-types = { version = "0.1.0", path = "../types" }
+ethers-conv.workspace = true
+futures-util = "0.3.31"
 git-version = "0.3.9"
+hotshot-contract-adapter.workspace = true
 hotshot-types.workspace = true
+jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 rust_decimal = "1.36.0"
 serde.workspace = true
 sysinfo = "0.33.1"
@@ -28,4 +37,6 @@ tracing.workspace = true
 url = { workspace = true }
 
 [dev-dependencies]
+rand.workspace = true
+staking-cli = { path = ".", features = [ "testing" ] }
 tempfile.workspace = true
