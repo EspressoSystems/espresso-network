@@ -734,24 +734,11 @@ impl<TYPES: NodeType, V: Versions> ExtendedQuorumVoteCollectionTaskState<TYPES, 
             "No accumulator to handle light client state update vote with. This shouldn't happen."
         ))?;
 
-        let key = vote.signing_key();
-        let epoch = state_vote.epoch;
-        let stake_table_entry =
-            QuorumCertificate2::<TYPES>::stake_table_entry(&self.membership, &key)
-                .await
-                .ok_or(error!("Cannot find the voting key {:?}", key))?;
-        let stake_table = QuorumCertificate2::<TYPES>::stake_table(&self.membership).await;
-        let threshold = QuorumCertificate2::<TYPES>::threshold(&self.membership).await;
-
         match (
             accumulator.accumulate(vote, self.membership.clone()).await,
-            state_vote_accumulator.accumulate(
-                epoch,
-                state_vote,
-                &stake_table_entry.state_ver_key,
-                &stake_table,
-                threshold.into(),
-            ),
+            state_vote_accumulator
+                .accumulate(&vote.signing_key(), state_vote, &self.membership)
+                .await,
         ) {
             (None, None) => Ok(None),
             (Some(cert), Some(state_cert)) => {

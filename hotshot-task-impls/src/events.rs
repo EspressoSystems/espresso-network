@@ -100,7 +100,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ),
     /// Send a quorum vote to the next leader; emitted by a replica in the consensus task after seeing a valid quorum proposal
     QuorumVoteSend(QuorumVote2<TYPES>),
-    /// Quorum vote for extended QC
+    /// Broadcast a quorum vote to form an eQC; emitted by a replica in the consensus task after seeing a valid quorum proposal
     ExtendedQuorumVoteSend(ExtendedQuorumVote<TYPES>),
     /// A quorum proposal with the given parent leaf is validated.
     /// The full validation checks include:
