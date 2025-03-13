@@ -131,8 +131,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 HotShotEvent::HighQcRecv(qc, _)
                 | HotShotEvent::ExtendedQcRecv(
                     ExtendedQuorumCertificate { qc, state_cert: _ },
-                    _,
-                    _,
+                    ..,
                 ) => {
                     let prev_epoch = qc.data.epoch;
                     let epoch_membership = self.membership.get_new_epoch(prev_epoch).await.ok()?;
