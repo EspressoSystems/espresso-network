@@ -30,7 +30,7 @@ use itertools::Itertools;
 use thiserror::Error;
 
 use super::{
-    traits::{MembershipPersistence, SequencerPersistence, StateCatchup},
+    traits::{MembershipPersistence, StateCatchup},
     v0_3::{DAMembers, StakeTable, StakeTables},
     Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes,
 };
