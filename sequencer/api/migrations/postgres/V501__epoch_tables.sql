@@ -17,6 +17,7 @@ CREATE TABLE vid_share2 (
     data BYTEA
 );
 
+
 CREATE TABLE undecided_state2 (
     -- The ID is always set to 0. Setting it explicitly allows us to enforce with every insert or
     -- update that there is only a single entry in this table: the latest known state.
@@ -25,6 +26,7 @@ CREATE TABLE undecided_state2 (
     leaves BYTEA NOT NULL,
     state  BYTEA NOT NULL
 );
+
 
 CREATE TABLE quorum_proposals2 (
     view BIGINT PRIMARY KEY,
