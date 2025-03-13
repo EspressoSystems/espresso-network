@@ -18,6 +18,9 @@ use url::Url;
 
 mod parse;
 
+#[cfg(any(test, feature = "testing"))]
+mod deploy;
+
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
 #[derive(Parser)]

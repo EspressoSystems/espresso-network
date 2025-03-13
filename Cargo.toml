@@ -57,6 +57,8 @@ alloy = { version = "0.9", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
+    "network",
+    "node-bindings",
     "provider-ws",
     "providers",
     "reqwest",
