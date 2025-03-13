@@ -25,7 +25,7 @@ pub struct StakeTable(pub Vec<PeerConfig<PubKey>>);
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct StakerConfig<KEY: SignatureKey> {
+pub struct Validator<KEY: SignatureKey> {
     pub account: Address,
     /// The peer's public key
     pub stake_table_key: KEY,

@@ -1,17 +1,16 @@
-use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
-    Timestamp, Upgrade, UpgradeMode,
-};
-use async_lock::RwLock;
-use hotshot_types::traits::states::InstanceState;
-use hotshot_types::HotShotConfig;
 use std::{collections::BTreeMap, sync::Arc};
 
+use async_lock::RwLock;
+use hotshot_types::{traits::states::InstanceState, HotShotConfig};
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
 use super::{state::ValidatedState, EpochCommittees};
+use crate::v0::{
+    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
+    Timestamp, Upgrade, UpgradeMode,
+};
 
 /// Represents the immutable state of a node.
 ///

@@ -26,15 +26,14 @@ use sequencer_utils::{
 };
 use thiserror::Error;
 
+use super::v0_1::{
+    RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardInfo,
+    RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
+};
 use crate::{
     eth_signature_key::EthKeyPair, v0_99::IterableFeeInfo, AccountQueryData, FeeAccount,
     FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree,
     SeqTypes,
-};
-
-use super::v0_1::{
-    RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardInfo,
-    RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
 };
 
 impl Committable for RewardInfo {

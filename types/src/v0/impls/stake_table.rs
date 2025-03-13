@@ -41,7 +41,7 @@ use thiserror::Error;
 
 use super::{
     traits::StateCatchup,
-    v0_3::{DAMembers, Delegator, StakeTable, StakerConfig},
+    v0_3::{DAMembers, Delegator, StakeTable, Validator},
     Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes,
 };
 
@@ -60,7 +60,7 @@ pub fn from_l1_events(
     deregistered: Vec<(ValidatorExit, Log)>,
     delegated: Vec<(Delegated, Log)>,
     undelegated: Vec<(Undelegated, Log)>,
-) -> IndexMap<Address, StakerConfig<BLSPubKey>> {
+) -> IndexMap<Address, Validator<BLSPubKey>> {
     // TODO: return RESULT
     // TODO: Handle consensus keys update event
     let mut st_map = BTreeMap::new();
@@ -124,7 +124,7 @@ pub fn from_l1_events(
 
                 validators.insert(
                     account,
-                    StakerConfig {
+                    Validator {
                         account,
                         stake_table_key: staker,
                         state_ver_key,
@@ -290,7 +290,7 @@ struct EpochCommittee {
     eligible_leaders: Vec<PeerConfig<PubKey>>,
     /// Keys for nodes participating in the network
     stake_table: IndexMap<PubKey, PeerConfig<PubKey>>,
-    staker_config: IndexMap<Address, StakerConfig<BLSPubKey>>,
+    validators: IndexMap<Address, Validator<BLSPubKey>>,
     address_mapping: HashMap<BLSPubKey, Address>,
 }
 
@@ -303,10 +303,10 @@ impl EpochCommittees {
     fn update_stake_table(
         &mut self,
         epoch: EpochNumber,
-        stakers: IndexMap<Address, StakerConfig<BLSPubKey>>,
+        validators: IndexMap<Address, Validator<BLSPubKey>>,
     ) {
         let mut address_mapping = HashMap::new();
-        let stake_table = stakers
+        let stake_table = validators
             .values()
             .map(|v| {
                 address_mapping.insert(v.stake_table_key, v.account);
@@ -328,7 +328,7 @@ impl EpochCommittees {
             EpochCommittee {
                 eligible_leaders: self.non_epoch_committee.eligible_leaders.clone(),
                 stake_table,
-                staker_config: stakers,
+                validators,
                 address_mapping: HashMap::new(),
             },
         );
@@ -337,12 +337,12 @@ impl EpochCommittees {
     pub fn validators(
         &self,
         epoch: &Epoch,
-    ) -> anyhow::Result<IndexMap<Address, StakerConfig<BLSPubKey>>> {
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         Ok(self
             .state
             .get(epoch)
             .context("state for found")?
-            .staker_config
+            .validators
             .clone())
     }
 
@@ -361,7 +361,7 @@ impl EpochCommittees {
         &self,
         epoch: &Epoch,
         key: BLSPubKey,
-    ) -> anyhow::Result<StakerConfig<BLSPubKey>> {
+    ) -> anyhow::Result<Validator<BLSPubKey>> {
         let address = self.address(&epoch, key)?;
         let validators = self.validators(epoch)?;
         Ok(validators.get(&address).unwrap().clone())
@@ -442,7 +442,7 @@ impl EpochCommittees {
                 .iter()
                 .map(|x| (PubKey::public_key(&x.stake_table_entry), x.clone()))
                 .collect(),
-            staker_config: Default::default(),
+            validators: Default::default(),
             address_mapping: HashMap::new(),
         };
         map.insert(Epoch::genesis(), epoch_committee.clone());

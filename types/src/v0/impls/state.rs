@@ -32,9 +32,10 @@ use super::{
     instance_state::NodeState,
     reward,
     v0_1::{
-        block_reward, RewardAccount, RewardAmount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT,
+        block_reward, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
+        REWARD_MERKLE_TREE_HEIGHT,
     },
-    v0_3::StakerConfig,
+    v0_3::Validator,
     BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
@@ -91,15 +92,20 @@ pub enum ProposalValidationError {
         parent_height: u64,
         proposal_height: u64,
     },
-    #[error("Invalid Block Root Error: expected={expected_root}, proposal={proposal_root}")]
+    #[error("Invalid Block Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
     InvalidBlockRoot {
         expected_root: BlockMerkleCommitment,
         proposal_root: BlockMerkleCommitment,
     },
-    #[error("Invalid Fee Root Error: expected={expected_root}, proposal={proposal_root}")]
+    #[error("Invalid Fee Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
     InvalidFeeRoot {
         expected_root: FeeMerkleCommitment,
         proposal_root: FeeMerkleCommitment,
+    },
+    #[error("Invalid Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
+    InvalidRewardRoot {
+        expected_root: RewardMerkleCommitment,
+        proposal_root: RewardMerkleCommitment,
     },
     #[error("Invalid namespace table: {0}")]
     InvalidNsTable(NsTableValidationError),
@@ -129,6 +135,8 @@ pub enum ProposalValidationError {
     BuilderValidationError(BuilderValidationError),
     #[error("Invalid proposal: l1 finalized does not match the proposal")]
     InvalidL1Finalized,
+    #[error("reward root not found")]
+    RewardRootNotFound {},
 }
 
 impl StateDelta for Delta {}
@@ -291,15 +299,15 @@ impl ValidatedState {
     pub fn distribute_rewards(
         &mut self,
         delta: &mut Delta,
-        staker_config: StakerConfig<BLSPubKey>,
+        validator: Validator<BLSPubKey>,
     ) -> anyhow::Result<()> {
-        let commission = staker_config.commission;
+        let commission = validator.commission;
 
         let leader_reward =
             RewardAmount::from((U256::from(commission) * block_reward().0) / U256::from(10_000));
         let mut reward_state = self.reward_merkle_tree.clone();
         reward_state = reward_state.persistent_update_with(
-            RewardAccount(staker_config.account.to_ethers()),
+            RewardAccount(validator.account.to_ethers()),
             |balance| {
                 let balance = balance.copied();
 
@@ -308,7 +316,7 @@ impl ValidatedState {
                     None => {
                         tracing::warn!(
                             "overflowed reward balance for account {}",
-                            staker_config.account
+                            validator.account
                         );
                         balance
                     },
@@ -316,9 +324,9 @@ impl ValidatedState {
             },
         )?;
 
-        let total_stake = staker_config.stake;
+        let total_stake = validator.stake;
 
-        for (delegator_address, delegator_stake) in staker_config.delegators.iter() {
+        for (delegator_address, delegator_stake) in validator.delegators.iter() {
             let delegator_reward = RewardAmount::from(
                 delegator_stake.to_ethers() * U256::from(100) / total_stake.to_ethers(),
             );
@@ -349,10 +357,10 @@ impl ValidatedState {
 
         delta
             .rewards_delta
-            .insert(RewardAccount(staker_config.account.to_ethers()));
+            .insert(RewardAccount(validator.account.to_ethers()));
 
         delta.rewards_delta.extend(
-            staker_config
+            validator
                 .delegators
                 .keys()
                 .map(|delegator_address| RewardAccount(delegator_address.to_ethers()))
@@ -546,6 +554,7 @@ impl<'a> ValidatedTransition<'a> {
         self.validate_fee()?;
         self.validate_fee_merkle_tree()?;
         self.validate_block_merkle_tree()?;
+        self.validate_reward_merkle_tree()?;
         self.validate_l1_finalized()?;
         self.validate_l1_head()?;
         self.validate_namespace_table()?;
@@ -692,6 +701,21 @@ impl<'a> ValidatedTransition<'a> {
 
         Ok(())
     }
+
+    /// Validate [`RewardMerkleTree`] by comparing proposed commitment
+    /// against that stored in [`ValidatedState`].
+    fn validate_reward_merkle_tree(&self) -> Result<(), ProposalValidationError> {
+        let reward_merkle_tree_root = self.state.reward_merkle_tree.commitment();
+        if self.proposal.header.reward_merkle_tree_root().unwrap() != reward_merkle_tree_root {
+            return Err(ProposalValidationError::InvalidRewardRoot {
+                expected_root: reward_merkle_tree_root,
+                proposal_root: self.proposal.header.reward_merkle_tree_root().unwrap(),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Validate [`FeeMerkleTree`] by comparing proposed commitment
     /// against that stored in [`ValidatedState`].
     fn validate_fee_merkle_tree(&self) -> Result<(), ProposalValidationError> {
@@ -905,19 +929,18 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
-        let membership = instance.membership.read().await;
-
         // TODO: make a function for this
         if version >= EpochVersion::version() {
             let height = proposed_header.block_number();
             let epoch_height = instance.epoch_height.unwrap();
             let epoch = EpochNumber::new(height % epoch_height);
-
+            let membership = instance.membership.read().await;
             let leader: BLSPubKey = membership
                 .leader(ViewNumber::new(height), Some(epoch))
                 .unwrap();
 
             let validator = membership.get_validator_config(&epoch, leader).unwrap();
+            drop(membership);
             let mut reward_accounts = vec![validator.account.to_ethers().into()];
             let delegators = validator
                 .delegators
@@ -943,7 +966,7 @@ impl ValidatedState {
                         instance,
                         parent_height,
                         parent_view,
-                        validated_state.fee_merkle_tree.commitment(),
+                        validated_state.reward_merkle_tree.commitment(),
                         missing_reward_accts,
                     )
                     .await?;

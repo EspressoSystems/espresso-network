@@ -48,7 +48,7 @@ use url::Url;
 use super::{
     from_l1_events,
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
-    v0_3::StakerConfig,
+    v0_3::Validator,
     L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
@@ -833,7 +833,7 @@ impl L1Client {
         &self,
         contract: Address,
         block: u64,
-    ) -> anyhow::Result<IndexMap<Address, StakerConfig<BLSPubKey>>> {
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         // TODO stake_table_address needs to be passed in to L1Client
         // before update loop starts.
         let stake_table_contract = StakeTableInstance::new(contract, self.provider.clone());

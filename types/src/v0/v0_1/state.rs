@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 
+use alloy::primitives::Keccak256;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use committable::Commitment;
 use derive_more::{Add, Display, From, Into, Mul, Sub};
 use ethers::{abi::Address, types::U256};
 use jf_merkle_tree::{
-    prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
+    prelude::{LightWeightSHA3MerkleTree, MerkleTree, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
 };

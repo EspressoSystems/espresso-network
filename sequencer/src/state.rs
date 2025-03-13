@@ -3,8 +3,10 @@ use std::{cmp::max, sync::Arc, time::Duration};
 
 use anyhow::{bail, ensure, Context};
 use espresso_types::{
-    traits::StateCatchup, v0_99::ChainConfig, BlockMerkleTree, Delta, FeeAccount, FeeMerkleTree,
-    Leaf2, ValidatedState,
+    traits::StateCatchup,
+    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_99::ChainConfig,
+    BlockMerkleTree, Delta, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;
@@ -68,6 +70,7 @@ async fn store_state_update(
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
+        reward_merkle_tree,
         ..
     } = state;
     let Delta {
@@ -89,7 +92,7 @@ async fn store_state_update(
             );
 
         tracing::debug!(%delta, "inserting fee account");
-        UpdateStateData::<SeqTypes, _, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
             path,
@@ -111,7 +114,7 @@ async fn store_state_update(
 
     {
         tracing::debug!("inserting blocks frontier");
-        UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::insert_merkle_nodes(
+        UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
             path,
@@ -128,6 +131,29 @@ async fn store_state_update(
     )
     .await
     .context("setting state height")?;
+
+    for delta in rewards_delta {
+        let proof = match reward_merkle_tree.universal_lookup(delta) {
+            LookupResult::Ok(_, proof) => proof,
+            LookupResult::NotFound(proof) => proof,
+            LookupResult::NotInMemory => bail!("missing merkle path for reward account {delta}"),
+        };
+        let path: Vec<usize> =
+            <RewardAccount as ToTraversalPath<{ RewardMerkleTree::ARITY }>>::to_traversal_path(
+                &delta,
+                reward_merkle_tree.height(),
+            );
+
+        tracing::debug!(%delta, "inserting fee account");
+        UpdateStateData::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::insert_merkle_nodes(
+            tx,
+            proof,
+            path,
+            block_number,
+        )
+        .await
+        .context("failed to store fee merkle nodes")?;
+    }
     Ok(())
 }
 
@@ -210,7 +236,7 @@ where
                 state.fee_merkle_tree.height(),
             );
 
-        UpdateStateData::<SeqTypes, _, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
             &mut tx, proof, path, 0,
         )
         .await
@@ -343,6 +369,7 @@ pub(crate) trait SequencerStateUpdate:
     Transaction
     + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
     + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+    + UpdateStateData<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
     + ChainConfigPersistence
 {
 }
@@ -351,6 +378,7 @@ impl<T> SequencerStateUpdate for T where
     T: Transaction
         + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + UpdateStateData<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
         + ChainConfigPersistence
 {
 }

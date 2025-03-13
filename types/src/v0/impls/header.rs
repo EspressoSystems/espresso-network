@@ -3,7 +3,7 @@ use std::fmt;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use ethers_conv::ToAlloy;
+use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
@@ -27,13 +27,16 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
-use super::{instance_state::NodeState, state::ValidatedState, v0_1::RewardMerkleCommitment};
+use super::{
+    instance_state::NodeState, state::ValidatedState, v0_1::RewardMerkleCommitment, v0_3::Validator,
+};
 use crate::{
     v0::{
         header::{EitherOrVersion, VersionedHeader},
         MarketplaceVersion,
     },
-    v0_1, v0_2, v0_3,
+    v0_1::{self, RewardAccount},
+    v0_2, v0_3,
     v0_99::{self, ChainConfig, IterableFeeInfo, SolverAuctionResults},
     BlockMerkleCommitment, BuilderSignature, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes,
@@ -412,6 +415,7 @@ impl Header {
         chain_config: ChainConfig,
         version: Version,
         auction_results: Option<SolverAuctionResults>,
+        validator_config: Option<Validator<BLSPubKey>>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -515,6 +519,8 @@ impl Header {
         let Version { major, minor } = version;
 
         assert!(major == 0, "Invalid major version {major}");
+
+        // DISTRIBUTE REWARDS
 
         let header = match minor {
             1 => Self::V1(v0_1::Header {
@@ -952,6 +958,7 @@ impl BlockHeader<SeqTypes> for Header {
             chain_config,
             version,
             auction_results,
+            None,
         )?)
     }
 
@@ -1068,19 +1075,58 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        if version >= EpochVersion::version() {
-            let membership = instance_state.membership.read().await;
-
+        let leader_config = if version >= EpochVersion::version() {
+            let height = parent_leaf.height();
             let epoch_height = instance_state.epoch_height.unwrap();
             let epoch = EpochNumber::new(height % epoch_height);
-
+            let membership = instance_state.membership.read().await;
             let leader: BLSPubKey = membership
                 .leader(ViewNumber::new(height), Some(epoch))
                 .unwrap();
 
             let validator = membership.get_validator_config(&epoch, leader).unwrap();
-            // apply rewards
-        }
+            let mut reward_accounts = vec![validator.account.to_ethers().into()];
+            let delegators = validator
+                .delegators
+                .keys()
+                .cloned()
+                .into_iter()
+                .map(|a| a.to_ethers().into())
+                .collect::<Vec<RewardAccount>>();
+
+            reward_accounts.extend(delegators.clone());
+            let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
+
+            if !missing_reward_accts.is_empty() {
+                tracing::warn!(
+                    height,
+                    ?view,
+                    ?missing_reward_accts,
+                    "fetching missing reward accounts from peers"
+                );
+
+                let missing_account_proofs = instance_state
+                    .peers
+                    .fetch_reward_accounts(
+                        instance_state,
+                        height,
+                        view,
+                        validated_state.reward_merkle_tree.commitment(),
+                        missing_reward_accts,
+                    )
+                    .await?;
+
+                for proof in missing_account_proofs.iter() {
+                    proof
+                        .remember(&mut validated_state.reward_merkle_tree)
+                        .expect("proof previously verified");
+                }
+            }
+
+            Some(validator)
+        } else {
+            None
+        };
 
         Ok(Self::from_info(
             payload_commitment,
@@ -1097,6 +1143,7 @@ impl BlockHeader<SeqTypes> for Header {
             chain_config,
             version,
             None,
+            leader_config,
         )?)
     }
 
@@ -1311,6 +1358,7 @@ mod test_headers {
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 Version { major: 0, minor: 1 },
+                None,
                 None,
             )
             .unwrap();
