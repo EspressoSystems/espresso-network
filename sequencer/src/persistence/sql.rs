@@ -1866,7 +1866,9 @@ impl MembershipPersistence for Persistence {
         result
             .map(|row| {
                 let bytes: Vec<u8> = row.get("stake");
-                anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
+                anyhow::Result::<_>::Ok(
+                    bincode::deserialize(&bytes).context("deserializing stake table")?,
+                )
             })
             .transpose()
     }
@@ -1896,9 +1898,10 @@ impl MembershipPersistence for Persistence {
     }
 
     async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+
         let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
 
-        let mut tx = self.db.write().await?;
         tx.upsert(
             "epoch_drb_and_root",
             ["epoch", "stake"],
@@ -1909,7 +1912,6 @@ impl MembershipPersistence for Persistence {
         tx.commit().await
     }
 }
-
 #[async_trait]
 impl Provider<SeqTypes, VidCommonRequest> for Persistence {
     #[tracing::instrument(skip(self))]
