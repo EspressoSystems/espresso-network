@@ -305,6 +305,37 @@ impl EpochCommittees {
             Some(&self.non_epoch_committee)
         }
     }
+
+    /// Get the stake tables. Try to load from persistence and fall back to fetching from l1.
+    async fn get_stake_table(
+        &self,
+        epoch: Epoch,
+        contract_address: Address,
+        l1_block: u64,
+    ) -> Result<StakeTables, GetStakeTablesError> {
+        if let Some(stake_tables) = self
+            .persistence
+            .load_stake(epoch)
+            .await
+            .map_err(GetStakeTablesError::PersistenceLoadError)?
+        {
+            Ok(stake_tables)
+        } else {
+            self.l1_client
+                .get_stake_table(contract_address.to_alloy(), l1_block)
+                .await
+                .map_err(GetStakeTablesError::L1ClientFetchError)
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+/// Error representing fail cases for retrieving the stake table.
+enum GetStakeTablesError {
+    #[error("Error loading from persistence: {0}")]
+    PersistenceLoadError(anyhow::Error),
+    #[error("Error fetching from L1: {0}")]
+    L1ClientFetchError(anyhow::Error),
 }
 
 #[derive(Error, Debug)]
@@ -489,19 +520,12 @@ impl Membership<SeqTypes> for EpochCommittees {
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
         let address = self.contract_address?;
         let stake_tables = self
-            .l1_client
-            .get_stake_table(address.to_alloy(), block_header.height())
+            .get_stake_table(epoch, address, block_header.height())
             .await
+            .inspect_err(|e| {
+                tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
+            })
             .ok()?;
-
-        match self
-            .persistence
-            .store_stake(epoch, stake_tables.clone())
-            .await
-        {
-            Ok(_) => tracing::debug!("`add_epoch_root`, stored stake table"),
-            Err(e) => tracing::error!(?e, "`add_epoch_root`, error storing stake table"),
-        }
 
         Some(Box::new(move |committee: &mut Self| {
             let _ = committee.update_stake_table(epoch, stake_tables);
