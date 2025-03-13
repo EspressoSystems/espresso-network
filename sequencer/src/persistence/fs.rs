@@ -612,7 +612,6 @@ impl SequencerPersistence for Persistence {
         self.inner.read().await.load_anchor_leaf()
     }
 
-
     async fn load_da_proposal(
         &self,
         view: ViewNumber,
@@ -1152,7 +1151,7 @@ impl SequencerPersistence for Persistence {
         tracing::warn!("successfully migrated vid shares");
         Ok(())
     }
-   
+
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
 
