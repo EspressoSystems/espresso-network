@@ -3,7 +3,7 @@
 pragma solidity ^0.8.0;
 
 import { BN254 } from "bn254/BN254.sol";
-import { PolynomialEvalV2 } from "./PolynomialEvalV2.sol";
+import { PolynomialEvalV2 as Poly } from "./PolynomialEvalV2.sol";
 import { IPlonkVerifier } from "../interfaces/IPlonkVerifier.sol";
 
 /* solhint-disable no-inline-assembly */
@@ -14,7 +14,7 @@ import { IPlonkVerifier } from "../interfaces/IPlonkVerifier.sol";
 ///           q_lc0 * w0 + q_lc1 * w1 + q_lc2 * w2 + q_lc3 * w3 +
 ///           q_hash0 * w0 + q_hash1 * w1 + q_hash2 * w2 + q_hash3 * w3 +
 ///           q_ecc * w0 * w1 * w2 * w3 * wo
-contract PlonkVerifierV2 is PolynomialEvalV2 {
+contract PlonkVerifierV2 {
     /// Plonk: invalid inputs, either mismatching lengths among input arguments
     /// or empty input.
     error InvalidPlonkArgs();
@@ -126,9 +126,9 @@ contract PlonkVerifierV2 is PolynomialEvalV2 {
 
         Challenges memory chal = _computeChallenges(verifyingKey, publicInput, proof);
 
-        EvalDomain memory domain = newEvalDomain(verifyingKey.domainSize);
+        Poly.EvalDomain memory domain = Poly.newEvalDomain(verifyingKey.domainSize);
         // pre-compute evaluation data
-        EvalData memory evalData = evalDataGen(domain, chal.zeta, publicInput);
+        Poly.EvalData memory evalData = Poly.evalDataGen(domain, chal.zeta, publicInput);
 
         // in the final pairing check: e(a, [x]_2) =?= e(b, [1]_2)
         BN254.G1Point memory a;
@@ -395,7 +395,7 @@ contract PlonkVerifierV2 is PolynomialEvalV2 {
     function _computeLinPolyConstantTerm(
         Challenges memory chal,
         IPlonkVerifier.PlonkProof memory proof,
-        EvalData memory evalData
+        Poly.EvalData memory evalData
     ) internal pure returns (uint256 res) {
         uint256 p = BN254.R_MOD;
         uint256 lagrangeOneEval = BN254.ScalarField.unwrap(evalData.lagrangeOne);
@@ -449,7 +449,7 @@ contract PlonkVerifierV2 is PolynomialEvalV2 {
     function _preparePolyCommitments(
         IPlonkVerifier.VerifyingKey memory verifyingKey,
         Challenges memory chal,
-        EvalData memory evalData,
+        Poly.EvalData memory evalData,
         IPlonkVerifier.PlonkProof memory proof
     ) internal view returns (BN254.G1Point memory e1, BN254.G1Point memory f1) {
         // Compute first part of batched polynomial commitment [D]1
@@ -560,7 +560,7 @@ contract PlonkVerifierV2 is PolynomialEvalV2 {
     function _linearizationPolyComm(
         IPlonkVerifier.VerifyingKey memory verifyingKey,
         Challenges memory challenge,
-        EvalData memory evalData,
+        Poly.EvalData memory evalData,
         IPlonkVerifier.PlonkProof memory proof
     ) private view returns (BN254.G1Point memory d1) {
         uint256 tmpScalar;

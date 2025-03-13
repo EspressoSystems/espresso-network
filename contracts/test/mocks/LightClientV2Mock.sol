@@ -6,6 +6,7 @@ import { BN254 } from "bn254/BN254.sol";
 import { LightClient as LC } from "../../src/LightClient.sol";
 import { LightClientV2 as LCV2 } from "../../src/LightClientV2.sol";
 import { IPlonkVerifier } from "../../src/interfaces/IPlonkVerifier.sol";
+import { PlonkVerifierV2 as PV } from "../../src/libraries/PlonkVerifierV2.sol";
 
 contract LightClientV2Mock is LCV2 {
     /// @dev Directly mutate finalizedState variable for test
@@ -57,7 +58,7 @@ contract LightClientV2Mock is LCV2 {
         }
 
         // invoking PlonkVerifier2.sol::verify()
-        if (!verify(vk, publicInput, proof)) {
+        if (!PV(_verifier).verify(vk, publicInput, proof)) {
             revert InvalidProof();
         }
     }
@@ -67,7 +68,7 @@ contract LightClientV2Mock is LCV2 {
     }
 
     // generated and copied from `cargo run --bin gen-vk-contract --release -- --mock`
-    function getVk() public pure override returns (IPlonkVerifier.VerifyingKey memory vk) {
+    function getVk() public pure returns (IPlonkVerifier.VerifyingKey memory vk) {
         assembly {
             // domain size
             mstore(vk, 65536)

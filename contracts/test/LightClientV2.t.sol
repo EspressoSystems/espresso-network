@@ -12,6 +12,7 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 // Target contract
 import { LightClient as LC } from "../src/LightClient.sol";
+import { PlonkVerifierV2 as PV2 } from "../src/libraries/PlonkVerifierV2.sol";
 import { LightClientV2Mock as LCV2 } from "./mocks/LightClientV2Mock.sol";
 import { BN254 } from "bn254/BN254.sol";
 
@@ -64,10 +65,11 @@ contract LightClientCommonTest is Test {
         vm.prank(admin);
         LC(proxyAddr).setPermissionedProver(prover);
 
-        // deploy LCV2
+        // deploy PlonkVerifierV2 and LCV2
         LCV2 lcv2 = new LCV2();
+        PV2 pv2 = new PV2();
         bytes memory lcv2InitData =
-            abi.encodeWithSignature("initializeV2(uint64)", BLOCKS_PER_EPOCH);
+            abi.encodeWithSignature("initializeV2(uint64,address)", BLOCKS_PER_EPOCH, address(pv2));
 
         // upgrade proxy to new LC impl and initialize LCV2
         vm.prank(admin);
@@ -723,8 +725,9 @@ contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest {
 
         // first deploy LCV2
         LC lcv2 = new LCV2();
+        PV2 pv2 = new PV2();
         bytes memory lcv2InitData =
-            abi.encodeWithSignature("initializeV2(uint64)", BLOCKS_PER_EPOCH);
+            abi.encodeWithSignature("initializeV2(uint64,address)", BLOCKS_PER_EPOCH, address(pv2));
         // upgrade V1 to V2 and initialize LCV2
         admin = LC(proxy).owner();
         vm.prank(admin);

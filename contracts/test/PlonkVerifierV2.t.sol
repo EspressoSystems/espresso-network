@@ -17,7 +17,7 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { IPlonkVerifier } from "../src/interfaces/IPlonkVerifier.sol";
-import { LightClientStateUpdateVKV2 as VkTest } from
+import { LightClientStateUpdateVKV2 as VkLib } from
     "../src/libraries/LightClientStateUpdateVKV2.sol";
 import { PolynomialEvalV2 as Poly } from "../src/libraries/PolynomialEvalV2.sol";
 
@@ -32,8 +32,7 @@ contract PlonkVerifierCommonTest is Test {
 
     constructor() {
         verifier = new VMock();
-        VkTest vkLib = new VkTest();
-        vk = vkLib.getVk();
+        vk = VkLib.getVk();
     }
 
     /// @dev Sanitize a single value to be valid scalar field Bn254::Fr.
@@ -86,9 +85,9 @@ contract PlonkVerifierCommonTest is Test {
         IPlonkVerifier.PlonkProof memory proof = dummyProof(seed);
         V.Challenges memory chal = verifier.computeChallenges(vk, publicInput, proof);
 
-        Poly.EvalDomain memory domain = verifier.newEvalDomain(vk.domainSize);
+        Poly.EvalDomain memory domain = Poly.newEvalDomain(vk.domainSize);
         // pre-compute evaluation data
-        Poly.EvalData memory evalData = verifier.evalDataGen(domain, chal.zeta, publicInput);
+        Poly.EvalData memory evalData = Poly.evalDataGen(domain, chal.zeta, publicInput);
 
         return (vk, proof, chal, evalData);
     }

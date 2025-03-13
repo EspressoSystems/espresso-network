@@ -12,8 +12,6 @@ import { BN254 } from "bn254/BN254.sol";
 import { PolynomialEvalV2 as Poly } from "../src/libraries/PolynomialEvalV2.sol";
 
 contract PolynomialEval_newEvalDomain_Test is Test {
-    Poly poly = new Poly();
-
     /// @dev diff-test with Rust when `domainSize` is in {2^16 ~ 2^20, 2^5}
     function test_supportedDomainSize_matches() external {
         uint256[3] memory logSizes = [uint256(5), 16, 20];
@@ -26,7 +24,7 @@ contract PolynomialEval_newEvalDomain_Test is Test {
             bytes memory result = vm.ffi(cmds);
             (uint256 sizeInv, uint256 groupGen) = abi.decode(result, (uint256, uint256));
 
-            Poly.EvalDomain memory domain = poly.newEvalDomain(2 ** logSizes[i]);
+            Poly.EvalDomain memory domain = Poly.newEvalDomain(2 ** logSizes[i]);
             assertEq(sizeInv, domain.sizeInv);
             assertEq(groupGen, domain.elements[1]);
         }
@@ -41,14 +39,12 @@ contract PolynomialEval_newEvalDomain_Test is Test {
         );
 
         vm.expectRevert(Poly.UnsupportedDegree.selector);
-        poly.newEvalDomain(domainSize);
+        Poly.newEvalDomain(domainSize);
     }
 }
 
 /// @dev Come with some helper function
 contract PolynomialEvalTest is Test {
-    Poly poly = new Poly();
-
     /// @dev Generate the domain elements for indexes 0..length
     /// which are essentially g^0, g^1, ..., g^{length-1}
     function domainElements(Poly.EvalDomain memory self, uint256 length)
@@ -78,7 +74,7 @@ contract PolynomialEvalTest is Test {
     /// @dev Test if the domain elements are generated correctly
     function test_domainElements_matches() external {
         uint256 logSize = 20;
-        Poly.EvalDomain memory domain = poly.newEvalDomain(2 ** logSize);
+        Poly.EvalDomain memory domain = Poly.newEvalDomain(2 ** logSize);
 
         string[] memory cmds = new string[](4);
         cmds[0] = "diff-test";
@@ -109,7 +105,7 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
             BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[i]));
         }
 
-        Poly.EvalDomain memory domain = poly.newEvalDomain(2 ** logSize);
+        Poly.EvalDomain memory domain = Poly.newEvalDomain(2 ** logSize);
 
         string[] memory cmds = new string[](5);
         cmds[0] = "diff-test";
@@ -122,7 +118,7 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
         (uint256 vanishEval, uint256 lagrangeOne, uint256 piEval) =
             abi.decode(result, (uint256, uint256, uint256));
 
-        Poly.EvalData memory evalData = poly.evalDataGen(domain, zeta, publicInput);
+        Poly.EvalData memory evalData = Poly.evalDataGen(domain, zeta, publicInput);
         assertEq(vanishEval, BN254.ScalarField.unwrap(evalData.vanishEval));
         assertEq(lagrangeOne, BN254.ScalarField.unwrap(evalData.lagrangeOne));
         assertEq(piEval, BN254.ScalarField.unwrap(evalData.piEval));
@@ -133,15 +129,15 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
     /// tested in `testFuzz_evalDataGen_matches()`
     function test_lagrangeOneCoeffForDomainElements() external view {
         uint256 size = 2 ** 5;
-        Poly.EvalDomain memory domain = poly.newEvalDomain(size);
+        Poly.EvalDomain memory domain = Poly.newEvalDomain(size);
 
         uint256[] memory elements = domainElements(domain, size);
-        uint256 vanishEval = poly.evaluateVanishingPoly(domain, elements[0]);
+        uint256 vanishEval = Poly.evaluateVanishingPoly(domain, elements[0]);
 
         // L_0(g^0) = 1
         assertEq(
             BN254.ScalarField.unwrap(
-                poly.evaluateLagrangeOne(
+                Poly.evaluateLagrangeOne(
                     domain, BN254.ScalarField.wrap(elements[0]), BN254.ScalarField.wrap(vanishEval)
                 )
             ),
@@ -150,10 +146,10 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
 
         // L_i(g^0) = 0 for i \in [size]
         for (uint256 i = 1; i < size; i++) {
-            vanishEval = poly.evaluateVanishingPoly(domain, elements[i]);
+            vanishEval = Poly.evaluateVanishingPoly(domain, elements[i]);
             assertEq(
                 BN254.ScalarField.unwrap(
-                    poly.evaluateLagrangeOne(
+                    Poly.evaluateLagrangeOne(
                         domain,
                         BN254.ScalarField.wrap(elements[i]),
                         BN254.ScalarField.wrap(vanishEval)
@@ -167,7 +163,7 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
     /// @dev Test edge cases when zeta is one of the elements in the evaluation domain.
     function test_evaluatePiPolyForDomainElements() external view {
         uint256 size = 2 ** 5;
-        Poly.EvalDomain memory domain = poly.newEvalDomain(size);
+        Poly.EvalDomain memory domain = Poly.newEvalDomain(size);
 
         uint256[] memory elements = domainElements(domain, size);
         uint256[11] memory publicInputs;
@@ -178,14 +174,14 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
 
         for (uint256 i = 0; i < size; i++) {
             uint256 zeta = elements[i];
-            uint256 vanishEval = poly.evaluateVanishingPoly(domain, zeta);
+            uint256 vanishEval = Poly.evaluateVanishingPoly(domain, zeta);
             if (i < 11) {
                 assertEq(vanishEval, 0);
                 assertEq(
-                    poly.evaluatePiPoly(domain, publicInputs, zeta, vanishEval), publicInputs[i]
+                    Poly.evaluatePiPoly(domain, publicInputs, zeta, vanishEval), publicInputs[i]
                 );
             } else {
-                assertEq(poly.evaluatePiPoly(domain, publicInputs, zeta, vanishEval), 0);
+                assertEq(Poly.evaluatePiPoly(domain, publicInputs, zeta, vanishEval), 0);
             }
         }
     }
