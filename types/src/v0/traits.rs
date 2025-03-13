@@ -30,8 +30,10 @@ use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
-    impls::NodeState, utils::BackoffParams, v0_3::StakeTables, EpochCommittees, EpochVersion,
-    SequencerVersions,
+    impls::NodeState,
+    utils::BackoffParams,
+    v0_3::{IndexedStake, StakeTables},
+    EpochCommittees, EpochVersion, SequencerVersions,
 };
 use crate::{
     v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,
@@ -497,7 +499,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>>;
 
     /// Load stake tables for storage for latest `n` known epochs
-    async fn load_latest_stake(&self, epochs: u64) -> anyhow::Result<Option<StakeTables>>;
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Vec<IndexedStake>>;
 
     /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()>;
