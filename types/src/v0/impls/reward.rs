@@ -12,13 +12,19 @@ use ethers::{
     utils::{parse_units, ParseUnits},
 };
 use ethers_conv::ToEthers;
+use hotshot::types::BLSPubKey;
 use hotshot_query_service::explorer::MonetaryValue;
-use hotshot_types::traits::block_contents::BuilderFee;
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    traits::{
+        block_contents::BuilderFee, election::Membership, node_implementation::ConsensusTime,
+    },
+};
 use itertools::Itertools;
 use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
-    MerkleCommitment, MerkleTreeError, MerkleTreeScheme, ToTraversalPath,
-    UniversalMerkleTreeScheme,
+    MerkleCommitment, MerkleTreeError, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme,
+    ToTraversalPath, UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
@@ -26,9 +32,13 @@ use sequencer_utils::{
 };
 use thiserror::Error;
 
-use super::v0_1::{
-    RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardInfo,
-    RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
+use super::{
+    v0_1::{
+        block_reward, RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount,
+        RewardInfo, RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
+    },
+    v0_3::Validator,
+    Leaf2, NodeState, ValidatedState,
 };
 use crate::{
     eth_signature_key::EthKeyPair, v0_99::IterableFeeInfo, AccountQueryData, FeeAccount,
@@ -340,4 +350,96 @@ pub fn retain_accounts(
     }
 
     Ok(snapshot)
+}
+
+pub fn apply_rewards(
+    mut reward_state: RewardMerkleTree,
+    validator: Validator<BLSPubKey>,
+) -> anyhow::Result<RewardMerkleTree> {
+    let mut update_balance = |account: &RewardAccount, amount: RewardAmount| {
+        reward_state = reward_state.persistent_update_with(account, |balance| {
+            let balance = balance.copied();
+            match balance.unwrap_or_default().0.checked_add(amount.0) {
+                Some(updated) => Some(updated.into()),
+                None => {
+                    tracing::warn!("overflowed reward balance for account {}", account);
+                    balance
+                },
+            }
+        })?;
+        Ok::<(), anyhow::Error>(())
+    };
+
+    // Distribute leader reward
+    let leader_reward = RewardAmount::from(
+        (U256::from(validator.commission) * block_reward().0) / U256::from(10_000),
+    );
+    update_balance(&RewardAccount(validator.account.to_ethers()), leader_reward)?;
+
+    // Distribute delegator rewards
+    let total_stake = validator.stake.to_ethers();
+    for (delegator_address, delegator_stake) in &validator.delegators {
+        let delegator_reward =
+            RewardAmount::from(delegator_stake.to_ethers() * U256::from(100) / total_stake);
+        update_balance(
+            &RewardAccount(delegator_address.to_ethers()),
+            delegator_reward,
+        )?;
+    }
+
+    Ok(reward_state)
+}
+
+pub async fn catchup_missing_accounts(
+    instance_state: &NodeState,
+    validated_state: &mut ValidatedState,
+    parent_leaf: &Leaf2,
+    view: ViewNumber,
+) -> anyhow::Result<Validator<BLSPubKey>> {
+    let height = parent_leaf.height();
+    let epoch_height = instance_state.epoch_height.unwrap();
+    let epoch = EpochNumber::new(height % epoch_height);
+    let membership = instance_state.membership.read().await;
+    let leader: BLSPubKey = membership
+        .leader(ViewNumber::new(height), Some(epoch))
+        .unwrap();
+
+    let validator = membership.get_validator_config(&epoch, leader).unwrap();
+    let mut reward_accounts = vec![validator.account.to_ethers().into()];
+    let delegators = validator
+        .delegators
+        .keys()
+        .cloned()
+        .map(|a| a.to_ethers().into())
+        .collect::<Vec<RewardAccount>>();
+
+    reward_accounts.extend(delegators.clone());
+    let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
+
+    if !missing_reward_accts.is_empty() {
+        tracing::warn!(
+            height,
+            ?view,
+            ?missing_reward_accts,
+            "fetching missing reward accounts from peers"
+        );
+
+        let missing_account_proofs = instance_state
+            .peers
+            .fetch_reward_accounts(
+                instance_state,
+                height,
+                view,
+                validated_state.reward_merkle_tree.commitment(),
+                missing_reward_accts,
+            )
+            .await?;
+
+        for proof in missing_account_proofs.iter() {
+            proof
+                .remember(&mut validated_state.reward_merkle_tree)
+                .expect("proof previously verified");
+        }
+    }
+    Ok(validator)
 }

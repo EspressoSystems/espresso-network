@@ -33,6 +33,7 @@ use super::{
 use crate::{
     v0::{
         header::{EitherOrVersion, VersionedHeader},
+        impls::reward::{apply_rewards, catchup_missing_accounts},
         MarketplaceVersion,
     },
     v0_1::{self, RewardAccount},
@@ -415,7 +416,7 @@ impl Header {
         chain_config: ChainConfig,
         version: Version,
         auction_results: Option<SolverAuctionResults>,
-        validator_config: Option<Validator<BLSPubKey>>,
+        validator: Option<Validator<BLSPubKey>>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -521,6 +522,11 @@ impl Header {
         assert!(major == 0, "Invalid major version {major}");
 
         // DISTRIBUTE REWARDS
+        if version >= EpochVersion::version() {
+            let validator = validator.ok_or_else(|| anyhow::anyhow!("Missing validator"))?;
+            let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
+            state.reward_merkle_tree = reward_state;
+        }
 
         let header = match minor {
             1 => Self::V1(v0_1::Header {
@@ -1076,54 +1082,10 @@ impl BlockHeader<SeqTypes> for Header {
         }
 
         let leader_config = if version >= EpochVersion::version() {
-            let height = parent_leaf.height();
-            let epoch_height = instance_state.epoch_height.unwrap();
-            let epoch = EpochNumber::new(height % epoch_height);
-            let membership = instance_state.membership.read().await;
-            let leader: BLSPubKey = membership
-                .leader(ViewNumber::new(height), Some(epoch))
-                .unwrap();
-
-            let validator = membership.get_validator_config(&epoch, leader).unwrap();
-            let mut reward_accounts = vec![validator.account.to_ethers().into()];
-            let delegators = validator
-                .delegators
-                .keys()
-                .cloned()
-                .into_iter()
-                .map(|a| a.to_ethers().into())
-                .collect::<Vec<RewardAccount>>();
-
-            reward_accounts.extend(delegators.clone());
-            let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
-
-            if !missing_reward_accts.is_empty() {
-                tracing::warn!(
-                    height,
-                    ?view,
-                    ?missing_reward_accts,
-                    "fetching missing reward accounts from peers"
-                );
-
-                let missing_account_proofs = instance_state
-                    .peers
-                    .fetch_reward_accounts(
-                        instance_state,
-                        height,
-                        view,
-                        validated_state.reward_merkle_tree.commitment(),
-                        missing_reward_accts,
-                    )
-                    .await?;
-
-                for proof in missing_account_proofs.iter() {
-                    proof
-                        .remember(&mut validated_state.reward_merkle_tree)
-                        .expect("proof previously verified");
-                }
-            }
-
-            Some(validator)
+            Some(
+                catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)
+                    .await?,
+            )
         } else {
             None
         };

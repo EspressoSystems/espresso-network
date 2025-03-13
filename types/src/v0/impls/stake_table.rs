@@ -354,7 +354,7 @@ impl EpochCommittees {
             .address_mapping
             .clone();
 
-        Ok(mapping.get(&bls_key).unwrap().clone())
+        Ok(*mapping.get(&bls_key).unwrap())
     }
 
     pub fn get_validator_config(
@@ -362,7 +362,7 @@ impl EpochCommittees {
         epoch: &Epoch,
         key: BLSPubKey,
     ) -> anyhow::Result<Validator<BLSPubKey>> {
-        let address = self.address(&epoch, key)?;
+        let address = self.address(epoch, key)?;
         let validators = self.validators(epoch)?;
         Ok(validators.get(&address).unwrap().clone())
     }
@@ -665,7 +665,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             .ok()
             .map(|stake_table| -> Box<dyn FnOnce(&mut Self) + Send> {
                 Box::new(move |committee: &mut Self| {
-                    let _ = committee.update_stake_table(epoch, stake_table);
+                    committee.update_stake_table(epoch, stake_table);
                 })
             })
     }

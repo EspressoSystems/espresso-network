@@ -30,7 +30,7 @@ use super::{
     auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
-    reward,
+    reward::{self, apply_rewards, catchup_missing_accounts},
     v0_1::{
         block_reward, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
@@ -301,74 +301,23 @@ impl ValidatedState {
         delta: &mut Delta,
         validator: Validator<BLSPubKey>,
     ) -> anyhow::Result<()> {
-        let commission = validator.commission;
-
-        let leader_reward =
-            RewardAmount::from((U256::from(commission) * block_reward().0) / U256::from(10_000));
-        let mut reward_state = self.reward_merkle_tree.clone();
-        reward_state = reward_state.persistent_update_with(
-            RewardAccount(validator.account.to_ethers()),
-            |balance| {
-                let balance = balance.copied();
-
-                match balance.unwrap_or_default().0.checked_add(leader_reward.0) {
-                    Some(updated) => Some(updated.into()),
-                    None => {
-                        tracing::warn!(
-                            "overflowed reward balance for account {}",
-                            validator.account
-                        );
-                        balance
-                    },
-                }
-            },
-        )?;
-
-        let total_stake = validator.stake;
-
-        for (delegator_address, delegator_stake) in validator.delegators.iter() {
-            let delegator_reward = RewardAmount::from(
-                delegator_stake.to_ethers() * U256::from(100) / total_stake.to_ethers(),
-            );
-            reward_state = reward_state.persistent_update_with(
-                RewardAccount(delegator_address.to_ethers()),
-                |balance| {
-                    let balance = balance.copied();
-
-                    match balance
-                        .unwrap_or_default()
-                        .0
-                        .checked_add(delegator_reward.0)
-                    {
-                        Some(updated) => Some(updated.into()),
-                        None => {
-                            tracing::warn!(
-                                "overflowed reward balance for account {}",
-                                delegator_address
-                            );
-                            balance
-                        },
-                    }
-                },
-            )?;
-        }
-
+        let reward_state = apply_rewards(self.reward_merkle_tree.clone(), validator.clone())?;
         self.reward_merkle_tree = reward_state;
 
+        // Update delta rewards
         delta
             .rewards_delta
             .insert(RewardAccount(validator.account.to_ethers()));
-
         delta.rewards_delta.extend(
             validator
                 .delegators
                 .keys()
-                .map(|delegator_address| RewardAccount(delegator_address.to_ethers()))
-                .collect::<Vec<_>>(),
+                .map(|d| RewardAccount(d.to_ethers())),
         );
 
         Ok(())
     }
+
     /// Charge a fee to an account, transferring the funds to the fee recipient account.
     pub fn charge_fee(&mut self, fee_info: FeeInfo, recipient: FeeAccount) -> Result<(), FeeError> {
         if fee_info.amount == 0.into() {
@@ -931,52 +880,9 @@ impl ValidatedState {
 
         // TODO: make a function for this
         if version >= EpochVersion::version() {
-            let height = proposed_header.block_number();
-            let epoch_height = instance.epoch_height.unwrap();
-            let epoch = EpochNumber::new(height % epoch_height);
-            let membership = instance.membership.read().await;
-            let leader: BLSPubKey = membership
-                .leader(ViewNumber::new(height), Some(epoch))
-                .unwrap();
-
-            let validator = membership.get_validator_config(&epoch, leader).unwrap();
-            drop(membership);
-            let mut reward_accounts = vec![validator.account.to_ethers().into()];
-            let delegators = validator
-                .delegators
-                .keys()
-                .cloned()
-                .into_iter()
-                .map(|a| a.to_ethers().into())
-                .collect::<Vec<RewardAccount>>();
-
-            reward_accounts.extend(delegators.clone());
-            let missing_reward_accts = self.forgotten_reward_accounts(reward_accounts);
-
-            if !missing_reward_accts.is_empty() {
-                tracing::info!(
-                    parent_height,
-                    ?parent_view,
-                    ?missing_reward_accts,
-                    "fetching missing accounts from peers"
-                );
-
-                let missing_account_proofs = peers
-                    .fetch_reward_accounts(
-                        instance,
-                        parent_height,
-                        parent_view,
-                        validated_state.reward_merkle_tree.commitment(),
-                        missing_reward_accts,
-                    )
+            let validator =
+                catchup_missing_accounts(instance, &mut validated_state, parent_leaf, parent_view)
                     .await?;
-
-                for proof in missing_account_proofs.iter() {
-                    proof
-                        .remember(&mut validated_state.reward_merkle_tree)
-                        .expect("proof previously verified");
-                }
-            }
 
             // apply rewards
 
