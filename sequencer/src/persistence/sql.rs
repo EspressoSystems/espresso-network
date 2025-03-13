@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -10,7 +16,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::StakeTables,
+    v0_3::{IndexedStake, StakeTables},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
 };
 use futures::stream::StreamExt;
@@ -1863,6 +1869,30 @@ impl MembershipPersistence for Persistence {
                 anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
             })
             .transpose()
+    }
+
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Vec<IndexedStake>> {
+        let mut tx = self.db.write().await?;
+
+        let rows = match query_as::<(i64, Vec<u8>)>("SELECT stake FROM epoch_drb_and_root LIMIT $1")
+            .bind(limit as i64)
+            .fetch_all(tx.as_mut())
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::error!("error loading stake tables: {err:#}");
+                bail!("{err:#}");
+            },
+        };
+
+        rows.into_iter()
+            .map(|(id, bytes)| -> anyhow::Result<_> {
+                let st: StakeTables =
+                    bincode::deserialize(&bytes).context("deserializing stake table")?;
+                Ok((id as u64, st))
+            })
+            .collect()
     }
 
     async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {

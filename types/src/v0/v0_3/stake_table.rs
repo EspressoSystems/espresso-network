@@ -24,3 +24,6 @@ pub struct StakeTables {
     pub stake_table: StakeTable,
     pub da_members: DAMembers,
 }
+
+/// Type for holding result sets matching epochs to stake tables.
+pub type IndexedStake = (u64, StakeTables);
