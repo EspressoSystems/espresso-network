@@ -69,7 +69,7 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
-itertools = "0.12.1"
+itertools = "0.14.0"
 jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
     "std",
 ] }
@@ -120,8 +120,8 @@ sqlx = { version = "0.8", features = [
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0", optional = true }
 hotshot-example-types = { workspace = true }
 portpicker = { version = "0.1", optional = true }
-rand = { version = "0.8", optional = true }
-tempfile = { version = "3.10", optional = true }
+rand = { version = "0.9", optional = true }
+tempfile = { version = "3.18", optional = true }
 
 # Dependencies enabled by feature "backtrace-on-stack-overflow".
 #
@@ -137,8 +137,8 @@ backtrace-on-stack-overflow = { version = "0.3", optional = true }
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive", "env"] }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
-generic-array = "0.14"
+generic-array = "1.2"
 portpicker = "0.1"
-rand = "0.8"
-reqwest = "0.12.3"
-tempfile = "3.10"
+rand = "0.9"
+reqwest = "0.12.12"
+tempfile = "3.18"
