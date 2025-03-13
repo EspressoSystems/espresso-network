@@ -8,7 +8,6 @@ use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
@@ -25,7 +24,7 @@ use hotshot_types::{
         storage::Storage,
         ValidatedState as HotShotState,
     },
-    utils::{genesis_epoch_from_version, verify_epoch_root_chain, View},
+    utils::{genesis_epoch_from_version, verify_epoch_root_chain},
 };
 use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
@@ -513,11 +512,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
     /// Load the highest view saved with [`save_voted_view`](Self::save_voted_view).
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>>;
 
-    /// Load undecided state saved by consensus before we shut down.
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>>;
-
     /// Load the proposals saved by consensus
     async fn load_quorum_proposals(
         &self,
@@ -629,12 +623,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
             .map(|c| c.config.epoch_start_block)
             .unwrap_or_default();
 
-        let (undecided_leaves, undecided_state) = self
-            .load_undecided_state()
-            .await
-            .context("loading undecided state")?
-            .unwrap_or_default();
-
         let saved_proposals = self
             .load_quorum_proposals()
             .await
@@ -656,10 +644,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
             ?epoch,
             ?high_qc,
             ?validated_state,
-            ?undecided_leaves,
-            ?undecided_state,
-            ?saved_proposals,
-            ?upgrade_certificate,
             "loaded consensus state"
         );
 
@@ -678,11 +662,8 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
                 high_qc,
                 next_epoch_high_qc,
                 decided_upgrade_certificate: upgrade_certificate,
-                undecided_leaves: undecided_leaves
-                    .into_values()
-                    .map(|e| (e.view_number(), e))
-                    .collect(),
-                undecided_state,
+                undecided_leaves: Default::default(),
+                undecided_state: Default::default(),
                 saved_vid_shares: Default::default(), // TODO: implement saved_vid_shares
                 start_epoch_info,
             },
@@ -789,7 +770,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         self.migrate_anchor_leaf().await?;
         self.migrate_da_proposals().await?;
         self.migrate_vid_shares().await?;
-        self.migrate_undecided_state().await?;
         self.migrate_quorum_proposals().await?;
         self.migrate_quorum_certificates().await?;
 
@@ -801,7 +781,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
     async fn migrate_da_proposals(&self) -> anyhow::Result<()>;
     async fn migrate_vid_shares(&self) -> anyhow::Result<()>;
-    async fn migrate_undecided_state(&self) -> anyhow::Result<()>;
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()>;
     async fn migrate_quorum_certificates(&self) -> anyhow::Result<()>;
 

@@ -7,7 +7,7 @@ use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
-    parse_duration, parse_size, upgrade_commitment_map,
+    parse_duration, parse_size,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::StakeTables,
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
@@ -34,7 +34,6 @@ use hotshot_query_service::{
     VidCommon,
 };
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper, VidCommitment,
@@ -50,7 +49,6 @@ use hotshot_types::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::ConsensusTime,
     },
-    utils::View,
     vote::HasViewNumber,
 };
 use itertools::Itertools;
@@ -1089,28 +1087,6 @@ impl SequencerPersistence for Persistence {
         Ok(ViewNumber::new(view as u64))
     }
 
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>> {
-        let Some(row) = self
-            .db
-            .read()
-            .await?
-            .fetch_optional("SELECT leaves, state FROM undecided_state2 WHERE id = 0")
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        let leaves_bytes: Vec<u8> = row.get("leaves");
-        let leaves2: CommitmentMap<Leaf2> = bincode::deserialize(&leaves_bytes)?;
-
-        let state_bytes: Vec<u8> = row.get("state");
-        let state = bincode::deserialize(&state_bytes)?;
-
-        Ok(Some((leaves2, state)))
-    }
-
     async fn load_da_proposal(
         &self,
         view: ViewNumber,
@@ -1596,63 +1572,6 @@ impl SequencerPersistence for Persistence {
         tx.commit().await?;
 
         tracing::info!("updated epoch_migration table for vid_share");
-
-        Ok(())
-    }
-
-    async fn migrate_undecided_state(&self) -> anyhow::Result<()> {
-        let mut tx = self.db.read().await?;
-
-        let row = tx
-            .fetch_optional("SELECT leaves, state FROM undecided_state WHERE id = 0")
-            .await?;
-
-        let (is_completed,) = query_as::<(bool,)>(
-            "SELECT completed from epoch_migration WHERE table_name = 'undecided_state'",
-        )
-        .fetch_one(tx.as_mut())
-        .await?;
-
-        if is_completed {
-            tracing::info!("undecided state migration already done");
-
-            return Ok(());
-        }
-
-        tracing::warn!("migrating undecided state..");
-
-        if let Some(row) = row {
-            let leaves_bytes: Vec<u8> = row.try_get("leaves")?;
-            let leaves: CommitmentMap<Leaf> = bincode::deserialize(&leaves_bytes)?;
-
-            let leaves2 = upgrade_commitment_map(leaves);
-            let leaves2_bytes = bincode::serialize(&leaves2)?;
-            let state_bytes: Vec<u8> = row.try_get("state")?;
-
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "undecided_state2",
-                ["id", "leaves", "state"],
-                ["id"],
-                [(0_i32, leaves2_bytes, state_bytes)],
-            )
-            .await?;
-            tx.commit().await?;
-        };
-
-        tracing::warn!("migrated undecided state");
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed"],
-            ["table_name"],
-            [("undecided_state".to_string(), true)],
-        )
-        .await?;
-        tx.commit().await?;
-
-        tracing::info!("updated epoch_migration table for undecided_state");
 
         Ok(())
     }

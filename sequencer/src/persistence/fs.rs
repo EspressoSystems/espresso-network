@@ -12,14 +12,12 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    upgrade_commitment_map,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::StakeTables,
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
@@ -35,7 +33,6 @@ use hotshot_types::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::{ConsensusTime, NodeType},
     },
-    utils::View,
     vote::HasViewNumber,
 };
 
@@ -178,14 +175,6 @@ impl Inner {
 
     fn da2_dir_path(&self) -> PathBuf {
         self.path.join("da2")
-    }
-
-    fn undecided_state_path(&self) -> PathBuf {
-        self.path.join("undecided_state")
-    }
-
-    fn undecided2_state_path(&self) -> PathBuf {
-        self.path.join("undecided_state2")
     }
 
     fn quorum_proposals_dir_path(&self) -> PathBuf {
@@ -623,19 +612,6 @@ impl SequencerPersistence for Persistence {
         self.inner.read().await.load_anchor_leaf()
     }
 
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>> {
-        let inner = self.inner.read().await;
-        let path = inner.undecided2_state_path();
-        if !path.is_file() {
-            return Ok(None);
-        }
-        let bytes = fs::read(&path).context("read")?;
-        let value: (CommitmentMap<Leaf2>, _) =
-            bincode::deserialize(&bytes).context("deserialize")?;
-        Ok(Some((value.0, value.1)))
-    }
 
     async fn load_da_proposal(
         &self,
@@ -1176,48 +1152,7 @@ impl SequencerPersistence for Persistence {
         tracing::warn!("successfully migrated vid shares");
         Ok(())
     }
-    async fn migrate_undecided_state(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        if inner.migrated.contains("undecided_state") {
-            tracing::info!("undecided state already migrated");
-            return Ok(());
-        }
-
-        let new_undecided_state_path = &inner.undecided2_state_path();
-
-        let old_undecided_state_path = inner.undecided_state_path();
-
-        if !old_undecided_state_path.is_file() {
-            return Ok(());
-        }
-
-        let bytes = fs::read(&old_undecided_state_path).context("read")?;
-        let (leaves, state): (CommitmentMap<Leaf>, QuorumCertificate<SeqTypes>) =
-            bincode::deserialize(&bytes).context("deserialize")?;
-
-        let leaves2 = upgrade_commitment_map(leaves);
-        let state2 = state.to_qc2();
-
-        tracing::warn!("migrating undecided state..");
-        inner.replace(
-            new_undecided_state_path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes = bincode::serialize(&(leaves2, state2))
-                    .context("serializing undecided state2")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )?;
-
-        inner.migrated.insert("undecided_state".to_string());
-        inner.update_migration()?;
-        tracing::warn!("successfully migrated undecided state");
-        Ok(())
-    }
+   
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
 
