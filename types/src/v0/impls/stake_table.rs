@@ -518,7 +518,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        let address = self.contract_address?;
+        let Some(address) = self.contract_address else {
+            tracing::debug!("`add_epoch_root` called with `self.contract_address` value of `None`");
+            return None;
+        };
+
         let stake_tables = self
             .get_stake_table(epoch, address, block_header.height())
             .await
