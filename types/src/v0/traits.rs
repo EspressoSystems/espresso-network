@@ -4,7 +4,7 @@ use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
 use hotshot_types::{
@@ -31,7 +31,7 @@ use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
-    impls::NodeState, utils::BackoffParams, v0_3::StakeTables, EpochCommittees, EpochVersion, Leaf,
+    impls::NodeState, utils::BackoffParams, v0_3::StakeTables, EpochCommittees, EpochVersion,
     SequencerVersions,
 };
 use crate::{
@@ -775,11 +775,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         action: HotShotAction,
     ) -> anyhow::Result<()>;
 
-    async fn update_undecided_state2(
-        &self,
-        leaves: CommitmentMap<Leaf2>,
-        state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()>;
     async fn append_quorum_proposal2(
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
@@ -921,24 +916,6 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         Ok(())
     }
 
-    async fn update_undecided_state(
-        &self,
-        leaves: CommitmentMap<Leaf>,
-        state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        (**self)
-            .update_undecided_state2(
-                leaves
-                    .into_values()
-                    .map(|leaf| {
-                        let leaf2: Leaf2 = leaf.into();
-                        (leaf2.commit(), leaf2)
-                    })
-                    .collect(),
-                state,
-            )
-            .await
-    }
     async fn append_proposal(
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposal<SeqTypes>>,
@@ -968,14 +945,6 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self)
             .store_upgrade_certificate(decided_upgrade_certificate)
             .await
-    }
-
-    async fn update_undecided_state2(
-        &self,
-        leaves: CommitmentMap<Leaf2>,
-        state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        (**self).update_undecided_state2(leaves, state).await
     }
 
     async fn add_drb_result(

@@ -48,9 +48,6 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_STORAGE_PATH")]
     path: PathBuf,
 
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STORE_UNDECIDED_STATE", hide = true)]
-    store_undecided_state: bool,
-
     /// Number of views to retain in consensus storage before data that hasn't been archived is
     /// garbage collected.
     ///
@@ -80,7 +77,6 @@ impl Options {
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            store_undecided_state: false,
             consensus_view_retention: 130000,
         }
     }
@@ -100,7 +96,6 @@ impl PersistenceOptions for Options {
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let path = self.path.clone();
-        let store_undecided_state = self.store_undecided_state;
         let view_retention = self.consensus_view_retention;
 
         let migration_path = path.join("migration");
@@ -113,7 +108,6 @@ impl PersistenceOptions for Options {
         };
 
         Ok(Persistence {
-            store_undecided_state,
             inner: Arc::new(RwLock::new(Inner {
                 path,
                 migrated,
@@ -130,8 +124,6 @@ impl PersistenceOptions for Options {
 /// File system backed persistence.
 #[derive(Clone, Debug)]
 pub struct Persistence {
-    store_undecided_state: bool,
-
     // We enforce mutual exclusion on access to the data source, as the current file system
     // implementation does not support transaction isolation for concurrent reads and writes. We can
     // improve this in the future by switching to a SQLite-based file system implementation.
@@ -773,31 +765,7 @@ impl SequencerPersistence for Persistence {
             },
         )
     }
-    async fn update_undecided_state2(
-        &self,
-        leaves: CommitmentMap<Leaf2>,
-        state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        if !self.store_undecided_state {
-            return Ok(());
-        }
 
-        let mut inner = self.inner.write().await;
-        let path = &inner.undecided2_state_path();
-        inner.replace(
-            path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes =
-                    bincode::serialize(&(leaves, state)).context("serializing undecided state")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
     async fn append_quorum_proposal2(
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,

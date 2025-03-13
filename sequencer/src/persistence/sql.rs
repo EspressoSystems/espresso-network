@@ -166,9 +166,6 @@ pub struct Options {
     #[clap(flatten)]
     pub(crate) consensus_pruning: ConsensusPruningOptions,
 
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STORE_UNDECIDED_STATE", hide = true)]
-    pub(crate) store_undecided_state: bool,
-
     /// Specifies the maximum number of concurrent fetch requests allowed from peers.
     #[clap(long, env = "ESPRESSO_SEQUENCER_FETCH_RATE_LIMIT")]
     pub(crate) fetch_rate_limit: Option<usize>,
@@ -561,10 +558,8 @@ impl PersistenceOptions for Options {
     }
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
-        let store_undecided_state = self.store_undecided_state;
         let config = (&*self).try_into()?;
         let persistence = Persistence {
-            store_undecided_state,
             db: SqlStorage::connect(config).await?,
             gc_opt: self.consensus_pruning,
         };
@@ -583,7 +578,6 @@ impl PersistenceOptions for Options {
 #[derive(Clone, Debug)]
 pub struct Persistence {
     db: SqlStorage,
-    store_undecided_state: bool,
     gc_opt: ConsensusPruningOptions,
 }
 
@@ -1882,29 +1876,6 @@ impl SequencerPersistence for Persistence {
             ["view", "data", "payload_hash"],
             ["view"],
             [(view as i64, data_bytes, vid_commit.to_string())],
-        )
-        .await?;
-        tx.commit().await
-    }
-
-    async fn update_undecided_state2(
-        &self,
-        leaves: CommitmentMap<Leaf2>,
-        state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        if !self.store_undecided_state {
-            return Ok(());
-        }
-
-        let leaves_bytes = bincode::serialize(&leaves).context("serializing leaves")?;
-        let state_bytes = bincode::serialize(&state).context("serializing state")?;
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "undecided_state2",
-            ["id", "leaves", "state"],
-            ["id"],
-            [(0_i32, leaves_bytes, state_bytes)],
         )
         .await?;
         tx.commit().await
