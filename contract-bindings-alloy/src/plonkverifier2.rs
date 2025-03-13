@@ -16,9 +16,8 @@ library BN254 {
     clippy::empty_structs_with_brackets
 )]
 pub mod BN254 {
-    use alloy::sol_types as alloy_sol_types;
-
     use super::*;
+    use alloy::sol_types as alloy_sol_types;
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct BaseField(alloy::sol_types::private::primitives::aliases::U256);
@@ -26,24 +25,29 @@ pub mod BN254 {
         use alloy::sol_types as alloy_sol_types;
         #[automatically_derived]
         impl alloy_sol_types::private::SolTypeValue<BaseField>
-            for alloy::sol_types::private::primitives::aliases::U256
-        {
+        for alloy::sol_types::private::primitives::aliases::U256 {
             #[inline]
             fn stv_to_tokens(
                 &self,
-            ) -> <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::Token<'_>
-            {
+            ) -> <alloy::sol_types::sol_data::Uint<
+                256,
+            > as alloy_sol_types::SolType>::Token<'_> {
                 alloy_sol_types::private::SolTypeValue::<
                     alloy::sol_types::sol_data::Uint<256>,
                 >::stv_to_tokens(self)
             }
             #[inline]
             fn stv_eip712_data_word(&self) -> alloy_sol_types::Word {
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::tokenize(self)
+                <alloy::sol_types::sol_data::Uint<
+                    256,
+                > as alloy_sol_types::SolType>::tokenize(self)
                     .0
             }
             #[inline]
-            fn stv_abi_encode_packed_to(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
+            fn stv_abi_encode_packed_to(
+                &self,
+                out: &mut alloy_sol_types::private::Vec<u8>,
+            ) {
                 <alloy::sol_types::sol_data::Uint<
                     256,
                 > as alloy_sol_types::SolType>::abi_encode_packed_to(self, out)
@@ -61,12 +65,16 @@ pub mod BN254 {
             pub const NAME: &'static str = stringify!(@ name);
             /// Convert from the underlying value type.
             #[inline]
-            pub const fn from(value: alloy::sol_types::private::primitives::aliases::U256) -> Self {
+            pub const fn from(
+                value: alloy::sol_types::private::primitives::aliases::U256,
+            ) -> Self {
                 Self(value)
             }
             /// Return the underlying value.
             #[inline]
-            pub const fn into(self) -> alloy::sol_types::private::primitives::aliases::U256 {
+            pub const fn into(
+                self,
+            ) -> alloy::sol_types::private::primitives::aliases::U256 {
                 self.0
             }
             /// Return the single encoding of this value, delegating to the
@@ -85,11 +93,13 @@ pub mod BN254 {
         #[automatically_derived]
         impl alloy_sol_types::SolType for BaseField {
             type RustType = alloy::sol_types::private::primitives::aliases::U256;
-            type Token<'a> =
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <alloy::sol_types::sol_data::Uint<
+                256,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SOL_NAME: &'static str = Self::NAME;
-            const ENCODED_SIZE: Option<usize> =
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::ENCODED_SIZE;
+            const ENCODED_SIZE: Option<usize> = <alloy::sol_types::sol_data::Uint<
+                256,
+            > as alloy_sol_types::SolType>::ENCODED_SIZE;
             const PACKED_ENCODED_SIZE: Option<usize> = <alloy::sol_types::sol_data::Uint<
                 256,
             > as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
@@ -99,15 +109,15 @@ pub mod BN254 {
             }
             #[inline]
             fn type_check(token: &Self::Token<'_>) -> alloy_sol_types::Result<()> {
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::type_check(
-                    token,
-                )
+                <alloy::sol_types::sol_data::Uint<
+                    256,
+                > as alloy_sol_types::SolType>::type_check(token)
             }
             #[inline]
             fn detokenize(token: Self::Token<'_>) -> Self::RustType {
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::detokenize(
-                    token,
-                )
+                <alloy::sol_types::sol_data::Uint<
+                    256,
+                > as alloy_sol_types::SolType>::detokenize(token)
             }
         }
         #[automatically_derived]
@@ -128,10 +138,12 @@ pub mod BN254 {
                 > as alloy_sol_types::EventTopic>::encode_topic_preimage(rust, out)
             }
             #[inline]
-            fn encode_topic(rust: &Self::RustType) -> alloy_sol_types::abi::token::WordToken {
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::EventTopic>::encode_topic(
-                    rust,
-                )
+            fn encode_topic(
+                rust: &Self::RustType,
+            ) -> alloy_sol_types::abi::token::WordToken {
+                <alloy::sol_types::sol_data::Uint<
+                    256,
+                > as alloy_sol_types::EventTopic>::encode_topic(rust)
             }
         }
     };
@@ -142,24 +154,29 @@ pub mod BN254 {
         use alloy::sol_types as alloy_sol_types;
         #[automatically_derived]
         impl alloy_sol_types::private::SolTypeValue<ScalarField>
-            for alloy::sol_types::private::primitives::aliases::U256
-        {
+        for alloy::sol_types::private::primitives::aliases::U256 {
             #[inline]
             fn stv_to_tokens(
                 &self,
-            ) -> <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::Token<'_>
-            {
+            ) -> <alloy::sol_types::sol_data::Uint<
+                256,
+            > as alloy_sol_types::SolType>::Token<'_> {
                 alloy_sol_types::private::SolTypeValue::<
                     alloy::sol_types::sol_data::Uint<256>,
                 >::stv_to_tokens(self)
             }
             #[inline]
             fn stv_eip712_data_word(&self) -> alloy_sol_types::Word {
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::tokenize(self)
+                <alloy::sol_types::sol_data::Uint<
+                    256,
+                > as alloy_sol_types::SolType>::tokenize(self)
                     .0
             }
             #[inline]
-            fn stv_abi_encode_packed_to(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
+            fn stv_abi_encode_packed_to(
+                &self,
+                out: &mut alloy_sol_types::private::Vec<u8>,
+            ) {
                 <alloy::sol_types::sol_data::Uint<
                     256,
                 > as alloy_sol_types::SolType>::abi_encode_packed_to(self, out)
@@ -177,12 +194,16 @@ pub mod BN254 {
             pub const NAME: &'static str = stringify!(@ name);
             /// Convert from the underlying value type.
             #[inline]
-            pub const fn from(value: alloy::sol_types::private::primitives::aliases::U256) -> Self {
+            pub const fn from(
+                value: alloy::sol_types::private::primitives::aliases::U256,
+            ) -> Self {
                 Self(value)
             }
             /// Return the underlying value.
             #[inline]
-            pub const fn into(self) -> alloy::sol_types::private::primitives::aliases::U256 {
+            pub const fn into(
+                self,
+            ) -> alloy::sol_types::private::primitives::aliases::U256 {
                 self.0
             }
             /// Return the single encoding of this value, delegating to the
@@ -201,11 +222,13 @@ pub mod BN254 {
         #[automatically_derived]
         impl alloy_sol_types::SolType for ScalarField {
             type RustType = alloy::sol_types::private::primitives::aliases::U256;
-            type Token<'a> =
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <alloy::sol_types::sol_data::Uint<
+                256,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SOL_NAME: &'static str = Self::NAME;
-            const ENCODED_SIZE: Option<usize> =
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::ENCODED_SIZE;
+            const ENCODED_SIZE: Option<usize> = <alloy::sol_types::sol_data::Uint<
+                256,
+            > as alloy_sol_types::SolType>::ENCODED_SIZE;
             const PACKED_ENCODED_SIZE: Option<usize> = <alloy::sol_types::sol_data::Uint<
                 256,
             > as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
@@ -215,15 +238,15 @@ pub mod BN254 {
             }
             #[inline]
             fn type_check(token: &Self::Token<'_>) -> alloy_sol_types::Result<()> {
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::type_check(
-                    token,
-                )
+                <alloy::sol_types::sol_data::Uint<
+                    256,
+                > as alloy_sol_types::SolType>::type_check(token)
             }
             #[inline]
             fn detokenize(token: Self::Token<'_>) -> Self::RustType {
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::SolType>::detokenize(
-                    token,
-                )
+                <alloy::sol_types::sol_data::Uint<
+                    256,
+                > as alloy_sol_types::SolType>::detokenize(token)
             }
         }
         #[automatically_derived]
@@ -244,16 +267,18 @@ pub mod BN254 {
                 > as alloy_sol_types::EventTopic>::encode_topic_preimage(rust, out)
             }
             #[inline]
-            fn encode_topic(rust: &Self::RustType) -> alloy_sol_types::abi::token::WordToken {
-                <alloy::sol_types::sol_data::Uint<256> as alloy_sol_types::EventTopic>::encode_topic(
-                    rust,
-                )
+            fn encode_topic(
+                rust: &Self::RustType,
+            ) -> alloy_sol_types::abi::token::WordToken {
+                <alloy::sol_types::sol_data::Uint<
+                    256,
+                > as alloy_sol_types::EventTopic>::encode_topic(rust)
             }
         }
     };
     /**```solidity
-    struct G1Point { BaseField x; BaseField y; }
-    ```*/
+struct G1Point { BaseField x; BaseField y; }
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct G1Point {
@@ -279,11 +304,13 @@ pub mod BN254 {
         );
         #[cfg(test)]
         #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+        fn _type_assertion(
+            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+        ) {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
+                >(_) => {}
             }
         }
         #[automatically_derived]
@@ -297,10 +324,7 @@ pub mod BN254 {
         #[doc(hidden)]
         impl ::core::convert::From<UnderlyingRustTuple<'_>> for G1Point {
             fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
-                Self {
-                    x: tuple.0,
-                    y: tuple.1,
-                }
+                Self { x: tuple.0, y: tuple.1 }
             }
         }
         #[automatically_derived]
@@ -321,50 +345,64 @@ pub mod BN254 {
                 if let Some(size) = <Self as alloy_sol_types::SolType>::ENCODED_SIZE {
                     return size;
                 }
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_encoded_size(&tuple)
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_encoded_size(&tuple)
             }
             #[inline]
             fn stv_eip712_data_word(&self) -> alloy_sol_types::Word {
                 <Self as alloy_sol_types::SolStruct>::eip712_hash_struct(self)
             }
             #[inline]
-            fn stv_abi_encode_packed_to(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_encode_packed_to(
-                    &tuple, out,
-                )
+            fn stv_abi_encode_packed_to(
+                &self,
+                out: &mut alloy_sol_types::private::Vec<u8>,
+            ) {
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_encode_packed_to(&tuple, out)
             }
             #[inline]
             fn stv_abi_packed_encoded_size(&self) -> usize {
                 if let Some(size) = <Self as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE {
                     return size;
                 }
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_packed_encoded_size(
-                    &tuple,
-                )
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_packed_encoded_size(&tuple)
             }
         }
         #[automatically_derived]
         impl alloy_sol_types::SolType for G1Point {
             type RustType = Self;
-            type Token<'a> = <UnderlyingSolTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <UnderlyingSolTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SOL_NAME: &'static str = <Self as alloy_sol_types::SolStruct>::NAME;
-            const ENCODED_SIZE: Option<usize> =
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::ENCODED_SIZE;
-            const PACKED_ENCODED_SIZE: Option<usize> =
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
+            const ENCODED_SIZE: Option<usize> = <UnderlyingSolTuple<
+                '_,
+            > as alloy_sol_types::SolType>::ENCODED_SIZE;
+            const PACKED_ENCODED_SIZE: Option<usize> = <UnderlyingSolTuple<
+                '_,
+            > as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
             #[inline]
             fn valid_token(token: &Self::Token<'_>) -> bool {
                 <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::valid_token(token)
             }
             #[inline]
             fn detokenize(token: Self::Token<'_>) -> Self::RustType {
-                let tuple = <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::detokenize(token);
+                let tuple = <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::detokenize(token);
                 <Self as ::core::convert::From<UnderlyingRustTuple<'_>>>::from(tuple)
             }
         }
@@ -376,9 +414,9 @@ pub mod BN254 {
                 alloy_sol_types::private::Cow::Borrowed("G1Point(uint256 x,uint256 y)")
             }
             #[inline]
-            fn eip712_components(
-            ) -> alloy_sol_types::private::Vec<alloy_sol_types::private::Cow<'static, str>>
-            {
+            fn eip712_components() -> alloy_sol_types::private::Vec<
+                alloy_sol_types::private::Cow<'static, str>,
+            > {
                 alloy_sol_types::private::Vec::new()
             }
             #[inline]
@@ -391,7 +429,7 @@ pub mod BN254 {
                     <BaseField as alloy_sol_types::SolType>::eip712_data_word(&self.x).0,
                     <BaseField as alloy_sol_types::SolType>::eip712_data_word(&self.y).0,
                 ]
-                .concat()
+                    .concat()
             }
         }
         #[automatically_derived]
@@ -399,30 +437,49 @@ pub mod BN254 {
             #[inline]
             fn topic_preimage_length(rust: &Self::RustType) -> usize {
                 0usize
-                    + <BaseField as alloy_sol_types::EventTopic>::topic_preimage_length(&rust.x)
-                    + <BaseField as alloy_sol_types::EventTopic>::topic_preimage_length(&rust.y)
+                    + <BaseField as alloy_sol_types::EventTopic>::topic_preimage_length(
+                        &rust.x,
+                    )
+                    + <BaseField as alloy_sol_types::EventTopic>::topic_preimage_length(
+                        &rust.y,
+                    )
             }
             #[inline]
             fn encode_topic_preimage(
                 rust: &Self::RustType,
                 out: &mut alloy_sol_types::private::Vec<u8>,
             ) {
-                out.reserve(<Self as alloy_sol_types::EventTopic>::topic_preimage_length(rust));
-                <BaseField as alloy_sol_types::EventTopic>::encode_topic_preimage(&rust.x, out);
-                <BaseField as alloy_sol_types::EventTopic>::encode_topic_preimage(&rust.y, out);
+                out.reserve(
+                    <Self as alloy_sol_types::EventTopic>::topic_preimage_length(rust),
+                );
+                <BaseField as alloy_sol_types::EventTopic>::encode_topic_preimage(
+                    &rust.x,
+                    out,
+                );
+                <BaseField as alloy_sol_types::EventTopic>::encode_topic_preimage(
+                    &rust.y,
+                    out,
+                );
             }
             #[inline]
-            fn encode_topic(rust: &Self::RustType) -> alloy_sol_types::abi::token::WordToken {
+            fn encode_topic(
+                rust: &Self::RustType,
+            ) -> alloy_sol_types::abi::token::WordToken {
                 let mut out = alloy_sol_types::private::Vec::new();
-                <Self as alloy_sol_types::EventTopic>::encode_topic_preimage(rust, &mut out);
-                alloy_sol_types::abi::token::WordToken(alloy_sol_types::private::keccak256(out))
+                <Self as alloy_sol_types::EventTopic>::encode_topic_preimage(
+                    rust,
+                    &mut out,
+                );
+                alloy_sol_types::abi::token::WordToken(
+                    alloy_sol_types::private::keccak256(out),
+                )
             }
         }
     };
     use alloy::contract as alloy_contract;
     /**Creates a new wrapper around an on-chain [`BN254`](self) contract instance.
 
-    See the [wrapper's documentation](`BN254Instance`) for more details.*/
+See the [wrapper's documentation](`BN254Instance`) for more details.*/
     #[inline]
     pub const fn new<
         T: alloy_contract::private::Transport + ::core::clone::Clone,
@@ -436,15 +493,15 @@ pub mod BN254 {
     }
     /**A [`BN254`](self) instance.
 
-    Contains type-safe methods for interacting with an on-chain instance of the
-    [`BN254`](self) contract located at a given `address`, using a given
-    provider `P`.
+Contains type-safe methods for interacting with an on-chain instance of the
+[`BN254`](self) contract located at a given `address`, using a given
+provider `P`.
 
-    If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
-    documentation on how to provide it), the `deploy` and `deploy_builder` methods can
-    be used to deploy a new instance of the contract.
+If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
+documentation on how to provide it), the `deploy` and `deploy_builder` methods can
+be used to deploy a new instance of the contract.
 
-    See the [module-level documentation](self) for all the available methods.*/
+See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
     pub struct BN254Instance<T, P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
@@ -461,16 +518,18 @@ pub mod BN254 {
     /// Instantiation and getters/setters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > BN254Instance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > BN254Instance<T, P, N> {
         /**Creates a new wrapper around an on-chain [`BN254`](self) contract instance.
 
-        See the [wrapper's documentation](`BN254Instance`) for more details.*/
+See the [wrapper's documentation](`BN254Instance`) for more details.*/
         #[inline]
-        pub const fn new(address: alloy_sol_types::private::Address, provider: P) -> Self {
+        pub const fn new(
+            address: alloy_sol_types::private::Address,
+            provider: P,
+        ) -> Self {
             Self {
                 address,
                 provider,
@@ -512,11 +571,10 @@ pub mod BN254 {
     /// Function calls.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > BN254Instance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > BN254Instance<T, P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -531,11 +589,10 @@ pub mod BN254 {
     /// Event filters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > BN254Instance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > BN254Instance<T, P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
@@ -564,12 +621,11 @@ library IPlonkVerifier {
     clippy::empty_structs_with_brackets
 )]
 pub mod IPlonkVerifier {
-    use alloy::sol_types as alloy_sol_types;
-
     use super::*;
+    use alloy::sol_types as alloy_sol_types;
     /**```solidity
-    struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire2; BN254.G1Point wire3; BN254.G1Point wire4; BN254.G1Point prodPerm; BN254.G1Point split0; BN254.G1Point split1; BN254.G1Point split2; BN254.G1Point split3; BN254.G1Point split4; BN254.G1Point zeta; BN254.G1Point zetaOmega; BN254.ScalarField wireEval0; BN254.ScalarField wireEval1; BN254.ScalarField wireEval2; BN254.ScalarField wireEval3; BN254.ScalarField wireEval4; BN254.ScalarField sigmaEval0; BN254.ScalarField sigmaEval1; BN254.ScalarField sigmaEval2; BN254.ScalarField sigmaEval3; BN254.ScalarField prodPermZetaOmegaEval; }
-    ```*/
+struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire2; BN254.G1Point wire3; BN254.G1Point wire4; BN254.G1Point prodPerm; BN254.G1Point split0; BN254.G1Point split1; BN254.G1Point split2; BN254.G1Point split3; BN254.G1Point split4; BN254.G1Point zeta; BN254.G1Point zetaOmega; BN254.ScalarField wireEval0; BN254.ScalarField wireEval1; BN254.ScalarField wireEval2; BN254.ScalarField wireEval3; BN254.ScalarField wireEval4; BN254.ScalarField sigmaEval0; BN254.ScalarField sigmaEval1; BN254.ScalarField sigmaEval2; BN254.ScalarField sigmaEval3; BN254.ScalarField prodPermZetaOmegaEval; }
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct PlonkProof {
@@ -682,11 +738,13 @@ pub mod IPlonkVerifier {
         );
         #[cfg(test)]
         #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+        fn _type_assertion(
+            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+        ) {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
+                >(_) => {}
             }
         }
         #[automatically_derived]
@@ -765,23 +823,45 @@ pub mod IPlonkVerifier {
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.wire2),
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.wire3),
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.wire4),
-                    <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.prodPerm),
+                    <BN254::G1Point as alloy_sol_types::SolType>::tokenize(
+                        &self.prodPerm,
+                    ),
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.split0),
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.split1),
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.split2),
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.split3),
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.split4),
                     <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.zeta),
-                    <BN254::G1Point as alloy_sol_types::SolType>::tokenize(&self.zetaOmega),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.wireEval0),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.wireEval1),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.wireEval2),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.wireEval3),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.wireEval4),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.sigmaEval0),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.sigmaEval1),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.sigmaEval2),
-                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(&self.sigmaEval3),
+                    <BN254::G1Point as alloy_sol_types::SolType>::tokenize(
+                        &self.zetaOmega,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.wireEval0,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.wireEval1,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.wireEval2,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.wireEval3,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.wireEval4,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.sigmaEval0,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.sigmaEval1,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.sigmaEval2,
+                    ),
+                    <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
+                        &self.sigmaEval3,
+                    ),
                     <BN254::ScalarField as alloy_sol_types::SolType>::tokenize(
                         &self.prodPermZetaOmegaEval,
                     ),
@@ -792,50 +872,64 @@ pub mod IPlonkVerifier {
                 if let Some(size) = <Self as alloy_sol_types::SolType>::ENCODED_SIZE {
                     return size;
                 }
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_encoded_size(&tuple)
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_encoded_size(&tuple)
             }
             #[inline]
             fn stv_eip712_data_word(&self) -> alloy_sol_types::Word {
                 <Self as alloy_sol_types::SolStruct>::eip712_hash_struct(self)
             }
             #[inline]
-            fn stv_abi_encode_packed_to(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_encode_packed_to(
-                    &tuple, out,
-                )
+            fn stv_abi_encode_packed_to(
+                &self,
+                out: &mut alloy_sol_types::private::Vec<u8>,
+            ) {
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_encode_packed_to(&tuple, out)
             }
             #[inline]
             fn stv_abi_packed_encoded_size(&self) -> usize {
                 if let Some(size) = <Self as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE {
                     return size;
                 }
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_packed_encoded_size(
-                    &tuple,
-                )
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_packed_encoded_size(&tuple)
             }
         }
         #[automatically_derived]
         impl alloy_sol_types::SolType for PlonkProof {
             type RustType = Self;
-            type Token<'a> = <UnderlyingSolTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <UnderlyingSolTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SOL_NAME: &'static str = <Self as alloy_sol_types::SolStruct>::NAME;
-            const ENCODED_SIZE: Option<usize> =
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::ENCODED_SIZE;
-            const PACKED_ENCODED_SIZE: Option<usize> =
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
+            const ENCODED_SIZE: Option<usize> = <UnderlyingSolTuple<
+                '_,
+            > as alloy_sol_types::SolType>::ENCODED_SIZE;
+            const PACKED_ENCODED_SIZE: Option<usize> = <UnderlyingSolTuple<
+                '_,
+            > as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
             #[inline]
             fn valid_token(token: &Self::Token<'_>) -> bool {
                 <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::valid_token(token)
             }
             #[inline]
             fn detokenize(token: Self::Token<'_>) -> Self::RustType {
-                let tuple = <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::detokenize(token);
+                let tuple = <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::detokenize(token);
                 <Self as ::core::convert::From<UnderlyingRustTuple<'_>>>::from(tuple)
             }
         }
@@ -849,111 +943,213 @@ pub mod IPlonkVerifier {
                 )
             }
             #[inline]
-            fn eip712_components(
-            ) -> alloy_sol_types::private::Vec<alloy_sol_types::private::Cow<'static, str>>
-            {
+            fn eip712_components() -> alloy_sol_types::private::Vec<
+                alloy_sol_types::private::Cow<'static, str>,
+            > {
                 let mut components = alloy_sol_types::private::Vec::with_capacity(13);
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
             }
             #[inline]
             fn eip712_encode_data(&self) -> alloy_sol_types::private::Vec<u8> {
                 [
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.wire0).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.wire1).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.wire2).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.wire3).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.wire4).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.prodPerm)
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.wire0,
+                        )
                         .0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.split0).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.split1).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.split2).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.split3).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.split4).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.zeta).0,
-                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(&self.zetaOmega)
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.wire1,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.wire2,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.wire3,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.wire4,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.prodPerm,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.split0,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.split1,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.split2,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.split3,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.split4,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.zeta,
+                        )
+                        .0,
+                    <BN254::G1Point as alloy_sol_types::SolType>::eip712_data_word(
+                            &self.zetaOmega,
+                        )
                         .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.wireEval0,
-                    )
-                    .0,
+                            &self.wireEval0,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.wireEval1,
-                    )
-                    .0,
+                            &self.wireEval1,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.wireEval2,
-                    )
-                    .0,
+                            &self.wireEval2,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.wireEval3,
-                    )
-                    .0,
+                            &self.wireEval3,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.wireEval4,
-                    )
-                    .0,
+                            &self.wireEval4,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.sigmaEval0,
-                    )
-                    .0,
+                            &self.sigmaEval0,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.sigmaEval1,
-                    )
-                    .0,
+                            &self.sigmaEval1,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.sigmaEval2,
-                    )
-                    .0,
+                            &self.sigmaEval2,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.sigmaEval3,
-                    )
-                    .0,
+                            &self.sigmaEval3,
+                        )
+                        .0,
                     <BN254::ScalarField as alloy_sol_types::SolType>::eip712_data_word(
-                        &self.prodPermZetaOmegaEval,
-                    )
-                    .0,
+                            &self.prodPermZetaOmegaEval,
+                        )
+                        .0,
                 ]
-                .concat()
+                    .concat()
             }
         }
         #[automatically_derived]
@@ -1036,7 +1232,9 @@ pub mod IPlonkVerifier {
                 rust: &Self::RustType,
                 out: &mut alloy_sol_types::private::Vec<u8>,
             ) {
-                out.reserve(<Self as alloy_sol_types::EventTopic>::topic_preimage_length(rust));
+                out.reserve(
+                    <Self as alloy_sol_types::EventTopic>::topic_preimage_length(rust),
+                );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
                     &rust.wire0,
                     out,
@@ -1082,7 +1280,8 @@ pub mod IPlonkVerifier {
                     out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.zeta, out,
+                    &rust.zeta,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
                     &rust.zetaOmega,
@@ -1130,16 +1329,23 @@ pub mod IPlonkVerifier {
                 );
             }
             #[inline]
-            fn encode_topic(rust: &Self::RustType) -> alloy_sol_types::abi::token::WordToken {
+            fn encode_topic(
+                rust: &Self::RustType,
+            ) -> alloy_sol_types::abi::token::WordToken {
                 let mut out = alloy_sol_types::private::Vec::new();
-                <Self as alloy_sol_types::EventTopic>::encode_topic_preimage(rust, &mut out);
-                alloy_sol_types::abi::token::WordToken(alloy_sol_types::private::keccak256(out))
+                <Self as alloy_sol_types::EventTopic>::encode_topic_preimage(
+                    rust,
+                    &mut out,
+                );
+                alloy_sol_types::abi::token::WordToken(
+                    alloy_sol_types::private::keccak256(out),
+                )
             }
         }
     };
     /**```solidity
-    struct VerifyingKey { uint256 domainSize; uint256 numInputs; BN254.G1Point sigma0; BN254.G1Point sigma1; BN254.G1Point sigma2; BN254.G1Point sigma3; BN254.G1Point sigma4; BN254.G1Point q1; BN254.G1Point q2; BN254.G1Point q3; BN254.G1Point q4; BN254.G1Point qM12; BN254.G1Point qM34; BN254.G1Point qO; BN254.G1Point qC; BN254.G1Point qH1; BN254.G1Point qH2; BN254.G1Point qH3; BN254.G1Point qH4; BN254.G1Point qEcc; bytes32 g2LSB; bytes32 g2MSB; }
-    ```*/
+struct VerifyingKey { uint256 domainSize; uint256 numInputs; BN254.G1Point sigma0; BN254.G1Point sigma1; BN254.G1Point sigma2; BN254.G1Point sigma3; BN254.G1Point sigma4; BN254.G1Point q1; BN254.G1Point q2; BN254.G1Point q3; BN254.G1Point q4; BN254.G1Point qM12; BN254.G1Point qM34; BN254.G1Point qO; BN254.G1Point qC; BN254.G1Point qH1; BN254.G1Point qH2; BN254.G1Point qH3; BN254.G1Point qH4; BN254.G1Point qEcc; bytes32 g2LSB; bytes32 g2MSB; }
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct VerifyingKey {
@@ -1248,11 +1454,13 @@ pub mod IPlonkVerifier {
         );
         #[cfg(test)]
         #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+        fn _type_assertion(
+            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+        ) {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
+                >(_) => {}
             }
         }
         #[automatically_derived]
@@ -1361,50 +1569,64 @@ pub mod IPlonkVerifier {
                 if let Some(size) = <Self as alloy_sol_types::SolType>::ENCODED_SIZE {
                     return size;
                 }
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_encoded_size(&tuple)
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_encoded_size(&tuple)
             }
             #[inline]
             fn stv_eip712_data_word(&self) -> alloy_sol_types::Word {
                 <Self as alloy_sol_types::SolStruct>::eip712_hash_struct(self)
             }
             #[inline]
-            fn stv_abi_encode_packed_to(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_encode_packed_to(
-                    &tuple, out,
-                )
+            fn stv_abi_encode_packed_to(
+                &self,
+                out: &mut alloy_sol_types::private::Vec<u8>,
+            ) {
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_encode_packed_to(&tuple, out)
             }
             #[inline]
             fn stv_abi_packed_encoded_size(&self) -> usize {
                 if let Some(size) = <Self as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE {
                     return size;
                 }
-                let tuple =
-                    <UnderlyingRustTuple<'_> as ::core::convert::From<Self>>::from(self.clone());
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::abi_packed_encoded_size(
-                    &tuple,
-                )
+                let tuple = <UnderlyingRustTuple<
+                    '_,
+                > as ::core::convert::From<Self>>::from(self.clone());
+                <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_packed_encoded_size(&tuple)
             }
         }
         #[automatically_derived]
         impl alloy_sol_types::SolType for VerifyingKey {
             type RustType = Self;
-            type Token<'a> = <UnderlyingSolTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <UnderlyingSolTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SOL_NAME: &'static str = <Self as alloy_sol_types::SolStruct>::NAME;
-            const ENCODED_SIZE: Option<usize> =
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::ENCODED_SIZE;
-            const PACKED_ENCODED_SIZE: Option<usize> =
-                <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
+            const ENCODED_SIZE: Option<usize> = <UnderlyingSolTuple<
+                '_,
+            > as alloy_sol_types::SolType>::ENCODED_SIZE;
+            const PACKED_ENCODED_SIZE: Option<usize> = <UnderlyingSolTuple<
+                '_,
+            > as alloy_sol_types::SolType>::PACKED_ENCODED_SIZE;
             #[inline]
             fn valid_token(token: &Self::Token<'_>) -> bool {
                 <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::valid_token(token)
             }
             #[inline]
             fn detokenize(token: Self::Token<'_>) -> Self::RustType {
-                let tuple = <UnderlyingSolTuple<'_> as alloy_sol_types::SolType>::detokenize(token);
+                let tuple = <UnderlyingSolTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::detokenize(token);
                 <Self as ::core::convert::From<UnderlyingRustTuple<'_>>>::from(tuple)
             }
         }
@@ -1418,64 +1640,154 @@ pub mod IPlonkVerifier {
                 )
             }
             #[inline]
-            fn eip712_components(
-            ) -> alloy_sol_types::private::Vec<alloy_sol_types::private::Cow<'static, str>>
-            {
+            fn eip712_components() -> alloy_sol_types::private::Vec<
+                alloy_sol_types::private::Cow<'static, str>,
+            > {
                 let mut components = alloy_sol_types::private::Vec::with_capacity(18);
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
-                components.push(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type());
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
                 components
-                    .extend(<BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components());
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
+                components
+                    .push(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_root_type(),
+                    );
+                components
+                    .extend(
+                        <BN254::G1Point as alloy_sol_types::SolStruct>::eip712_components(),
+                    );
                 components
             }
             #[inline]
@@ -1654,7 +1966,9 @@ pub mod IPlonkVerifier {
                 rust: &Self::RustType,
                 out: &mut alloy_sol_types::private::Vec<u8>,
             ) {
-                out.reserve(<Self as alloy_sol_types::EventTopic>::topic_preimage_length(rust));
+                out.reserve(
+                    <Self as alloy_sol_types::EventTopic>::topic_preimage_length(rust),
+                );
                 <alloy::sol_types::sol_data::Uint<
                     256,
                 > as alloy_sol_types::EventTopic>::encode_topic_preimage(
@@ -1688,43 +2002,56 @@ pub mod IPlonkVerifier {
                     out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.q1, out,
+                    &rust.q1,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.q2, out,
+                    &rust.q2,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.q3, out,
+                    &rust.q3,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.q4, out,
+                    &rust.q4,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qM12, out,
+                    &rust.qM12,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qM34, out,
+                    &rust.qM34,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qO, out,
+                    &rust.qO,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qC, out,
+                    &rust.qC,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qH1, out,
+                    &rust.qH1,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qH2, out,
+                    &rust.qH2,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qH3, out,
+                    &rust.qH3,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qH4, out,
+                    &rust.qH4,
+                    out,
                 );
                 <BN254::G1Point as alloy_sol_types::EventTopic>::encode_topic_preimage(
-                    &rust.qEcc, out,
+                    &rust.qEcc,
+                    out,
                 );
                 <alloy::sol_types::sol_data::FixedBytes<
                     32,
@@ -1740,17 +2067,24 @@ pub mod IPlonkVerifier {
                 );
             }
             #[inline]
-            fn encode_topic(rust: &Self::RustType) -> alloy_sol_types::abi::token::WordToken {
+            fn encode_topic(
+                rust: &Self::RustType,
+            ) -> alloy_sol_types::abi::token::WordToken {
                 let mut out = alloy_sol_types::private::Vec::new();
-                <Self as alloy_sol_types::EventTopic>::encode_topic_preimage(rust, &mut out);
-                alloy_sol_types::abi::token::WordToken(alloy_sol_types::private::keccak256(out))
+                <Self as alloy_sol_types::EventTopic>::encode_topic_preimage(
+                    rust,
+                    &mut out,
+                );
+                alloy_sol_types::abi::token::WordToken(
+                    alloy_sol_types::private::keccak256(out),
+                )
             }
         }
     };
     use alloy::contract as alloy_contract;
     /**Creates a new wrapper around an on-chain [`IPlonkVerifier`](self) contract instance.
 
-    See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
+See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
     #[inline]
     pub const fn new<
         T: alloy_contract::private::Transport + ::core::clone::Clone,
@@ -1764,15 +2098,15 @@ pub mod IPlonkVerifier {
     }
     /**A [`IPlonkVerifier`](self) instance.
 
-    Contains type-safe methods for interacting with an on-chain instance of the
-    [`IPlonkVerifier`](self) contract located at a given `address`, using a given
-    provider `P`.
+Contains type-safe methods for interacting with an on-chain instance of the
+[`IPlonkVerifier`](self) contract located at a given `address`, using a given
+provider `P`.
 
-    If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
-    documentation on how to provide it), the `deploy` and `deploy_builder` methods can
-    be used to deploy a new instance of the contract.
+If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
+documentation on how to provide it), the `deploy` and `deploy_builder` methods can
+be used to deploy a new instance of the contract.
 
-    See the [module-level documentation](self) for all the available methods.*/
+See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
     pub struct IPlonkVerifierInstance<T, P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
@@ -1783,24 +2117,24 @@ pub mod IPlonkVerifier {
     impl<T, P, N> ::core::fmt::Debug for IPlonkVerifierInstance<T, P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            f.debug_tuple("IPlonkVerifierInstance")
-                .field(&self.address)
-                .finish()
+            f.debug_tuple("IPlonkVerifierInstance").field(&self.address).finish()
         }
     }
     /// Instantiation and getters/setters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > IPlonkVerifierInstance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > IPlonkVerifierInstance<T, P, N> {
         /**Creates a new wrapper around an on-chain [`IPlonkVerifier`](self) contract instance.
 
-        See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
+See the [wrapper's documentation](`IPlonkVerifierInstance`) for more details.*/
         #[inline]
-        pub const fn new(address: alloy_sol_types::private::Address, provider: P) -> Self {
+        pub const fn new(
+            address: alloy_sol_types::private::Address,
+            provider: P,
+        ) -> Self {
             Self {
                 address,
                 provider,
@@ -1842,11 +2176,10 @@ pub mod IPlonkVerifier {
     /// Function calls.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > IPlonkVerifierInstance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > IPlonkVerifierInstance<T, P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -1861,11 +2194,10 @@ pub mod IPlonkVerifier {
     /// Event filters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > IPlonkVerifierInstance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > IPlonkVerifierInstance<T, P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
@@ -2625,9 +2957,8 @@ interface PlonkVerifier2 {
     clippy::empty_structs_with_brackets
 )]
 pub mod PlonkVerifier2 {
-    use alloy::sol_types as alloy_sol_types;
-
     use super::*;
+    use alloy::sol_types as alloy_sol_types;
     /// The creation / init bytecode of the contract.
     ///
     /// ```text
@@ -2649,9 +2980,9 @@ pub mod PlonkVerifier2 {
         b"s\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x000\x14`\x80`@R`\x046\x10a\0JW_5`\xE0\x1C\x80c\x1Dq.'\x14a\0NW\x80c\xCESzw\x14a\0\x88W\x80c\xDFnl\xB4\x14a\0\xABW[_\x80\xFD[a\0u\x7F0dNr\xE11\xA0)\xB8PE\xB6\x81\x81X]\x97\x81j\x91hq\xCA\x8D< \x8C\x16\xD8|\xFDG\x81V[`@Q\x90\x81R` \x01[`@Q\x80\x91\x03\x90\xF3[a\0\x9Ba\0\x966`\x04a#\xEDV[a\0\xBFV[`@Q\x90\x15\x15\x81R` \x01a\0\x7FV[a\0u_\x80Q` a%\xF4\x839\x81Q\x91R\x81V[_a\0\xC9\x82a\x10\x12V[a\0\xD9\x83_[` \x02\x01Qa\x11MV[a\0\xE4\x83`\x01a\0\xCFV[a\0\xEF\x83`\x02a\0\xCFV[a\0\xFA\x83`\x03a\0\xCFV[a\x01\x05\x83`\x04a\0\xCFV[a\x01\x10\x83`\x05a\0\xCFV[a\x01\x1B\x83`\x06a\0\xCFV[_a\x01'\x85\x85\x85a\x11\xAFV[\x90P_a\x016\x86_\x01Qa\x17\xB8V[\x90P_a\x01H\x82\x84`\xA0\x01Q\x88a\x1B\x96V[\x90P_a\x01V\x84\x87\x84a\x1B\xF3V[\x90Pa\x025V[`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x0C`$\x82\x01Rkerror verify`\xA0\x1B`D\x82\x01R`d\x81\xFD[`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\r`$\x82\x01Rlerror pairing`\x98\x1B`D\x82\x01R`d\x81\xFD[`@Q\x81Q\x81R` \x82\x01Q` \x82\x01R\x82`@\x82\x01R`@_``\x83`\x07Z\xFA\x90P\x80a\x01\xF6Wa\x01\xF6a\x01]V[PPPV[`@\x80Q\x82Q\x81R` \x80\x84\x01Q\x81\x83\x01R_Q\x82\x84\x01RQ``\x82\x01R\x90\x82`\x80\x83`\x06Z\xFA\x90P\x80a\x021Wa\x021a\x01]V[PPV[`@Q`\xC0\x81\x01\x7F&\x0E\x01\xB2Q\xF6\xF1\xC7\xE7\xFFNX\x07\x91\xDE\xE8\xEAQ\xD8z5\x8E\x03\x8BN\xFE0\xFA\xC0\x93\x83\xC1`@\x83\x01R\x7F\x01\x18\xC4\xD5\xB87\xBC\xC2\xBC\x89\xB5\xB3\x98\xB5\x97N\x9FYD\x07;2\x07\x8B~#\x1F\xEC\x93\x88\x83\xB0``\x83\x01R\x7F\x04\xFCci\xF7\x11\x0F\xE3\xD2QV\xC1\xBB\x9Ar\x85\x9C\xF2\xA0FA\xF9\x9B\xA4\xEEA<\x80\xDAj_\xE4`\x80\x83\x01R\x7F\"\xFE\xBD\xA3\xC0\xC0c*VG[B\x14\xE5a^\x11\xE6\xDD?\x96\xE6\xCE\xA2\x85J\x87\xD4\xDA\xCC^U`\xA0\x83\x01R\x7F\x19\x8E\x93\x93\x92\rH:r`\xBF\xB71\xFB]%\xF1\xAAI35\xA9\xE7\x12\x97\xE4\x85\xB7\xAE\xF3\x12\xC2a\x01\0\x83\x01R\x7F\x18\0\xDE\xEF\x12\x1F\x1EvBj\0f^\\DygC\"\xD4\xF7^\xDA\xDDF\xDE\xBD\\\xD9\x92\xF6\xEDa\x01 \x83\x01R\x7F\t\x06\x89\xD0X_\xF0u\xEC\x9E\x99\xADi\x0C3\x95\xBCK13p\xB3\x8E\xF3U\xAC\xDA\xDC\xD1\"\x97[a\x01@\x83\x01R\x7F\x12\xC8^\xA5\xDB\x8Cm\xEBJ\xABq\x80\x8D\xCB@\x8F\xE3\xD1\xE7i\x0CC\xD3{L\xE6\xCC\x01f\xFA}\xAAa\x01`\x83\x01Ra\x01\x80\x82\x01`@R_\x80_\x80`\x80\x8A\x01Q_\x80Q` a%\xF4\x839\x81Q\x91R` \x8A\x01Q` \x8D\x01Q\t\x93P\x8AQ_\x80Q` a%\xF4\x839\x81Q\x91R`\xA0\x8D\x01Q``\x8E\x01Q\t\x93P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xA0\x8F\x01Q\x85\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x7F/\x8D\xD1\xF1\xA7X<B\xC4\xE1*D\xE1\x10@Ls\xCAl\x94\x81?\x85\x83]\xA4\xFB{\xB10\x1DJ\x85\t\x92P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xC0\x8F\x01Q\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x7F\x1E\xE6x\xA0G\nu\xA6\xEA\xA8\xFE\x83p`I\x8B\xA8(\xA3p;1\x1D\x0Fw\xF0\x10BJ\xFE\xB0%\x85\t\x92P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xE0\x8F\x01Q\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x7F B\xA5\x87\xA9\x0C\x18{\n\x08|\x03\xE2\x9C\x96\x8B\x95\x0B\x1D\xB2m\\\x82\xD6f\x90Zh\x95y\x0C\n\x85\t\x92P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02\0\x8F\x01Q\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x7F.+\x91Ea\x03i\x8A\xDFW\xB7\x99\x96\x9D\xEA\x1C\x8Fs\x9D\xA5\xD8\xD4\r\xD3\xEB\x92\"\xDB|\x81\xE8\x81\x85\t\x92P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02 \x8F\x01Q\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x86\x08\x94PP`\xA0\x8D\x01Q\x94Pa\x05\xE0\x84\x86a\x01\xC6V[_Q\x86R` Q` \x87\x01R_\x80Q` a%\xF4\x839\x81Q\x91R``\x8C\x01Q\x8CQ\t\x93P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02\xC0\x8E\x01Q\x85\t\x93P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02@\x8E\x01Q``\x8D\x01Q\t\x92P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xA0\x8E\x01Q\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x83\x85\t\x93P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02`\x8E\x01Q``\x8D\x01Q\t\x92P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xC0\x8E\x01Q\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x83\x85\t\x93P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02\x80\x8E\x01Q``\x8D\x01Q\t\x92P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xE0\x8E\x01Q\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x83\x85\t\x93P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02\xA0\x8E\x01Q``\x8D\x01Q\t\x92P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02\0\x8E\x01Q\x84\x08\x92P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x84\x08\x92PP_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t_\x80Q` a%\xF4\x839\x81Q\x91R\x03\x92P`\xC0\x8E\x01Q\x93Pa\x07\xA5\x83\x85a\x01\xC6V[a\x07\xAE\x85a\x01\xFBV[a\x01\xA0\x8C\x01Q\x92P`\xE0\x8E\x01Q\x93Pa\x07\xC7\x83\x85a\x01\xC6V[a\x07\xD0\x85a\x01\xFBV[a\x01\xC0\x8C\x01Q\x92Pa\x01\0\x8E\x01Q\x93Pa\x07\xEA\x83\x85a\x01\xC6V[a\x07\xF3\x85a\x01\xFBV[a\x01\xE0\x8C\x01Q\x92Pa\x01 \x8E\x01Q\x93Pa\x08\r\x83\x85a\x01\xC6V[a\x08\x16\x85a\x01\xFBV[a\x02\0\x8C\x01Q\x92Pa\x01@\x8E\x01Q\x93Pa\x080\x83\x85a\x01\xC6V[a\x089\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xC0\x8D\x01Qa\x01\xA0\x8E\x01Q\t\x92Pa\x01`\x8E\x01Q\x93Pa\x08h\x83\x85a\x01\xC6V[a\x08q\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02\0\x8D\x01Qa\x01\xE0\x8E\x01Q\t\x92Pa\x01\x80\x8E\x01Q\x93Pa\x08\xA0\x83\x85a\x01\xC6V[a\x08\xA9\x85a\x01\xFBV[a\x01\xA0\x8C\x01Q\x91P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x83\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x82\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x92Pa\x01\xE0\x8E\x01Q\x93Pa\x08\xFC\x83\x85a\x01\xC6V[a\t\x05\x85a\x01\xFBV[a\x01\xC0\x8C\x01Q\x91P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x83\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x82\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x92Pa\x02\0\x8E\x01Q\x93Pa\tX\x83\x85a\x01\xC6V[a\ta\x85a\x01\xFBV[a\x01\xE0\x8C\x01Q\x91P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x83\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x82\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x92Pa\x02 \x8E\x01Q\x93Pa\t\xB4\x83\x85a\x01\xC6V[a\t\xBD\x85a\x01\xFBV[a\x02\0\x8C\x01Q\x91P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x83\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x82\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x92Pa\x02@\x8E\x01Q\x93Pa\n\x10\x83\x85a\x01\xC6V[a\n\x19\x85a\x01\xFBV[a\x02 \x8C\x01Q_\x80Q` a%\xF4\x839\x81Q\x91R\x03\x92Pa\x01\xA0\x8E\x01Q\x93Pa\nB\x83\x85a\x01\xC6V[a\nK\x85a\x01\xFBV[`\x01\x92Pa\x01\xC0\x8E\x01Q\x93Pa\na\x83\x85a\x01\xC6V[a\nj\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xC0\x8D\x01Qa\x01\xA0\x8E\x01Q\t\x91P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x01\xE0\x8D\x01Q\x83\t\x91P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02\0\x8D\x01Q\x83\t\x91P_\x80Q` a%\xF4\x839\x81Q\x91Ra\x02 \x8D\x01Q\x83\t\x92Pa\x02`\x8E\x01Q\x93Pa\n\xE1\x83\x85a\x01\xC6V[a\n\xEA\x85a\x01\xFBV[\x87Q_\x80Q` a%\xF4\x839\x81Q\x91R\x03\x92P`\xC0\x8C\x01Q\x93Pa\x0B\x0E\x83\x85a\x01\xC6V[a\x0B\x17\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R`\x01\x89Q\x08\x91P`\xA0\x8A\x01Q\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x82\t\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x91PP_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x91P`\xE0\x8B\x01Q\x92Pa\x0B~\x82\x84a\x01\xC6V[a\x0B\x87\x84a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x91Pa\x01\0\x8B\x01Q\x92Pa\x0B\xAC\x82\x84a\x01\xC6V[a\x0B\xB5\x84a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x91Pa\x01 \x8B\x01Q\x92Pa\x0B\xDA\x82\x84a\x01\xC6V[a\x0B\xE3\x84a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x83\t\x91Pa\x01@\x8B\x01Q\x92Pa\x0C\x08\x82\x84a\x01\xC6V[a\x0C\x11\x84a\x01\xFBV[PPP`\xC0\x86\x01Q\x88Q\x90\x80_\x80Q` a%\xF4\x839\x81Q\x91R\x86\x90\x03a\x0C8\x82\x85a\x01\xC6V[a\x0CA\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x01\xA0\x8E\x01Q\x85\t\x82\x08\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t\x92P` \x8C\x01Q\x93Pa\x0C\x80\x83\x85a\x01\xC6V[a\x0C\x89\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x01\xC0\x8E\x01Q\x85\t\x82\x08\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t\x92P`@\x8C\x01Q\x93Pa\x0C\xC8\x83\x85a\x01\xC6V[a\x0C\xD1\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x01\xE0\x8E\x01Q\x85\t\x82\x08\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t\x92P``\x8C\x01Q\x93Pa\r\x10\x83\x85a\x01\xC6V[a\r\x19\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x02\0\x8E\x01Q\x85\t\x82\x08\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t\x92P`\x80\x8C\x01Q\x93Pa\rX\x83\x85a\x01\xC6V[a\ra\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x02 \x8E\x01Q\x85\t\x82\x08\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t\x92P`@\x8E\x01Q\x93Pa\r\xA0\x83\x85a\x01\xC6V[a\r\xA9\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x02@\x8E\x01Q\x85\t\x82\x08\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t\x92P``\x8E\x01Q\x93Pa\r\xE8\x83\x85a\x01\xC6V[a\r\xF1\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x02`\x8E\x01Q\x85\t\x82\x08\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t\x92P`\x80\x8E\x01Q\x93Pa\x0E0\x83\x85a\x01\xC6V[a\x0E9\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x02\x80\x8E\x01Q\x85\t\x82\x08\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x84\t\x92P`\xA0\x8E\x01Q\x93Pa\x0Ex\x83\x85a\x01\xC6V[a\x0E\x81\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x02\xA0\x8E\x01Q\x85\t\x82\x08\x90P`\xE0\x8A\x01Q\x92P`\xA0\x8C\x01Q\x93Pa\x0E\xB4\x83\x85a\x01\xC6V[a\x0E\xBD\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R\x80a\x02\xC0\x8E\x01Q\x85\t\x82\x08\x90P`\xA0\x8A\x01Q\x92Pa\x01`\x8C\x01Q\x93Pa\x0E\xF1\x83\x85a\x01\xC6V[a\x0E\xFA\x85a\x01\xFBV[_\x80Q` a%\xF4\x839\x81Q\x91R` `@\x8B\x01Q\x01Q\x84\t\x91P_\x80Q` a%\xF4\x839\x81Q\x91R`\xE0\x8B\x01Q\x83\t\x92Pa\x01\x80\x8C\x01Q\x93Pa\x0F>\x83\x85a\x01\xC6V[a\x0FG\x85a\x01\xFBV[`@\x80Q\x80\x82\x01\x90\x91R\x93P`\x01\x84R`\x02` \x85\x01Ra\x0Fw\x81_\x80Q` a%\xF4\x839\x81Q\x91R\x03\x85a\x01\xC6V[Pa\x0F\x81\x84a\x01\xFBV[a\x0F\xB0\x84` \x01\x80Q\x7F0dNr\xE11\xA0)\xB8PE\xB6\x81\x81X]\x97\x81j\x91hq\xCA\x8D< \x8C\x16\xD8|\xFDG\x03\x90RV[PPPa\x01`\x88\x01Q\x80Q\x83R` \x90\x81\x01Q\x90\x83\x01R`\xE0\x86\x01Qa\x01\x80\x89\x01Q\x90a\x0F\xDD\x81\x83a\x01\xC6V[PPPa\x0F\xE9\x81a\x01\xFBV[` _a\x01\x80\x83`\x08Z\xFA\x90P\x80a\x10\x03Wa\x10\x03a\x01\x91V[PP_Q\x97\x96PPPPPPPV[\x80Qa\x10\x1D\x90a\x1D\xA8V[a\x10*\x81` \x01Qa\x1D\xA8V[a\x107\x81`@\x01Qa\x1D\xA8V[a\x10D\x81``\x01Qa\x1D\xA8V[a\x10Q\x81`\x80\x01Qa\x1D\xA8V[a\x10^\x81`\xA0\x01Qa\x1D\xA8V[a\x10k\x81`\xC0\x01Qa\x1D\xA8V[a\x10x\x81`\xE0\x01Qa\x1D\xA8V[a\x10\x86\x81a\x01\0\x01Qa\x1D\xA8V[a\x10\x94\x81a\x01 \x01Qa\x1D\xA8V[a\x10\xA2\x81a\x01@\x01Qa\x1D\xA8V[a\x10\xB0\x81a\x01`\x01Qa\x1D\xA8V[a\x10\xBE\x81a\x01\x80\x01Qa\x1D\xA8V[a\x10\xCC\x81a\x01\xA0\x01Qa\x11MV[a\x10\xDA\x81a\x01\xC0\x01Qa\x11MV[a\x10\xE8\x81a\x01\xE0\x01Qa\x11MV[a\x10\xF6\x81a\x02\0\x01Qa\x11MV[a\x11\x04\x81a\x02 \x01Qa\x11MV[a\x11\x12\x81a\x02@\x01Qa\x11MV[a\x11 \x81a\x02`\x01Qa\x11MV[a\x11.\x81a\x02\x80\x01Qa\x11MV[a\x11<\x81a\x02\xA0\x01Qa\x11MV[a\x11J\x81a\x02\xC0\x01Qa\x11MV[PV[_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x10\x80a\x021W`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x1B`$\x82\x01R\x7FBn254: invalid scalar field\0\0\0\0\0`D\x82\x01R`d\x01[`@Q\x80\x91\x03\x90\xFD[a\x11\xEF`@Q\x80a\x01\0\x01`@R\x80_\x81R` \x01_\x81R` \x01_\x81R` \x01_\x81R` \x01_\x81R` \x01_\x81R` \x01_\x81R` \x01_\x81RP\x90V[`@Q` \x81\x01_\x81R`\xFE`\xE0\x1B\x81R\x85Q`\xC0\x1B`\x04\x82\x01R` \x86\x01Q`\xC0\x1B`\x0C\x82\x01Ra\x02\x80\x86\x01Q` \x82\x01Ra\x02\xA0\x86\x01Q`@\x82\x01R`\x01``\x82\x01R\x7F/\x8D\xD1\xF1\xA7X<B\xC4\xE1*D\xE1\x10@Ls\xCAl\x94\x81?\x85\x83]\xA4\xFB{\xB10\x1DJ`\x80\x82\x01R\x7F\x1E\xE6x\xA0G\nu\xA6\xEA\xA8\xFE\x83p`I\x8B\xA8(\xA3p;1\x1D\x0Fw\xF0\x10BJ\xFE\xB0%`\xA0\x82\x01R\x7F B\xA5\x87\xA9\x0C\x18{\n\x08|\x03\xE2\x9C\x96\x8B\x95\x0B\x1D\xB2m\\\x82\xD6f\x90Zh\x95y\x0C\n`\xC0\x82\x01R\x7F.+\x91Ea\x03i\x8A\xDFW\xB7\x99\x96\x9D\xEA\x1C\x8Fs\x9D\xA5\xD8\xD4\r\xD3\xEB\x92\"\xDB|\x81\xE8\x81`\xE0\x82\x01R`\xE0\x86\x01Q\x80Qa\x01\0\x83\x01R` \x81\x01Qa\x01 \x83\x01RPa\x01\0\x86\x01Q\x80Qa\x01@\x83\x01R` \x81\x01Qa\x01`\x83\x01RPa\x01 \x86\x01Q\x80Qa\x01\x80\x83\x01R` \x81\x01Qa\x01\xA0\x83\x01RPa\x01@\x86\x01Q\x80Qa\x01\xC0\x83\x01R` \x81\x01Qa\x01\xE0\x83\x01RPa\x01`\x86\x01Q\x80Qa\x02\0\x83\x01R` \x81\x01Qa\x02 \x83\x01RPa\x01\x80\x86\x01Q\x80Qa\x02@\x83\x01R` \x81\x01Qa\x02`\x83\x01RPa\x01\xE0\x86\x01Q\x80Qa\x02\x80\x83\x01R` \x81\x01Qa\x02\xA0\x83\x01RPa\x02\0\x86\x01Q\x80Qa\x02\xC0\x83\x01R` \x81\x01Qa\x02\xE0\x83\x01RPa\x02 \x86\x01Q\x80Qa\x03\0\x83\x01R` \x81\x01Qa\x03 \x83\x01RPa\x02@\x86\x01Q\x80Qa\x03@\x83\x01R` \x81\x01Qa\x03`\x83\x01RPa\x01\xA0\x86\x01Q\x80Qa\x03\x80\x83\x01R` \x81\x01Qa\x03\xA0\x83\x01RPa\x01\xC0\x86\x01Q\x80Qa\x03\xC0\x83\x01R` \x81\x01Qa\x03\xE0\x83\x01RPa\x02`\x86\x01Q\x80Qa\x04\0\x83\x01R` \x81\x01Qa\x04 \x83\x01RP`@\x86\x01Q\x80Qa\x04@\x83\x01R` \x81\x01Qa\x04`\x83\x01RP``\x86\x01Q\x80Qa\x04\x80\x83\x01R` \x81\x01Qa\x04\xA0\x83\x01RP`\x80\x86\x01Q\x80Qa\x04\xC0\x83\x01R` \x81\x01Qa\x04\xE0\x83\x01RP`\xA0\x86\x01Q\x80Qa\x05\0\x83\x01R` \x81\x01Qa\x05 \x83\x01RP`\xC0\x86\x01Q\x80Qa\x05@\x83\x01R` \x81\x01Qa\x05`\x83\x01RP\x84Qa\x05\x80\x82\x01R` \x85\x01Qa\x05\xA0\x82\x01R`@\x85\x01Qa\x05\xC0\x82\x01R``\x85\x01Qa\x05\xE0\x82\x01R`\x80\x85\x01Qa\x06\0\x82\x01R`\xA0\x85\x01Qa\x06 \x82\x01R`\xC0\x85\x01Qa\x06@\x82\x01R`\xE0\x85\x01Qa\x06`\x82\x01R\x83Q\x80Qa\x06`\x83\x01R` \x81\x01Qa\x06\x80\x83\x01RP` \x84\x01Q\x80Qa\x06\xA0\x83\x01R` \x81\x01Qa\x06\xC0\x83\x01RP`@\x84\x01Q\x80Qa\x06\xE0\x83\x01R` \x81\x01Qa\x07\0\x83\x01RP``\x84\x01Q\x80Qa\x07 \x83\x01R` \x81\x01Qa\x07@\x83\x01RP`\x80\x84\x01Q\x80Qa\x07`\x83\x01R` \x81\x01Qa\x07\x80\x83\x01RP_\x82Ra\x07\xC0\x82 a\x07\xC0\x82\x01Ra\x07\xC0\x81\x01\x91P` \x82\x01\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82Q\x06``\x84\x01R` \x82 \x81R\x80\x91P` \x82\x01\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82Q\x06`\x80\x84\x01R`\xA0\x84\x01Q\x80Q\x82R` \x81\x01Q` \x83\x01RP``\x82 `@\x82\x01\x92P\x80\x83R` \x83\x01\x91P_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x06\x84R_\x80Q` a%\xF4\x839\x81Q\x91R\x81\x82\t_\x80Q` a%\xF4\x839\x81Q\x91R\x82\x82\t\x91P\x80` \x86\x01RP\x80`@\x85\x01RP`\xC0\x84\x01Q\x80Q\x82R` \x81\x01Q` \x83\x01RP`\xE0\x84\x01Q\x80Q`@\x83\x01R` \x81\x01Q``\x83\x01RPa\x01\0\x84\x01Q\x80Q`\x80\x83\x01R` \x81\x01Q`\xA0\x83\x01RPa\x01 \x84\x01Q\x80Q`\xC0\x83\x01R` \x81\x01Q`\xE0\x83\x01RPa\x01@\x84\x01Q\x80Qa\x01\0\x83\x01R` \x81\x01Qa\x01 \x83\x01RPa\x01`\x82 a\x01@\x82\x01Ra\x01@\x81\x01\x91P` \x82\x01\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82Q\x06`\xA0\x84\x01Ra\x01\xA0\x84\x01Q\x81Ra\x01\xC0\x84\x01Q` \x82\x01Ra\x01\xE0\x84\x01Q`@\x82\x01Ra\x02\0\x84\x01Q``\x82\x01Ra\x02 \x84\x01Q`\x80\x82\x01Ra\x02@\x84\x01Q`\xA0\x82\x01Ra\x02`\x84\x01Q`\xC0\x82\x01Ra\x02\x80\x84\x01Q`\xE0\x82\x01Ra\x02\xA0\x84\x01Qa\x01\0\x82\x01Ra\x02\xC0\x84\x01Qa\x01 \x82\x01Ra\x01`\x82 a\x01@\x82\x01Ra\x01@\x81\x01\x91P` \x82\x01\x90P_\x80Q` a%\xF4\x839\x81Q\x91R\x82Q\x06`\xC0\x84\x01Ra\x01`\x84\x01Q\x80Q\x82R` \x81\x01Q` \x83\x01RPa\x01\x80\x84\x01Q\x80Q`@\x83\x01R` \x81\x01Q``\x83\x01RPP`\xA0\x81 _\x80Q` a%\xF4\x839\x81Q\x91R\x81\x06`\xE0\x84\x01RPP\x93\x92PPPV[a\x17\xC0a!\x04V[\x81b\x01\0\0\x03a\x18\xFFW`@Q\x80``\x01`@R\x80`\x10\x81R` \x01\x7F0d\x1E\x0E\x92\xBE\xBE\xF8\x18&\x8Df;\xCA\xD6\xDB\xCF\xD6\xC0\x14\x91p\xF6\xD7\xD3P\xB1\xB1\xFAl\x10\x01\x81R` \x01`@Q\x80`\xE0\x01`@R\x80`\x01\x81R` \x01~\xEE\xB2\xCBY\x81\xEDEd\x9A\xBE\xBD\xE0\x81\xDC\xFF\x16\xC8`\x1D\xE44~}\xD1b\x8B\xA2\xDA\xACC\xB7\x81R` \x01\x7F-\x1B\xA6oYA\xDC\x91\x01qq\xFAi\xEC+\xD0\x02**-A\x15\xA0\t\xA94X\xFDN&\xEC\xFB\x81R` \x01\x7F\x08h\x12\xA0\n\xC4>\xA8\x01f\x9Cd\x01q <A\xA4\x96g\x1B\xFB\xC0e\xAC\x8D\xB2MR\xCF1\xE5\x81R` \x01\x7F-\x96VQ\xCD\xD9\xE4\x81\x1FNQ\xB8\r\xDC\xA8\xA8\xB4\xA9>\xE1t \xAA\xE6\xAD\xAA\x01\xC2a|n\x85\x81R` \x01\x7F\x12YzV\xC2\xE48b\x0B\x90A\xB9\x89\x92\xAE\rNp[x\0W\xBFwf\xA2v|\xEC\xE1n\x1D\x81R` \x01\x7F\x02\xD9A\x17\xCD\x17\xBC\xF1)\x0F\xD6|\x01\x15]\xD4\x08\x07\x85}\xFFJZ\x0BM\xC6{\xEF\xA8\xAA4\xFD\x81RP\x81RP\x90P\x91\x90PV[\x81b\x10\0\0\x03a\x1A?W`@Q\x80``\x01`@R\x80`\x14\x81R` \x01\x7F0dKl\x9CJr\x16\x9EM\xAA1}%\xF0E\x12\xAE\x15\xC5;4\xE8\xF5\xAC\xD8\xE1U\xD0\xA6\xC1\x01\x81R` \x01`@Q\x80`\xE0\x01`@R\x80`\x01\x81R` \x01\x7F&\x12]\xA1\n\x0E\xD0c'P\x8A\xBA\x06\xD1\xE3\x03\xACaf2\xDB\xED4\x9FSB-\xA9S3xW\x81R` \x01\x7F\"`\xE7$\x84K\xCARQ\x82\x93S\x96\x8EI\x150RXA\x83WG:\\\x1DY\x7Fa?l\xBD\x81R` \x01\x7F \x87\xEA,\xD6d'\x86\x08\xFB\x0E\xBD\xB8 \x90\x7FY\x85\x02\xC8\x1Bf\x90\xC1\x85\xE2\xBF\x15\xCB\x93_B\x81R` \x01\x7F\x19\xDD\xBC\xAF:\x8DF\xC1\\\x01v\xFB\xB5\xB9^M\xC5p\x88\xFF\x13\xF4\xD1\xBD\x84\xC6\xBF\xA5}\xCD\xC0\xE0\x81R` \x01\x7F\x05\xA2\xC8\\\xFCY\x17\x89`\\\xAE\x81\x8E7\xDDAa\xEE\xF9\xAAfk\xECo\xE4(\x8D\t\xE6\xD24\x18\x81R` \x01\x7F\x11\xF7\x0ESc%\x8F\xF4\xF0\xD7\x16\xA6S\xE1\xDCA\xF1\xC6D\x84\xD7\xF4\xB6\xE2\x19\xD67v\x14\xA3\x90\\\x81RP\x81RP\x90P\x91\x90PV[\x81` \x03a\x1B}W`@Q\x80``\x01`@R\x80`\x05\x81R` \x01\x7F.\xE1+\xFFJ(\x13(j\x8D\xC3\x88\xCDuM\x9A>\xF2I\x065\xEB\xA5\x0C\xB9\xC2\xE5\xE7P\x80\0\x01\x81R` \x01`@Q\x80`\xE0\x01`@R\x80`\x01\x81R` \x01\x7F\t\xC52\xC60k\x93\xD2\x96x \rG\xC0\xB2\xA9\x9C\x18\xD5\x1B\x83\x8E\xEB\x1D>\xEDLS;\xB5\x12\xD0\x81R` \x01\x7F!\x08,\xA2\x16\xCB\xBFN\x1CnOE\x94\xDDP\x8C\x99m\xFB\xE1\x17N\xFB\x98\xB1\x15\t\xC6\xE3\x06F\x0B\x81R` \x01\x7F\x12w\xAEd\x15\xF0\xEF\x18\xF2\xBA_\xB1b\xC3\x9E\xB71\x1F8n-&\xD6D\x01\xF4\xA2]\xA7|%;\x81R` \x01\x7F+3}\xE1\xC8\xC1O\"\xEC\x9B\x9E/\x96\xAF\xEF6Rbsf\xF8\x17\n\n\x94\x8D\xADJ\xC1\xBD^\x80\x81R` \x01\x7F/\xBDM\xD2\x97k\xE5]\x1A\x16:\xA9\x82\x0F\xB8\x8D\xFA\xC5\xDD\xCEw\xE1\x87.\x90c '2z^\xBE\x81R` \x01\x7F\x10z\xABI\xE6Zg\xF9\xDA\x9C\xD2\xAB\xF7\x8B\xE3\x8B\xD9\xDC\x1D]\xB3\x9F\x81\xDE6\xBC\xFA[K\x03\x90C\x81RP\x81RP\x90P\x91\x90PV[`@Qc\xE2\xEF\t\xE5`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x1B\xB7`@Q\x80``\x01`@R\x80_\x81R` \x01_\x81R` \x01_\x81RP\x90V[a\x1B\xC1\x84\x84a\x1EQV[\x80\x82Ra\x1B\xD1\x90\x85\x90\x85\x90a\x1E\xA2V[` \x82\x01R\x80Qa\x1B\xE7\x90\x85\x90\x84\x90\x86\x90a\x1F\x13V[`@\x82\x01R\x93\x92PPPV[` \x81\x01Q`@\x82\x01Q``\x85\x01Q`\x80\x86\x01Qa\x01\xA0\x86\x01Qa\x02@\x87\x01Q_\x95\x94\x93`\x01\x93\x90\x92\x90\x91_\x80Q` a%\xF4\x839\x81Q\x91R\x80\x80\x83\x87\t_\x80Q` a%\xF4\x839\x81Q\x91R\x86\x86\x08\x08\x86\t\x94PPPa\x01\xC0\x88\x01Qa\x02`\x89\x01Q_\x80Q` a%\xF4\x839\x81Q\x91R\x80_\x80Q` a%\xF4\x839\x81Q\x91R\x83\x87\t_\x80Q` a%\xF4\x839\x81Q\x91R\x86\x86\x08\x08\x86\t\x94PPPa\x01\xE0\x88\x01Qa\x02\x80\x89\x01Q_\x80Q` a%\xF4\x839\x81Q\x91R\x80_\x80Q` a%\xF4\x839\x81Q\x91R\x83\x87\t_\x80Q` a%\xF4\x839\x81Q\x91R\x86\x86\x08\x08\x86\t\x94PPPa\x02\0\x88\x01Qa\x02\xA0\x89\x01Q_\x80Q` a%\xF4\x839\x81Q\x91R\x80_\x80Q` a%\xF4\x839\x81Q\x91R\x83\x87\t_\x80Q` a%\xF4\x839\x81Q\x91R\x86\x86\x08\x08\x86\t\x94PPPa\x02 \x88\x01Q\x91Pa\x02\xC0\x88\x01Q_\x80Q` a%\xF4\x839\x81Q\x91R\x80\x82_\x80Q` a%\xF4\x839\x81Q\x91R\x85\x87\x08\t\x85\t\x93PPPP\x86Q` \x88\x01Q_\x80Q` a%\xF4\x839\x81Q\x91R\x80\x86\x83\t_\x80Q` a%\xF4\x839\x81Q\x91R\x03\x85\x08\x95PP_\x80Q` a%\xF4\x839\x81Q\x91R\x80\x83\x83\t_\x80Q` a%\xF4\x839\x81Q\x91R\x03\x86\x08\x98\x97PPPPPPPPV[\x80Q` \x82\x01Q_\x91\x7F0dNr\xE11\xA0)\xB8PE\xB6\x81\x81X]\x97\x81j\x91hq\xCA\x8D< \x8C\x16\xD8|\xFDG\x91\x15\x90\x15\x16\x15a\x1D\xE1WPPPV[\x82Q` \x84\x01Q\x82`\x03\x84\x85\x85\x86\t\x85\t\x08\x83\x82\x83\t\x14\x83\x82\x10\x84\x84\x10\x16\x16\x93PPP\x81a\x01\xF6W`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x17`$\x82\x01R\x7FBn254: invalid G1 point\0\0\0\0\0\0\0\0\0`D\x82\x01R`d\x01a\x11\xA6V[\x81Q_\x90_\x80Q` a%\xF4\x839\x81Q\x91R\x90\x83\x80\x15a\x1E\x92W\x84\x93P_[\x82\x81\x10\x15a\x1E\x86W\x83\x85\x86\t\x94P`\x01\x01a\x1EpV[P`\x01\x84\x03\x93Pa\x1E\x99V[`\x01\x83\x03\x93P[PPP\x92\x91PPV[_\x82`\x01\x03a\x1E\xB3WP`\x01a\x1F\x0CV[\x81_\x03a\x1E\xC1WP_a\x1F\x0CV[` \x84\x01Q_\x80Q` a%\xF4\x839\x81Q\x91R\x90_\x90\x82\x81\x86\t\x90P\x85\x80\x15a\x1E\xEFW`\x01\x87\x03\x92Pa\x1E\xF6V[`\x01\x84\x03\x92P[Pa\x1F\0\x82a cV[\x91P\x82\x82\x82\t\x93PPPP[\x93\x92PPPV[__\x80Q` a%\xF4\x839\x81Q\x91R\x82\x82\x03a\x1F\x8CW`\x01_[`\x07\x81\x10\x15a\x1F\x81W\x81\x86\x03a\x1F^W\x86\x81`\x07\x81\x10a\x1FOWa\x1FOa%\xCBV[` \x02\x01Q\x93PPPPa [V[\x82\x80a\x1FlWa\x1Fla%\xDFV[`@\x89\x01Q` \x01Q\x83\t\x91P`\x01\x01a\x1F-V[P_\x92PPPa [V[a\x1F\x94a!(V[`@\x87\x01Q`\x01`\xC0\x83\x81\x01\x82\x81R\x92\x01\x90\x80[`\x07\x81\x10\x15a\x1F\xD5W` \x84\x03\x93P\x85\x86\x8A\x85Q\x89\x03\x08\x83\t\x80\x85R`\x1F\x19\x90\x93\x01\x92\x91P`\x01\x01a\x1F\xA8V[PPPP_\x80_\x90P`\x01\x83\x89`@\x8C\x01Q_[`\x07\x81\x10\x15a )W\x88\x82Q\x8A\x85Q\x8C\x88Q\x8A\t\t\t\x89\x81\x88\x08\x96PP\x88\x89\x8D\x84Q\x8C\x03\x08\x86\t\x94P` \x93\x84\x01\x93\x92\x83\x01\x92\x91\x90\x91\x01\x90`\x01\x01a\x1F\xE9V[PPPP\x80\x92PP_a ;\x83a cV[\x90P` \x8A\x01Q\x85\x81\x89\t\x96PP\x84\x81\x87\t\x95P\x84\x82\x87\t\x95PPPPPP[\x94\x93PPPPV[_\x80__\x80Q` a%\xF4\x839\x81Q\x91R\x90P`@Q` \x81R` \x80\x82\x01R` `@\x82\x01R\x84``\x82\x01R`\x02\x82\x03`\x80\x82\x01R\x81`\xA0\x82\x01R` _`\xC0\x83`\x05Z\xFA\x92PP_Q\x92P\x81a \xFDW`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x1D`$\x82\x01R\x7FBn254: pow precompile failed!\0\0\0`D\x82\x01R`d\x01a\x11\xA6V[PP\x91\x90PV[`@Q\x80``\x01`@R\x80_\x81R` \x01_\x81R` \x01a!#a!(V[\x90R\x90V[`@Q\x80`\xE0\x01`@R\x80`\x07\x90` \x82\x02\x806\x837P\x91\x92\x91PPV[cNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[`@Qa\x02\xE0\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a!~Wa!~a!FV[`@R\x90V[`@Qa\x02\xC0\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a!~Wa!~a!FV[_`@\x82\x84\x03\x12\x15a!\xB8W_\x80\xFD[`@Q`@\x81\x01\x81\x81\x10g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x17\x15a!\xDBWa!\xDBa!FV[`@R\x825\x81R` \x92\x83\x015\x92\x81\x01\x92\x90\x92RP\x91\x90PV[_\x82`\x1F\x83\x01\x12a\"\x04W_\x80\xFD[`@Q`\xE0\x81\x01\x81\x81\x10g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x17\x15a\"'Wa\"'a!FV[`@R\x80`\xE0\x84\x01\x85\x81\x11\x15a\";W_\x80\xFD[\x84[\x81\x81\x10\x15a\"UW\x805\x83R` \x92\x83\x01\x92\x01a\"=V[P\x91\x95\x94PPPPPV[_a\x04\x80\x82\x84\x03\x12\x15a\"qW_\x80\xFD[a\"ya!ZV[\x90Pa\"\x85\x83\x83a!\xA8V[\x81Ra\"\x94\x83`@\x84\x01a!\xA8V[` \x82\x01Ra\"\xA6\x83`\x80\x84\x01a!\xA8V[`@\x82\x01Ra\"\xB8\x83`\xC0\x84\x01a!\xA8V[``\x82\x01Ra\x01\0a\"\xCC\x84\x82\x85\x01a!\xA8V[`\x80\x83\x01Ra\x01@a\"\xE0\x85\x82\x86\x01a!\xA8V[`\xA0\x84\x01Ra\x01\x80a\"\xF4\x86\x82\x87\x01a!\xA8V[`\xC0\x85\x01Ra\x01\xC0a#\x08\x87\x82\x88\x01a!\xA8V[`\xE0\x86\x01Ra\x02\0a#\x1C\x88\x82\x89\x01a!\xA8V[\x85\x87\x01Ra\x02@\x94Pa#1\x88\x86\x89\x01a!\xA8V[a\x01 \x87\x01Ra\x02\x80a#F\x89\x82\x8A\x01a!\xA8V[\x85\x88\x01Ra\x02\xC0\x94Pa#[\x89\x86\x8A\x01a!\xA8V[a\x01`\x88\x01Ra#o\x89a\x03\0\x8A\x01a!\xA8V[\x84\x88\x01Ra\x03@\x88\x015a\x01\xA0\x88\x01Ra\x03`\x88\x015\x83\x88\x01Ra\x03\x80\x88\x015a\x01\xE0\x88\x01Ra\x03\xA0\x88\x015\x82\x88\x01Ra\x03\xC0\x88\x015a\x02 \x88\x01Ra\x03\xE0\x88\x015\x86\x88\x01Ra\x04\0\x88\x015a\x02`\x88\x01Ra\x04 \x88\x015\x81\x88\x01RPPPPa\x04@\x84\x015a\x02\xA0\x84\x01Ra\x04`\x84\x015\x81\x84\x01RPP\x92\x91PPV[_\x80_\x83\x85\x03a\n`\x81\x12\x15a$\x01W_\x80\xFD[a\x05\0\x80\x82\x12\x15a$\x10W_\x80\xFD[a$\x18a!\x84V[\x91P\x855\x82R` \x86\x015` \x83\x01Ra$5\x87`@\x88\x01a!\xA8V[`@\x83\x01Ra$G\x87`\x80\x88\x01a!\xA8V[``\x83\x01Ra$Y\x87`\xC0\x88\x01a!\xA8V[`\x80\x83\x01Ra\x01\0a$m\x88\x82\x89\x01a!\xA8V[`\xA0\x84\x01Ra\x01@a$\x81\x89\x82\x8A\x01a!\xA8V[`\xC0\x85\x01Ra\x01\x80a$\x95\x8A\x82\x8B\x01a!\xA8V[`\xE0\x86\x01Ra\x01\xC0a$\xA9\x8B\x82\x8C\x01a!\xA8V[\x84\x87\x01Ra\x02\0\x93Pa$\xBE\x8B\x85\x8C\x01a!\xA8V[a\x01 \x87\x01Ra\x02@a$\xD3\x8C\x82\x8D\x01a!\xA8V[\x84\x88\x01Ra\x02\x80\x93Pa$\xE8\x8C\x85\x8D\x01a!\xA8V[a\x01`\x88\x01Ra$\xFC\x8Ca\x02\xC0\x8D\x01a!\xA8V[\x83\x88\x01Ra%\x0E\x8Ca\x03\0\x8D\x01a!\xA8V[a\x01\xA0\x88\x01Ra%\"\x8Ca\x03@\x8D\x01a!\xA8V[\x82\x88\x01Ra%4\x8Ca\x03\x80\x8D\x01a!\xA8V[a\x01\xE0\x88\x01Ra%H\x8Ca\x03\xC0\x8D\x01a!\xA8V[\x85\x88\x01Ra%Z\x8Ca\x04\0\x8D\x01a!\xA8V[a\x02 \x88\x01Ra%n\x8Ca\x04@\x8D\x01a!\xA8V[\x81\x88\x01RPPPa%\x83\x89a\x04\x80\x8A\x01a!\xA8V[a\x02`\x85\x01Ra\x04\xC0\x88\x015\x81\x85\x01RPPa\x04\xE0\x86\x015a\x02\xA0\x83\x01R\x81\x94Pa%\xB0\x87\x82\x88\x01a!\xF5V[\x93PPPa%\xC2\x85a\x05\xE0\x86\x01a\"`V[\x90P\x92P\x92P\x92V[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD[cNH{q`\xE0\x1B_R`\x12`\x04R`$_\xFD\xFE0dNr\xE11\xA0)\xB8PE\xB6\x81\x81X](3\xE8Hy\xB9p\x91C\xE1\xF5\x93\xF0\0\0\x01\xA1dsolcC\0\x08\x17\0\n",
     );
     /**Custom error with signature `UnsupportedDegree()` and selector `0xe2ef09e5`.
-    ```solidity
-    error UnsupportedDegree();
-    ```*/
+```solidity
+error UnsupportedDegree();
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct UnsupportedDegree {}
@@ -2669,11 +3000,13 @@ pub mod PlonkVerifier2 {
         type UnderlyingRustTuple<'a> = ();
         #[cfg(test)]
         #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+        fn _type_assertion(
+            _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+        ) {
             match _t {
                 alloy_sol_types::private::AssertTypeEq::<
                     <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
+                >(_) => {}
             }
         }
         #[automatically_derived]
@@ -2693,7 +3026,9 @@ pub mod PlonkVerifier2 {
         #[automatically_derived]
         impl alloy_sol_types::SolError for UnsupportedDegree {
             type Parameters<'a> = UnderlyingSolTuple<'a>;
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "UnsupportedDegree()";
             const SELECTOR: [u8; 4] = [226u8, 239u8, 9u8, 229u8];
             #[inline]
@@ -2709,9 +3044,9 @@ pub mod PlonkVerifier2 {
         }
     };
     /**Function with signature `P_MOD()` and selector `0x1d712e27`.
-    ```solidity
-    function P_MOD() external view returns (uint256);
-    ```*/
+```solidity
+function P_MOD() external view returns (uint256);
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct P_MODCall {}
@@ -2737,11 +3072,13 @@ pub mod PlonkVerifier2 {
             type UnderlyingRustTuple<'a> = ();
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -2763,14 +3100,18 @@ pub mod PlonkVerifier2 {
             #[doc(hidden)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
-            type UnderlyingRustTuple<'a> = (alloy::sol_types::private::primitives::aliases::U256,);
+            type UnderlyingRustTuple<'a> = (
+                alloy::sol_types::private::primitives::aliases::U256,
+            );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -2791,10 +3132,14 @@ pub mod PlonkVerifier2 {
         #[automatically_derived]
         impl alloy_sol_types::SolCall for P_MODCall {
             type Parameters<'a> = ();
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type Return = P_MODReturn;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
-            type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "P_MOD()";
             const SELECTOR: [u8; 4] = [29u8, 113u8, 46u8, 39u8];
             #[inline]
@@ -2812,17 +3157,17 @@ pub mod PlonkVerifier2 {
                 data: &[u8],
                 validate: bool,
             ) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence(
-                    data, validate,
-                )
-                .map(Into::into)
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data, validate)
+                    .map(Into::into)
             }
         }
     };
     /**Function with signature `R_MOD()` and selector `0xdf6e6cb4`.
-    ```solidity
-    function R_MOD() external view returns (uint256);
-    ```*/
+```solidity
+function R_MOD() external view returns (uint256);
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct R_MODCall {}
@@ -2848,11 +3193,13 @@ pub mod PlonkVerifier2 {
             type UnderlyingRustTuple<'a> = ();
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -2874,14 +3221,18 @@ pub mod PlonkVerifier2 {
             #[doc(hidden)]
             type UnderlyingSolTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
             #[doc(hidden)]
-            type UnderlyingRustTuple<'a> = (alloy::sol_types::private::primitives::aliases::U256,);
+            type UnderlyingRustTuple<'a> = (
+                alloy::sol_types::private::primitives::aliases::U256,
+            );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -2902,10 +3253,14 @@ pub mod PlonkVerifier2 {
         #[automatically_derived]
         impl alloy_sol_types::SolCall for R_MODCall {
             type Parameters<'a> = ();
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type Return = R_MODReturn;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Uint<256>,);
-            type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "R_MOD()";
             const SELECTOR: [u8; 4] = [223u8, 110u8, 108u8, 180u8];
             #[inline]
@@ -2923,17 +3278,17 @@ pub mod PlonkVerifier2 {
                 data: &[u8],
                 validate: bool,
             ) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence(
-                    data, validate,
-                )
-                .map(Into::into)
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data, validate)
+                    .map(Into::into)
             }
         }
     };
     /**Function with signature `verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[7],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))` and selector `0x77ae3f07`.
-    ```solidity
-    function verify(IPlonkVerifier.VerifyingKey memory vk, uint256[7] memory publicInput, IPlonkVerifier.PlonkProof memory proof) external view returns (bool success);
-    ```*/
+```solidity
+function verify(IPlonkVerifier.VerifyingKey memory vk, uint256[7] memory publicInput, IPlonkVerifier.PlonkProof memory proof) external view returns (bool success);
+```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct verifyCall {
@@ -2977,11 +3332,13 @@ pub mod PlonkVerifier2 {
             );
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -3010,11 +3367,13 @@ pub mod PlonkVerifier2 {
             type UnderlyingRustTuple<'a> = (bool,);
             #[cfg(test)]
             #[allow(dead_code, unreachable_patterns)]
-            fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
+            fn _type_assertion(
+                _t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>,
+            ) {
                 match _t {
                     alloy_sol_types::private::AssertTypeEq::<
                         <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                    >(_) => {},
+                    >(_) => {}
                 }
             }
             #[automatically_derived]
@@ -3042,10 +3401,14 @@ pub mod PlonkVerifier2 {
                 >,
                 IPlonkVerifier::PlonkProof,
             );
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type Token<'a> = <Self::Parameters<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             type Return = verifyReturn;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Bool,);
-            type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
+            type ReturnToken<'a> = <Self::ReturnTuple<
+                'a,
+            > as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[7],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))";
             const SELECTOR: [u8; 4] = [119u8, 174u8, 63u8, 7u8];
             #[inline]
@@ -3057,12 +3420,16 @@ pub mod PlonkVerifier2 {
             #[inline]
             fn tokenize(&self) -> Self::Token<'_> {
                 (
-                    <IPlonkVerifier::VerifyingKey as alloy_sol_types::SolType>::tokenize(&self.vk),
+                    <IPlonkVerifier::VerifyingKey as alloy_sol_types::SolType>::tokenize(
+                        &self.vk,
+                    ),
                     <alloy::sol_types::sol_data::FixedArray<
                         alloy::sol_types::sol_data::Uint<256>,
                         7usize,
                     > as alloy_sol_types::SolType>::tokenize(&self.publicInput),
-                    <IPlonkVerifier::PlonkProof as alloy_sol_types::SolType>::tokenize(&self.proof),
+                    <IPlonkVerifier::PlonkProof as alloy_sol_types::SolType>::tokenize(
+                        &self.proof,
+                    ),
                 )
             }
             #[inline]
@@ -3070,10 +3437,10 @@ pub mod PlonkVerifier2 {
                 data: &[u8],
                 validate: bool,
             ) -> alloy_sol_types::Result<Self::Return> {
-                <Self::ReturnTuple<'_> as alloy_sol_types::SolType>::abi_decode_sequence(
-                    data, validate,
-                )
-                .map(Into::into)
+                <Self::ReturnTuple<
+                    '_,
+                > as alloy_sol_types::SolType>::abi_decode_sequence(data, validate)
+                    .map(Into::into)
             }
         }
     };
@@ -3131,14 +3498,16 @@ pub mod PlonkVerifier2 {
             static DECODE_SHIMS: &[fn(
                 &[u8],
                 bool,
-            )
-                -> alloy_sol_types::Result<PlonkVerifier2Calls>] = &[
+            ) -> alloy_sol_types::Result<PlonkVerifier2Calls>] = &[
                 {
                     fn P_MOD(
                         data: &[u8],
                         validate: bool,
                     ) -> alloy_sol_types::Result<PlonkVerifier2Calls> {
-                        <P_MODCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
+                        <P_MODCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                                validate,
+                            )
                             .map(PlonkVerifier2Calls::P_MOD)
                     }
                     P_MOD
@@ -3148,7 +3517,10 @@ pub mod PlonkVerifier2 {
                         data: &[u8],
                         validate: bool,
                     ) -> alloy_sol_types::Result<PlonkVerifier2Calls> {
-                        <verifyCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
+                        <verifyCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                                validate,
+                            )
                             .map(PlonkVerifier2Calls::verify)
                     }
                     verify
@@ -3158,17 +3530,22 @@ pub mod PlonkVerifier2 {
                         data: &[u8],
                         validate: bool,
                     ) -> alloy_sol_types::Result<PlonkVerifier2Calls> {
-                        <R_MODCall as alloy_sol_types::SolCall>::abi_decode_raw(data, validate)
+                        <R_MODCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                                data,
+                                validate,
+                            )
                             .map(PlonkVerifier2Calls::R_MOD)
                     }
                     R_MOD
                 },
             ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(alloy_sol_types::Error::unknown_selector(
-                    <Self as alloy_sol_types::SolInterface>::NAME,
-                    selector,
-                ));
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
             };
             DECODE_SHIMS[idx](data, validate)
         }
@@ -3177,13 +3554,13 @@ pub mod PlonkVerifier2 {
             match self {
                 Self::P_MOD(inner) => {
                     <P_MODCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                },
+                }
                 Self::R_MOD(inner) => {
                     <R_MODCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                },
+                }
                 Self::verify(inner) => {
                     <verifyCall as alloy_sol_types::SolCall>::abi_encoded_size(inner)
-                },
+                }
             }
         }
         #[inline]
@@ -3191,13 +3568,13 @@ pub mod PlonkVerifier2 {
             match self {
                 Self::P_MOD(inner) => {
                     <P_MODCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                },
+                }
                 Self::R_MOD(inner) => {
                     <R_MODCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                },
+                }
                 Self::verify(inner) => {
                     <verifyCall as alloy_sol_types::SolCall>::abi_encode_raw(inner, out)
-                },
+                }
             }
         }
     }
@@ -3226,7 +3603,7 @@ pub mod PlonkVerifier2 {
             match self {
                 Self::UnsupportedDegree(_) => {
                     <UnsupportedDegree as alloy_sol_types::SolError>::SELECTOR
-                },
+                }
             }
         }
         #[inline]
@@ -3247,22 +3624,28 @@ pub mod PlonkVerifier2 {
             static DECODE_SHIMS: &[fn(
                 &[u8],
                 bool,
-            )
-                -> alloy_sol_types::Result<PlonkVerifier2Errors>] = &[{
-                fn UnsupportedDegree(
-                    data: &[u8],
-                    validate: bool,
-                ) -> alloy_sol_types::Result<PlonkVerifier2Errors> {
-                    <UnsupportedDegree as alloy_sol_types::SolError>::abi_decode_raw(data, validate)
-                        .map(PlonkVerifier2Errors::UnsupportedDegree)
-                }
-                UnsupportedDegree
-            }];
+            ) -> alloy_sol_types::Result<PlonkVerifier2Errors>] = &[
+                {
+                    fn UnsupportedDegree(
+                        data: &[u8],
+                        validate: bool,
+                    ) -> alloy_sol_types::Result<PlonkVerifier2Errors> {
+                        <UnsupportedDegree as alloy_sol_types::SolError>::abi_decode_raw(
+                                data,
+                                validate,
+                            )
+                            .map(PlonkVerifier2Errors::UnsupportedDegree)
+                    }
+                    UnsupportedDegree
+                },
+            ];
             let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(alloy_sol_types::Error::unknown_selector(
-                    <Self as alloy_sol_types::SolInterface>::NAME,
-                    selector,
-                ));
+                return Err(
+                    alloy_sol_types::Error::unknown_selector(
+                        <Self as alloy_sol_types::SolInterface>::NAME,
+                        selector,
+                    ),
+                );
             };
             DECODE_SHIMS[idx](data, validate)
         }
@@ -3270,23 +3653,28 @@ pub mod PlonkVerifier2 {
         fn abi_encoded_size(&self) -> usize {
             match self {
                 Self::UnsupportedDegree(inner) => {
-                    <UnsupportedDegree as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                },
+                    <UnsupportedDegree as alloy_sol_types::SolError>::abi_encoded_size(
+                        inner,
+                    )
+                }
             }
         }
         #[inline]
         fn abi_encode_raw(&self, out: &mut alloy_sol_types::private::Vec<u8>) {
             match self {
                 Self::UnsupportedDegree(inner) => {
-                    <UnsupportedDegree as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                },
+                    <UnsupportedDegree as alloy_sol_types::SolError>::abi_encode_raw(
+                        inner,
+                        out,
+                    )
+                }
             }
         }
     }
     use alloy::contract as alloy_contract;
     /**Creates a new wrapper around an on-chain [`PlonkVerifier2`](self) contract instance.
 
-    See the [wrapper's documentation](`PlonkVerifier2Instance`) for more details.*/
+See the [wrapper's documentation](`PlonkVerifier2Instance`) for more details.*/
     #[inline]
     pub const fn new<
         T: alloy_contract::private::Transport + ::core::clone::Clone,
@@ -3300,9 +3688,9 @@ pub mod PlonkVerifier2 {
     }
     /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
-    Returns a new instance of the contract, if the deployment was successful.
+Returns a new instance of the contract, if the deployment was successful.
 
-    For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
+For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
     #[inline]
     pub fn deploy<
         T: alloy_contract::private::Transport + ::core::clone::Clone,
@@ -3310,36 +3698,35 @@ pub mod PlonkVerifier2 {
         N: alloy_contract::private::Network,
     >(
         provider: P,
-    ) -> impl ::core::future::Future<Output = alloy_contract::Result<PlonkVerifier2Instance<T, P, N>>>
-    {
+    ) -> impl ::core::future::Future<
+        Output = alloy_contract::Result<PlonkVerifier2Instance<T, P, N>>,
+    > {
         PlonkVerifier2Instance::<T, P, N>::deploy(provider)
     }
     /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
-    and constructor arguments, if any.
+and constructor arguments, if any.
 
-    This is a simple wrapper around creating a `RawCallBuilder` with the data set to
-    the bytecode concatenated with the constructor's ABI-encoded arguments.*/
+This is a simple wrapper around creating a `RawCallBuilder` with the data set to
+the bytecode concatenated with the constructor's ABI-encoded arguments.*/
     #[inline]
     pub fn deploy_builder<
         T: alloy_contract::private::Transport + ::core::clone::Clone,
         P: alloy_contract::private::Provider<T, N>,
         N: alloy_contract::private::Network,
-    >(
-        provider: P,
-    ) -> alloy_contract::RawCallBuilder<T, P, N> {
+    >(provider: P) -> alloy_contract::RawCallBuilder<T, P, N> {
         PlonkVerifier2Instance::<T, P, N>::deploy_builder(provider)
     }
     /**A [`PlonkVerifier2`](self) instance.
 
-    Contains type-safe methods for interacting with an on-chain instance of the
-    [`PlonkVerifier2`](self) contract located at a given `address`, using a given
-    provider `P`.
+Contains type-safe methods for interacting with an on-chain instance of the
+[`PlonkVerifier2`](self) contract located at a given `address`, using a given
+provider `P`.
 
-    If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
-    documentation on how to provide it), the `deploy` and `deploy_builder` methods can
-    be used to deploy a new instance of the contract.
+If the contract bytecode is available (see the [`sol!`](alloy_sol_types::sol!)
+documentation on how to provide it), the `deploy` and `deploy_builder` methods can
+be used to deploy a new instance of the contract.
 
-    See the [module-level documentation](self) for all the available methods.*/
+See the [module-level documentation](self) for all the available methods.*/
     #[derive(Clone)]
     pub struct PlonkVerifier2Instance<T, P, N = alloy_contract::private::Ethereum> {
         address: alloy_sol_types::private::Address,
@@ -3350,24 +3737,24 @@ pub mod PlonkVerifier2 {
     impl<T, P, N> ::core::fmt::Debug for PlonkVerifier2Instance<T, P, N> {
         #[inline]
         fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-            f.debug_tuple("PlonkVerifier2Instance")
-                .field(&self.address)
-                .finish()
+            f.debug_tuple("PlonkVerifier2Instance").field(&self.address).finish()
         }
     }
     /// Instantiation and getters/setters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > PlonkVerifier2Instance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > PlonkVerifier2Instance<T, P, N> {
         /**Creates a new wrapper around an on-chain [`PlonkVerifier2`](self) contract instance.
 
-        See the [wrapper's documentation](`PlonkVerifier2Instance`) for more details.*/
+See the [wrapper's documentation](`PlonkVerifier2Instance`) for more details.*/
         #[inline]
-        pub const fn new(address: alloy_sol_types::private::Address, provider: P) -> Self {
+        pub const fn new(
+            address: alloy_sol_types::private::Address,
+            provider: P,
+        ) -> Self {
             Self {
                 address,
                 provider,
@@ -3376,9 +3763,9 @@ pub mod PlonkVerifier2 {
         }
         /**Deploys this contract using the given `provider` and constructor arguments, if any.
 
-        Returns a new instance of the contract, if the deployment was successful.
+Returns a new instance of the contract, if the deployment was successful.
 
-        For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
+For more fine-grained control over the deployment process, use [`deploy_builder`] instead.*/
         #[inline]
         pub async fn deploy(
             provider: P,
@@ -3388,10 +3775,10 @@ pub mod PlonkVerifier2 {
             Ok(Self::new(contract_address, call_builder.provider))
         }
         /**Creates a `RawCallBuilder` for deploying this contract using the given `provider`
-        and constructor arguments, if any.
+and constructor arguments, if any.
 
-        This is a simple wrapper around creating a `RawCallBuilder` with the data set to
-        the bytecode concatenated with the constructor's ABI-encoded arguments.*/
+This is a simple wrapper around creating a `RawCallBuilder` with the data set to
+the bytecode concatenated with the constructor's ABI-encoded arguments.*/
         #[inline]
         pub fn deploy_builder(provider: P) -> alloy_contract::RawCallBuilder<T, P, N> {
             alloy_contract::RawCallBuilder::new_raw_deploy(
@@ -3434,11 +3821,10 @@ pub mod PlonkVerifier2 {
     /// Function calls.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > PlonkVerifier2Instance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > PlonkVerifier2Instance<T, P, N> {
         /// Creates a new call builder using this contract instance's provider and address.
         ///
         /// Note that the call can be any function call, not just those defined in this
@@ -3464,21 +3850,22 @@ pub mod PlonkVerifier2 {
             publicInput: [alloy::sol_types::private::primitives::aliases::U256; 7usize],
             proof: <IPlonkVerifier::PlonkProof as alloy::sol_types::SolType>::RustType,
         ) -> alloy_contract::SolCallBuilder<T, &P, verifyCall, N> {
-            self.call_builder(&verifyCall {
-                vk,
-                publicInput,
-                proof,
-            })
+            self.call_builder(
+                &verifyCall {
+                    vk,
+                    publicInput,
+                    proof,
+                },
+            )
         }
     }
     /// Event filters.
     #[automatically_derived]
     impl<
-            T: alloy_contract::private::Transport + ::core::clone::Clone,
-            P: alloy_contract::private::Provider<T, N>,
-            N: alloy_contract::private::Network,
-        > PlonkVerifier2Instance<T, P, N>
-    {
+        T: alloy_contract::private::Transport + ::core::clone::Clone,
+        P: alloy_contract::private::Provider<T, N>,
+        N: alloy_contract::private::Network,
+    > PlonkVerifier2Instance<T, P, N> {
         /// Creates a new event filter using this contract instance's provider and address.
         ///
         /// Note that the type can be any event, not just those defined in this contract.
