@@ -85,7 +85,6 @@ where
 
     async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>> {
         let mut query = QueryBuilder::default();
-        tracing::error!("get_payload: {:?}", id);
         let where_clause = query.header_where_clause(id)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
