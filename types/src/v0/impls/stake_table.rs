@@ -30,7 +30,7 @@ use itertools::Itertools;
 use thiserror::Error;
 
 use super::{
-    traits::StateCatchup,
+    traits::{MembershipPersistence, SequencerPersistence, StateCatchup},
     v0_3::{DAMembers, StakeTable, StakeTables},
     Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes,
 };
@@ -120,6 +120,10 @@ pub struct EpochCommittees {
     /// Contains the epoch after which initial_drb_result will not be used (set_first_epoch.epoch + 2)
     /// And the DrbResult to use before that epoch
     initial_drb_result: Option<(Epoch, DrbResult)>,
+
+    /// Methods for persisting the stake table
+    #[debug(skip)]
+    persistence: Arc<dyn MembershipPersistence>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -223,6 +227,7 @@ impl EpochCommittees {
         da_members: Vec<PeerConfig<PubKey>>,
         instance_state: &NodeState,
         epoch_size: u64,
+        persistence: impl MembershipPersistence,
     ) -> Self {
         // For each eligible leader, get the stake table entry
         let eligible_leaders: Vec<_> = committee_members
@@ -289,6 +294,7 @@ impl EpochCommittees {
             randomized_committees: BTreeMap::new(),
             peers: Some(instance_state.peers.clone()),
             initial_drb_result: None,
+            persistence: Arc::new(persistence),
         }
     }
 
