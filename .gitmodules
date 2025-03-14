@@ -1,7 +1,7 @@
 [submodule "lib/forge-std"]
 	path = contracts/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
-	branch = v1.8.1
+	branch = master
 [submodule "lib/solidity-bytes-utils"]
 	path = contracts/lib/solidity-bytes-utils
 	url = https://github.com/GNSPS/solidity-bytes-utils
