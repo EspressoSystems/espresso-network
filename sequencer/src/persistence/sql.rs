@@ -1886,7 +1886,7 @@ impl MembershipPersistence for Persistence {
             .map(|(id, bytes)| -> anyhow::Result<_> {
                 let st: StakeTables =
                     bincode::deserialize(&bytes).context("deserializing stake table")?;
-                Ok((id as u64, st))
+                Ok((EpochNumber::new(id as u64), st))
             })
             .collect()
     }
@@ -2746,8 +2746,8 @@ mod test {
 
         let tables = storage.load_latest_stake(4).await?;
         let mut iter = tables.iter();
-        assert_eq!(Some(&(10, st)), iter.next());
-        assert_eq!(Some(&(11, st2)), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
         assert_eq!(None, iter.next());
 
         Ok(())

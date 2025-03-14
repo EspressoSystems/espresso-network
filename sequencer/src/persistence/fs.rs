@@ -36,6 +36,7 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
+use itertools::Itertools;
 
 use crate::ViewNumber;
 
@@ -1280,10 +1281,6 @@ impl MembershipPersistence for Persistence {
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
-        if !path.is_file() {
-            return Ok(None);
-        }
-
         let file_path = path.join(epoch.to_string()).with_extension("txt");
         let bytes = fs::read(&file_path).context("read")?;
         Ok(Some(
@@ -1291,8 +1288,28 @@ impl MembershipPersistence for Persistence {
         ))
     }
 
-    async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Vec<IndexedStake>> {
-        todo!();
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Vec<IndexedStake>> {
+        let limit = limit as usize;
+        let inner = self.inner.read().await;
+        let path = &inner.stake_table_dir_path();
+        let sorted: Vec<_> = epoch_files(path)?
+            .sorted_unstable_by_key(|t| t.0)
+            .collect::<Vec<_>>();
+
+        let l = sorted.len();
+        let mut slice = &sorted[..];
+        if l > limit {
+            slice = &sorted[l - limit..l - 1]
+        };
+        slice
+            .iter()
+            .map(|(epoch, path)| -> anyhow::Result<IndexedStake> {
+                let bytes = fs::read(path).context("read")?;
+                let st =
+                    bincode::deserialize(&bytes).context("deserialize combined stake table")?;
+                Ok((*epoch, st))
+            })
+            .collect()
     }
 
     async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
@@ -1904,5 +1921,36 @@ mod test {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_membership_persistence() -> anyhow::Result<()> {
+        setup_test();
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let st = StakeTables::mock();
+        storage
+            .store_stake(EpochNumber::new(10), st.clone())
+            .await?;
+
+        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        assert_eq!(st, table);
+
+        let st2 = StakeTables::mock();
+        storage
+            .store_stake(EpochNumber::new(11), st2.clone())
+            .await?;
+
+        let tables = storage.load_latest_stake(4).await?;
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
+        assert_eq!(None, iter.next());
+
+        Ok(())
     }
 }
