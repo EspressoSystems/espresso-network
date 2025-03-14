@@ -91,6 +91,11 @@ impl StakeTables {
         }
         Self::new(consensus_stake_table.into(), da_members.into())
     }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn mock() -> Self {
+        StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
+    }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -601,6 +606,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl StakeTable {
     /// Generate a `StakeTable` with `n` members.
     pub fn mock(n: u64) -> Self {
@@ -612,6 +618,7 @@ impl StakeTable {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl DAMembers {
     /// Generate a `DaMembers` (alias committee) with `n` members.
     pub fn mock(n: u64) -> Self {

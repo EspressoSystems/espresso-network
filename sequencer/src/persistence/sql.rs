@@ -10,7 +10,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{IndexedStake, StakeTable, StakeTables},
+    v0_3::{IndexedStake, StakeTables},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
 };
 use futures::stream::StreamExt;
@@ -2109,9 +2109,7 @@ mod generic_tests {
 mod test {
 
     use committable::{Commitment, CommitmentBoundsArkless};
-    use espresso_types::{
-        traits::NullEventConsumer, v0_3::DAMembers, Header, Leaf, NodeState, ValidatedState,
-    };
+    use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
@@ -2732,8 +2730,7 @@ mod test {
 
         let storage = opt.create().await.unwrap();
 
-        let st = StakeTables::new(StakeTable::mock(3), DAMembers::mock(3));
-
+        let st = StakeTables::mock();
         storage
             .store_stake(EpochNumber::new(10), st.clone())
             .await?;
