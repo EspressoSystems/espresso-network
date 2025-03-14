@@ -418,6 +418,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             version >= V::Epochs::VERSION,
             task_state.membership.membership(),
             &task_state.storage,
+            task_state.epoch_height,
         )
         .await
     };
