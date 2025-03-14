@@ -124,7 +124,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::MockBase,
+            mocks::{MockBase, MockVersions},
             setup_test, sleep,
         },
         ApiState, Error,
@@ -135,7 +135,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start the web server.
         let port = pick_unused_port().unwrap();

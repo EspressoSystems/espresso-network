@@ -894,7 +894,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1099,7 +1099,7 @@ mod test {
         let small_object_range_limit = 3;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1191,7 +1191,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1233,7 +1233,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init_with_leaf_ds().await;
+        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init_with_leaf_ds().await;
         network.start().await;
 
         // Start the web server.

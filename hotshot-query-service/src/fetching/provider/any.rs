@@ -215,7 +215,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockTypes},
+            mocks::{MockBase, MockTypes, MockVersions},
             setup_test,
         },
         types::HeightIndexed,
@@ -229,7 +229,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();

@@ -14,8 +14,8 @@ pub type AvidMCommitment = vid::avid_m::namespaced::NsAvidMCommit;
 pub type AvidMShare = vid::avid_m::namespaced::NsAvidMShare;
 pub type AvidMCommon = AvidMParam;
 
-pub fn init_avidm_param(num_storage_nodes: usize) -> Result<AvidMParam> {
-    let recovery_threshold = 1 << num_storage_nodes.ilog2();
-    AvidMParam::new(recovery_threshold, num_storage_nodes)
+pub fn init_avidm_param(total_weight: usize) -> Result<AvidMParam> {
+    let recovery_threshold = 1 << total_weight.ilog2();
+    AvidMParam::new(recovery_threshold, total_weight)
         .map_err(|err| error!("Failed to initialize VID: {}", err.to_string()))
 }

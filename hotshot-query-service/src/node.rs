@@ -229,7 +229,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes},
+            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
             setup_test,
         },
         ApiState, Error, Header,
@@ -242,7 +242,7 @@ mod test {
         let window_limit = 78;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         let mut events = network.handle().event_stream();
         network.start().await;
 
@@ -421,7 +421,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         let mut events = network.handle().event_stream();
         network.start().await;
 
