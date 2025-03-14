@@ -73,9 +73,19 @@ pub async fn register_validator<P: Provider<T>, T: Transport + Clone>(
         .await?)
 }
 
+pub async fn deregister_validator<P: Provider<T>, T: Transport + Clone>(
+    stake_table: StakeTableInstance<T, P>,
+) -> Result<TransactionReceipt> {
+    Ok(stake_table
+        .deregisterValidator()
+        .send()
+        .await?
+        .get_receipt()
+        .await?)
+}
+
 #[cfg(test)]
 mod test {
-    use alloy::providers::WalletProvider;
     use contract_bindings_alloy::staketable::StakeTable;
 
     use super::*;
@@ -101,6 +111,20 @@ mod test {
         assert_eq!(event.commission, system.commission.to_evm());
 
         // TODO verify we can parse keys and verify signature
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deregister_validator() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.register_validator().await?;
+
+        let receipt = deregister_validator(system.stake_table).await?;
+        assert!(receipt.status());
+
+        let event = decode_log::<StakeTable::ValidatorExit>(&receipt).unwrap();
+        assert_eq!(event.validator, system.deployer_address);
 
         Ok(())
     }

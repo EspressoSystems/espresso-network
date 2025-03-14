@@ -7,6 +7,7 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::Result;
+use claim::{claim_validator_exit, claim_withdrawal};
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
@@ -19,7 +20,7 @@ pub(crate) use jf_signature::{
     bls_over_bn254::KeyPair as BLSKeyPair, schnorr::KeyPair as SchnorrKeyPair,
 };
 use parse::Commission;
-use registration::register_validator;
+use registration::{deregister_validator, register_validator};
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
 use url::Url;
@@ -167,8 +168,16 @@ enum Commands {
         #[clap(long)]
         amount: U256,
     },
-    /// Claim withdrawals from the stake table.
-    ClaimWithdrawal,
+    /// Claim withdrawal after an undelegation.
+    ClaimWithdrawal {
+        #[clap(long)]
+        validator_address: Address,
+    },
+    /// Claim withdrawal after validator exit.
+    ClaimValidatorExit {
+        #[clap(long)]
+        validator_address: Address,
+    },
 }
 
 fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
@@ -282,10 +291,7 @@ pub async fn main() -> Result<()> {
             )
             .await
         },
-        Commands::DeregisterValidator {} => {
-            todo!();
-            // deregister_validator(provider, stake_table).await?
-        },
+        Commands::DeregisterValidator {} => deregister_validator(stake_table).await,
         Commands::Delegate {
             validator_address,
             amount,
@@ -294,7 +300,12 @@ pub async fn main() -> Result<()> {
             validator_address,
             amount,
         } => undelegate(stake_table, validator_address, amount).await,
-        Commands::ClaimWithdrawal => todo!(),
+        Commands::ClaimWithdrawal { validator_address } => {
+            claim_withdrawal(stake_table, validator_address).await
+        },
+        Commands::ClaimValidatorExit { validator_address } => {
+            claim_validator_exit(stake_table, validator_address).await
+        },
         _ => unreachable!(),
     };
     tracing::info!("Result: {:?}", result);
@@ -303,10 +314,7 @@ pub async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        process::{Command, Output},
-        time::Duration,
-    };
+    use std::process::{Command, Output};
 
     use anyhow::Result;
 
@@ -426,6 +434,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cli_deregister_validator() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.register_validator().await?;
+
+        cmd()
+            .arg("--mnemonic")
+            .arg(DEV_MNEMONIC)
+            .arg("--rpc-url")
+            .arg(system.rpc_url.to_string())
+            .arg("deregister-validator")
+            .output()?
+            .assert_success();
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_cli_undelegate() -> Result<()> {
         let system = TestSystem::deploy().await?;
         system.register_validator().await?;
@@ -442,6 +466,50 @@ mod tests {
             .arg(system.deployer_address.to_string())
             .arg("--amount")
             .arg(amount.to_string())
+            .output()?
+            .assert_success();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cli_claim_withdrawal() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        let amount = U256::from(123);
+        system.register_validator().await?;
+        system.delegate(amount).await?;
+        system.undelegate(amount).await?;
+        system.warp_to_unlock_time().await?;
+
+        cmd()
+            .arg("--mnemonic")
+            .arg(DEV_MNEMONIC)
+            .arg("--rpc-url")
+            .arg(system.rpc_url.to_string())
+            .arg("claim-withdrawal")
+            .arg("--validator-address")
+            .arg(system.deployer_address.to_string())
+            .output()?
+            .assert_success();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cli_claim_validator_exit() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        let amount = U256::from(123);
+        system.register_validator().await?;
+        system.delegate(amount).await?;
+        system.deregister_validator().await?;
+        system.warp_to_unlock_time().await?;
+
+        cmd()
+            .arg("--mnemonic")
+            .arg(DEV_MNEMONIC)
+            .arg("--rpc-url")
+            .arg(system.rpc_url.to_string())
+            .arg("claim-validator-exit")
+            .arg("--validator-address")
+            .arg(system.deployer_address.to_string())
             .output()?
             .assert_success();
         Ok(())

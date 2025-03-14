@@ -4,6 +4,7 @@ use alloy::{
     network::{Ethereum, EthereumWallet},
     primitives::{utils::parse_ether, Address, U256},
     providers::{
+        ext::AnvilApi as _,
         fillers::{
             BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             WalletFiller,
@@ -123,10 +124,34 @@ impl TestSystem {
         Ok(())
     }
 
+    pub async fn deregister_validator(&self) -> Result<()> {
+        let receipt = self
+            .stake_table
+            .deregisterValidator()
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+        Ok(())
+    }
+
     pub async fn delegate(&self, amount: U256) -> Result<()> {
         let receipt = self
             .stake_table
             .delegate(self.deployer_address, amount)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+        Ok(())
+    }
+
+    pub async fn undelegate(&self, amount: U256) -> Result<()> {
+        let receipt = self
+            .stake_table
+            .undelegate(self.deployer_address, amount)
             .send()
             .await?
             .get_receipt()
@@ -141,6 +166,13 @@ impl TestSystem {
             .send()
             .await?
             .get_receipt()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn warp_to_unlock_time(&self) -> Result<()> {
+        self.provider
+            .anvil_increase_time(U256::from(self.exit_escrow_period.as_secs()))
             .await?;
         Ok(())
     }
