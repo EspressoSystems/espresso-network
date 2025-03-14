@@ -17,12 +17,14 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    simple_vote::{HasEpoch, QuorumData2, QuorumVote2},
+    simple_vote::{
+        ExtendedQuorumVote, HasEpoch, LightClientStateUpdateVote, QuorumData2, QuorumVote2,
+    },
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
         ValidatedState,
     },
@@ -685,6 +687,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
     epoch_height: u64,
+    state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 ) -> Result<()> {
     let committee_member_in_current_epoch = membership.has_stake(&public_key).await;
     // If the proposed leaf is for the last block in the epoch and the node is part of the quorum committee
@@ -725,9 +728,31 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .context(error!("Failed to store VID share"))?;
 
     if extended_vote {
-        tracing::debug!("sending extended vote to everybody",);
+        tracing::debug!(
+            "sending extended vote to everybody {:?}",
+            vote.view_number() + 1
+        );
+        let light_client_state = leaf
+            .block_header()
+            .get_light_client_state(view_number)
+            .wrap()
+            .context(error!("Failed to generate light client state"))?;
+        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
+            state_private_key,
+            &(&light_client_state).into(),
+        )
+        .wrap()
+        .context(error!("Failed to sign the light client state"))?;
+        let state_vote = LightClientStateUpdateVote {
+            epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
+            light_client_state,
+            signature,
+        };
         broadcast_event(
-            Arc::new(HotShotEvent::ExtendedQuorumVoteSend(vote)),
+            Arc::new(HotShotEvent::ExtendedQuorumVoteSend(ExtendedQuorumVote {
+                vote,
+                state_vote,
+            })),
             &sender,
         )
         .await;

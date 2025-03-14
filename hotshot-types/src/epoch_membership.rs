@@ -240,7 +240,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn stake_table(&self) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn stake_table(&self) -> Vec<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -249,7 +249,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn da_stake_table(&self) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn da_stake_table(&self) -> Vec<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -295,10 +295,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
 
     /// Get the stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
-    pub async fn stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn stake(&self, pub_key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -308,10 +305,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
 
     /// Get the DA stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
-    pub async fn da_stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn da_stake(&self, pub_key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()

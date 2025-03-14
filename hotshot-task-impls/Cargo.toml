@@ -26,6 +26,7 @@ hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 jf-vid = { workspace = true }
 lru = { workspace = true }
+primitive-types = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }

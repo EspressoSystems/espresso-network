@@ -33,15 +33,15 @@ use crate::{
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate, DaCertificate2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate, ViewSyncCommitCertificate, ViewSyncCommitCertificate2,
-        ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate,
-        ViewSyncPreCommitCertificate2,
+        DaCertificate, DaCertificate2, ExtendedQuorumCertificate, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate, ViewSyncCommitCertificate,
+        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
+        ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote, DaVote2, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote,
-        ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote, ViewSyncFinalizeVote2,
-        ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+        DaVote, DaVote2, ExtendedQuorumVote, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote,
+        TimeoutVote2, UpgradeVote, ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote,
+        ViewSyncFinalizeVote2, ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
     },
     traits::{
         election::Membership,
@@ -243,9 +243,12 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
 
     /// Message for the next leader containing our highest QC
     ExtendedQc(
-        QuorumCertificate2<TYPES>,
+        ExtendedQuorumCertificate<TYPES>,
         NextEpochQuorumCertificate2<TYPES>,
     ),
+
+    /// Message with a epoch transition quorum vote
+    ExtendedQuorumVote(ExtendedQuorumVote<TYPES>),
 
     /// Message with a view sync pre-commit vote
     ViewSyncPreCommitVote2(ViewSyncPreCommitVote2<TYPES>),
@@ -372,8 +375,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::UpgradeProposal(message) => message.data.view_number(),
                     GeneralConsensusMessage::UpgradeVote(message) => message.view_number(),
-                    GeneralConsensusMessage::HighQc(qc)
-                    | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
+                    GeneralConsensusMessage::HighQc(qc) => qc.view_number(),
+                    GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
+                    GeneralConsensusMessage::ExtendedQuorumVote(message) => message.view_number(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -443,8 +447,9 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::UpgradeProposal(message) => message.data.epoch(),
                     GeneralConsensusMessage::UpgradeVote(message) => message.epoch(),
-                    GeneralConsensusMessage::HighQc(qc)
-                    | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
+                    GeneralConsensusMessage::HighQc(qc) => qc.epoch(),
+                    GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
+                    GeneralConsensusMessage::ExtendedQuorumVote(message) => message.epoch(),
                 }
             },
             SequencingMessage::Da(da_message) => {

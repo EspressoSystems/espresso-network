@@ -292,7 +292,7 @@ struct Weights {
 }
 
 pub fn vid_total_weight<TYPES: NodeType>(
-    stake_table: Vec<PeerConfig<TYPES::SignatureKey>>,
+    stake_table: Vec<PeerConfig<TYPES>>,
     epoch: Option<TYPES::Epoch>,
 ) -> usize {
     if epoch.is_none() {
@@ -307,7 +307,7 @@ pub fn vid_total_weight<TYPES: NodeType>(
     }
 }
 
-fn approximate_weights<Key: SignatureKey>(stake_table: Vec<PeerConfig<Key>>) -> Weights {
+fn approximate_weights<TYPES: NodeType>(stake_table: Vec<PeerConfig<TYPES>>) -> Weights {
     let total_stake = stake_table.iter().fold(U256::zero(), |acc, entry| {
         acc + entry.stake_table_entry.stake()
     });

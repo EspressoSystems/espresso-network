@@ -19,11 +19,14 @@ use rand_chacha::ChaCha20Rng;
 use tracing::instrument;
 
 use crate::{
+    light_client::LightClientStateMsg,
     qc::{BitVectorQc, QcParams},
     stake_table::StakeTableEntry,
     traits::{
         qc::QuorumCertificateScheme,
-        signature_key::{BuilderSignatureKey, PrivateSignatureKey, SignatureKey},
+        signature_key::{
+            BuilderSignatureKey, PrivateSignatureKey, SignatureKey, StateSignatureKey,
+        },
     },
 };
 
@@ -183,5 +186,56 @@ impl BuilderSignatureKey for BuilderKey {
         let new_seed = *hasher.finalize().as_bytes();
         let kp = KeyPair::generate(&mut ChaCha20Rng::from_seed(new_seed));
         (kp.ver_key(), kp.sign_key_ref().clone())
+    }
+}
+
+pub type SchnorrPubKey = jf_signature::schnorr::VerKey<ark_ed_on_bn254::EdwardsConfig>;
+pub type SchnorrPrivKey = jf_signature::schnorr::SignKey<ark_ed_on_bn254::Fr>;
+pub type SchnorrSignatureScheme =
+    jf_signature::schnorr::SchnorrSignatureScheme<ark_ed_on_bn254::EdwardsConfig>;
+
+impl PrivateSignatureKey for SchnorrPrivKey {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_bytes()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        Ok(Self::from_bytes(bytes))
+    }
+
+    fn to_tagged_base64(&self) -> Result<tagged_base64::TaggedBase64, tagged_base64::Tb64Error> {
+        self.to_tagged_base64()
+    }
+}
+
+impl StateSignatureKey for SchnorrPubKey {
+    type StatePrivateKey = SchnorrPrivKey;
+
+    type StateSignature = jf_signature::schnorr::Signature<ark_ed_on_bn254::EdwardsConfig>;
+
+    type SignError = SignatureError;
+
+    fn sign_state(
+        sk: &Self::StatePrivateKey,
+        state: &LightClientStateMsg,
+    ) -> Result<Self::StateSignature, Self::SignError> {
+        SchnorrSignatureScheme::sign(&(), sk, state, &mut rand::thread_rng())
+    }
+
+    fn verify_state_sig(
+        &self,
+        signature: &Self::StateSignature,
+        state: &LightClientStateMsg,
+    ) -> bool {
+        SchnorrSignatureScheme::verify(&(), self, state, signature).is_ok()
+    }
+
+    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey) {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&seed);
+        hasher.update(&index.to_le_bytes());
+        let new_seed = *hasher.finalize().as_bytes();
+        let kp = jf_signature::schnorr::KeyPair::generate(&mut ChaCha20Rng::from_seed(new_seed));
+        (kp.ver_key(), kp.sign_key())
     }
 }

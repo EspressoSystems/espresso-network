@@ -27,7 +27,10 @@ use crate::{
     error::HotShotError,
     event::{HotShotAction, LeafInfo},
     message::{Proposal, UpgradeLock},
-    simple_certificate::{DaCertificate2, NextEpochQuorumCertificate2, QuorumCertificate2},
+    simple_certificate::{
+        DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
+        QuorumCertificate2,
+    },
     traits::{
         block_contents::BuilderFee,
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
@@ -330,6 +333,9 @@ pub struct Consensus<TYPES: NodeType> {
 
     /// Tables for the DRB seeds and results.
     pub drb_seeds_and_results: DrbSeedsAndResults<TYPES>,
+
+    /// The light client state update certificate
+    pub state_cert: LightClientStateUpdateCertificate<TYPES>,
 }
 
 /// This struct holds a payload and its metadata
@@ -431,6 +437,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
         metrics: Arc<ConsensusMetricsValue>,
         epoch_height: u64,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
     ) -> Self {
         Consensus {
             validated_state_map,
@@ -449,6 +456,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             metrics,
             epoch_height,
             drb_seeds_and_results: DrbSeedsAndResults::new(),
+            state_cert,
         }
     }
 
@@ -475,6 +483,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Get the high QC.
     pub fn high_qc(&self) -> &QuorumCertificate2<TYPES> {
         &self.high_qc
+    }
+
+    /// Get the light client state certificate
+    pub fn state_cert(&self) -> &LightClientStateUpdateCertificate<TYPES> {
+        &self.state_cert
     }
 
     /// Get the next epoch high QC.
@@ -791,6 +804,35 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.next_epoch_high_qc = Some(high_qc);
 
         Ok(())
+    }
+
+    /// Update the light client state update certificate if given a newer one.
+    /// # Errors
+    /// Can return an error when the provided state_cert is not newer than the existing entry.
+    pub fn update_state_cert(
+        &mut self,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
+    ) -> Result<()> {
+        ensure!(
+            state_cert.epoch > self.state_cert.epoch || state_cert == self.state_cert,
+            debug!("Light client state update certification with an equal or higher epoch exists.")
+        );
+        tracing::debug!("Updating light client state update certification");
+        self.state_cert = state_cert;
+
+        Ok(())
+    }
+
+    /// Update the light client state update certificate if given a newer one.
+    /// # Errors
+    /// Can return an error when the provided state_cert is not newer than the existing entry.
+    pub fn update_high_qc_and_state_cert(
+        &mut self,
+        high_qc: QuorumCertificate2<TYPES>,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
+    ) -> Result<()> {
+        self.update_high_qc(high_qc)?;
+        self.update_state_cert(state_cert)
     }
 
     /// Add a new entry to the vid_shares map.

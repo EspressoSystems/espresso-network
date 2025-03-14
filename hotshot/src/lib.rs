@@ -17,9 +17,10 @@ use hotshot_types::{
     drb::{DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificate,
     traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions,
+        node_implementation::Versions, signature_key::StateSignatureKey,
     },
 };
 use rand::Rng;
@@ -108,8 +109,11 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     /// The private key of this node
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
 
+    /// The private key to sign the light client state
+    state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+
     /// Configuration items for this hotshot instance
-    pub config: HotShotConfig<TYPES::SignatureKey>,
+    pub config: HotShotConfig<TYPES>,
 
     /// The underlying network
     pub network: Arc<I::Network>,
@@ -168,6 +172,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
         Self {
             public_key: self.public_key.clone(),
             private_key: self.private_key.clone(),
+            state_private_key: self.state_private_key.clone(),
             config: self.config.clone(),
             network: Arc::clone(&self.network),
             membership_coordinator: self.membership_coordinator.clone(),
@@ -204,8 +209,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     pub async fn new(
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
-        config: HotShotConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -227,6 +233,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         Self::new_from_channels(
             public_key,
             private_key,
+            state_private_key,
             nonce,
             config,
             memberships,
@@ -252,8 +259,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     pub async fn new_from_channels(
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
-        config: HotShotConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -351,6 +359,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             initializer.next_epoch_high_qc,
             Arc::clone(&consensus_metrics),
             config.epoch_height,
+            initializer.state_cert,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));
@@ -365,6 +374,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             instance_state: Arc::new(instance_state),
             public_key,
             private_key,
+            state_private_key,
             config,
             start_view: initializer.start_view,
             start_epoch: initializer.start_epoch,
@@ -625,8 +635,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     pub async fn init(
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         node_id: u64,
-        config: HotShotConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -644,6 +655,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let hotshot = Self::new(
             public_key,
             private_key,
+            state_private_key,
             node_id,
             config,
             memberships,
@@ -788,8 +800,9 @@ where
         &'static mut self,
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
-        config: HotShotConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -804,6 +817,7 @@ where
         let left_system_context = SystemContext::new(
             public_key.clone(),
             private_key.clone(),
+            state_private_key.clone(),
             nonce,
             config.clone(),
             memberships.clone(),
@@ -817,6 +831,7 @@ where
         let right_system_context = SystemContext::new(
             public_key,
             private_key,
+            state_private_key,
             nonce,
             config,
             memberships,
@@ -991,6 +1006,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusApi<TY
     fn private_key(&self) -> &<TYPES::SignatureKey as SignatureKey>::PrivateKey {
         &self.hotshot.private_key
     }
+
+    fn state_private_key(
+        &self,
+    ) -> &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey {
+        &self.hotshot.state_private_key
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1058,6 +1079,9 @@ pub struct HotShotInitializer<TYPES: NodeType> {
 
     /// Saved epoch information. This must be sorted ascending by epoch.
     pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
+
+    /// The last formed light client state update certificate
+    pub state_cert: LightClientStateUpdateCertificate<TYPES>,
 }
 
 impl<TYPES: NodeType> HotShotInitializer<TYPES> {
@@ -1091,6 +1115,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             epoch_height,
             epoch_start_block,
             start_epoch_info,
+            state_cert: LightClientStateUpdateCertificate::<TYPES>::genesis(),
         })
     }
 
@@ -1153,6 +1178,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
     ) -> Self {
         let anchor_state = Arc::new(TYPES::ValidatedState::from_header(
             anchor_leaf.block_header(),
@@ -1177,6 +1203,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             undecided_leaves: BTreeMap::new(),
             undecided_state: BTreeMap::new(),
             start_epoch_info,
+            state_cert,
         };
 
         initializer.update_undecided()

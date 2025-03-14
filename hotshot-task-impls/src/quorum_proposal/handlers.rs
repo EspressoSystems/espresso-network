@@ -13,7 +13,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{ensure, Context, Result};
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
@@ -23,7 +22,7 @@ use hotshot_types::{
     data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2},
     epoch_membership::EpochMembership,
     message::Proposal,
-    simple_certificate::{QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{ExtendedQuorumCertificate, QuorumCertificate2, UpgradeCertificate},
     traits::{
         block_contents::BlockHeader,
         node_implementation::{NodeImplementation, NodeType},
@@ -49,13 +48,13 @@ pub(crate) enum ProposalDependency {
     /// For the `SendPayloadCommitmentAndMetadata` event.
     PayloadAndMetadata,
 
-    /// For the `Qc2Formed` event.
+    /// For the `Qc2Formed` and `ExtendedQcFormed` event.
     Qc,
 
     /// For the `ViewSyncFinalizeCertificateRecv` event.
     ViewSyncCert,
 
-    /// For the `Qc2Formed` event timeout branch.
+    /// For the `Qc2Formed` and `ExtendedQcFormed` event timeout branch.
     TimeoutCert,
 
     /// For the `QuorumProposalRecv` event.
@@ -128,23 +127,30 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         rx: &mut Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<QuorumCertificate2<TYPES>> {
         while let Ok(event) = rx.recv_direct().await {
-            if let HotShotEvent::HighQcRecv(qc, _sender) = event.as_ref() {
-                let prev_epoch = qc.data.epoch;
-                let epoch_membership = self.membership.get_new_epoch(prev_epoch).await.ok()?;
-                let membership_stake_table = epoch_membership.stake_table().await;
-                let membership_success_threshold = epoch_membership.success_threshold().await;
+            match event.as_ref() {
+                HotShotEvent::HighQcRecv(qc, _)
+                | HotShotEvent::ExtendedQcRecv(
+                    ExtendedQuorumCertificate { qc, state_cert: _ },
+                    ..,
+                ) => {
+                    let prev_epoch = qc.data.epoch;
+                    let epoch_membership = self.membership.get_new_epoch(prev_epoch).await.ok()?;
+                    let membership_stake_table = epoch_membership.stake_table().await;
+                    let membership_success_threshold = epoch_membership.success_threshold().await;
 
-                if qc
-                    .is_valid_cert(
-                        StakeTableEntries::<TYPES>::from(membership_stake_table).0,
-                        membership_success_threshold,
-                        &self.upgrade_lock,
-                    )
-                    .await
-                    .is_ok()
-                {
-                    return Some(qc.clone());
-                }
+                    if qc
+                        .is_valid_cert(
+                            StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                            membership_success_threshold,
+                            &self.upgrade_lock,
+                        )
+                        .await
+                        .is_ok()
+                    {
+                        return Some(qc.clone());
+                    }
+                },
+                _ => {},
             }
         }
         None
@@ -441,6 +447,14 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                         parent_qc = Some(qc.clone());
                     },
                 },
+                HotShotEvent::ExtendedQcFormed(cert) => match cert {
+                    either::Right(timeout) => {
+                        timeout_certificate = Some(timeout.clone());
+                    },
+                    either::Left(eqc) => {
+                        parent_qc = Some(eqc.qc.clone());
+                    },
+                },
                 HotShotEvent::ViewSyncFinalizeCertificateRecv(cert) => {
                     view_sync_finalize_cert = Some(cert.clone());
                 },
@@ -510,6 +524,7 @@ pub(super) async fn handle_eqc_formed<
     leaf_commit: Commitment<Leaf2<TYPES>>,
     task_state: &QuorumProposalTaskState<TYPES, I, V>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    epoch_height: u64,
 ) {
     if !task_state.upgrade_lock.epochs_enabled(cert_view).await {
         tracing::debug!("QC2 formed but epochs not enabled. Do nothing");
@@ -527,6 +542,17 @@ pub(super) async fn handle_eqc_formed<
 
     let consensus_reader = task_state.consensus.read().await;
     let current_epoch_qc = consensus_reader.high_qc();
+    let cert_view = current_epoch_qc.view_number();
+    let cert_block_number = match consensus_reader
+        .saved_leaves()
+        .get(&current_epoch_qc.data.leaf_commit)
+    {
+        Some(leaf) => leaf.height(),
+        None => {
+            tracing::error!("Could not find the leaf for the eQC. It shouldn't happen.");
+            return;
+        },
+    };
     let Some(next_epoch_qc) = consensus_reader.next_epoch_high_qc() else {
         tracing::debug!("We formed the eQC but we don't have the next epoch eQC at all.");
         return;
@@ -539,11 +565,14 @@ pub(super) async fn handle_eqc_formed<
         );
         return;
     }
-    let current_epoch_qc_clone = current_epoch_qc.clone();
     drop(consensus_reader);
 
+    let cert_epoch = option_epoch_from_block_number::<TYPES>(true, cert_block_number, epoch_height);
+    // Transition to the new epoch by sending ViewChange
+    let next_epoch = cert_epoch.map(|x| x + 1);
+    tracing::info!("Entering new epoch: {:?}", next_epoch);
     broadcast_event(
-        Arc::new(HotShotEvent::ExtendedQc2Formed(current_epoch_qc_clone)),
+        Arc::new(HotShotEvent::ViewChange(cert_view + 1, next_epoch)),
         event_sender,
     )
     .await;

@@ -7,7 +7,7 @@ use espresso_types::{
         BidTx, RollupRegistration, RollupRegistrationBody, RollupUpdate, RollupUpdatebody,
         SolverAuctionResults,
     },
-    PubKey, SeqTypes,
+    SeqTypes,
     Update::Set,
 };
 use hotshot::types::SignatureKey;
@@ -48,7 +48,7 @@ pub struct SolverState {
 }
 
 pub struct StakeTable {
-    pub known_nodes_with_stake: Vec<PeerConfig<PubKey>>,
+    pub known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
 }
 
 #[async_trait]

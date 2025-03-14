@@ -9,6 +9,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use contract_bindings_ethers::light_client::{LightClient, LightClientErrors};
 use displaydoc::Display;
+use espresso_types::SeqTypes;
 use ethers::{
     core::k256::ecdsa::SigningKey,
     middleware::{
@@ -123,7 +124,7 @@ pub fn init_stake_table(
 
 #[derive(Debug, Deserialize)]
 struct PublicHotShotConfig {
-    known_nodes_with_stake: Vec<PeerConfig<BLSPubKey>>,
+    known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -23,7 +23,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tagged_base64::{TaggedBase64, Tb64Error};
 
 use super::EncodeBytes;
-use crate::{bundle::Bundle, traits::node_implementation::NodeType, utils::BuilderCommitment};
+use crate::{
+    bundle::Bundle, light_client::LightClientStateMsg, traits::node_implementation::NodeType,
+    utils::BuilderCommitment,
+};
 
 /// Type representing stake table entries in a `StakeTable`
 pub trait StakeTableEntryType<K> {
@@ -359,4 +362,54 @@ fn aggregate_block_info_data(
     block_info.extend_from_slice(fee_amount.to_be_bytes().as_ref());
     block_info.extend_from_slice(payload_commitment.as_ref());
     block_info
+}
+
+/// Light client state signature key with minimal requirements
+pub trait StateSignatureKey:
+    Send
+    + Sync
+    + Clone
+    + Sized
+    + Debug
+    + Hash
+    + Serialize
+    + for<'a> Deserialize<'a>
+    + PartialEq
+    + Eq
+    + Display
+    + for<'a> TryFrom<&'a TaggedBase64>
+    + Into<TaggedBase64>
+{
+    /// The private key type
+    type StatePrivateKey: PrivateSignatureKey;
+
+    /// The type of the signature
+    type StateSignature: Send
+        + Sync
+        + Sized
+        + Clone
+        + Debug
+        + Eq
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + Hash;
+
+    /// Type of error that can occur when signing data
+    type SignError: std::error::Error + Send + Sync;
+
+    /// Sign the light client state
+    fn sign_state(
+        private_key: &Self::StatePrivateKey,
+        state: &LightClientStateMsg,
+    ) -> Result<Self::StateSignature, Self::SignError>;
+
+    /// Verify the light client state signature
+    fn verify_state_sig(
+        &self,
+        signature: &Self::StateSignature,
+        state: &LightClientStateMsg,
+    ) -> bool;
+
+    /// Generate a new key pair
+    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey);
 }

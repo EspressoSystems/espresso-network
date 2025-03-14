@@ -311,6 +311,9 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         GeneralConsensusMessage::ExtendedQc(qc, next_epoch_qc) => {
                             HotShotEvent::ExtendedQcRecv(qc, next_epoch_qc, sender)
                         },
+                        GeneralConsensusMessage::ExtendedQuorumVote(vote) => {
+                            HotShotEvent::ExtendedQuorumVoteRecv(vote)
+                        },
                     },
                     SequencingMessage::Da(da_message) => match da_message {
                         DaConsensusMessage::DaProposal(proposal) => {
@@ -759,15 +762,15 @@ impl<
                 *maybe_action = Some(HotShotAction::Vote);
                 let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
-                        GeneralConsensusMessage::Vote2(vote.clone()),
+                        GeneralConsensusMessage::ExtendedQuorumVote(vote.clone()),
                     ))
                 } else {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
-                        GeneralConsensusMessage::Vote(vote.clone().to_vote()),
+                        GeneralConsensusMessage::Vote(vote.vote.clone().to_vote()),
                     ))
                 };
 
-                Some((vote.signing_key(), message, TransmitType::Broadcast))
+                Some((vote.vote.signing_key(), message, TransmitType::Broadcast))
             },
             HotShotEvent::QuorumProposalRequestSend(req, signature) => Some((
                 req.key.clone(),

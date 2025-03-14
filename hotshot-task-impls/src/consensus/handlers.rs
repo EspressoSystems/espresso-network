@@ -10,7 +10,8 @@ use async_broadcast::{Receiver, Sender};
 use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
-    simple_vote::{HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
+    simple_certificate::ExtendedQuorumCertificate,
+    simple_vote::{ExtendedQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     utils::EpochTransitionIndicator,
     vote::{HasViewNumber, Vote},
@@ -25,7 +26,7 @@ use crate::{
     consensus::Versions,
     events::HotShotEvent,
     helpers::{broadcast_event, wait_for_next_epoch_qc},
-    vote_collection::handle_vote,
+    vote_collection::{handle_extended_quorum_vote, handle_vote},
 };
 
 /// Handle a `QuorumVoteRecv` event.
@@ -104,6 +105,76 @@ pub(crate) async fn handle_quorum_vote_recv<
     Ok(())
 }
 
+/// Handle a `ExtendedQuorumVoteRecv` event.
+pub(crate) async fn handle_extended_quorum_vote_recv<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
+    vote: &ExtendedQuorumVote<TYPES>,
+    event: Arc<HotShotEvent<TYPES>>,
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+) -> Result<()> {
+    let in_transition = task_state
+        .consensus
+        .read()
+        .await
+        .is_high_qc_for_last_block();
+    let epoch_membership = task_state
+        .membership_coordinator
+        .membership_for_epoch(vote.vote.data.epoch)
+        .await
+        .context(warn!("No stake table for epoch"))?;
+
+    let we_are_leader =
+        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key;
+    ensure!(
+        in_transition || we_are_leader,
+        info!(
+            "We are not the leader for view {:?} and we are not in the epoch transition",
+            vote.view_number() + 1
+        )
+    );
+
+    handle_extended_quorum_vote(
+        &mut task_state.extended_quorum_vote_collectors,
+        vote,
+        task_state.public_key.clone(),
+        &epoch_membership,
+        task_state.id,
+        &event,
+        sender,
+        &task_state.upgrade_lock,
+    )
+    .await?;
+
+    if vote.epoch().is_some() {
+        // If the vote sender belongs to the next epoch, collect it separately to form the second QC
+        let has_stake = epoch_membership
+            .next_epoch()
+            .await?
+            .has_stake(&vote.vote.signing_key())
+            .await;
+        if has_stake {
+            handle_vote(
+                &mut task_state.next_epoch_vote_collectors,
+                &vote.vote.clone().into(),
+                task_state.public_key.clone(),
+                &epoch_membership.next_epoch().await?.clone(),
+                task_state.id,
+                &event,
+                sender,
+                &task_state.upgrade_lock,
+                EpochTransitionIndicator::InTransition,
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Handle a `TimeoutVoteRecv` event.
 pub(crate) async fn handle_timeout_vote_recv<
     TYPES: NodeType,
@@ -168,6 +239,8 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
 
     let consensus_reader = task_state.consensus.read().await;
     let high_qc = consensus_reader.high_qc().clone();
+    // The light client state update cert will be formed along with the eqc.
+    let state_cert = consensus_reader.state_cert().clone();
     let is_eqc = consensus_reader.is_leaf_extended(high_qc.data.leaf_commit);
     drop(consensus_reader);
 
@@ -189,9 +262,13 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             high_qc.epoch(),
             task_state.id
         );
+        let eqc = ExtendedQuorumCertificate {
+            qc: high_qc,
+            state_cert,
+        };
         broadcast_event(
             Arc::new(HotShotEvent::ExtendedQcSend(
-                high_qc,
+                eqc,
                 next_epoch_high_qc,
                 task_state.public_key.clone(),
             )),

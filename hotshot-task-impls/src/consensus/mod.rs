@@ -8,6 +8,7 @@ use std::{sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
+use handlers::handle_extended_quorum_vote_recv;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -20,7 +21,6 @@ use hotshot_types::{
         node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
     },
-    utils::option_epoch_from_block_number,
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -32,8 +32,11 @@ use self::handlers::{
 };
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, validate_qc_and_next_epoch_qc},
-    vote_collection::VoteCollectorsMap,
+    helpers::{
+        broadcast_event, validate_light_client_state_update_certificate,
+        validate_qc_and_next_epoch_qc,
+    },
+    vote_collection::{ExtendedQuorumVoteCollectorsMap, VoteCollectorsMap},
 };
 
 /// Event handlers for use in the `handle` method.
@@ -66,6 +69,9 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
         NextEpochQuorumCertificate2<TYPES>,
         V,
     >,
+
+    /// A map of collector tasks for light client state update vote
+    pub extended_quorum_vote_collectors: ExtendedQuorumVoteCollectorsMap<TYPES, V>,
 
     /// A map of `TimeoutVote` collector tasks.
     pub timeout_vote_collectors:
@@ -122,6 +128,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::debug!("Failed to handle QuorumVoteRecv event; error = {e}");
                 }
             },
+            HotShotEvent::ExtendedQuorumVoteRecv(ref vote) => {
+                if let Err(e) =
+                    handle_extended_quorum_vote_recv(vote, Arc::clone(&event), &sender, self).await
+                {
+                    tracing::debug!("Failed to handle ExtendedQuorumVoteRecv event; error = {e}");
+                }
+            },
             HotShotEvent::TimeoutVoteRecv(ref vote) => {
                 if let Err(e) =
                     handle_timeout_vote_recv(vote, Arc::clone(&event), &sender, self).await
@@ -143,45 +156,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::debug!("Failed to handle Timeout event; error = {e}");
                 }
             },
-            HotShotEvent::ExtendedQc2Formed(eqc) => {
-                let cert_view = eqc.view_number();
-                let cert_block_number = self
-                    .consensus
-                    .read()
-                    .await
-                    .saved_leaves()
-                    .get(&eqc.data.leaf_commit)
-                    .context(error!(
-                        "Could not find the leaf for the eQC. It shouldn't happen."
-                    ))?
-                    .height();
-
-                let cert_epoch = option_epoch_from_block_number::<TYPES>(
-                    true,
-                    cert_block_number,
-                    self.epoch_height,
-                );
-                // Transition to the new epoch by sending ViewChange
-                let next_epoch = cert_epoch.map(|x| x + 1);
-                tracing::info!("Entering new epoch: {:?}", next_epoch);
-                broadcast_event(
-                    Arc::new(HotShotEvent::ViewChange(cert_view + 1, next_epoch)),
-                    &sender,
-                )
-                .await;
-            },
-            HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {
+            HotShotEvent::ExtendedQcRecv(eqc, next_epoch_high_qc, _) => {
                 if !self
                     .consensus
                     .read()
                     .await
-                    .is_leaf_extended(high_qc.data.leaf_commit)
+                    .is_leaf_extended(eqc.qc.data.leaf_commit)
                 {
                     tracing::warn!("Received extended QC but we can't verify the leaf is extended");
                     return Ok(());
                 }
                 if let Err(e) = validate_qc_and_next_epoch_qc(
-                    high_qc,
+                    &eqc.qc,
                     Some(next_epoch_high_qc),
                     &self.consensus,
                     &self.membership_coordinator,
@@ -193,8 +179,23 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     return Ok(());
                 }
 
+                if let Err(e) = validate_light_client_state_update_certificate(
+                    &eqc.state_cert,
+                    &self.membership_coordinator,
+                )
+                .await
+                {
+                    tracing::error!(
+                        "Received invalid light client state update certificate: {}",
+                        e
+                    );
+                    return Ok(());
+                }
+
                 let mut consensus_writer = self.consensus.write().await;
-                let high_qc_updated = consensus_writer.update_high_qc(high_qc.clone()).is_ok();
+                let high_qc_updated = consensus_writer
+                    .update_high_qc_and_state_cert(eqc.qc.clone(), eqc.state_cert.clone())
+                    .is_ok();
                 let next_high_qc_updated = consensus_writer
                     .update_next_epoch_high_qc(next_epoch_high_qc.clone())
                     .is_ok();
@@ -202,18 +203,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
 
                 tracing::debug!(
                     "Received Extended QC for view {:?} and epoch {:?}.",
-                    high_qc.view_number(),
-                    high_qc.epoch()
+                    eqc.view_number(),
+                    eqc.epoch()
                 );
                 if high_qc_updated || next_high_qc_updated {
                     // Send ViewChange indicating new view and new epoch.
-                    let next_epoch = high_qc.data.epoch().map(|x| x + 1);
+                    let next_epoch = eqc.qc.data.epoch().map(|x| x + 1);
                     tracing::info!("Entering new epoch: {:?}", next_epoch);
                     broadcast_event(
-                        Arc::new(HotShotEvent::ViewChange(
-                            high_qc.view_number() + 1,
-                            next_epoch,
-                        )),
+                        Arc::new(HotShotEvent::ViewChange(eqc.view_number() + 1, next_epoch)),
                         &sender,
                     )
                     .await;

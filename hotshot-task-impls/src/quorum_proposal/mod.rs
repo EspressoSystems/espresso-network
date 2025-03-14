@@ -19,7 +19,7 @@ use hotshot_types::{
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::{QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{ExtendedQuorumCertificate, QuorumCertificate2, UpgradeCertificate},
     traits::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
@@ -111,12 +111,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     ProposalDependency::Qc => {
                         if let HotShotEvent::Qc2Formed(either::Left(qc)) = event {
                             qc.view_number() + 1
+                        } else if let HotShotEvent::ExtendedQcFormed(either::Left(eqc)) = event {
+                            eqc.qc.view_number() + 1
                         } else {
                             return false;
                         }
                     },
                     ProposalDependency::TimeoutCert => {
-                        if let HotShotEvent::Qc2Formed(either::Right(timeout)) = event {
+                        if let HotShotEvent::Qc2Formed(either::Right(timeout))
+                        | HotShotEvent::ExtendedQcFormed(either::Right(timeout)) = event
+                        {
                             timeout.view_number() + 1
                         } else {
                             return false;
@@ -230,6 +234,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     qc_dependency.mark_as_completed(event);
                 },
             },
+            HotShotEvent::ExtendedQcFormed(eqc) => match eqc {
+                Either::Right(_) => timeout_dependency.mark_as_completed(event),
+                Either::Left(_) => qc_dependency.mark_as_completed(event),
+            },
             HotShotEvent::ViewSyncFinalizeCertificateRecv(_) => {
                 view_sync_dependency.mark_as_completed(event);
             },
@@ -281,6 +289,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         event: Arc<HotShotEvent<TYPES>>,
         epoch_transition_indicator: EpochTransitionIndicator,
     ) -> Result<()> {
+        tracing::debug!(
+            "Start attempting to make dependency task for view {view_number:?} and event {event:?}"
+        );
+
         let epoch_membership = self
             .membership_coordinator
             .membership_for_epoch(epoch_number)
@@ -448,10 +460,68 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                         .wrap()
                         .context(error!("Failed to update high QC in storage!"))?;
 
-                    handle_eqc_formed(qc.view_number(), qc.data.leaf_commit, self, &event_sender)
-                        .await;
-
                     let view_number = qc.view_number() + 1;
+                    self.create_dependency_task_if_new(
+                        view_number,
+                        epoch_number,
+                        event_receiver,
+                        event_sender,
+                        Arc::clone(&event),
+                        epoch_transition_indicator,
+                    )
+                    .await?;
+                },
+            },
+            HotShotEvent::ExtendedQcFormed(cert) => match cert {
+                either::Right(timeout_cert) => {
+                    let view_number = timeout_cert.view_number + 1;
+                    self.create_dependency_task_if_new(
+                        view_number,
+                        epoch_number,
+                        event_receiver,
+                        event_sender,
+                        Arc::clone(&event),
+                        epoch_transition_indicator,
+                    )
+                    .await?;
+                },
+                either::Left(eqc) => {
+                    // Only update if the qc is from a newer view
+                    if eqc.qc.view_number() <= self.consensus.read().await.high_qc().view_number {
+                        tracing::trace!(
+                            "Received a QC for a view that was not > than our current high QC"
+                        );
+                    }
+                    self.consensus
+                        .write()
+                        .await
+                        .update_high_qc_and_state_cert(eqc.qc.clone(), eqc.state_cert.clone())
+                        .wrap()
+                        .context(error!(
+                            "Failed to update high QC or state certificate in internal consensus state!"
+                        ))?;
+
+                    // Then update the high QC and the state certificate in storage
+                    self.storage
+                        .write()
+                        .await
+                        .update_high_qc2_and_state_cert(eqc.qc.clone(), eqc.state_cert.clone())
+                        .await
+                        .wrap()
+                        .context(error!(
+                            "Failed to update high QC or state certificate in storage!"
+                        ))?;
+
+                    handle_eqc_formed(
+                        eqc.qc.view_number(),
+                        eqc.qc.data.leaf_commit,
+                        self,
+                        &event_sender,
+                        self.epoch_height,
+                    )
+                    .await;
+
+                    let view_number = eqc.qc.view_number() + 1;
                     self.create_dependency_task_if_new(
                         view_number,
                         epoch_number,
@@ -569,7 +639,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let keep_view = TYPES::View::new(view.saturating_sub(1));
                 self.cancel_tasks(keep_view);
             },
-            HotShotEvent::HighQcSend(qc, ..) | HotShotEvent::ExtendedQcSend(qc, ..) => {
+            HotShotEvent::HighQcSend(qc, ..)
+            | HotShotEvent::ExtendedQcSend(ExtendedQuorumCertificate { qc, .. }, ..) => {
                 ensure!(qc.view_number() > self.highest_qc.view_number());
                 let cert_epoch_number = qc.data.epoch;
 
@@ -621,6 +692,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     next_epoch_qc.data.leaf_commit,
                     self,
                     &event_sender,
+                    self.epoch_height,
                 )
                 .await;
             },

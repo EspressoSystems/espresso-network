@@ -59,12 +59,12 @@ pub struct TimingData {
 }
 
 pub fn default_hotshot_config<TYPES: NodeType>(
-    known_nodes_with_stake: Vec<PeerConfig<TYPES::SignatureKey>>,
-    known_da_nodes: Vec<PeerConfig<TYPES::SignatureKey>>,
+    known_nodes_with_stake: Vec<PeerConfig<TYPES>>,
+    known_da_nodes: Vec<PeerConfig<TYPES>>,
     num_bootstrap_nodes: usize,
     epoch_height: u64,
     epoch_start_block: u64,
-) -> HotShotConfig<TYPES::SignatureKey> {
+) -> HotShotConfig<TYPES> {
     HotShotConfig {
         start_threshold: (1, 1),
         num_nodes_with_stake: NonZeroUsize::new(known_nodes_with_stake.len()).unwrap(),
@@ -96,15 +96,12 @@ pub fn default_hotshot_config<TYPES: NodeType>(
 pub fn gen_node_lists<TYPES: NodeType>(
     num_staked_nodes: u64,
     num_da_nodes: u64,
-) -> (
-    Vec<PeerConfig<TYPES::SignatureKey>>,
-    Vec<PeerConfig<TYPES::SignatureKey>>,
-) {
+) -> (Vec<PeerConfig<TYPES>>, Vec<PeerConfig<TYPES>>) {
     let mut staked_nodes = Vec::new();
     let mut da_nodes = Vec::new();
 
     for n in 0..num_staked_nodes {
-        let validator_config: ValidatorConfig<TYPES::SignatureKey> =
+        let validator_config: ValidatorConfig<TYPES> =
             ValidatorConfig::generated_from_seed_indexed([0u8; 32], n, 1, n < num_da_nodes);
 
         let peer_config = validator_config.public_config();
@@ -125,7 +122,7 @@ pub struct TestDescription<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     ///
     /// Note: this is not the same as the `HotShotConfig` passed to test nodes for `SystemContext::init`;
     /// those configs are instead provided by the resource generators in the test launcher.
-    pub test_config: HotShotConfig<TYPES::SignatureKey>,
+    pub test_config: HotShotConfig<TYPES>,
     /// Whether to skip initializing nodes that will start late, which will catch up later with
     /// `HotShotInitializer::from_reload` in the spinning task.
     pub skip_late: bool,
@@ -235,7 +232,7 @@ pub async fn create_test_handle<
     node_id: u64,
     network: Network<TYPES, I>,
     memberships: Arc<RwLock<TYPES::Membership>>,
-    config: HotShotConfig<TYPES::SignatureKey>,
+    config: HotShotConfig<TYPES>,
     storage: I::Storage,
     marketplace_config: MarketplaceConfig<TYPES, I>,
 ) -> SystemContextHandle<TYPES, I, V> {
@@ -255,13 +252,14 @@ pub async fn create_test_handle<
     // See whether or not we should be DA
     let is_da = node_id < config.da_staked_committee_size as u64;
 
-    let validator_config: ValidatorConfig<TYPES::SignatureKey> =
+    let validator_config: ValidatorConfig<TYPES> =
         ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, 1, is_da);
 
     // Get key pair for certificate aggregation
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
     let membership_coordinator = EpochMembershipCoordinator::new(memberships, config.epoch_height);
+    let state_private_key = validator_config.state_private_key.clone();
 
     let behaviour = (metadata.behaviour)(node_id);
     match behaviour {
@@ -271,6 +269,7 @@ pub async fn create_test_handle<
                 .spawn_twin_handles(
                     public_key,
                     private_key,
+                    state_private_key,
                     node_id,
                     config,
                     membership_coordinator,
@@ -290,6 +289,7 @@ pub async fn create_test_handle<
                 .spawn_handle(
                     public_key,
                     private_key,
+                    state_private_key,
                     node_id,
                     config,
                     membership_coordinator,
@@ -305,6 +305,7 @@ pub async fn create_test_handle<
             let hotshot = SystemContext::<TYPES, I, V>::new(
                 public_key,
                 private_key,
+                state_private_key,
                 node_id,
                 config,
                 membership_coordinator,
@@ -561,7 +562,7 @@ where
         let da_staked_committee_size = test_config.da_staked_committee_size;
 
         let validator_config = Rc::new(move |node_id| {
-            ValidatorConfig::<TYPES::SignatureKey>::generated_from_seed_indexed(
+            ValidatorConfig::<TYPES>::generated_from_seed_indexed(
                 [0u8; 32],
                 node_id,
                 1,
@@ -579,7 +580,7 @@ where
             view_sync_timeout,
         } = timing_data;
         // TODO this should really be using the timing config struct
-        let mod_hotshot_config = move |hotshot_config: &mut HotShotConfig<TYPES::SignatureKey>| {
+        let mod_hotshot_config = move |hotshot_config: &mut HotShotConfig<TYPES>| {
             hotshot_config.next_view_timeout = next_view_timeout;
             hotshot_config.builder_timeout = builder_timeout;
             hotshot_config.data_request_delay = data_request_delay;

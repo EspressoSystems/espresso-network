@@ -20,7 +20,10 @@ use hotshot_types::{
     drb::DrbResult,
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        UpgradeCertificate,
+    },
 };
 
 use crate::{NodeType, SeqTypes, ViewNumber};
@@ -233,5 +236,16 @@ impl SequencerPersistence for NoStorage {
 
     async fn store_stake(&self, _epoch: EpochNumber, _stake: StakeTables) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn add_state_cert(
+        &self,
+        _state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>> {
+        Ok(LightClientStateUpdateCertificate::<SeqTypes>::genesis())
     }
 }

@@ -14,9 +14,10 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
     data::{BlockError, Leaf2, VidCommitment},
+    light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
-        node_implementation::NodeType,
+        node_implementation::{ConsensusTime, NodeType},
         BlockPayload, ValidatedState,
     },
     utils::BuilderCommitment,
@@ -402,6 +403,14 @@ impl<
 
     fn get_auction_results(&self) -> Option<TYPES::AuctionResult> {
         Some(TYPES::AuctionResult { urls: vec![] })
+    }
+
+    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState> {
+        LightClientState::new(
+            view.u64(),
+            self.block_number,
+            self.payload_commitment.as_ref(),
+        )
     }
 }
 
