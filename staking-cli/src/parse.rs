@@ -23,16 +23,11 @@ impl Commission {
     }
 }
 
-impl TryFrom<u64> for Commission {
+impl TryFrom<&str> for Commission {
     type Error = ParseCommissionError;
 
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        if value > 10000 {
-            return Err("Commission must be between 0 (0.00%) and 100 (100.00%)"
-                .to_string()
-                .into());
-        }
-        Ok(Self(value as u16))
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        parse_commission(s)
     }
 }
 
@@ -99,20 +94,7 @@ mod test {
         }
 
         let failure_cases = [
-            /// negative
-            "-1",
-            "-0.001",
-            /// too many decimals
-            "0.123",
-            "0.1234",
-            "99.999",
-            ".001",
-            /// too large
-            "100.01",
-            "100.1",
-            "1000",
-            /// not a number
-            "fooo",
+            "-1", "-0.001", "0.123", "0.1234", "99.999", ".001", "100.01", "100.1", "1000", "fooo",
             "0.0.",
         ];
         for input in failure_cases {

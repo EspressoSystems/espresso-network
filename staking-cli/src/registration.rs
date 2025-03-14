@@ -3,7 +3,7 @@ use alloy::{
     sol_types::SolValue as _, transports::Transport,
 };
 use anyhow::Result;
-use ark_ec::{twisted_edwards::TECurveConfig, CurveGroup};
+use ark_ec::CurveGroup;
 use contract_bindings_alloy::staketable::{
     EdOnBN254::EdOnBN254Point,
     StakeTable::StakeTableInstance,
@@ -14,7 +14,7 @@ use hotshot_contract_adapter::{
     jellyfish::ParsedG1Point,
     stake_table::{ParsedEdOnBN254Point, ParsedG2Point},
 };
-use jf_signature::{bls_over_bn254::KeyPair, constants::CS_ID_BLS_BN254};
+use jf_signature::constants::CS_ID_BLS_BN254;
 
 use crate::{parse::Commission, BLSKeyPair, SchnorrKeyPair, StateVerKey};
 
@@ -42,7 +42,6 @@ fn to_alloy_ed_on_bn_point(p: ParsedEdOnBN254Point) -> EdOnBN254Point {
 }
 
 pub async fn register_validator<P: Provider<T>, T: Transport + Clone>(
-    provider: P,
     stake_table: StakeTableInstance<T, P>,
     commission: Commission,
     validator_address: Address,
@@ -76,42 +75,30 @@ pub async fn register_validator<P: Provider<T>, T: Transport + Clone>(
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
-
     use alloy::providers::WalletProvider;
-    use futures_util::StreamExt;
+    use contract_bindings_alloy::staketable::StakeTable;
 
     use super::*;
-    use crate::deploy::TestSystem;
+    use crate::{deploy::TestSystem, l1::decode_log};
 
     #[tokio::test]
     async fn test_register_validator() -> Result<()> {
-        let exit_escrow_period = Duration::from_secs(60);
-        let commission = 1234.try_into()?;
-        let system = TestSystem::deploy(exit_escrow_period).await?;
+        let system = TestSystem::deploy().await?;
 
-        let mut register_filter = system
-            .stake_table
-            .ValidatorRegistered_filter()
-            .watch()
-            .await?
-            .into_stream();
-
-        let validator_address = system.provider.default_signer_address();
+        let validator_address = system.deployer_address;
         let receipt = register_validator(
-            system.provider.clone(),
             system.stake_table,
-            commission,
+            system.commission,
             validator_address,
             system.bls_key_pair,
             system.schnorr_key_pair.ver_key(),
         )
         .await?;
-        assert_eq!(receipt.status(), true);
+        assert!(receipt.status());
 
-        let (event, _) = register_filter.next().await.unwrap()?;
+        let event = decode_log::<StakeTable::ValidatorRegistered>(&receipt).unwrap();
         assert_eq!(event.account, validator_address);
-        assert_eq!(event.commission, commission.to_evm());
+        assert_eq!(event.commission, system.commission.to_evm());
 
         // TODO verify we can parse keys and verify signature
 

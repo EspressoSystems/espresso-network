@@ -394,6 +394,7 @@ dependencies = [
  "const-hex",
  "derive_more 2.0.1",
  "foldhash",
+ "getrandom 0.2.15",
  "hashbrown 0.15.2",
  "indexmap 2.7.1",
  "itoa",
@@ -3814,9 +3815,9 @@ checksum = "e3f497e87b038c09a155dfd169faa5ec940d0644635555ef6bd464ac20e97397"
 
 [[package]]
 name = "either"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7914353092ddf589ad78f25c5c1c21b7f80b0ff8621e7c814c3485b5306da9d"
+checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 dependencies = [
  "serde",
 ]
@@ -11184,6 +11185,7 @@ dependencies = [
  "tokio",
  "toml 0.8.20",
  "tracing",
+ "tracing-subscriber 0.3.19",
  "url",
 ]
 

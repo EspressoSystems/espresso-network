@@ -10,6 +10,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
+use delegation::delegate;
 pub(crate) use hotshot_types::{
     light_client::{StateSignKey, StateVerKey},
     signature_key::{BLSPrivKey, BLSPubKey},
@@ -30,6 +31,7 @@ mod registration;
 
 #[cfg(any(test, feature = "testing"))]
 mod deploy;
+mod l1;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
@@ -175,6 +177,10 @@ fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
 }
 
 pub async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let mut cli = Args::parse();
     let config_path = cli.config_path();
     // Get config file
@@ -260,25 +266,30 @@ pub async fn main() -> Result<()> {
         .on_http(config.rpc_url.clone());
     let stake_table = StakeTableInstance::new(config.stake_table_address, provider.clone());
 
-    match config.commands {
+    let result = match config.commands {
         Commands::Info => todo!(),
         Commands::RegisterValidator {
             consensus_private_key,
             state_private_key,
             commission,
-        } => register_validator(
-            provider,
-            stake_table,
-            commission,
-            account,
-            (consensus_private_key).into(),
-            (&state_private_key).into(),
-        ),
-        Commands::DeregisterValidator {} => todo!(),
+        } => {
+            register_validator(
+                stake_table,
+                commission,
+                account,
+                (consensus_private_key).into(),
+                (&state_private_key).into(),
+            )
+            .await
+        },
+        Commands::DeregisterValidator {} => {
+            todo!();
+            // deregister_validator(provider, stake_table).await?
+        },
         Commands::Delegate {
             validator_address,
             amount,
-        } => todo!(),
+        } => delegate(stake_table, validator_address, amount).await,
         Commands::Undelegate {
             validator_address,
             amount,
@@ -286,6 +297,7 @@ pub async fn main() -> Result<()> {
         Commands::ClaimWithdrawal => todo!(),
         _ => unreachable!(),
     };
+    tracing::info!("Result: {:?}", result);
     Ok(())
 }
 
@@ -363,8 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cli_register_validator() -> Result<()> {
-        let exit_escrow_period = Duration::from_secs(60);
-        let system = TestSystem::deploy(exit_escrow_period).await?;
+        let system = TestSystem::deploy().await?;
         cmd()
             .arg("--mnemonic")
             .arg(DEV_MNEMONIC)
@@ -389,6 +400,26 @@ mod tests {
             )
             .arg("--commission")
             .arg("12.34")
+            .output()?
+            .assert_success();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cli_delegate() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.register_validator().await?;
+
+        cmd()
+            .arg("--mnemonic")
+            .arg(DEV_MNEMONIC)
+            .arg("--rpc-url")
+            .arg(system.rpc_url.to_string())
+            .arg("delegate")
+            .arg("--validator-address")
+            .arg(system.deployer_address.to_string())
+            .arg("--amount")
+            .arg("123")
             .output()?
             .assert_success();
         Ok(())
