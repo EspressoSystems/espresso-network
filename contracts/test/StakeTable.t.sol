@@ -618,6 +618,10 @@ contract StakeTable_register_Test is Test {
         vm.stopPrank();
     }
 
+    function test_revertIf_undelegate_AfterValidatorExit() public {
+       // TODO
+    }
+
     // TODO: using openzeppelin contracts for this now
     // test set admin succeeds
     // function test_setAdmin_succeeds() public {
