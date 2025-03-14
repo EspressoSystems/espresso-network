@@ -62,19 +62,6 @@ async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<TYPES
         tracing::trace!("{e:?}");
     }
 
-    if let Err(e) = validation_info
-        .storage
-        .write()
-        .await
-        .update_undecided_state2(
-            consensus_writer.saved_leaves().clone(),
-            consensus_writer.validated_state_map().clone(),
-        )
-        .await
-    {
-        tracing::warn!("Couldn't store undecided state.  Error: {:?}", e);
-    }
-
     // #3967 REVIEW NOTE: Why are we cloning justify_qc here just to get the view_number out?
     let liveness_check = proposal.data.justify_qc().view_number() > consensus_writer.locked_view();
     // if we are using HS2 we update our locked view for any QC from a leader greater than our current lock

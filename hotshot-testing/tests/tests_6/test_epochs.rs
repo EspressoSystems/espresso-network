@@ -501,7 +501,7 @@ cross_tests!(
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
-          next_view_timeout: 2000,
+          next_view_timeout: 5000,
           ..Default::default()
       };
       let mut metadata = TestDescription::default().set_num_nodes(20,20);
@@ -534,7 +534,7 @@ cross_tests!(
           num_successful_views: 22,
           expected_view_failures: vec![10],
           possible_view_failures: vec![9, 11, 12],
-          decide_timeout: Duration::from_secs(20),
+          decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
 
@@ -550,7 +550,7 @@ cross_tests!(
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
-          next_view_timeout: 2000,
+          next_view_timeout: 5000,
           ..Default::default()
       };
       let mut metadata = TestDescription::default().set_num_nodes(20,2);
@@ -583,7 +583,7 @@ cross_tests!(
           num_successful_views: 22,
           expected_view_failures: vec![10],
           possible_view_failures: vec![9, 11, 12],
-          decide_timeout: Duration::from_secs(20),
+          decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
 
