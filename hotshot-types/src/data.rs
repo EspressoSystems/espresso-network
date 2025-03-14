@@ -142,7 +142,7 @@ impl_u64_wrapper!(EpochNumber);
 impl EpochNumber {
     /// Create a genesis number (1)
     #[allow(dead_code)]
-    fn genesis() -> Self {
+    pub fn genesis() -> Self {
         Self(1)
     }
 }

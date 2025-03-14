@@ -23,11 +23,11 @@ use num_traits::CheckedSub;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::Version;
+use vbs::version::{StaticVersionType, Version};
 
 use super::{
     auction::ExecutionError, fee_info::FeeError, instance_state::NodeState, BlockMerkleCommitment,
-    BlockSize, FeeMerkleCommitment, L1Client,
+    BlockSize, FeeMerkleCommitment, L1Client, MarketplaceVersion,
 };
 use crate::{
     traits::StateCatchup,
@@ -667,7 +667,7 @@ fn validate_builder_fee(
         // TODO Marketplace signatures are placeholders for now. In
         // finished Marketplace signatures will cover the full
         // transaction.
-        if version.minor >= 3 {
+        if version.minor >= MarketplaceVersion::MINOR {
             fee_info
                 .account()
                 .validate_sequencing_fee_signature_marketplace(

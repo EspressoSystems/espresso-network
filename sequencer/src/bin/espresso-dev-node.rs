@@ -292,7 +292,6 @@ async fn main() -> anyhow::Result<()> {
             async { Ok(lc_genesis.clone()) }.boxed(),
             None,
             contracts.clone(),
-            None, // initial stake table
         )
         .await?;
 

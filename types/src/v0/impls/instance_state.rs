@@ -5,10 +5,9 @@ use vbs::version::Version;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::{StaticVersion, StaticVersionType};
 
-use super::state::ValidatedState;
-use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
-    Timestamp, Upgrade, UpgradeMode,
+use super::{
+    state::ValidatedState, traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo,
+    L1Client, PubKey, Timestamp, Upgrade, UpgradeMode, UpgradeType,
 };
 
 /// Represents the immutable state of a node.
@@ -24,7 +23,7 @@ pub struct NodeState {
     pub genesis_header: GenesisHeader,
     pub genesis_state: ValidatedState,
     pub l1_genesis: Option<L1BlockInfo>,
-    pub epoch_height: Option<u64>,
+    pub epoch_height: u64,
 
     /// Map containing all planned and executed upgrades.
     ///
@@ -65,7 +64,7 @@ impl NodeState {
             l1_genesis: None,
             upgrades: Default::default(),
             current_version,
-            epoch_height: None,
+            epoch_height: 0,
         }
     }
 
@@ -94,6 +93,20 @@ impl NodeState {
                 .expect("Failed to create L1 client"),
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 2>::version(),
+        )
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn mock_v3() -> Self {
+        use vbs::version::StaticVersion;
+
+        Self::new(
+            0,
+            ChainConfig::default(),
+            L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            mock::MockStateCatchup::default(),
+            StaticVersion::<0, 3>::version(),
         )
     }
 
@@ -131,16 +144,23 @@ impl NodeState {
         self
     }
 
-    pub fn with_current_version(mut self, ver: Version) -> Self {
-        self.current_version = ver;
+    pub fn with_current_version(mut self, version: Version) -> Self {
+        self.current_version = version;
         self
     }
 
-    // TODO remove following `Memberships` trait update:
-    // https://github.com/EspressoSystems/HotShot/issues/3966
-    pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
-        self.epoch_height = Some(epoch_height);
-        self
+    /// Given a `version`, get the correct `ChainConfig` from `self.upgrades`.
+    pub fn upgrade_chain_config(&self, version: Version) -> Option<ChainConfig> {
+        let chain_config = (version > self.current_version).then(|| {
+            self.upgrades
+                .get(&version)
+                .and_then(|upgrade| match upgrade.upgrade_type {
+                    UpgradeType::Fee { chain_config } => Some(chain_config),
+                    UpgradeType::Epoch { chain_config } => Some(chain_config),
+                    UpgradeType::Marketplace { chain_config } => Some(chain_config),
+                })
+        });
+        chain_config?
     }
 }
 
@@ -288,5 +308,79 @@ pub mod mock {
         fn name(&self) -> String {
             "MockStateCatchup".into()
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use crate::{v0::Versions, EpochVersion, FeeVersion, SequencerVersions, ViewBasedUpgrade};
+
+    #[test]
+    fn test_upgrade_chain_config_version_02() {
+        let mut upgrades = std::collections::BTreeMap::new();
+        type MySequencerVersions = SequencerVersions<StaticVersion<0, 1>, FeeVersion>;
+
+        let mode = UpgradeMode::View(ViewBasedUpgrade {
+            start_voting_view: None,
+            stop_voting_view: None,
+            start_proposing_view: 1,
+            stop_proposing_view: 10,
+        });
+
+        let upgraded_chain_config = ChainConfig {
+            max_block_size: 300.into(),
+            base_fee: 1.into(),
+            ..Default::default()
+        };
+
+        let upgrade_type = UpgradeType::Fee {
+            chain_config: upgraded_chain_config,
+        };
+
+        upgrades.insert(
+            <MySequencerVersions as Versions>::Upgrade::VERSION,
+            Upgrade { mode, upgrade_type },
+        );
+
+        let instance_state = NodeState::mock().with_upgrades(upgrades);
+
+        let chain_config = instance_state.upgrade_chain_config(FeeVersion::version());
+        assert_eq!(Some(upgraded_chain_config), chain_config);
+    }
+
+    #[test]
+    fn test_upgrade_chain_config_version_03() {
+        let mut upgrades = std::collections::BTreeMap::new();
+        type MySequencerVersions = SequencerVersions<FeeVersion, EpochVersion>;
+
+        let mode = UpgradeMode::View(ViewBasedUpgrade {
+            start_voting_view: None,
+            stop_voting_view: None,
+            start_proposing_view: 1,
+            stop_proposing_view: 10,
+        });
+
+        let upgraded_chain_config = ChainConfig {
+            max_block_size: 300.into(),
+            base_fee: 1.into(),
+            stake_table_contract: Some(Default::default()),
+            ..Default::default()
+        };
+
+        let upgrade_type = UpgradeType::Epoch {
+            chain_config: upgraded_chain_config,
+        };
+
+        upgrades.insert(
+            <MySequencerVersions as Versions>::Upgrade::VERSION,
+            Upgrade { mode, upgrade_type },
+        );
+
+        let instance_state = NodeState::mock_v2().with_upgrades(upgrades);
+
+        let chain_config = instance_state.upgrade_chain_config(EpochVersion::version());
+        assert_eq!(Some(upgraded_chain_config), chain_config);
     }
 }

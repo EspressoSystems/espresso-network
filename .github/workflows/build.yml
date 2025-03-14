@@ -45,10 +45,10 @@ jobs:
       - name: Build
         # Build in release without `testing` feature, this should work without `hotshot_example` config.
         run: |
-          cargo build --locked --release --workspace
+          cargo build --features "fee, pos, marketplace" --locked --release --workspace
       
       - name: Build sequencer-sqlite 
-        run: cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
+        run: cargo build --features "fee, pos, marketplace" --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
 
       - name: Build Espresso Dev Node
         # Espresso Dev Node currently requires testing feature, so it is built separately.
