@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use espresso_types::{PubKey, SeqTypes};
@@ -6,13 +6,15 @@ use futures::{
     channel::mpsc::{self, Receiver, SendError, Sender},
     Sink, SinkExt, Stream, StreamExt,
 };
-use hotshot_query_service::Leaf2;
-use hotshot_types::event::{Event, EventType};
+use hotshot_types::{
+    data::Leaf2,
+    event::{Event, EventType},
+};
 use serde::{Deserialize, Serialize};
 use tokio::{spawn, task::JoinHandle};
 use url::Url;
 
-use super::{get_stake_table_from_sequencer, ProcessNodeIdentityUrlStreamTask};
+use super::{get_stake_table_from_sequencer, LeafAndBlock, ProcessNodeIdentityUrlStreamTask};
 use crate::service::{
     client_id::ClientId,
     client_message::InternalClientMessage,
@@ -21,7 +23,7 @@ use crate::service::{
         ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
         ProcessDistributeVotersHandlingTask,
     },
-    data_state::{DataState, ProcessLeafStreamTask, ProcessNodeIdentityStreamTask},
+    data_state::{DataState, ProcessLeafAndBlockPairStreamTask, ProcessNodeIdentityStreamTask},
     server_message::ServerMessage,
 };
 
@@ -30,9 +32,10 @@ pub struct NodeValidatorAPI<K> {
     pub process_distribute_block_detail_handle: Option<ProcessDistributeBlockDetailHandlingTask>,
     pub process_distribute_node_identity_handle: Option<ProcessDistributeNodeIdentityHandlingTask>,
     pub process_distribute_voters_handle: Option<ProcessDistributeVotersHandlingTask>,
-    pub process_leaf_stream_handle: Option<ProcessLeafStreamTask>,
+    pub process_leaf_stream_handle: Option<ProcessLeafAndBlockPairStreamTask>,
     pub process_node_identity_stream_handle: Option<ProcessNodeIdentityStreamTask>,
     pub process_url_stream_handle: Option<ProcessNodeIdentityUrlStreamTask>,
+    pub submit_public_urls_handle: Option<SubmitPublicUrlsToScrapeTask>,
     pub url_sender: K,
 }
 
@@ -128,9 +131,9 @@ impl HotShotEventProcessingTask {
             match event {
                 EventType::Decide { leaf_chain, .. } => {
                     for leaf_info in leaf_chain.iter().rev() {
-                        let leaf2 = leaf_info.leaf.clone();
+                        let leaf = leaf_info.leaf.clone();
 
-                        let send_result = leaf_sender.send(leaf2).await;
+                        let send_result = leaf_sender.send(leaf).await;
                         if let Err(err) = send_result {
                             tracing::error!("leaf sender closed: {}", err);
                             panic!("HotShotEventProcessingTask leaf sender is closed, unrecoverable, the block state will stagnate.");
@@ -260,6 +263,53 @@ impl ProcessExternalMessageHandlingTask {
     }
 }
 
+/// [SubmitPublicUrlsToScrapeTask] is a task that is capable of submitting
+/// public urls to a url sender at a regular interval.  This task will
+/// submit the provided urls to the url sender every 5 minutes.
+pub struct SubmitPublicUrlsToScrapeTask {
+    pub task_handle: Option<JoinHandle<()>>,
+}
+
+const PUBLIC_URL_RESUBMIT_INTERVAL: Duration = Duration::from_secs(300);
+
+impl SubmitPublicUrlsToScrapeTask {
+    pub fn new<S>(url_sender: S, urls: Vec<Url>) -> Self
+    where
+        S: Sink<Url, Error = SendError> + Send + Unpin + 'static,
+    {
+        let task_handle = spawn(Self::submit_urls(url_sender, urls));
+
+        Self {
+            task_handle: Some(task_handle),
+        }
+    }
+
+    pub async fn submit_urls<S>(url_sender: S, urls: Vec<Url>)
+    where
+        S: Sink<Url, Error = SendError> + Unpin + 'static,
+    {
+        if urls.is_empty() {
+            tracing::warn!("no urls to send to url sender");
+            return;
+        }
+
+        let mut url_sender = url_sender;
+        tracing::debug!("sending initial urls to url sender to process node identity");
+        loop {
+            for url in urls.iter() {
+                let send_result = url_sender.send(url.clone()).await;
+                if let Err(err) = send_result {
+                    tracing::error!("url sender closed: {}", err);
+                    panic!("SubmitPublicUrlsToScrapeTask url sender is closed, unrecoverable, the node state will stagnate.");
+                }
+            }
+
+            // Sleep for 5 minutes before sending the urls again
+            tokio::time::sleep(PUBLIC_URL_RESUBMIT_INTERVAL).await;
+        }
+    }
+}
+
 /// [Drop] implementation for [ProcessExternalMessageHandlingTask] that will
 /// cancel the task when the structure is dropped.
 impl Drop for ProcessExternalMessageHandlingTask {
@@ -280,7 +330,7 @@ impl Drop for ProcessExternalMessageHandlingTask {
 pub async fn create_node_validator_processing(
     config: NodeValidatorConfig,
     internal_client_message_receiver: Receiver<InternalClientMessage<Sender<ServerMessage>>>,
-    leaf_receiver: Receiver<Leaf2<SeqTypes>>,
+    leaf_and_block_pair_receiver: Receiver<LeafAndBlock<SeqTypes>>,
 ) -> Result<NodeValidatorAPI<Sender<Url>>, CreateNodeValidatorProcessingError> {
     let client_thread_state = ClientThreadState::<Sender<ServerMessage>>::new(
         Default::default(),
@@ -304,7 +354,7 @@ pub async fn create_node_validator_processing(
     let (node_identity_sender_1, node_identity_receiver_1) = mpsc::channel(32);
     let (node_identity_sender_2, node_identity_receiver_2) = mpsc::channel(32);
     let (voters_sender, voters_receiver) = mpsc::channel(32);
-    let (mut url_sender, url_receiver) = mpsc::channel(32);
+    let (url_sender, url_receiver) = mpsc::channel(32);
 
     let process_internal_client_message_handle = InternalClientMessageProcessingTask::new(
         internal_client_message_receiver,
@@ -325,8 +375,8 @@ pub async fn create_node_validator_processing(
     let process_distribute_voters_handle =
         ProcessDistributeVotersHandlingTask::new(client_thread_state.clone(), voters_receiver);
 
-    let process_leaf_stream_handle = ProcessLeafStreamTask::new(
-        leaf_receiver,
+    let process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
+        leaf_and_block_pair_receiver,
         data_state.clone(),
         block_detail_sender,
         voters_sender,
@@ -343,17 +393,10 @@ pub async fn create_node_validator_processing(
 
     // Send any initial URLS to the url sender for immediate processing.
     // These urls are supplied by the configuration of this function
-    {
-        let urls = config.initial_node_public_base_urls;
-
-        for url in urls {
-            let send_result = url_sender.send(url).await;
-            if let Err(err) = send_result {
-                tracing::info!("url sender closed: {}", err);
-                break;
-            }
-        }
-    }
+    let submit_public_urls_handle = SubmitPublicUrlsToScrapeTask::new(
+        url_sender.clone(),
+        config.initial_node_public_base_urls.clone(),
+    );
 
     Ok(NodeValidatorAPI {
         process_internal_client_message_handle: Some(process_internal_client_message_handle),
@@ -363,22 +406,29 @@ pub async fn create_node_validator_processing(
         process_leaf_stream_handle: Some(process_leaf_stream_handle),
         process_node_identity_stream_handle: Some(process_node_identity_stream_handle),
         process_url_stream_handle: Some(process_url_stream_handle),
-        url_sender: url_sender.clone(),
+        submit_public_urls_handle: Some(submit_public_urls_handle),
+        url_sender,
     })
 }
 
 #[cfg(test)]
 mod test {
-    use futures::channel::mpsc::{self, Sender};
+    use futures::{
+        channel::mpsc::{self, Sender},
+        StreamExt,
+    };
     use tide_disco::App;
     use tokio::spawn;
 
     use crate::{
         api::node_validator::v0::{
-            HotshotQueryServiceLeafStreamRetriever, ProcessProduceLeafStreamTask,
-            StateClientMessageSender, STATIC_VER_0_1,
+            BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender,
+            SurfDiscoAvailabilityAPIStream, STATIC_VER_0_1,
         },
-        service::{client_message::InternalClientMessage, server_message::ServerMessage},
+        service::{
+            client_message::InternalClientMessage, data_state::MAX_VOTERS_HISTORY,
+            server_message::ServerMessage,
+        },
     };
 
     struct TestState(Sender<InternalClientMessage<Sender<ServerMessage>>>);
@@ -392,6 +442,9 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
     async fn test_full_setup_example() {
+        use hotshot::helpers::initialize_logging;
+        initialize_logging();
+
         let (internal_client_message_sender, internal_client_message_receiver) = mpsc::channel(32);
         let state = TestState(internal_client_message_sender);
 
@@ -411,39 +464,63 @@ mod test {
             },
         }
 
-        let (leaf_sender, leaf_receiver) = mpsc::channel(10);
-
-        let process_consume_leaves = ProcessProduceLeafStreamTask::new(
-            HotshotQueryServiceLeafStreamRetriever::new(
-                "https://query.cappuccino.testnet.espresso.network/v0"
-                    .parse()
-                    .unwrap(),
-            ),
-            leaf_sender,
+        let client = surf_disco::Client::new(
+            "https://query.main.net.espresso.network/v0/"
+                .parse()
+                .unwrap(),
         );
+
+        // Let's get the current starting block height.
+        let block_height = {
+            let block_height_result = client.get("status/block-height").send().await;
+            let block_height: u64 = match block_height_result {
+                Ok(block_height) => block_height,
+                Err(err) => {
+                    tracing::warn!("retrieve block height request failed: {}", err);
+                    panic!("error retrieving block height request failed: {}", err);
+                },
+            };
+
+            // We want to make sure that we have at least MAX_VOTERS_HISTORY blocks of
+            // history that we are pulling
+            block_height.saturating_sub(MAX_VOTERS_HISTORY as u64 + 1)
+        };
+
+        tracing::info!("retrieved initial block height, starting at {block_height}");
+
+        let leaf_stream =
+            SurfDiscoAvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
+        let block_stream = SurfDiscoAvailabilityAPIStream::new_block_stream(client, block_height);
+
+        let zipped_stream = leaf_stream.zip(block_stream);
+
+        let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
+
+        let process_consume_leaves =
+            BridgeLeafAndBlockStreamToSenderTask::new(zipped_stream, leaf_and_block_pair_sender);
 
         let node_validator_task_state = match super::create_node_validator_processing(
             super::NodeValidatorConfig {
-                stake_table_url_base: "https://query.cappuccino.testnet.espresso.network/v0"
+                stake_table_url_base: "https://query.main.net.espresso.network/v0"
                     .parse()
                     .unwrap(),
                 initial_node_public_base_urls: vec![
-                    "https://query-1.cappuccino.testnet.espresso.network/"
+                    "https://query-1.main.net.espresso.network/"
                         .parse()
                         .unwrap(),
-                    "https://query-2.cappuccino.testnet.espresso.network/"
+                    "https://query-2.main.net.espresso.network/"
                         .parse()
                         .unwrap(),
-                    "https://query-3.cappuccino.testnet.espresso.network/"
+                    "https://query-3.main.net.espresso.network/"
                         .parse()
                         .unwrap(),
-                    "https://query-4.cappuccino.testnet.espresso.network/"
+                    "https://query-4.main.net.espresso.network/"
                         .parse()
                         .unwrap(),
                 ],
             },
             internal_client_message_receiver,
-            leaf_receiver,
+            leaf_and_block_pair_receiver,
         )
         .await
         {
