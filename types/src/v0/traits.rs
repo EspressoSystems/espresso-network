@@ -31,7 +31,8 @@ use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
-    impls::NodeState, utils::BackoffParams, EpochCommittees, EpochVersion, Leaf, SequencerVersions,
+    impls::NodeState, utils::BackoffParams, v0_3::StakeTables, EpochCommittees, EpochVersion, Leaf,
+    SequencerVersions,
 };
 use crate::{
     v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,
@@ -539,6 +540,8 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         &self,
     ) -> anyhow::Result<Option<UpgradeCertificate<SeqTypes>>>;
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>>;
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>>;
+    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()>;
 
     /// Load the latest known consensus state.
     ///
