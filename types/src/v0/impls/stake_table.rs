@@ -601,6 +601,28 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 }
 
+impl StakeTable {
+    /// Generate a `StakeTable` with `n` members.
+    pub fn mock(n: u64) -> Self {
+        [..n]
+            .iter()
+            .map(|_| PeerConfig::default())
+            .collect::<Vec<PeerConfig<PubKey>>>()
+            .into()
+    }
+}
+
+impl DAMembers {
+    /// Generate a `DaMembers` (alias committee) with `n` members.
+    pub fn mock(n: u64) -> Self {
+        [..n]
+            .iter()
+            .map(|_| PeerConfig::default())
+            .collect::<Vec<PeerConfig<PubKey>>>()
+            .into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use contract_bindings_alloy::permissionedstaketable::PermissionedStakeTable::NodeInfo;
@@ -612,10 +634,8 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Build a stake table with one DA node and one consensus node.
-        let mut da_node = NodeInfoJf::random(&mut rng);
-        da_node.da = true;
-        let mut consensus_node = NodeInfoJf::random(&mut rng);
-        consensus_node.da = false;
+        let da_node = NodeInfoJf::random(&mut rng).as_da();
+        let consensus_node = NodeInfoJf::random(&mut rng).as_consensus();
         let added: Vec<NodeInfo> = vec![da_node.clone().into(), consensus_node.clone().into()];
         let mut updates = vec![StakersUpdated {
             removed: vec![],

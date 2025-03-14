@@ -10,7 +10,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{IndexedStake, StakeTables},
+    v0_3::{IndexedStake, StakeTable, StakeTables},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
 };
 use futures::stream::StreamExt;
@@ -51,6 +51,7 @@ use hotshot_types::{
         node_implementation::ConsensusTime,
     },
     vote::HasViewNumber,
+    PeerConfig,
 };
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
@@ -2108,7 +2109,9 @@ mod generic_tests {
 mod test {
 
     use committable::{Commitment, CommitmentBoundsArkless};
-    use espresso_types::{traits::NullEventConsumer, Header, Leaf, NodeState, ValidatedState};
+    use espresso_types::{
+        traits::NullEventConsumer, v0_3::DAMembers, Header, Leaf, NodeState, ValidatedState,
+    };
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
@@ -2718,5 +2721,26 @@ mod test {
             quorum_certificates_count, rows as i64,
             "quorum certificates count does not match rows",
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_membership_persistence() -> anyhow::Result<()> {
+        setup_test();
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let st = StakeTables::new(StakeTable::mock(3), DAMembers::mock(3));
+
+        storage
+            .store_stake(EpochNumber::new(10), st.clone())
+            .await?;
+
+        let stake = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        assert_eq!(st, stake);
+
+        Ok(())
     }
 }
