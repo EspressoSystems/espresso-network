@@ -1868,10 +1868,12 @@ impl MembershipPersistence for Persistence {
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Vec<IndexedStake>> {
         let mut tx = self.db.write().await?;
 
-        let rows = match query_as::<(i64, Vec<u8>)>("SELECT stake FROM epoch_drb_and_root LIMIT $1")
-            .bind(limit as i64)
-            .fetch_all(tx.as_mut())
-            .await
+        let rows = match query_as::<(i64, Vec<u8>)>(
+            "SELECT epoch, stake FROM epoch_drb_and_root LIMIT $1",
+        )
+        .bind(limit as i64)
+        .fetch_all(tx.as_mut())
+        .await
         {
             Ok(bytes) => bytes,
             Err(err) => {
@@ -2734,8 +2736,19 @@ mod test {
             .store_stake(EpochNumber::new(10), st.clone())
             .await?;
 
-        let stake = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
-        assert_eq!(st, stake);
+        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        assert_eq!(st, table);
+
+        let st2 = StakeTables::mock();
+        storage
+            .store_stake(EpochNumber::new(11), st2.clone())
+            .await?;
+
+        let tables = storage.load_latest_stake(4).await?;
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(10, st)), iter.next());
+        assert_eq!(Some(&(11, st2)), iter.next());
+        assert_eq!(None, iter.next());
 
         Ok(())
     }
