@@ -11165,6 +11165,7 @@ dependencies = [
  "contract-bindings-alloy",
  "derive_more 1.0.0",
  "directories 6.0.0",
+ "dotenvy",
  "escargot",
  "espresso-types",
  "ethers-conv",

@@ -10,8 +10,11 @@ use anyhow::Result;
 use claim::{claim_validator_exit, claim_withdrawal};
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
-use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
+use contract_bindings_alloy::{
+    esptoken::EspToken::EspTokenInstance, staketable::StakeTable::StakeTableInstance,
+};
 use delegation::{delegate, undelegate};
+use demo::stake_for_demo;
 pub(crate) use hotshot_types::{
     light_client::{StateSignKey, StateVerKey},
     signature_key::{BLSPrivKey, BLSPubKey},
@@ -27,6 +30,7 @@ use url::Url;
 
 mod claim;
 mod delegation;
+mod demo;
 mod parse;
 mod registration;
 
@@ -178,6 +182,8 @@ enum Commands {
         #[clap(long)]
         validator_address: Address,
     },
+    /// Register the validators and delegates for the local demo.
+    StakeForDemo,
 }
 
 fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
@@ -305,6 +311,10 @@ pub async fn main() -> Result<()> {
         },
         Commands::ClaimValidatorExit { validator_address } => {
             claim_validator_exit(stake_table, validator_address).await
+        },
+        Commands::StakeForDemo => {
+            stake_for_demo(&config).await.unwrap();
+            return Ok(());
         },
         _ => unreachable!(),
     };

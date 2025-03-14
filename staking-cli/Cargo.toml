@@ -23,6 +23,7 @@ clap-serde-derive = "0.2.1"
 contract-bindings-alloy = { workspace = true }
 derive_more = { workspace = true }
 directories = "6.0.0"
+dotenvy = { workspace = true }
 escargot = "0.5.13"
 espresso-types = { version = "0.1.0", path = "../types" }
 ethers-conv = { workspace = true }
