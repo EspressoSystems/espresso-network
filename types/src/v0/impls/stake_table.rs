@@ -641,8 +641,10 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Build a stake table with one DA node and one consensus node.
-        let da_node = NodeInfoJf::random(&mut rng).as_da();
-        let consensus_node = NodeInfoJf::random(&mut rng).as_consensus();
+        let mut da_node = NodeInfoJf::random(&mut rng);
+        da_node.da = true;
+        let mut consensus_node = NodeInfoJf::random(&mut rng);
+        consensus_node.da = false;
         let added: Vec<NodeInfo> = vec![da_node.clone().into(), consensus_node.clone().into()];
         let mut updates = vec![StakersUpdated {
             removed: vec![],
