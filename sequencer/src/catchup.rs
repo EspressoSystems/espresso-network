@@ -351,7 +351,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         self.fetch(retry, |client| async move {
             let snapshot = client
                 .inner
-                .post::<RewardMerkleTree>(&format!("catchup/{height}/{}/accounts", view.u64()))
+                .post::<RewardMerkleTree>(&format!("catchup/{height}/{}/reward-accounts", view.u64()))
                 .body_binary(&accounts.to_vec())?
                 .send()
                 .await?;

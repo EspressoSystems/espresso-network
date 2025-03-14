@@ -5,8 +5,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
-    v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
-    BlockMerkleTree, PubKey,
+    v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence}, v0_1::RewardMerkleTree, BlockMerkleTree, PubKey
 };
 use futures::{
     channel::oneshot,
@@ -387,6 +386,11 @@ impl Options {
         app.register_module(
             "fee-state",
             endpoints::get_balance::<_, SequencerApiVersion>()?,
+        )?;
+
+        app.register_module(
+            "reward-state",
+            endpoints::merklized_state::<N, P, _, RewardMerkleTree, _, 256>()?,
         )?;
 
         let get_node_state = {

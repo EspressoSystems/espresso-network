@@ -8,9 +8,13 @@ use committable::Commitment;
 use data_source::{CatchupDataSource, StakeTableDataSource, SubmitDataSource};
 use derivative::Derivative;
 use espresso_types::{
-    config::PublicNetworkConfig, retain_accounts, v0::traits::SequencerPersistence,
-    v0_99::ChainConfig, AccountQueryData, BlockMerkleTree, FeeAccount, FeeAccountProof,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction, ValidatedState,
+    config::PublicNetworkConfig,
+    retain_accounts,
+    v0::traits::SequencerPersistence,
+    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleTree},
+    v0_99::ChainConfig,
+    AccountQueryData, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2,
+    NodeState, PubKey, Transaction, ValidatedState,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
@@ -35,7 +39,10 @@ use hotshot_types::{
     PeerConfig,
 };
 use itertools::Itertools;
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree::{
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, UniversalMerkleTreeScheme,
+};
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
@@ -386,6 +393,79 @@ impl<
         // Try storage.
         self.inner().get_leaf_chain(height).await
     }
+
+    #[tracing::instrument(skip(self, instance))]
+    async fn get_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        // Check if we have the desired state in memory.
+        match self
+            .as_ref()
+            .get_reward_accounts(instance, height, view, accounts)
+            .await
+        {
+            Ok(accounts) => return Ok(accounts),
+            Err(err) => {
+                tracing::info!("reward accounts not in memory, trying storage: {err:#}");
+            },
+        }
+
+        // Try storage.
+        let (tree, leaf) = self
+            .inner()
+            .get_reward_accounts(instance, height, view, accounts)
+            .await
+            .context("accounts not in memory, and could not fetch from storage")?;
+        // If we successfully fetched accounts from storage, try to add them back into the in-memory
+        // state.
+        let handle = self.as_ref().consensus().await;
+        let handle = handle.read().await;
+        let consensus = handle.consensus();
+        let mut consensus = consensus.write().await;
+        let (state, delta) = match consensus.validated_state_map().get(&view) {
+            Some(View {
+                view_inner: ViewInner::Leaf { state, delta, .. },
+            }) => {
+                let mut state = (**state).clone();
+
+                // Add the fetched accounts to the state.
+                for account in accounts {
+                    if let Some((proof, _)) = RewardAccountProof::prove(&tree, (*account).into()) {
+                        if let Err(err) = proof.remember(&mut state.reward_merkle_tree) {
+                            tracing::warn!(
+                                ?view,
+                                %account,
+                                "cannot update fetched account state: {err:#}"
+                            );
+                        }
+                    } else {
+                        tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                    };
+                }
+
+                (Arc::new(state), delta.clone())
+            },
+            _ => {
+                // If we don't already have a leaf for this view, or if we don't have the view
+                // at all, we can create a new view based on the recovered leaf and add it to
+                // our state map. In this case, we must also add the leaf to the saved leaves
+                // map to ensure consistency.
+                let mut state = ValidatedState::from_header(leaf.block_header());
+                state.reward_merkle_tree = tree.clone();
+                (Arc::new(state), None)
+            },
+        };
+        if let Err(err) = consensus.update_leaf(leaf, Arc::clone(&state), delta) {
+            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        }
+        tracing::info!(?view, "updated with fetched account state");
+
+        Ok(tree)
+    }
 }
 
 // #[async_trait]
@@ -518,6 +598,46 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             }
         }
         bail!(format!("leaf chain not available for {height}"))
+    }
+
+    #[tracing::instrument(skip(self, _instance))]
+    async fn get_reward_accounts(
+        &self,
+        _instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        let state = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .state(view)
+            .await
+            .context(format!(
+                "state not available for height {height}, view {view:?}"
+            ))?;
+
+        let mut snapshot = RewardMerkleTree::from_commitment(state.reward_merkle_tree.commitment());
+        for account in accounts {
+            match state.reward_merkle_tree.universal_lookup(account) {
+                LookupResult::Ok(elem, proof) => {
+                    // This remember cannot fail, since we just constructed a valid proof, and are
+                    // remembering into a tree with the same commitment.
+                    snapshot.remember(account, *elem, proof).unwrap();
+                },
+                LookupResult::NotFound(proof) => {
+                    // Likewise this cannot fail.
+                    snapshot.non_membership_remember(*account, proof).unwrap()
+                },
+                LookupResult::NotInMemory => {
+                    bail!("missing account {account}");
+                },
+            }
+        }
+
+        Ok(snapshot)
     }
 }
 
