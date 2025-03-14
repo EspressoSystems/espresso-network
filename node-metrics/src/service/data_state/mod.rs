@@ -3,7 +3,6 @@ pub mod node_identity;
 
 use std::{collections::HashSet, iter::zip, sync::Arc};
 
-use crate::api::node_validator::v0::LeafAndBlock;
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use circular_buffer::CircularBuffer;
@@ -29,6 +28,8 @@ pub use location_details::LocationDetails;
 pub use node_identity::NodeIdentity;
 use time::OffsetDateTime;
 use tokio::{spawn, task::JoinHandle};
+
+use crate::api::node_validator::v0::LeafAndBlock;
 
 /// MAX_HISTORY represents the last N records that are stored within the
 /// DataState structure for the various different sample types.

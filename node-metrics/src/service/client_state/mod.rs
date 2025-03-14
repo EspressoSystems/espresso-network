@@ -1177,8 +1177,7 @@ pub mod tests {
         SinkExt, StreamExt,
     };
     use hotshot_example_types::node_types::TestVersions;
-    use hotshot_query_service::availability::BlockQueryData;
-    use hotshot_query_service::testing::mocks::MockVersions;
+    use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
     use hotshot_types::{
         data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
     };
