@@ -12,7 +12,6 @@ use espresso_types::{
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
@@ -22,7 +21,6 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
-    utils::View,
 };
 
 use crate::{NodeType, SeqTypes, ViewNumber};
@@ -93,12 +91,6 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>> {
-        Ok(None)
-    }
-
     async fn load_da_proposal(
         &self,
         _view: ViewNumber,
@@ -158,13 +150,6 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn update_undecided_state2(
-        &self,
-        _leaves: CommitmentMap<Leaf2>,
-        _state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
     async fn append_quorum_proposal2(
         &self,
         _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
@@ -213,9 +198,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
     async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn migrate_undecided_state(&self) -> anyhow::Result<()> {
         Ok(())
     }
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {

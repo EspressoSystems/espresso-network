@@ -7,7 +7,7 @@ use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
-    parse_duration, parse_size, upgrade_commitment_map,
+    parse_duration, parse_size,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::StakeTables,
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
@@ -34,7 +34,6 @@ use hotshot_query_service::{
     VidCommon,
 };
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper, VidCommitment,
@@ -50,7 +49,6 @@ use hotshot_types::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::ConsensusTime,
     },
-    utils::View,
     vote::HasViewNumber,
 };
 use itertools::Itertools;
@@ -165,9 +163,6 @@ pub struct Options {
     /// Pruning parameters for ephemeral consensus storage.
     #[clap(flatten)]
     pub(crate) consensus_pruning: ConsensusPruningOptions,
-
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STORE_UNDECIDED_STATE", hide = true)]
-    pub(crate) store_undecided_state: bool,
 
     /// Specifies the maximum number of concurrent fetch requests allowed from peers.
     #[clap(long, env = "ESPRESSO_SEQUENCER_FETCH_RATE_LIMIT")]
@@ -561,10 +556,8 @@ impl PersistenceOptions for Options {
     }
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
-        let store_undecided_state = self.store_undecided_state;
         let config = (&*self).try_into()?;
         let persistence = Persistence {
-            store_undecided_state,
             db: SqlStorage::connect(config).await?,
             gc_opt: self.consensus_pruning,
         };
@@ -583,7 +576,6 @@ impl PersistenceOptions for Options {
 #[derive(Clone, Debug)]
 pub struct Persistence {
     db: SqlStorage,
-    store_undecided_state: bool,
     gc_opt: ConsensusPruningOptions,
 }
 
@@ -1095,28 +1087,6 @@ impl SequencerPersistence for Persistence {
         Ok(ViewNumber::new(view as u64))
     }
 
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>> {
-        let Some(row) = self
-            .db
-            .read()
-            .await?
-            .fetch_optional("SELECT leaves, state FROM undecided_state2 WHERE id = 0")
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        let leaves_bytes: Vec<u8> = row.get("leaves");
-        let leaves2: CommitmentMap<Leaf2> = bincode::deserialize(&leaves_bytes)?;
-
-        let state_bytes: Vec<u8> = row.get("state");
-        let state = bincode::deserialize(&state_bytes)?;
-
-        Ok(Some((leaves2, state)))
-    }
-
     async fn load_da_proposal(
         &self,
         view: ViewNumber,
@@ -1606,63 +1576,6 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn migrate_undecided_state(&self) -> anyhow::Result<()> {
-        let mut tx = self.db.read().await?;
-
-        let row = tx
-            .fetch_optional("SELECT leaves, state FROM undecided_state WHERE id = 0")
-            .await?;
-
-        let (is_completed,) = query_as::<(bool,)>(
-            "SELECT completed from epoch_migration WHERE table_name = 'undecided_state'",
-        )
-        .fetch_one(tx.as_mut())
-        .await?;
-
-        if is_completed {
-            tracing::info!("undecided state migration already done");
-
-            return Ok(());
-        }
-
-        tracing::warn!("migrating undecided state..");
-
-        if let Some(row) = row {
-            let leaves_bytes: Vec<u8> = row.try_get("leaves")?;
-            let leaves: CommitmentMap<Leaf> = bincode::deserialize(&leaves_bytes)?;
-
-            let leaves2 = upgrade_commitment_map(leaves);
-            let leaves2_bytes = bincode::serialize(&leaves2)?;
-            let state_bytes: Vec<u8> = row.try_get("state")?;
-
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "undecided_state2",
-                ["id", "leaves", "state"],
-                ["id"],
-                [(0_i32, leaves2_bytes, state_bytes)],
-            )
-            .await?;
-            tx.commit().await?;
-        };
-
-        tracing::warn!("migrated undecided state");
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed"],
-            ["table_name"],
-            [("undecided_state".to_string(), true)],
-        )
-        .await?;
-        tx.commit().await?;
-
-        tracing::info!("updated epoch_migration table for undecided_state");
-
-        Ok(())
-    }
-
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
         let batch_size: i64 = 10000;
         let mut offset: i64 = 0;
@@ -1882,29 +1795,6 @@ impl SequencerPersistence for Persistence {
             ["view", "data", "payload_hash"],
             ["view"],
             [(view as i64, data_bytes, vid_commit.to_string())],
-        )
-        .await?;
-        tx.commit().await
-    }
-
-    async fn update_undecided_state2(
-        &self,
-        leaves: CommitmentMap<Leaf2>,
-        state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        if !self.store_undecided_state {
-            return Ok(());
-        }
-
-        let leaves_bytes = bincode::serialize(&leaves).context("serializing leaves")?;
-        let state_bytes = bincode::serialize(&state).context("serializing state")?;
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "undecided_state2",
-            ["id", "leaves", "state"],
-            ["id"],
-            [(0_i32, leaves_bytes, state_bytes)],
         )
         .await?;
         tx.commit().await
@@ -2313,7 +2203,10 @@ mod test {
         let avidm_param = init_avidm_param(2).unwrap();
         let weights = vec![1u32; 2];
 
-        let ns_table = parse_ns_table(leaf_payload.byte_len().as_usize(), &leaf_payload.encode());
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
         let (payload_commitment, shares) =
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();
@@ -2453,7 +2346,10 @@ mod test {
         let avidm_param = init_avidm_param(2).unwrap();
         let weights = vec![1u32; 2];
 
-        let ns_table = parse_ns_table(leaf_payload.byte_len().as_usize(), &leaf_payload.encode());
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
         let (payload_commitment, shares) =
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();

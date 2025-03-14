@@ -13,11 +13,10 @@ use anyhow::{bail, Result};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment,
+        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
+        VidCommitment,
     },
     drb::DrbResult,
     event::HotShotAction,
@@ -27,7 +26,6 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         storage::Storage,
     },
-    utils::View,
     vote::HasViewNumber,
 };
 
@@ -331,30 +329,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         } else {
             inner.next_epoch_high_qc2 = Some(new_next_epoch_high_qc);
         }
-        Ok(())
-    }
-
-    async fn update_undecided_state(
-        &self,
-        _leaves: CommitmentMap<Leaf<TYPES>>,
-        _state: BTreeMap<TYPES::View, View<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err {
-            bail!("Failed to update high qc to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        Ok(())
-    }
-
-    async fn update_undecided_state2(
-        &self,
-        _leaves: CommitmentMap<Leaf2<TYPES>>,
-        _state: BTreeMap<TYPES::View, View<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err {
-            bail!("Failed to update high qc to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
         Ok(())
     }
 
