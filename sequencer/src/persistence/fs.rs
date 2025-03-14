@@ -14,7 +14,7 @@ use clap::Parser;
 use espresso_types::{
     traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::StakeTables,
+    v0_3::{IndexedStake, StakeTables},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
 use hotshot::InitializerEpochInfo;
@@ -1289,6 +1289,10 @@ impl MembershipPersistence for Persistence {
         Ok(Some(
             bincode::deserialize(&bytes).context("deserialize combined stake table")?,
         ))
+    }
+
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Vec<IndexedStake>> {
+        todo!();
     }
 
     async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
