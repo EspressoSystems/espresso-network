@@ -1860,9 +1860,7 @@ impl MembershipPersistence for Persistence {
         result
             .map(|row| {
                 let bytes: Vec<u8> = row.get("stake");
-                anyhow::Result::<_>::Ok(
-                    bincode::deserialize(&bytes).context("deserializing stake table")?,
-                )
+                bincode::deserialize(&bytes).context("deserializing stake table")
             })
             .transpose()
     }
