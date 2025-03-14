@@ -362,18 +362,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_register_validator() -> Result<()> {
+    async fn test_cli_register_validator() -> Result<()> {
         let exit_escrow_period = Duration::from_secs(60);
         let system = TestSystem::deploy(exit_escrow_period).await?;
-        // TODO: how to get url out of anvil
-        // cmd()
-        //     .arg("register-validator")
-        //     .arg("--mnemonic")
-        //     .arg(DEV_MNEMONIC)
-        //     .arg("--rpc-url")
-        //     .arg(system.rpc_url.to_string())
-        //     .output()?
-        //     .assert_success();
+        cmd()
+            .arg("--mnemonic")
+            .arg(DEV_MNEMONIC)
+            .arg("--rpc-url")
+            .arg(system.rpc_url.to_string())
+            .arg("register-validator")
+            .arg("--consensus-private-key")
+            .arg(
+                system
+                    .bls_key_pair
+                    .sign_key_ref()
+                    .to_tagged_base64()?
+                    .to_string(),
+            )
+            .arg("--state-private-key")
+            .arg(
+                system
+                    .schnorr_key_pair
+                    .sign_key()
+                    .to_tagged_base64()?
+                    .to_string(),
+            )
+            .arg("--commission")
+            .arg("12.34")
+            .output()?
+            .assert_success();
         Ok(())
     }
 }

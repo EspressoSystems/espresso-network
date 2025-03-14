@@ -3,7 +3,7 @@ use alloy::{
     sol_types::SolValue as _, transports::Transport,
 };
 use anyhow::Result;
-use ark_ec::CurveGroup;
+use ark_ec::{twisted_edwards::TECurveConfig, CurveGroup};
 use contract_bindings_alloy::staketable::{
     EdOnBN254::EdOnBN254Point,
     StakeTable::StakeTableInstance,
@@ -89,9 +89,6 @@ mod test {
         let exit_escrow_period = Duration::from_secs(60);
         let commission = 1234.try_into()?;
         let system = TestSystem::deploy(exit_escrow_period).await?;
-        let rng = &mut rand::thread_rng();
-        let bls_key_pair = BLSKeyPair::generate(rng);
-        let schnorr_key_pair = SchnorrKeyPair::generate(rng).ver_key();
 
         let mut register_filter = system
             .stake_table
@@ -106,8 +103,8 @@ mod test {
             system.stake_table,
             commission,
             validator_address,
-            bls_key_pair,
-            schnorr_key_pair,
+            system.bls_key_pair,
+            system.schnorr_key_pair.ver_key(),
         )
         .await?;
         assert_eq!(receipt.status(), true);

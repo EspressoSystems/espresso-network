@@ -20,6 +20,9 @@ use contract_bindings_alloy::{
     esptoken::EspToken::{self, EspTokenInstance},
     staketable::StakeTable::{self, StakeTableInstance},
 };
+use url::Url;
+
+use crate::{BLSKeyPair, SchnorrKeyPair};
 
 type TestProvider = FillProvider<
     JoinFill<
@@ -34,20 +37,25 @@ type TestProvider = FillProvider<
     Ethereum,
 >;
 
+#[derive(Debug, Clone)]
 pub struct TestSystem {
     pub provider: TestProvider,
     pub token: EspTokenInstance<BoxTransport, TestProvider>,
     pub stake_table: StakeTableInstance<BoxTransport, TestProvider>,
     pub exit_escrow_period: Duration,
-    // pub rpc_url: Url,
+    pub rpc_url: Url,
+    pub bls_key_pair: BLSKeyPair,
+    pub schnorr_key_pair: SchnorrKeyPair<ark_ed_on_bn254::EdwardsConfig>,
 }
 
 impl TestSystem {
     pub async fn deploy(exit_escrow_period: Duration) -> Result<Self> {
+        let port = portpicker::pick_unused_port().unwrap();
         // Spawn anvil
         let provider = ProviderBuilder::new()
             .with_recommended_fillers()
-            .on_anvil_with_wallet();
+            .on_anvil_with_wallet_and_config(|anvil| anvil.port(port));
+        let rpc_url = format!("http://localhost:{}", port).parse()?;
 
         // `EspToken.sol`
         let token = EspToken::deploy(provider.clone()).await?;
@@ -76,12 +84,16 @@ impl TestSystem {
 
         let proxy = ERC1967Proxy::deploy(provider.clone(), *stake_table.address(), data).await?;
         let stake_table = StakeTable::new(*proxy.address(), provider.clone());
-
+        let bls_key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
+        let schnorr_key_pair = SchnorrKeyPair::generate(&mut rand::thread_rng());
         Ok(Self {
             provider,
             token,
             stake_table,
             exit_escrow_period,
+            rpc_url,
+            bls_key_pair,
+            schnorr_key_pair,
         })
     }
 
