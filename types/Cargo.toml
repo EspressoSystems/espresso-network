@@ -31,6 +31,7 @@ hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
+indexmap = "2"
 itertools = { workspace = true }
 jf-merkle-tree = { workspace = true }
 jf-utils = { workspace = true }                                      # TODO temporary: used only for test_rng()
@@ -42,6 +43,7 @@ paste = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 sequencer-utils = { path = "../utils" }
+async-lock = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }                                                         # TODO temporary, used only for VID, should be set in hotshot

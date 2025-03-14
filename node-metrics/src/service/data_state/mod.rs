@@ -568,7 +568,8 @@ mod tests {
 
     use async_lock::RwLock;
     use espresso_types::{
-        v0_99::ChainConfig, BlockMerkleTree, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
+        v0_1::RewardMerkleTree, v0_99::ChainConfig, BlockMerkleTree, FeeMerkleTree, Leaf2,
+        NodeState, ValidatedState,
     };
     use futures::{channel::mpsc, SinkExt, StreamExt};
     use hotshot_example_types::node_types::TestVersions;
@@ -627,6 +628,7 @@ mod tests {
         let validated_state = ValidatedState {
             block_merkle_tree: BlockMerkleTree::new(32),
             fee_merkle_tree: FeeMerkleTree::new(32),
+            reward_merkle_tree: RewardMerkleTree::new(32),
             chain_config: ChainConfig::default().into(),
         };
         let instance_state = NodeState::mock();

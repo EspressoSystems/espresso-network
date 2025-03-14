@@ -31,7 +31,10 @@ use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
-    impls::NodeState, utils::BackoffParams, EpochCommittees, EpochVersion, Leaf, SequencerVersions,
+    impls::NodeState,
+    utils::BackoffParams,
+    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
+    EpochCommittees, EpochVersion, Leaf, SequencerVersions,
 };
 use crate::{
     v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,
@@ -163,6 +166,59 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Try to fetch the given accounts state, failing without retrying if unable.
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        account: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree>;
+
+    /// Fetch the given list of accounts, retrying on transient errors.
+    async fn fetch_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                let accounts = &accounts;
+                async move {
+                    let tree = provider
+                        .try_fetch_reward_accounts(
+                            retry,
+                            instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            accounts,
+                        )
+                        .await
+                        .map_err(|err| {
+                            err.context(format!(
+                                "fetching reward accounts {accounts:?}, height {height}, view {view:?}"
+                            ))
+                        })?;
+                    accounts
+                        .iter()
+                        .map(|account| {
+                            RewardAccountProof::prove(&tree, (*account).into())
+                                .context(format!("missing reward account {account}"))
+                                .map(|(proof, _)| proof)
+                        })
+                        .collect::<anyhow::Result<Vec<RewardAccountProof>>>()
+                }
+                .boxed()
+            })
+            .await
+    }
+
     fn backoff(&self) -> &BackoffParams;
     fn name(&self) -> String;
 }
@@ -256,6 +312,40 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Box<T> {
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
         (**self).fetch_chain_config(commitment).await
+    }
+
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        (**self)
+            .try_fetch_reward_accounts(
+                retry,
+                instance,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
+            .await
+    }
+
+    async fn fetch_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        (**self)
+            .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
+            .await
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -356,6 +446,40 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
         (**self).fetch_chain_config(commitment).await
+    }
+
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        (**self)
+            .try_fetch_reward_accounts(
+                retry,
+                instance,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
+            .await
+    }
+
+    async fn fetch_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        (**self)
+            .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
+            .await
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -466,6 +590,42 @@ impl<T: StateCatchup> StateCatchup for Vec<T> {
         }
 
         bail!("could not fetch chain config from any provider");
+    }
+
+    #[tracing::instrument(skip(self, instance))]
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        for provider in self {
+            match provider
+                .try_fetch_reward_accounts(
+                    retry,
+                    instance,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    accounts,
+                )
+                .await
+            {
+                Ok(tree) => return Ok(tree),
+                Err(err) => {
+                    tracing::info!(
+                        ?accounts,
+                        provider = provider.name(),
+                        "failed to fetch reward accounts: {err:#}"
+                    );
+                },
+            }
+        }
+
+        bail!("could not fetch account from any provider");
     }
 
     fn backoff(&self) -> &BackoffParams {

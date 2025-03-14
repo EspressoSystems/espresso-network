@@ -4,9 +4,10 @@ use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::RwLock;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_99::ChainConfig, FeeAmount, NodeState, Payload, SeqTypes,
-    ValidatedState,
+    eth_signature_key::EthKeyPair, v0_99::ChainConfig, EpochCommittees, FeeAmount, NodeState,
+    Payload, SeqTypes, ValidatedState,
 };
+use ethers_conv::ToAlloy;
 use hotshot::traits::BlockPayload;
 use hotshot_builder_core::{
     builder_state::{BuilderState, MessageType},
@@ -47,16 +48,25 @@ pub fn build_instance_state<V: Versions>(
         .connect(l1_params.urls)
         .expect("failed to create L1 client");
 
+    let peers = Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
+        state_peers,
+        Default::default(),
+        &NoMetrics,
+    ));
+
     NodeState::new(
         u64::MAX, // dummy node ID, only used for debugging
         chain_config,
-        l1_client,
-        Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
-            state_peers,
-            Default::default(),
-            &NoMetrics,
-        )),
-        V::Base::VERSION,
+        l1_client.clone(),
+        peers.clone(),
+        V::Base::version(),
+        Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            l1_client,
+            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            peers,
+        ))),
     )
 }
 

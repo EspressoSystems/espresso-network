@@ -252,6 +252,17 @@ impl From<NodeInfo> for NodeInfoJf {
     }
 }
 
+pub fn edward_bn254point_to_state_ver(
+    schnorr_vk: contract_bindings_alloy::staketable::EdOnBN254::EdOnBN254Point,
+) -> StateVerKey {
+    let g1_point: ParsedEdOnBN254Point = ParsedEdOnBN254Point {
+        x: schnorr_vk.x.to_ethers(),
+        y: schnorr_vk.y.to_ethers(),
+    };
+    let state_sk_affine = twisted_edwards::Affine::<EdwardsConfig>::from(g1_point);
+    StateVerKey::from(state_sk_affine)
+}
+
 impl From<NodeInfoAlloy> for NodeInfoJf {
     fn from(value: NodeInfoAlloy) -> Self {
         let NodeInfoAlloy {
@@ -341,7 +352,7 @@ pub fn bls_sol_to_jf(bls_vk: permissioned_stake_table::G2Point) -> BLSPubKey {
     bls_conv_helper(g2)
 }
 
-pub fn bls_alloy_to_jf(bls_vk: G2PointAlloy) -> BLSPubKey {
+pub fn bls_alloy_to_jf2(bls_vk: contract_bindings_alloy::staketable::BN254::G2Point) -> BLSPubKey {
     let g2 = diff_test_bn254::ParsedG2Point {
         x0: bls_vk.x0.to_ethers(),
         x1: bls_vk.x1.to_ethers(),
