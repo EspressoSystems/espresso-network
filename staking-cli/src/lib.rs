@@ -10,7 +10,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
-use delegation::delegate;
+use delegation::{delegate, undelegate};
 pub(crate) use hotshot_types::{
     light_client::{StateSignKey, StateVerKey},
     signature_key::{BLSPrivKey, BLSPubKey},
@@ -293,7 +293,7 @@ pub async fn main() -> Result<()> {
         Commands::Undelegate {
             validator_address,
             amount,
-        } => todo!(),
+        } => undelegate(stake_table, validator_address, amount).await,
         Commands::ClaimWithdrawal => todo!(),
         _ => unreachable!(),
     };
@@ -420,6 +420,28 @@ mod tests {
             .arg(system.deployer_address.to_string())
             .arg("--amount")
             .arg("123")
+            .output()?
+            .assert_success();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cli_undelegate() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+        system.register_validator().await?;
+        let amount = U256::from(123);
+        system.delegate(amount).await?;
+
+        cmd()
+            .arg("--mnemonic")
+            .arg(DEV_MNEMONIC)
+            .arg("--rpc-url")
+            .arg(system.rpc_url.to_string())
+            .arg("undelegate")
+            .arg("--validator-address")
+            .arg(system.deployer_address.to_string())
+            .arg("--amount")
+            .arg(amount.to_string())
             .output()?
             .assert_success();
         Ok(())

@@ -123,6 +123,18 @@ impl TestSystem {
         Ok(())
     }
 
+    pub async fn delegate(&self, amount: U256) -> Result<()> {
+        let receipt = self
+            .stake_table
+            .delegate(self.deployer_address, amount)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+        Ok(())
+    }
+
     pub async fn transfer(&self, to: Address, amount: U256) -> Result<()> {
         self.token
             .transfer(to, amount)
