@@ -1,39 +1,35 @@
 pub mod cdn;
 pub mod create_node_validator_api;
 
-use crate::service::client_message::{ClientMessage, InternalClientMessage};
-use crate::service::data_state::{LocationDetails, NodeIdentity};
-use crate::service::server_message::ServerMessage;
+use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
+
 use espresso_types::{BackoffParams, SeqTypes};
-use futures::channel::mpsc::SendError;
-use futures::future::{BoxFuture, Either};
-use futures::pin_mut;
 use futures::{
-    channel::mpsc::{self, Sender},
-    FutureExt, Sink, SinkExt, Stream, StreamExt,
+    channel::mpsc::{self, SendError, Sender},
+    future::{BoxFuture, Either},
+    pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt,
 };
-use hotshot_query_service::availability::BlockQueryData;
-use hotshot_query_service::types::HeightIndexed;
+use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
 use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::data::Leaf2;
-use hotshot_types::light_client::{CircuitField, StateVerKey};
-use hotshot_types::signature_key::BLSPubKey;
-use hotshot_types::traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme};
-use hotshot_types::PeerConfig;
+use hotshot_types::{
+    data::Leaf2,
+    light_client::{CircuitField, StateVerKey},
+    signature_key::BLSPubKey,
+    traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme},
+    PeerConfig,
+};
 use prometheus_parse::{Sample, Scrape};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::future::Future;
-use std::io::BufRead;
-use std::pin::Pin;
-use std::str::FromStr;
-use std::time::Duration;
-use tide_disco::socket::Connection;
-use tide_disco::{api::ApiError, Api};
-use tokio::spawn;
-use tokio::task::JoinHandle;
+use tide_disco::{api::ApiError, socket::Connection, Api};
+use tokio::{spawn, task::JoinHandle};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
+
+use crate::service::{
+    client_message::{ClientMessage, InternalClientMessage},
+    data_state::{LocationDetails, NodeIdentity},
+    server_message::ServerMessage,
+};
 
 /// CONSTANT for protocol major version
 pub const VERSION_MAJ: u16 = 0;
