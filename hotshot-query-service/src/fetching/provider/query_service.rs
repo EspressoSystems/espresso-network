@@ -19,7 +19,6 @@ use hotshot_types::{
     vid::{
         advz::{advz_scheme, ADVZScheme},
         avidm::{init_avidm_param, AvidMScheme},
-        // avidm::{init_avidm_param, AvidMScheme},
     },
 };
 use jf_vid::VidScheme;
@@ -113,6 +112,11 @@ where
                             .send()
                             .await
                             .ok()?;
+
+                        if header.payload_commitment() != req.0 {
+                            tracing::error!(?req, ?header, "received inconsistent payload");
+                            return None;
+                        }
 
                         let metadata = header.metadata().encode();
 
