@@ -51,7 +51,6 @@ use hotshot_types::{
         node_implementation::ConsensusTime,
     },
     vote::HasViewNumber,
-    PeerConfig,
 };
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
