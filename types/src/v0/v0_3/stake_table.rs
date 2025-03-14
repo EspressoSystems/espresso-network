@@ -1,7 +1,7 @@
 use crate::PubKey;
 use derive_more::derive::{From, Into};
 use hotshot_contract_adapter::stake_table::NodeInfoJf;
-use hotshot_types::{network::PeerConfigKeys, PeerConfig};
+use hotshot_types::{data::EpochNumber, network::PeerConfigKeys, PeerConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
@@ -26,4 +26,4 @@ pub struct StakeTables {
 }
 
 /// Type for holding result sets matching epochs to stake tables.
-pub type IndexedStake = (u64, StakeTables);
+pub type IndexedStake = (EpochNumber, StakeTables);
