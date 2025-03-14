@@ -19,28 +19,28 @@ abstract contract AbstractStakeTable {
     /// delegations. The confirmation layer needs to to use this event to keep
     /// track of the validator's keys for the stake table.
     event ValidatorRegistered(
-        address account, BN254.G2Point blsVk, EdOnBN254.EdOnBN254Point schnorrVk, uint16 commission
+        address indexed account, BN254.G2Point blsVk, EdOnBN254.EdOnBN254Point schnorrVk, uint16 commission
     );
 
     /// @notice Validator initiated exit from stake table
     ///
     /// All funds delegated to this validator will be undelegated and the
     /// validator will be removed from the active stake table.
-    event ValidatorExit(address validator);
+    event ValidatorExit(address indexed validator);
 
     /// @notice Signals a new delegation to a validator
     ///
     /// A delegator delegates funds to a validator. The confirmation layer needs
     /// to update the stake table and adjust the weight for this validator and
     /// the delegators delegation associated with it.
-    event Delegated(address delegator, address validator, uint256 amount);
+    event Delegated(address indexed delegator, address indexed validator, uint256 amount);
 
     /// @notice Signals an undelegation to a validator
     ///
     /// A delegator undelegates funds from a validator. The confirmation layer
     /// needs to update the stake table and adjust the weight for this validator
     /// and the delegators delegation associated with it.
-    event Undelegated(address delegator, address validator, uint256 amount);
+    event Undelegated(address indexed delegator, address indexed validator, uint256 amount);
 
     /// @notice Signals a consensus key update for a validator
     ///
@@ -50,7 +50,7 @@ abstract contract AbstractStakeTable {
     ///
     /// The confirmation layer needs to update the stake table with the new keys.
     event ConsensusKeysUpdated(
-        address account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
+        address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
     );
 
     /// @notice Unlocked funds were claimed.
@@ -58,7 +58,7 @@ abstract contract AbstractStakeTable {
     /// @dev This event is not relevant for the confirmation layer because the
     /// events that remove stake from the stake table are `Undelegated` and
     /// `ValidatorExit`.
-    event Withdrawal(address account, uint256 amount);
+    event Withdrawal(address indexed account, uint256 amount);
 
     // === Structs ===
 
