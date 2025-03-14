@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: UNLICENSED
 
 pragma solidity ^0.8.0;
-pragma experimental ABIEncoderV2;
 
 import { BN254 } from "bn254/BN254.sol";
-import { IPlonkVerifier } from "../src/interfaces/IPlonkVerifier.sol";
-import { LightClient } from "../src/LightClient.sol";
-import { PlonkVerifier } from "../src/libraries/PlonkVerifier.sol";
-import { LightClientStateUpdateVK as VkLib } from "../src/libraries/LightClientStateUpdateVK.sol";
+import { IPlonkVerifier } from "../../src/interfaces/IPlonkVerifier.sol";
+import { LightClient } from "../../src/LightClient.sol";
+import { PlonkVerifier } from "../../src/libraries/PlonkVerifier.sol";
+import { LightClientStateUpdateVK as VkLib } from "../../src/libraries/LightClientStateUpdateVK.sol";
 
-/// @notice A light client for HotShot consensus. Keeping track of its finalized states in safe,
-/// authenticated ways.
-contract LightClientV2 is LightClient {
+/// @dev a Fake V2 for testing upgradability purposes only
+contract LightClientV2Fake is LightClient {
     /// @notice new field for testing purposes
     /// @dev In order to add a field to LightClientState struct one can: add a new contract variable
     /// that has the new struct type, or put the struct inside a map.

@@ -608,6 +608,7 @@ pub mod test_helpers {
                 constructor_args.stake_table_state.into(),
                 constructor_args.max_history_seconds,
                 deployer,
+                constructor_args.blocks_per_epoch,
             )
             .calldata()
             .context("calldata for initialize transaction not available")?;

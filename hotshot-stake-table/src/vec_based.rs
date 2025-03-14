@@ -8,7 +8,10 @@
 
 use ark_std::{collections::HashMap, hash::Hash, rand::SeedableRng};
 use digest::crypto_common::rand_core::CryptoRngCore;
-use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme};
+use hotshot_types::{
+    light_client::GenericStakeTableState,
+    traits::stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme},
+};
 use jf_crhf::CRHF;
 use jf_rescue::{crhf::VariableLengthRescueCRHF, RescueParameter};
 use primitive_types::{U256, U512};
@@ -16,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::STAKE_TABLE_CAPACITY,
-    utils::{u256_to_field, ToFields},
+    utils::{one_honest_threshold, u256_to_field, ToFields},
 };
 
 pub mod config;
@@ -309,6 +312,32 @@ where
             },
             None => Err(StakeTableError::KeyNotFound),
         }
+    }
+
+    /// Returns the stake table state used for voting
+    pub fn voting_state(&self) -> Result<GenericStakeTableState<F>, StakeTableError> {
+        let (bls_key_comm, schnorr_key_comm, amount_comm) =
+            self.commitment(SnapshotVersion::LastEpochStart)?;
+        let threshold = one_honest_threshold(self.total_stake(SnapshotVersion::LastEpochStart)?);
+        Ok(GenericStakeTableState {
+            bls_key_comm,
+            schnorr_key_comm,
+            amount_comm,
+            threshold: u256_to_field(&threshold),
+        })
+    }
+
+    /// Returns the stake table state used for voting in the next epoch
+    pub fn next_voting_state(&self) -> Result<GenericStakeTableState<F>, StakeTableError> {
+        let (bls_key_comm, schnorr_key_comm, amount_comm) =
+            self.commitment(SnapshotVersion::EpochStart)?;
+        let threshold = one_honest_threshold(self.total_stake(SnapshotVersion::EpochStart)?);
+        Ok(GenericStakeTableState {
+            bls_key_comm,
+            schnorr_key_comm,
+            amount_comm,
+            threshold: u256_to_field(&threshold),
+        })
     }
 
     /// Helper function to recompute the stake table commitment for head version

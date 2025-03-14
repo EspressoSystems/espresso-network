@@ -4,7 +4,7 @@ import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 import { AbstractStakeTable } from "./interfaces/AbstractStakeTable.sol";
-import { LightClient } from "../src/LightClient.sol";
+import { LightClientV2 as LightClient } from "../src/LightClientV2.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { InitializedAt } from "./InitializedAt.sol";
@@ -75,9 +75,6 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
     /// Error raised when the value is invalid
     error InvalidValue();
 
-    // Error raised when the hotShotBlocksPerEpoch is zero
-    error InvalidHotShotBlocksPerEpoch();
-
     /// Mapping from a hash of a BLS key to a node struct defined in the abstract contract.
     mapping(address account => Node node) public nodes;
 
@@ -106,9 +103,6 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
     /// the number of validators that can exit per epoch.
     uint64 public maxNumChurnPerEpoch;
 
-    /// @notice The number of hotshot blocks per epoch.
-    uint64 public hotShotBlocksPerEpoch;
-
     address public admin;
 
     uint256 public minStakeAmount;
@@ -118,7 +112,6 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
         address _tokenAddress,
         address _lightClientAddress,
         uint64 _maxNumChurnPerEpoch,
-        uint64 _hotShotBlocksPerEpoch,
         uint256 _minStakeAmount,
         address _initialOwner
     ) Ownable(_initialOwner) InitializedAt() {
@@ -134,10 +127,6 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
         exitEpoch = 1;
         numPendingExitsInEpoch = 0;
 
-        if (_hotShotBlocksPerEpoch == 0) {
-            revert InvalidHotShotBlocksPerEpoch();
-        }
-        hotShotBlocksPerEpoch = _hotShotBlocksPerEpoch;
         minStakeAmount = _minStakeAmount;
         admin = msg.sender;
     }
@@ -164,19 +153,6 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
             && BN254.BaseField.unwrap(a.y1) == BN254.BaseField.unwrap(b.y1);
     }
 
-    /// @dev Fetches the last hotshot block number from the light client contract to calculate the
-    /// epoch.
-    /// @return current epoch (computed from the last known hotshot block number)
-    function currentEpoch() public view virtual returns (uint64) {
-        // get the last hotshot block number from the light client contract since this contract
-        // gets the latest info from HotShot periodically
-        (, uint64 lastHotshotBlockNumber,) = lightClient.finalizedState();
-
-        uint64 epoch = lastHotshotBlockNumber / hotShotBlocksPerEpoch;
-
-        return epoch;
-    }
-
     /// @notice Add a registration
     function pushToRegistrationQueue() internal virtual override {
         // Either we have a need for a new registration epoch and registrations queue for the
@@ -185,9 +161,10 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
         // if the current epoch is max uint64, the registration queue will not be updated and this
         // function will revert
 
-        if (registrationEpoch < currentEpoch() + 1) {
+        uint64 curEpoch = lightClient.currentEpoch();
+        if (registrationEpoch < curEpoch + 1) {
             // The registration epoch is outdated.
-            registrationEpoch = currentEpoch() + 1;
+            registrationEpoch = curEpoch + 1;
             numPendingRegistrationsInEpoch = 0;
         } else if (numPendingRegistrationsInEpoch >= maxNumChurnPerEpoch) {
             // The queue for in the current registration epoch is full.
@@ -207,9 +184,10 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
         // if the current epoch is max uint64, the exit queue will not be updated and this function
         // will revert
 
-        if (exitEpoch < currentEpoch() + 1) {
+        uint64 curEpoch = lightClient.currentEpoch();
+        if (exitEpoch < curEpoch + 1) {
             // The exit epoch is outdated.
-            exitEpoch = currentEpoch() + 1;
+            exitEpoch = curEpoch + 1;
             numPendingExitsInEpoch = 0;
         } else if (numPendingExitsInEpoch >= maxNumChurnPerEpoch) {
             // The queue for in the current exit epoch is full.
@@ -371,8 +349,8 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
         }
 
         // A node cannot deposit more tokens while it waiting to register.
-        uint64 _currentEpoch = currentEpoch();
-        if (_currentEpoch <= node.registerEpoch) {
+        uint64 _curEpoch = lightClient.currentEpoch();
+        if (_curEpoch <= node.registerEpoch) {
             revert PrematureDeposit();
         }
 
@@ -386,7 +364,7 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
 
         emit Deposit(msg.sender, uint256(amount));
 
-        uint64 effectiveEpoch = _currentEpoch + 1;
+        uint64 effectiveEpoch = _curEpoch + 1;
 
         return (nodes[msg.sender].balance, effectiveEpoch);
     }
@@ -396,6 +374,7 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
     /// @dev TODO modify this according to the current spec
     function requestExit() external virtual override {
         Node memory node = nodes[msg.sender];
+        uint64 curEpoch = lightClient.currentEpoch();
 
         if (node.account == address(0)) {
             revert NodeNotRegistered();
@@ -412,7 +391,7 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
 
         // Cannot exit before becoming an active participant. Activation happens one epoch after the
         // node's registration epoch, due to the consensus-imposed activation waiting period.
-        if (currentEpoch() < node.registerEpoch + 1) {
+        if (curEpoch < node.registerEpoch + 1) {
             revert PrematureExit();
         }
 
@@ -431,6 +410,7 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
     /// for the exit escrow period to be over
     function withdrawFunds() external virtual override returns (uint256) {
         Node memory node = nodes[msg.sender];
+        uint64 curEpoch = lightClient.currentEpoch();
 
         if (node.account == address(0)) {
             revert NodeNotRegistered();
@@ -448,7 +428,7 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
         }
 
         // Verify that the exit escrow period is over.
-        if (currentEpoch() < node.exitEpoch + exitEscrowPeriod(node)) {
+        if (curEpoch < node.exitEpoch + exitEscrowPeriod(node)) {
             revert PrematureWithdrawal();
         }
         totalStake -= balance;

@@ -25,7 +25,10 @@ use hotshot_contract_adapter::{
     jellyfish::{field_to_u256, ParsedPlonkProof},
     light_client::{ParsedLightClientState, ParsedStakeTableState},
 };
-use hotshot_stake_table::vec_based::{config::FieldType, StakeTable};
+use hotshot_stake_table::{
+    utils::one_honest_threshold,
+    vec_based::{config::FieldType, StakeTable},
+};
 use hotshot_types::{
     light_client::{
         CircuitField, LightClientState, PublicInput, StakeTableState, StateSignaturesBundle,
@@ -97,12 +100,6 @@ impl StateProverConfig {
     }
 }
 
-#[inline]
-/// A helper function to compute the quorum threshold given a total amount of stake.
-pub fn one_honest_threshold(total_stake: U256) -> U256 {
-    total_stake / 3 + 1
-}
-
 pub fn init_stake_table(
     bls_keys: &[BLSPubKey],
     state_keys: &[StateVerKey],
@@ -122,11 +119,13 @@ pub fn init_stake_table(
 }
 
 #[derive(Debug, Deserialize)]
+/// Part of the full `PublicHotShotConfig` needed for our state-prover purposes
 struct PublicHotShotConfig {
     known_nodes_with_stake: Vec<PeerConfig<BLSPubKey>>,
 }
 
 #[derive(Debug, Deserialize)]
+/// Part of the full `PublicNetworkConfig` needed for our state-prover purposes
 struct PublicNetworkConfig {
     config: PublicHotShotConfig,
 }
@@ -311,7 +310,8 @@ pub async fn submit_state_and_proof(
 ) -> Result<(), ProverError> {
     // prepare the input the contract call and the tx itself
     let proof: ParsedPlonkProof = proof.into();
-    let new_state: ParsedLightClientState = public_input.into();
+    let new_state: ParsedLightClientState = public_input.lc_state.into();
+    let _next_stake_table: ParsedStakeTableState = public_input.next_st_state.into();
 
     let mut tx = contract.new_finalized_state(new_state.into(), proof.into());
 
@@ -421,6 +421,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             &bundle.state,
             &st_state,
             stake_table_capacity,
+            &st_state, // FIXME: use next_st_state later!
         )
     })
     .await
@@ -581,14 +582,10 @@ impl std::error::Error for ProverError {}
 mod test {
 
     use anyhow::Result;
-    use ark_ed_on_bn254::EdwardsConfig;
     use ethers::utils::{Anvil, AnvilInstance};
     use hotshot_contract_adapter::light_client::{
         LightClientConstructorArgs, ParsedStakeTableState,
     };
-    use hotshot_stake_table::vec_based::StakeTable;
-    use hotshot_types::light_client::StateSignKey;
-    use jf_signature::{schnorr::SchnorrSignatureScheme, SignatureScheme};
     use jf_utils::test_rng;
     use sequencer_utils::{
         deployer::{self, test_helpers::deploy_light_client_contract_as_proxy_for_test},
@@ -596,98 +593,11 @@ mod test {
     };
 
     use super::*;
-    use crate::mock_ledger::{MockLedger, MockSystemParam};
+    use crate::mock_ledger::{MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST};
 
-    const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
     const MAX_HISTORY_SECONDS: u32 = 864000;
-
-    const NUM_INIT_VALIDATORS: u32 = (STAKE_TABLE_CAPACITY_FOR_TEST / 2) as u32;
-
-    /// Init a meaningful ledger state that prover can generate future valid proof.
-    /// this is used for testing purposes, contract deployed to test proof verification should also be initialized with this genesis
-    ///
-    #[allow(clippy::type_complexity)]
-    fn init_ledger_for_test() -> (
-        ParsedLightClientState,
-        ParsedStakeTableState,
-        Vec<BLSPubKey>,
-        Vec<(StateSignKey, StateVerKey)>,
-        StakeTable<BLSPubKey, StateVerKey, CircuitField>,
-    ) {
-        let pp = MockSystemParam::init();
-        let ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS as usize);
-
-        let genesis = ledger.get_state();
-        let stake_genesis = ledger.get_stake_table_state();
-
-        let qc_keys = ledger.qc_keys;
-        let state_keys = ledger.state_keys;
-        let st = ledger.st;
-
-        eprintln!(
-            "Genesis: view_num: {}, block_height: {}, block_comm_root: {}",
-            genesis.view_num, genesis.block_height, genesis.block_comm_root,
-        );
-        (genesis, stake_genesis, qc_keys, state_keys, st)
-    }
-
-    // everybody signs, then generate a proof
-    fn gen_state_proof(
-        new_state: ParsedLightClientState,
-        genesis_stake_state: &ParsedStakeTableState,
-        state_keypairs: &[(StateSignKey, StateVerKey)],
-        st: &StakeTable<BLSPubKey, StateVerKey, CircuitField>,
-    ) -> (PublicInput, Proof) {
-        let mut rng = test_rng();
-
-        let new_state_msg: [CircuitField; 3] = {
-            // sorry for the complicated .into() conversion chain, might improve in the future
-            let pi_msg: LightClientState = new_state.clone().into();
-            pi_msg.into()
-        };
-        let bit_vec = vec![true; st.len(SnapshotVersion::LastEpochStart).unwrap()];
-        let sigs = state_keypairs
-            .iter()
-            .map(|(sk, _)| {
-                SchnorrSignatureScheme::<EdwardsConfig>::sign(&(), sk, new_state_msg, &mut rng)
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-
-        let srs = {
-            // load SRS from Aztec's ceremony
-            let srs = ark_srs::kzg10::aztec20::setup(2u64.pow(16) as usize + 2)
-                .expect("Aztec SRS fail to load");
-            // convert to Jellyfish type
-            // TODO: (alex) use constructor instead https://github.com/EspressoSystems/jellyfish/issues/440
-            UnivariateUniversalParams {
-                powers_of_g: srs.powers_of_g,
-                h: srs.h,
-                beta_h: srs.beta_h,
-                powers_of_h: vec![srs.h, srs.beta_h],
-            }
-        };
-        let (pk, _) = crate::preprocess(&srs, STAKE_TABLE_CAPACITY_FOR_TEST)
-            .expect("Fail to preprocess state prover circuit");
-        let stake_table_entries = st
-            .try_iter(SnapshotVersion::LastEpochStart)
-            .unwrap()
-            .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
-            .collect::<Vec<_>>();
-        let (proof, pi) = crate::generate_state_update_proof::<_, _, _, _>(
-            &mut rng,
-            &pk,
-            &stake_table_entries,
-            &bit_vec,
-            &sigs,
-            &new_state.into(),
-            &genesis_stake_state.clone().into(),
-            STAKE_TABLE_CAPACITY_FOR_TEST,
-        )
-        .expect("Fail to generate state proof");
-
-        (pi, proof)
-    }
+    const NUM_INIT_VALIDATORS: usize = STAKE_TABLE_CAPACITY_FOR_TEST / 2;
+    const BLOCKS_PER_EPOCH_FOR_TEST: u64 = 3;
 
     /// deploy LightClientMock.sol on local blockchain (via `anvil`) for testing
     /// return (signer-loaded wallet, contract instance)
@@ -706,6 +616,7 @@ mod test {
             light_client_state: genesis,
             stake_table_state: stake_genesis,
             max_history_seconds: MAX_HISTORY_SECONDS,
+            blocks_per_epoch: BLOCKS_PER_EPOCH_FOR_TEST,
         };
 
         let mut contracts = deployer::Contracts::default();
@@ -734,6 +645,7 @@ mod test {
             light_client_state: genesis,
             stake_table_state: stake_genesis,
             max_history_seconds: MAX_HISTORY_SECONDS,
+            blocks_per_epoch: BLOCKS_PER_EPOCH_FOR_TEST,
         };
 
         let mut contracts = deployer::Contracts::default();
@@ -880,7 +792,10 @@ mod test {
     async fn test_submit_state_and_proof() -> Result<()> {
         setup_test();
 
-        let (genesis, stake_genesis, _qc_keys, state_keys, st) = init_ledger_for_test();
+        let pp = MockSystemParam::init();
+        let mut ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS);
+        let genesis: ParsedLightClientState = ledger.light_client_state().into();
+        let stake_genesis: ParsedStakeTableState = ledger.voting_stake_table_state().into();
 
         let anvil = Anvil::new().spawn();
         let (_wallet, contract) =
@@ -891,13 +806,33 @@ mod test {
         let genesis_l1: ParsedLightClientState = contract.genesis_state().await?.into();
         assert_eq!(genesis_l1, genesis, "mismatched genesis, aborting tests");
 
-        let mut new_state = genesis.clone();
-        new_state.view_num = 5;
-        new_state.block_height = 1;
+        // simulate some block elapsing until the end of epoch 1
+        for _ in 0..BLOCKS_PER_EPOCH_FOR_TEST {
+            ledger.elapse_with_block();
+        }
 
-        let (pi, proof) = gen_state_proof(new_state.clone(), &stake_genesis, &state_keys, &st);
+        let (pi, proof) = ledger.gen_state_proof();
         tracing::info!("Successfully generated proof for new state.");
 
+        let contract = super::prepare_contract(
+            config.provider.clone(),
+            config.signing_key.clone(),
+            config.light_client_address,
+        )
+        .await?;
+        super::submit_state_and_proof(proof, pi, &contract).await?;
+        tracing::info!("Successfully submitted new finalized state to L1.");
+        // test if new state is updated in l1
+        let finalized_l1: ParsedLightClientState = contract.finalized_state().await?.into();
+        let voting_st_l1: ParsedStakeTableState = contract.voting_stake_table_state().await?.into();
+        assert_eq!(finalized_l1, ledger.light_client_state().into());
+        // test if the new stake table state is synced as the new voting stake table snapshot
+        assert_eq!(voting_st_l1, ledger.next_stake_table_state().into());
+
+        // simulate more block elapsing in epoch 2
+        ledger.elapse_with_block();
+        let (pi, proof) = ledger.gen_state_proof();
+        tracing::info!("Successfully generated proof for new state in epoch 2.");
         let contract = super::prepare_contract(
             config.provider,
             config.signing_key,
@@ -906,9 +841,7 @@ mod test {
         .await?;
         super::submit_state_and_proof(proof, pi, &contract).await?;
         tracing::info!("Successfully submitted new finalized state to L1.");
-        // test if new state is updated in l1
-        let finalized_l1: ParsedLightClientState = contract.finalized_state().await?.into();
-        assert_eq!(finalized_l1, new_state);
+
         Ok(())
     }
 }

@@ -127,3 +127,58 @@ pub struct StakeTableState {
     pub schnorr_key_comm: ::ethers::core::types::U256,
     pub amount_comm: ::ethers::core::types::U256,
 }
+///`StateHistoryCommitment(uint64,uint64,uint64,uint256)`
+#[derive(
+    Clone,
+    ::ethers::contract::EthAbiType,
+    ::ethers::contract::EthAbiCodec,
+    serde::Serialize,
+    serde::Deserialize,
+    Default,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+)]
+pub struct StateHistoryCommitment {
+    pub l_1_block_height: u64,
+    pub l_1_block_timestamp: u64,
+    pub hot_shot_block_height: u64,
+    pub hot_shot_block_comm_root: ::ethers::core::types::U256,
+}
+///`EvalData(uint256,uint256,uint256)`
+#[derive(
+    Clone,
+    ::ethers::contract::EthAbiType,
+    ::ethers::contract::EthAbiCodec,
+    serde::Serialize,
+    serde::Deserialize,
+    Default,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+)]
+pub struct EvalData {
+    pub vanish_eval: ::ethers::core::types::U256,
+    pub lagrange_one: ::ethers::core::types::U256,
+    pub pi_eval: ::ethers::core::types::U256,
+}
+///`EvalDomain(uint256,uint256,uint256[11])`
+#[derive(
+    Clone,
+    ::ethers::contract::EthAbiType,
+    ::ethers::contract::EthAbiCodec,
+    serde::Serialize,
+    serde::Deserialize,
+    Default,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+)]
+pub struct EvalDomain {
+    pub log_size: ::ethers::core::types::U256,
+    pub size_inv: ::ethers::core::types::U256,
+    pub elements: [::ethers::core::types::U256; 11],
+}
