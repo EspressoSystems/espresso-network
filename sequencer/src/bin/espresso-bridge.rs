@@ -114,11 +114,11 @@ struct Balance {
 #[derive(Debug, Parser)]
 struct L1Balance {
     /// L1 JSON-RPC provider.
-    #[clap(short, long, env = "L1_PROVIDER")]
+    #[arg(short, long, env = "L1_PROVIDER")]
     rpc_url: Url,
 
     /// Request rate when polling L1.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "L1_POLLING_INTERVAL",
@@ -128,15 +128,15 @@ struct L1Balance {
     l1_interval: Duration,
 
     /// Account to check.
-    #[clap(short, long, env = "ADDRESS", required_unless_present = "mnemonic")]
+    #[arg(short, long, env = "ADDRESS", required_unless_present = "mnemonic")]
     address: Option<Address>,
 
     /// Mnemonic to generate the account to check.
-    #[clap(short, long, env = "MNEMONIC", conflicts_with = "address")]
+    #[arg(short, long, env = "MNEMONIC", conflicts_with = "address")]
     mnemonic: Option<String>,
 
     /// Account index when deriving an account from MNEMONIC.
-    #[clap(
+    #[arg(
         short = 'i',
         long,
         env = "ACCOUNT_INDEX",
@@ -146,7 +146,7 @@ struct L1Balance {
     account_index: u32,
 
     /// L1 block number at which to check (default: latest).
-    #[clap(short, long, env = "BLOCK")]
+    #[arg(short, long, env = "BLOCK")]
     block: Option<u64>,
 }
 

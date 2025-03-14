@@ -36,30 +36,30 @@ struct Options {
     /// Minimum size of transaction to submit.
     ///
     /// The size of each transaction will be chosen uniformly between MIN_SIZE and MAX_SIZE.
-    #[clap(long, name = "MIN_SIZE", default_value = "1", value_parser = parse_size, env = "ESPRESSO_SUBMIT_TRANSACTIONS_MIN_SIZE")]
+    #[arg(long, name = "MIN_SIZE", default_value = "1", value_parser = parse_size, env = "ESPRESSO_SUBMIT_TRANSACTIONS_MIN_SIZE")]
     min_size: u64,
 
     /// Maximum size of transaction to submit.
     ///
     /// The size of each transaction will be chosen uniformly between MIN_SIZE and MAX_SIZE.
-    #[clap(long, name = "MAX_SIZE", default_value = "1kb", value_parser = parse_size, env = "ESPRESSO_SUBMIT_TRANSACTIONS_MAX_SIZE")]
+    #[arg(long, name = "MAX_SIZE", default_value = "1kb", value_parser = parse_size, env = "ESPRESSO_SUBMIT_TRANSACTIONS_MAX_SIZE")]
     max_size: u64,
 
     /// Minimum size of batch of transactions to submit.
     ///
     /// Batches will be a random count between MIN_BATCH_SIZE and MAX_BATCH_SIZE, with a falling distribution favoring smaller batches.
     /// This is by selecting a random size S on each iteration I since last batch, and collecting a batch whenever that S <= I.
-    #[clap(long, name = "MIN_BATCH_SIZE", default_value = "1", value_parser = parse_size, env = "ESPRESSO_SUBMIT_TRANSACTIONS_MIN_BATCH_SIZE")]
+    #[arg(long, name = "MIN_BATCH_SIZE", default_value = "1", value_parser = parse_size, env = "ESPRESSO_SUBMIT_TRANSACTIONS_MIN_BATCH_SIZE")]
     min_batch_size: u64,
 
     /// Maximum size of batch of transactions to submit.
     ///
     /// Batches will be a random count between MIN_BATCH_SIZE and MAX_BATCH_SIZE, with a falling distribution favoring smaller batches.
-    #[clap(long, name = "MAX_BATCH_SIZE", default_value = "20", value_parser = parse_size, env = "ESPRESSO_SUBMIT_TRANSACTIONS_MAX_BATCH_SIZE")]
+    #[arg(long, name = "MAX_BATCH_SIZE", default_value = "20", value_parser = parse_size, env = "ESPRESSO_SUBMIT_TRANSACTIONS_MAX_BATCH_SIZE")]
     max_batch_size: u64,
 
     /// Minimum namespace ID to submit to.
-    #[clap(
+    #[arg(
         long,
         default_value = "10000",
         env = "ESPRESSO_SUBMIT_TRANSACTIONS_MIN_NAMESPACE"
@@ -67,7 +67,7 @@ struct Options {
     min_namespace: u32,
 
     /// Maximum namespace ID to submit to.
-    #[clap(
+    #[arg(
         long,
         default_value = "10010",
         env = "ESPRESSO_SUBMIT_TRANSACTIONS_MAX_NAMESPACE"
@@ -78,14 +78,14 @@ struct Options {
     ///
     /// The delay after each transaction will be sampled from an exponential distribution with mean
     /// DELAY.
-    #[clap(long, name = "DELAY", value_parser = parse_duration, default_value = "30s", env = "ESPRESSO_SUBMIT_TRANSACTIONS_DELAY")]
+    #[arg(long, name = "DELAY", value_parser = parse_duration, default_value = "30s", env = "ESPRESSO_SUBMIT_TRANSACTIONS_DELAY")]
     delay: Duration,
 
     /// Maximum number of unprocessed transaction submissions.
     ///
     /// This can be used to apply backpressure so that the tasks submitting transactions do not get
     /// too far ahead of the task processing results.
-    #[clap(
+    #[arg(
         long,
         default_value = "1000",
         env = "ESPRESSO_SUBMIT_TRANSACTIONS_CHANNEL_BOUND"
@@ -93,11 +93,11 @@ struct Options {
     channel_bound: usize,
 
     /// Seed for reproducible randomness.
-    #[clap(long, env = "ESPRESSO_SUBMIT_TRANSACTIONS_SEED")]
+    #[arg(long, env = "ESPRESSO_SUBMIT_TRANSACTIONS_SEED")]
     seed: Option<u64>,
 
     /// Number of parallel tasks to run.
-    #[clap(
+    #[arg(
         short,
         long,
         default_value = "1",
@@ -106,7 +106,7 @@ struct Options {
     jobs: usize,
 
     /// Number of accumulated pending transactions which should trigger a warning.
-    #[clap(
+    #[arg(
         long,
         default_value = "10",
         env = "ESPRESSO_SUBMIT_TRANSACTIONS_PENDING_TRANSACTIONS_WARNING_THRESHOLD"
@@ -114,37 +114,37 @@ struct Options {
     pending_transactions_warning_threshold: usize,
 
     /// Duration after which we should warn about a pending transaction.
-    #[clap(long, value_parser = parse_duration, default_value = "30s", env = "ESPRESSO_SUBMIT_TRANSACTIONS_SLOW_TRANSACTION_WARNING_THRESHOLD")]
+    #[arg(long, value_parser = parse_duration, default_value = "30s", env = "ESPRESSO_SUBMIT_TRANSACTIONS_SLOW_TRANSACTION_WARNING_THRESHOLD")]
     slow_transaction_warning_threshold: Duration,
 
     /// Enable an HTTP server with a healthcheck endpoint on this port.
-    #[clap(short, long, env = "ESPRESSO_SUBMIT_TRANSACTIONS_PORT")]
+    #[arg(short, long, env = "ESPRESSO_SUBMIT_TRANSACTIONS_PORT")]
     port: Option<u16>,
 
     /// Alternative URL to submit transactions to, if not the query service URL.
-    #[clap(long, env = "ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL")]
+    #[arg(long, env = "ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL")]
     submit_url: Option<Url>,
 
     /// URL of the query service.
-    #[clap(env = "ESPRESSO_SEQUENCER_URL")]
+    #[arg(env = "ESPRESSO_SEQUENCER_URL")]
     url: Url,
 
     /// Relay num_nodes for benchmark results output
     #[cfg(feature = "benchmarking")]
-    #[clap(short, long, env = "ESPRESSO_ORCHESTRATOR_NUM_NODES")]
+    #[arg(short, long, env = "ESPRESSO_ORCHESTRATOR_NUM_NODES")]
     num_nodes: NonZeroUsize,
 
     /// The first block that benchmark starts counting in
     #[cfg(feature = "benchmarking")]
-    #[clap(short, long, env = "ESPRESSO_BENCH_START_BLOCK")]
+    #[arg(short, long, env = "ESPRESSO_BENCH_START_BLOCK")]
     benchmark_start_block: NonZeroUsize,
 
     /// The final block that benchmark counts in
     #[cfg(feature = "benchmarking")]
-    #[clap(short, long, env = "ESPRESSO_BENCH_END_BLOCK")]
+    #[arg(short, long, env = "ESPRESSO_BENCH_END_BLOCK")]
     benchmark_end_block: NonZeroUsize,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 

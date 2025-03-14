@@ -11,7 +11,7 @@ use sequencer_utils::logging;
 /// its genesis state. Do not run this program while the sequencer is running.
 #[derive(Clone, Debug, Parser)]
 struct Options {
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 
     #[command(subcommand)]

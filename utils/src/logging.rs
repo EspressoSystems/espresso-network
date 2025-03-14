@@ -23,7 +23,7 @@ enum BacktraceLoggingMode {
 /// Logging configuration.
 #[derive(Clone, Debug, Default, Parser)]
 pub struct Config {
-    #[clap(long, env = "RUST_LOG_FORMAT")]
+    #[arg(long, env = "RUST_LOG_FORMAT")]
     backtrace_mode: Option<BacktraceLoggingMode>,
 }
 

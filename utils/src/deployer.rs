@@ -32,27 +32,27 @@ use url::Url;
 #[derive(Clone, Debug, Parser)]
 pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
-    #[clap(long, env = Contract::PlonkVerifier)]
+    #[arg(long, env = "PLONK_VERIFIER")]
     plonk_verifier: Option<Address>,
 
     /// Use an already-deployed LightClient.sol instead of deploying a new one.
-    #[clap(long, env = Contract::LightClient)]
+    #[arg(long, env = "LIGHT_CLIENT")]
     light_client: Option<Address>,
 
     /// Use an already-deployed LightClient.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::LightClientProxy)]
+    #[arg(long, env = "LIGHT_CLIENT_PROXY")]
     light_client_proxy: Option<Address>,
 
     /// Use an already-deployed FeeContract.sol instead of deploying a new one.
-    #[clap(long, env = Contract::FeeContract)]
+    #[arg(long, env = "FEE_CONTRACT")]
     fee_contract: Option<Address>,
 
     /// Use an already-deployed FeeContract.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::FeeContractProxy)]
+    #[arg(long, env = "FEE_CONTRACT_PROXY")]
     fee_contract_proxy: Option<Address>,
 
     /// Use an already-deployed PermissonedStakeTable.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::PermissonedStakeTable)]
+    #[arg(long, env = "PERMISSIONED_STAKE_TABLE")]
     permissioned_stake_table: Option<Address>,
 }
 

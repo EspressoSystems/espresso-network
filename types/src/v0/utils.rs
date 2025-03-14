@@ -202,7 +202,7 @@ pub const BACKOFF_JITTER: (u64, u64) = (1, 10);
 #[derive(Clone, Copy, Debug, Parser, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BackoffParams {
     /// Exponential backoff exponent.
-    #[clap(
+    #[arg(
         long = "catchup-backoff-factor",
         env = "ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_FACTOR",
         default_value = "4"
@@ -210,7 +210,7 @@ pub struct BackoffParams {
     factor: u32,
 
     /// Exponential backoff base delay.
-    #[clap(
+    #[arg(
         long = "catchup-base-retry-delay",
         env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_RETRY_DELAY",
         default_value = "20ms",
@@ -219,7 +219,7 @@ pub struct BackoffParams {
     base: Duration,
 
     /// Exponential max delay.
-    #[clap(
+    #[arg(
         long = "catchup-max-retry-delay",
         env = "ESPRESSO_SEQUENCER_CATCHUP_MAX_RETRY_DELAY",
         default_value = "5s",
@@ -228,7 +228,7 @@ pub struct BackoffParams {
     max: Duration,
 
     /// Exponential backoff jitter as a ratio of the backoff delay, numerator:denominator.
-    #[clap(
+    #[arg(
         long = "catchup-backoff-jitter",
         env = "ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_JITTER",
         default_value = "1:10"
@@ -236,7 +236,7 @@ pub struct BackoffParams {
     jitter: Ratio,
 
     /// Disable retries and just fail after one failed attempt.
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_DISABLE")]
+    #[arg(short, long, env = "ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_DISABLE")]
     disable: bool,
 }
 

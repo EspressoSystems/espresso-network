@@ -50,20 +50,22 @@ use hotshot_types::{
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
+
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;
+use clap::Parser;
 
 const NUM_NODES: usize = 2;
 
 #[derive(Parser)]
 struct Options {
     /// Port on which to host the query service for the first consensus node.
-    #[clap(long, default_value = "18080")]
+    #[arg(long, default_value = "18080")]
     port1: u16,
 
     /// Port on which to host the query service for the second consensus node.
-    #[clap(long, default_value = "28080")]
+    #[arg(long, default_value = "28080")]
     port2: u16,
 }
 
