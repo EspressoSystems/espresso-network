@@ -713,11 +713,6 @@ impl<TYPES: NodeType, V: Versions> ExtendedQuorumVoteCollectionTaskState<TYPES, 
         let ExtendedQuorumVote { vote, state_vote } = vote;
 
         ensure!(
-            vote.leader(&self.membership).await? == self.public_key,
-            info!("Received vote for a view in which we were not the leader.")
-        );
-
-        ensure!(
             vote.view_number() == self.view,
             error!(
                 "Vote view does not match! vote view is {} current view is {}. This vote should not have been passed to this accumulator.",

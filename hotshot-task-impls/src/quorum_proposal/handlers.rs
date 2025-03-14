@@ -48,13 +48,13 @@ pub(crate) enum ProposalDependency {
     /// For the `SendPayloadCommitmentAndMetadata` event.
     PayloadAndMetadata,
 
-    /// For the `Qc2Formed` event.
+    /// For the `Qc2Formed` and `ExtendedQcFormed` event.
     Qc,
 
     /// For the `ViewSyncFinalizeCertificateRecv` event.
     ViewSyncCert,
 
-    /// For the `Qc2Formed` event timeout branch.
+    /// For the `Qc2Formed` and `ExtendedQcFormed` event timeout branch.
     TimeoutCert,
 
     /// For the `QuorumProposalRecv` event.
@@ -525,42 +525,45 @@ pub(super) async fn handle_eqc_formed<
     task_state: &QuorumProposalTaskState<TYPES, I, V>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     epoch_height: u64,
-) -> Result<()> {
-    ensure!(
-        task_state.upgrade_lock.epochs_enabled(cert_view).await,
-        debug!("QC2 formed but epochs not enabled. Do nothing")
-    );
-    ensure!(
-        task_state
-            .consensus
-            .read()
-            .await
-            .is_leaf_extended(leaf_commit),
-        debug!("We formed QC but not eQC. Do nothing")
-    );
+) {
+    if !task_state.upgrade_lock.epochs_enabled(cert_view).await {
+        tracing::debug!("QC2 formed but epochs not enabled. Do nothing");
+        return;
+    }
+    if !task_state
+        .consensus
+        .read()
+        .await
+        .is_leaf_extended(leaf_commit)
+    {
+        tracing::debug!("We formed QC but not eQC. Do nothing");
+        return;
+    }
 
     let consensus_reader = task_state.consensus.read().await;
     let current_epoch_qc = consensus_reader.high_qc();
     let cert_view = current_epoch_qc.view_number();
-    let cert_block_number = consensus_reader
+    let cert_block_number = match consensus_reader
         .saved_leaves()
         .get(&current_epoch_qc.data.leaf_commit)
-        .context(error!(
-            "Could not find the leaf for the eQC. It shouldn't happen."
-        ))?
-        .height();
-
+    {
+        Some(leaf) => leaf.height(),
+        None => {
+            tracing::error!("Could not find the leaf for the eQC. It shouldn't happen.");
+            return;
+        },
+    };
     let Some(next_epoch_qc) = consensus_reader.next_epoch_high_qc() else {
-        return Err(debug!(
-            "We formed the eQC but we don't have the next epoch eQC at all."
-        ));
+        tracing::debug!("We formed the eQC but we don't have the next epoch eQC at all.");
+        return;
     };
     if current_epoch_qc.view_number() != next_epoch_qc.view_number()
         || current_epoch_qc.data != *next_epoch_qc.data
     {
-        return Err(debug!(
+        tracing::debug!(
             "We formed the eQC but the current and next epoch QCs do not correspond to each other."
-        ));
+        );
+        return;
     }
     drop(consensus_reader);
 
@@ -573,5 +576,4 @@ pub(super) async fn handle_eqc_formed<
         event_sender,
     )
     .await;
-    Ok(())
 }

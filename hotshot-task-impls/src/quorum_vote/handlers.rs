@@ -741,7 +741,10 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .context(error!("Failed to store VID share"))?;
 
     if extended_vote {
-        tracing::debug!("sending extended vote to everybody",);
+        tracing::debug!(
+            "sending extended vote to everybody {:?}",
+            vote.view_number() + 1
+        );
         let light_client_state = leaf
             .block_header()
             .get_light_client_state(view_number)

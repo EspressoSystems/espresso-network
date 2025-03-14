@@ -118,9 +118,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                         }
                     },
                     ProposalDependency::TimeoutCert => {
-                        if let HotShotEvent::Qc2Formed(either::Right(timeout)) = event {
-                            timeout.view_number() + 1
-                        } else if let HotShotEvent::ExtendedQcFormed(either::Right(timeout)) = event
+                        if let HotShotEvent::Qc2Formed(either::Right(timeout))
+                        | HotShotEvent::ExtendedQcFormed(either::Right(timeout)) = event
                         {
                             timeout.view_number() + 1
                         } else {
@@ -290,6 +289,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         event: Arc<HotShotEvent<TYPES>>,
         epoch_transition_indicator: EpochTransitionIndicator,
     ) -> Result<()> {
+        tracing::debug!(
+            "Start attempting to make dependency task for view {view_number:?} and event {event:?}"
+        );
+
         let epoch_membership = self
             .membership_coordinator
             .membership_for_epoch(epoch_number)
@@ -516,7 +519,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                         &event_sender,
                         self.epoch_height,
                     )
-                    .await?;
+                    .await;
 
                     let view_number = eqc.qc.view_number() + 1;
                     self.create_dependency_task_if_new(
@@ -691,7 +694,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     &event_sender,
                     self.epoch_height,
                 )
-                .await?;
+                .await;
             },
             _ => {},
         }
