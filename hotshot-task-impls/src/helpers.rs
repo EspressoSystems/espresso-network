@@ -1010,6 +1010,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 /// makes sure it corresponds to the given DA certificate;
 /// if it's not yet available, waits for it with the given timeout.
 pub async fn wait_for_second_vid_share<TYPES: NodeType>(
+    target_epoch: Option<TYPES::Epoch>,
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
     da_cert: &DaCertificate2<TYPES>,
     consensus: &OuterConsensus<TYPES>,
@@ -1017,13 +1018,6 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     view_start_time: Instant,
     receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<Proposal<TYPES, VidDisperseShare<TYPES>>> {
-    // If the VID share that we already have is for the current epoch, get the next epoch VID.
-    // And the other way around.
-    let target_epoch = if vid_share.data.epoch() == vid_share.data.target_epoch() {
-        vid_share.data.target_epoch().map(|e| e + 1)
-    } else {
-        vid_share.data.target_epoch().map(|e| e - 1)
-    };
     tracing::debug!("getting the second VID share for epoch {:?}", target_epoch);
     let maybe_second_vid_share = consensus
         .read()
@@ -1082,25 +1076,6 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     })
     .await
     else {
-        // Check again, there is a chance we missed it
-        let maybe_second_vid_share = consensus
-            .read()
-            .await
-            .vid_shares()
-            .get(&vid_share.data.view_number())
-            .and_then(|key_map| key_map.get(vid_share.data.recipient_key()))
-            .and_then(|epoch_map| epoch_map.get(&target_epoch))
-            .cloned();
-        if let Some(second_vid_share) = maybe_second_vid_share {
-            if (target_epoch == da_cert.epoch()
-                && second_vid_share.data.payload_commitment() == da_cert.data().payload_commit)
-                || (target_epoch != da_cert.epoch()
-                    && Some(second_vid_share.data.payload_commitment())
-                        == da_cert.data().next_epoch_payload_commit)
-            {
-                return Ok(second_vid_share);
-            }
-        }
         return Err(warn!("Error while waiting for the second VID share."));
     };
     let HotShotEvent::VidShareValidated(second_vid_share) = event.as_ref() else {

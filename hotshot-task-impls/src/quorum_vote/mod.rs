@@ -258,17 +258,36 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 leaf.block_header().block_number(),
                 self.epoch_height,
             );
+            let next_epoch = current_epoch.map(|e| e + 1);
 
-            let membership_reader = self.membership_coordinator.membership().read().await;
-            let committee_member_in_current_epoch =
-                membership_reader.has_stake(&self.public_key, current_epoch);
-            let committee_member_in_next_epoch =
-                membership_reader.has_stake(&self.public_key, current_epoch.map(|e| e + 1));
-            drop(membership_reader);
+            let Ok(current_epoch_membership) = self
+                .membership_coordinator
+                .membership_for_epoch(current_epoch)
+                .await
+            else {
+                tracing::warn!("Couldn't acquire current epoch membership. Do not vote!");
+                return;
+            };
+            let Ok(next_epoch_membership) = self
+                .membership_coordinator
+                .membership_for_epoch(next_epoch)
+                .await
+            else {
+                tracing::warn!("Couldn't acquire next epoch membership. Do not vote!");
+                return;
+            };
 
             // If we belong to both epochs, we require VID shares from both epochs.
-            if committee_member_in_current_epoch && committee_member_in_next_epoch {
+            if current_epoch_membership.has_stake(&self.public_key).await
+                && next_epoch_membership.has_stake(&self.public_key).await
+            {
+                let other_target_epoch = if vid_share.data.target_epoch() == current_epoch {
+                    next_epoch
+                } else {
+                    current_epoch
+                };
                 if let Err(e) = wait_for_second_vid_share(
+                    other_target_epoch,
                     &vid_share,
                     &da_cert,
                     &self.consensus,
