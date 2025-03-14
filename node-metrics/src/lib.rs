@@ -99,14 +99,6 @@
 pub mod api;
 pub mod service;
 
-use crate::{
-    api::node_validator::v0::{
-        cdn::{BroadcastRollCallTask, CdnReceiveMessagesTask},
-        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
-        BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender, STATIC_VER_0_1,
-    },
-    service::{client_message::InternalClientMessage, server_message::ServerMessage},
-};
 use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 use clap::Parser;
 use espresso_types::{PubKey, SeqTypes};
@@ -123,6 +115,15 @@ use service::data_state::MAX_VOTERS_HISTORY;
 use tide_disco::App;
 use tokio::spawn;
 use url::Url;
+
+use crate::{
+    api::node_validator::v0::{
+        cdn::{BroadcastRollCallTask, CdnReceiveMessagesTask},
+        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
+        BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender, STATIC_VER_0_1,
+    },
+    service::{client_message::InternalClientMessage, server_message::ServerMessage},
+};
 
 /// Options represents the configuration options that are available for running
 /// the node validator service via the [run_standalone_service] function.
