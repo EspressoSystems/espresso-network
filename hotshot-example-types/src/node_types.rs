@@ -330,8 +330,8 @@ impl Versions for MarketplaceTestVersions {
 pub struct EpochsTestVersions {}
 
 impl Versions for EpochsTestVersions {
-    type Base = StaticVersion<0, 4>;
-    type Upgrade = StaticVersion<0, 4>;
+    type Base = StaticVersion<0, 3>;
+    type Upgrade = StaticVersion<0, 3>;
     const UPGRADE_HASH: [u8; 32] = [
         1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
         0, 0,
@@ -339,7 +339,7 @@ impl Versions for EpochsTestVersions {
 
     type Marketplace = StaticVersion<0, 5>;
 
-    type Epochs = StaticVersion<0, 4>;
+    type Epochs = StaticVersion<0, 3>;
 }
 
 #[derive(Clone, Debug, Copy)]

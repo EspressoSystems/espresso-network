@@ -181,7 +181,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 .await
                 {
                     Ok(()) => {},
-                    Err(e) => error!(?e, "Failed to validate the proposal"),
+                    Err(e) => tracing::error!(?e, "Failed to validate the proposal"),
                 }
             },
             HotShotEvent::ViewChange(view, epoch) => {

@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::Context;
+use async_lock::RwLock;
 use contract_bindings_alloy::permissionedstaketable::PermissionedStakeTable::StakersUpdated;
 use ethers::types::{Address, U256};
 use ethers_conv::ToAlloy;
@@ -361,20 +362,6 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
     }
 
-    /// Get all eligible leaders of the committee for the current view
-    fn committee_leaders(
-        &self,
-        _view_number: <SeqTypes as NodeType>::View,
-        epoch: Option<Epoch>,
-    ) -> BTreeSet<PubKey> {
-        self.state(&epoch)
-            .unwrap()
-            .eligible_leaders
-            .iter()
-            .map(|x| PubKey::public_key(&x.stake_table_entry))
-            .collect()
-    }
-
     /// Get the stake table entry for a public key
     fn stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
         // Only return the stake if it is above zero
@@ -409,6 +396,16 @@ impl Membership<SeqTypes> for EpochCommittees {
         view_number: <SeqTypes as NodeType>::View,
         epoch: Option<Epoch>,
     ) -> Result<PubKey, Self::Error> {
+        // if we aren't at the initial epoch or epoch is None, we use the non-randomized leader
+        if let Some((initial_epoch, _drb_result)) = self.initial_drb_result {
+            if epoch.unwrap_or(Epoch::genesis()) < initial_epoch {
+                let leaders = &self.non_epoch_committee.eligible_leaders;
+
+                let index = *view_number as usize % leaders.len();
+                let res = leaders[index].clone();
+                return Ok(PubKey::public_key(&res.stake_table_entry));
+            }
+        }
         if let Some(epoch) = epoch {
             let Some(randomized_committee) = self.randomized_committees.get(&epoch) else {
                 tracing::error!(
@@ -498,22 +495,29 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     async fn get_epoch_root_and_drb(
-        &self,
+        membership: Arc<RwLock<Self>>,
         block_height: u64,
         epoch_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<(Header, DrbResult)> {
-        let Some(ref peers) = self.peers else {
+        let Some(peers) = membership.read().await.peers.clone() else {
             anyhow::bail!("No Peers Configured for Catchup");
         };
+        let stake_table = membership.read().await.stake_table(Some(epoch)).clone();
+        let success_threshold = membership.read().await.success_threshold(Some(epoch));
         // Fetch leaves from peers
         let leaf: Leaf2 = peers
-            .fetch_leaf(block_height, self, epoch, epoch_height)
+            .fetch_leaf(
+                block_height,
+                stake_table.clone(),
+                success_threshold,
+                epoch_height,
+            )
             .await?;
         //DRB height is decided in the next epoch's last block
         let drb_height = block_height + epoch_height + 3;
         let drb_leaf = peers
-            .fetch_leaf(drb_height, self, epoch, epoch_height)
+            .fetch_leaf(drb_height, stake_table, success_threshold, epoch_height)
             .await?;
 
         Ok((

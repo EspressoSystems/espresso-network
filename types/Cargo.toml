@@ -12,6 +12,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-broadcast = { workspace = true }
+async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64-bytes = { workspace = true }
 bincode = { workspace = true }

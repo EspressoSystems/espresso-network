@@ -588,12 +588,16 @@ pub mod testing {
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
+        data::EpochNumber,
+        drb::INITIAL_DRB_RESULT,
         event::LeafInfo,
         light_client::{CircuitField, StateKeyPair, StateVerKey},
         traits::{
             block_contents::BlockHeader,
+            election::Membership,
             metrics::NoMetrics,
             network::Topic,
+            node_implementation::ConsensusTime,
             signature_key::{BuilderSignatureKey, StakeTableEntryType},
             stake_table::StakeTableScheme,
         },
@@ -980,12 +984,14 @@ pub mod testing {
             .with_upgrades(upgrades);
 
             // Create the HotShot membership
-            let membership = EpochCommittees::new_stake(
+            let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 &node_state,
                 100,
             );
+
+            membership.set_first_epoch(EpochNumber::new(1), INITIAL_DRB_RESULT);
 
             tracing::info!(
                 i,

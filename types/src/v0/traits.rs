@@ -1,6 +1,6 @@
 //! This module contains all the traits used for building the sequencer types.
 //! It also includes some trait implementations that cannot be implemented in an external crate.
-use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
+use std::{cmp::max, collections::BTreeMap, fmt::Debug, num::NonZeroU64, ops::Range, sync::Arc};
 
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
@@ -25,12 +25,13 @@ use hotshot_types::{
         ValidatedState as HotShotState,
     },
     utils::{genesis_epoch_from_version, verify_epoch_root_chain},
+    PeerConfig,
 };
 use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
-    impls::NodeState, utils::BackoffParams, v0_3::StakeTables, EpochCommittees, EpochVersion,
+    impls::NodeState, utils::BackoffParams, v0_3::StakeTables, EpochVersion, PubKey,
     SequencerVersions,
 };
 use crate::{
@@ -45,18 +46,19 @@ pub trait StateCatchup: Send + Sync {
     async fn fetch_leaf(
         &self,
         height: u64,
-        membership: &EpochCommittees,
-        epoch: EpochNumber,
+        stake_table: Vec<PeerConfig<PubKey>>,
+        success_threshold: NonZeroU64,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         self.backoff().retry(
             self, |provider, retry| {
-                async move {
+        let stake_table_clone = stake_table.clone();
+        async move {
                     let chain = provider.try_fetch_leaves(retry, height).await?;
                     verify_epoch_root_chain(
                         chain,
-                        membership,
-                        epoch,
+                        stake_table_clone.clone(),
+                        success_threshold,
                         epoch_height,
                         &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new()).await
                 }.boxed()
@@ -176,12 +178,12 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Box<T> {
     async fn fetch_leaf(
         &self,
         height: u64,
-        membership: &EpochCommittees,
-        epoch: EpochNumber,
+        stake_table: Vec<PeerConfig<PubKey>>,
+        success_threshold: NonZeroU64,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         (**self)
-            .fetch_leaf(height, membership, epoch, epoch_height)
+            .fetch_leaf(height, stake_table, success_threshold, epoch_height)
             .await
     }
     async fn try_fetch_accounts(
@@ -276,12 +278,12 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn fetch_leaf(
         &self,
         height: u64,
-        membership: &EpochCommittees,
-        epoch: EpochNumber,
+        stake_table: Vec<PeerConfig<PubKey>>,
+        success_threshold: NonZeroU64,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         (**self)
-            .fetch_leaf(height, membership, epoch, epoch_height)
+            .fetch_leaf(height, stake_table, success_threshold, epoch_height)
             .await
     }
     async fn try_fetch_accounts(

@@ -8,6 +8,7 @@
 
 use std::{
     hash::{Hash, Hasher},
+    num::NonZeroU64,
     ops::Deref,
     sync::Arc,
 };
@@ -32,12 +33,11 @@ use vbs::version::StaticVersionType;
 use crate::{
     data::{Leaf2, VidCommitment},
     traits::{
-        election::Membership,
         node_implementation::{ConsensusTime, NodeType, Versions},
         ValidatedState,
     },
     vote::{Certificate, HasViewNumber},
-    StakeTableEntries,
+    PeerConfig, StakeTableEntries,
 };
 
 /// A view's state
@@ -105,8 +105,8 @@ pub type StateAndDelta<TYPES> = (
 
 pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
     leaf_chain: Vec<Leaf2<T>>,
-    membership: &T::Membership,
-    epoch: T::Epoch,
+    stake_table: Vec<PeerConfig<T::SignatureKey>>,
+    success_threshold: NonZeroU64,
     epoch_height: u64,
     upgrade_lock: &crate::message::UpgradeLock<T, V>,
 ) -> anyhow::Result<Leaf2<T>> {
@@ -137,13 +137,11 @@ pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
     }
 
     // verify all QCs are valid
-    let stake_table = membership.stake_table(Some(epoch));
-    let threshold = membership.success_threshold(Some(epoch));
     newest_leaf
         .justify_qc()
         .is_valid_cert(
             StakeTableEntries::<T>::from(stake_table.clone()).0,
-            threshold,
+            success_threshold,
             upgrade_lock,
         )
         .await?;
@@ -151,7 +149,7 @@ pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
         .justify_qc()
         .is_valid_cert(
             StakeTableEntries::<T>::from(stake_table.clone()).0,
-            threshold,
+            success_threshold,
             upgrade_lock,
         )
         .await?;
@@ -159,7 +157,7 @@ pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
         .justify_qc()
         .is_valid_cert(
             StakeTableEntries::<T>::from(stake_table.clone()).0,
-            threshold,
+            success_threshold,
             upgrade_lock,
         )
         .await?;
@@ -173,7 +171,7 @@ pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
         leaf.justify_qc()
             .is_valid_cert(
                 StakeTableEntries::<T>::from(stake_table.clone()).0,
-                threshold,
+                success_threshold,
                 upgrade_lock,
             )
             .await?;

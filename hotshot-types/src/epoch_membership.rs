@@ -143,9 +143,7 @@ where
             .await
             .ok_or(anytrace::warn!("add epoch root failed"))?;
         updater(&mut *(self.membership.write().await));
-
         self.membership.write().await.add_drb_result(epoch, drb);
-
         Ok(EpochMembership {
             epoch: Some(epoch),
             coordinator: self.clone(),
@@ -231,12 +229,13 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
         let Some(epoch) = self.epoch else {
             anyhow::bail!("Cannot get root for None epoch");
         };
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .get_epoch_root_and_drb(block_height, self.coordinator.epoch_height, epoch)
-            .await
+        <TYPES::Membership as Membership<TYPES>>::get_epoch_root_and_drb(
+            self.coordinator.membership.clone(),
+            block_height,
+            self.coordinator.epoch_height,
+            epoch,
+        )
+        .await
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
@@ -279,18 +278,6 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
             .read()
             .await
             .da_committee_members(view_number, self.epoch)
-    }
-
-    /// Get all leaders in the committee for a specific view for a specific epoch
-    pub async fn committee_leaders(
-        &self,
-        view_number: TYPES::View,
-    ) -> BTreeSet<TYPES::SignatureKey> {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .committee_leaders(view_number, self.epoch)
     }
 
     /// Get the stake table entry for a public key, returns `None` if the
@@ -434,7 +421,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
                 .membership
                 .write()
                 .await
-                .add_drb_result(epoch, drb_result)
+                .add_drb_result(epoch, drb_result);
         }
     }
 }

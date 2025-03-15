@@ -1629,7 +1629,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
-        BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
+        BackoffParams, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState,
     };
@@ -1639,6 +1639,7 @@ mod test {
         stream::{StreamExt, TryStreamExt},
     };
     use hotshot::types::EventType;
+    use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         types::HeightIndexed,
@@ -1985,7 +1986,6 @@ mod test {
         }
     }
 
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_catchup_epochs() {
         setup_test();
@@ -1999,7 +1999,7 @@ mod test {
             .l1_url(l1)
             .epoch_height(EPOCH_HEIGHT)
             .build();
-        const NUM_NODES: usize = 5;
+        const NUM_NODES: usize = 4;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(network_config)
@@ -2011,11 +2011,7 @@ mod test {
                 )
             }))
             .build();
-        let mut network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
 
         // Wait for replica 0 to decide in the third epoch.
         let mut events = network.peers[0].event_stream().await;
@@ -2024,7 +2020,10 @@ mod test {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
+            tracing::error!("got decide height {}", leaf_chain[0].leaf.height());
+
             if leaf_chain[0].leaf.height() > EPOCH_HEIGHT * 3 {
+                tracing::error!("decided past one epoch");
                 break;
             }
         }
@@ -2046,7 +2045,7 @@ mod test {
             .collect::<Vec<_>>()
             .await;
 
-        tracing::info!("restarting node");
+        tracing::error!("restarting node");
         let node = network
             .cfg
             .init_node(
