@@ -6,6 +6,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ec = { workspace = true }
