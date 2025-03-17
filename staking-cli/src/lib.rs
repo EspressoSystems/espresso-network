@@ -27,12 +27,12 @@ use url::Url;
 mod claim;
 mod delegation;
 mod demo;
+mod l1;
 mod parse;
 mod registration;
 
 #[cfg(any(test, feature = "testing"))]
-mod deploy;
-mod l1;
+pub mod deploy;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
