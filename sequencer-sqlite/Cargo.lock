@@ -3223,7 +3223,7 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 [[package]]
 name = "diff-test-bn254"
 version = "0.1.0"
-source = "git+https://github.com/EspressoSystems/solidity-bn254.git#050a98a3b389862c50d0bbbea620d8dc278c275a"
+source = "git+https://github.com/EspressoSystems/solidity-bn254.git?tag=v0.2.0#050a98a3b389862c50d0bbbea620d8dc278c275a"
 dependencies = [
  "ark-bn254",
  "ark-ec",
