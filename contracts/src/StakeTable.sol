@@ -113,8 +113,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// The commission is invalid
     error InvalidCommission();
 
-    /// Error raised when the light client address is invalid
-    error InvalidAddress();
+    /// Contract dependencies initialized with zero address.
+    error ZeroAddress();
 
     // === Structs ===
 
@@ -208,9 +208,13 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         address _lightClientAddress,
         uint256 _exitEscrowPeriod
     ) internal {
-        // TODO ensure address not zero
+        if (_tokenAddress == address(0)) {
+            revert ZeroAddress();
+        }
+        if (_lightClientAddress == address(0)) {
+            revert ZeroAddress();
+        }
         token = ERC20(_tokenAddress);
-        // TODO ensure address not zero
         lightClient = LightClient(_lightClientAddress);
         exitEscrowPeriod = _exitEscrowPeriod;
     }

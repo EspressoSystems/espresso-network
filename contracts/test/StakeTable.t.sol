@@ -44,7 +44,6 @@ contract StakeTable_register_Test is Test {
     address public tokenGrantRecipient;
     address public delegator;
     address public validator;
-    uint64 public hotShotBlocksPerEpoch = 1;
     string seed1 = "1";
     string seed2 = "255";
 
