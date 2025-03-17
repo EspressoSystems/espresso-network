@@ -342,10 +342,7 @@ pub async fn deploy(
     .build()?
     .with_chain_id(Some(chain_id));
     let wallet_alloy = EthereumWallet::from(signer_alloy);
-    let l1_alloy = ProviderBuilder::new()
-        .with_recommended_fillers()
-        .wallet(wallet_alloy)
-        .on_http(l1url);
+    let l1_alloy = ProviderBuilder::new().wallet(wallet_alloy).on_http(l1url);
 
     // As a sanity check, check that the deployer address has some balance of ETH it can use to pay
     // gas.

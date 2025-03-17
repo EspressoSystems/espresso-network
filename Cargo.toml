@@ -52,7 +52,7 @@ exclude = ["sequencer-sqlite"]
 [workspace.dependencies]
 contract-bindings-alloy = { path = "./contract-bindings-alloy" }
 ethers-conv = { path = "./ethers-conv" }
-alloy = { version = "0.9", default-features = false, features = [
+alloy = { version = "0.12", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
