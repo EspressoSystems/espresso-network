@@ -14,7 +14,6 @@ import { ERC20 } from "solmate/utils/SafeTransferLib.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "../src/libraries/BLSSig.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
-import { AbstractStakeTable } from "../src/interfaces/AbstractStakeTable.sol";
 import { LightClient } from "../src/LightClient.sol";
 import { LightClientMock } from "../test/mocks/LightClientMock.sol";
 import { InitializedAt } from "../src/InitializedAt.sol";
@@ -31,7 +30,6 @@ import { DeployStakeTableScript } from "./script/StakeTable.s.sol";
 import { DeployEspTokenScript } from "./script/EspToken.s.sol";
 
 // TODO: currently missing several tests
-// TODO: test deployment with proxy
 // TODO: test only owner methods access control
 
 contract StakeTable_register_Test is Test {
@@ -247,7 +245,7 @@ contract StakeTable_register_Test is Test {
 
         vm.prank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
         stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
     }
 
@@ -300,7 +298,7 @@ contract StakeTable_register_Test is Test {
 
         // Check event is emitted after calling successfully `register`
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
         stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // Step 2: generate a new blsVK and schnorrVK
@@ -312,7 +310,7 @@ contract StakeTable_register_Test is Test {
 
         // Step 3: update the consensus keys
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
+        emit S.ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
         stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newBlsSig);
 
         vm.stopPrank();
@@ -430,7 +428,7 @@ contract StakeTable_register_Test is Test {
         assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
         stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // Step 2: generate an empty and new schnorrVK
@@ -505,7 +503,7 @@ contract StakeTable_register_Test is Test {
     //     assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
     //     vm.expectEmit(false, false, false, true, address(stakeTable));
-    //     emit AbstractStakeTable.ValidatorRegistered(validator, blsVK, schnorrVK,
+    //     emit S.ValidatorRegistered(validator, blsVK, schnorrVK,
     // COMMISSION);
     //     stakeTable.registerValidator(blsVK, schnorrVK, blsSig, COMMISSION);
 
@@ -516,7 +514,7 @@ contract StakeTable_register_Test is Test {
 
     //     // Step 3: update the consensus keys with the new schnorrVK
     //     vm.expectEmit(false, false, false, true, address(stakeTable));
-    //     emit AbstractStakeTable.ConsensusKeysUpdated(validator, blsVK, newSchnorrVK);
+    //     emit S.ConsensusKeysUpdated(validator, blsVK, newSchnorrVK);
     //     stakeTable.updateConsensusKeys(blsVK, newSchnorrVK, blsSig);
 
     //     vm.stopPrank();
@@ -540,7 +538,7 @@ contract StakeTable_register_Test is Test {
         assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
         stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // Step 2: generate an empty and new schnorrVK
@@ -549,7 +547,7 @@ contract StakeTable_register_Test is Test {
 
         // Step 3: update the consensus keys with the same bls keys but new schnorrV
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.ConsensusKeysUpdated(validator, newBlsVK, schnorrVK);
+        emit S.ConsensusKeysUpdated(validator, newBlsVK, schnorrVK);
         stakeTable.updateConsensusKeys(newBlsVK, schnorrVK, newSig);
 
         vm.stopPrank();
@@ -572,14 +570,14 @@ contract StakeTable_register_Test is Test {
         // register the node
         vm.prank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
         stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         vm.startPrank(delegator);
 
         // Delegate some funds
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Delegated(delegator, validator, 3 ether);
+        emit S.Delegated(delegator, validator, 3 ether);
         stakeTable.delegate(validator, 3 ether);
 
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
@@ -591,7 +589,7 @@ contract StakeTable_register_Test is Test {
 
         // Request partial undelegation of funds
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Undelegated(delegator, validator, 1 ether);
+        emit S.Undelegated(delegator, validator, 1 ether);
         stakeTable.undelegate(validator, 1 ether);
 
         // Withdraw too early
@@ -618,8 +616,9 @@ contract StakeTable_register_Test is Test {
         vm.stopPrank();
     }
 
+    // solhint-disable-next-line no-empty-blocks
     function test_revertIf_undelegate_AfterValidatorExit() public {
-       // TODO
+        // TODO
     }
 
     // TODO: using openzeppelin contracts for this now
