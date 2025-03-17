@@ -8,7 +8,7 @@ use ethers::{
     prelude::{AbiError, EthAbiCodec, EthAbiType},
     types::U256,
 };
-use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState, PublicInput};
+use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState};
 
 /// Intermediate representations for `LightClientState` in Solidity
 #[derive(Clone, Debug, EthAbiType, EthAbiCodec, PartialEq)]
@@ -67,16 +67,6 @@ impl<F: PrimeField> From<GenericLightClientState<F>> for ParsedLightClientState 
             view_num: v.view_number as u64,
             block_height: v.block_height as u64,
             block_comm_root: field_to_u256(v.block_comm_root),
-        }
-    }
-}
-
-impl From<PublicInput> for ParsedLightClientState {
-    fn from(pi: PublicInput) -> Self {
-        Self {
-            view_num: field_to_u256(pi.view_number()).as_u64(),
-            block_height: field_to_u256(pi.block_height()).as_u64(),
-            block_comm_root: field_to_u256(pi.block_comm_root()),
         }
     }
 }
@@ -187,6 +177,7 @@ pub struct LightClientConstructorArgs {
     pub light_client_state: ParsedLightClientState,
     pub stake_table_state: ParsedStakeTableState,
     pub max_history_seconds: u32,
+    pub blocks_per_epoch: u64,
 }
 
 impl LightClientConstructorArgs {
@@ -199,6 +190,7 @@ impl LightClientConstructorArgs {
             light_client_state: ParsedLightClientState::dummy_genesis(),
             stake_table_state: ParsedStakeTableState::dummy_genesis(),
             max_history_seconds: 864000,
+            blocks_per_epoch: 14400, // 24hr assuming 6 sec block time
         }
     }
 }
@@ -214,6 +206,7 @@ impl Tokenize for LightClientConstructorArgs {
             ethers::abi::Token::Tuple(self.light_client_state.into_tokens()),
             ethers::abi::Token::Tuple(self.stake_table_state.into_tokens()),
             ethers::abi::Token::Uint(U256::from(self.max_history_seconds)),
+            ethers::abi::Token::Uint(U256::from(self.blocks_per_epoch)),
         ]
     }
 }

@@ -1,6 +1,6 @@
 use clap::Parser;
 use ethers::types::U256;
-use hotshot_state_prover::service::one_honest_threshold;
+use hotshot_stake_table::utils::one_honest_threshold;
 use sequencer::{state_signature::relay_server::run_relay_server, SequencerApiVersion};
 use sequencer_utils::logging;
 use vbs::version::StaticVersionType;

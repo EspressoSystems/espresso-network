@@ -24,3 +24,9 @@ pub(crate) fn u256_to_field<F: PrimeField>(v: &U256) -> F {
     v.to_little_endian(&mut bytes);
     F::from_le_bytes_mod_order(&bytes)
 }
+
+#[inline]
+/// A helper function to compute the quorum threshold given a total amount of stake.
+pub fn one_honest_threshold(total_stake: U256) -> U256 {
+    total_stake / 3 + 1
+}

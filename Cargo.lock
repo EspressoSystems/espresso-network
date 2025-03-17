@@ -3482,6 +3482,7 @@ dependencies = [
  "ethers",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
+ "hotshot-types",
  "jf-pcs",
  "jf-plonk",
  "jf-signature 0.2.0",

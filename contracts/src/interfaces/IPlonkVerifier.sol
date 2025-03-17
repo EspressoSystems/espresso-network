@@ -96,7 +96,7 @@ interface IPlonkVerifier {
     /// @return _ A boolean indicating successful verification, false otherwise
     function verify(
         VerifyingKey memory verifyingKey,
-        uint256[8] memory publicInput,
+        uint256[] memory publicInput,
         PlonkProof memory proof
     ) external view returns (bool);
 }

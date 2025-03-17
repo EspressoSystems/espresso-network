@@ -3501,23 +3501,4 @@ pub mod light_client_mock {
         Hash,
     )]
     pub struct StateHistoryRetentionPeriodReturn(pub u32);
-    ///`StateHistoryCommitment(uint64,uint64,uint64,uint256)`
-    #[derive(
-        Clone,
-        ::ethers::contract::EthAbiType,
-        ::ethers::contract::EthAbiCodec,
-        serde::Serialize,
-        serde::Deserialize,
-        Default,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-    )]
-    pub struct StateHistoryCommitment {
-        pub l_1_block_height: u64,
-        pub l_1_block_timestamp: u64,
-        pub hot_shot_block_height: u64,
-        pub hot_shot_block_comm_root: ::ethers::core::types::U256,
-    }
 }

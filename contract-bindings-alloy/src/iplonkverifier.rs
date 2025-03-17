@@ -611,7 +611,7 @@ interface IPlonkVerifier {
         bytes32 g2MSB;
     }
 
-    function verify(VerifyingKey memory verifyingKey, uint256[8] memory publicInput, PlonkProof memory proof) external view returns (bool);
+    function verify(VerifyingKey memory verifyingKey, uint256[] memory publicInput, PlonkProof memory proof) external view returns (bool);
 }
 ```
 
@@ -957,8 +957,8 @@ interface IPlonkVerifier {
       },
       {
         "name": "publicInput",
-        "type": "uint256[8]",
-        "internalType": "uint256[8]"
+        "type": "uint256[]",
+        "internalType": "uint256[]"
       },
       {
         "name": "proof",
@@ -2461,9 +2461,9 @@ pub mod IPlonkVerifier {
             }
         }
     };
-    /**Function with signature `verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[8],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))` and selector `0x64e4c59e`.
+    /**Function with signature `verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))` and selector `0xe2605010`.
     ```solidity
-    function verify(VerifyingKey memory verifyingKey, uint256[8] memory publicInput, PlonkProof memory proof) external view returns (bool);
+    function verify(VerifyingKey memory verifyingKey, uint256[] memory publicInput, PlonkProof memory proof) external view returns (bool);
     ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2471,11 +2471,12 @@ pub mod IPlonkVerifier {
         #[allow(missing_docs)]
         pub verifyingKey: <VerifyingKey as alloy::sol_types::SolType>::RustType,
         #[allow(missing_docs)]
-        pub publicInput: [alloy::sol_types::private::primitives::aliases::U256; 8usize],
+        pub publicInput:
+            alloy::sol_types::private::Vec<alloy::sol_types::private::primitives::aliases::U256>,
         #[allow(missing_docs)]
         pub proof: <PlonkProof as alloy::sol_types::SolType>::RustType,
     }
-    ///Container type for the return parameters of the [`verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[8],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))`](verifyCall) function.
+    ///Container type for the return parameters of the [`verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))`](verifyCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct verifyReturn {
@@ -2494,16 +2495,15 @@ pub mod IPlonkVerifier {
             #[doc(hidden)]
             type UnderlyingSolTuple<'a> = (
                 VerifyingKey,
-                alloy::sol_types::sol_data::FixedArray<
-                    alloy::sol_types::sol_data::Uint<256>,
-                    8usize,
-                >,
+                alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Uint<256>>,
                 PlonkProof,
             );
             #[doc(hidden)]
             type UnderlyingRustTuple<'a> = (
                 <VerifyingKey as alloy::sol_types::SolType>::RustType,
-                [alloy::sol_types::private::primitives::aliases::U256; 8usize],
+                alloy::sol_types::private::Vec<
+                    alloy::sol_types::private::primitives::aliases::U256,
+                >,
                 <PlonkProof as alloy::sol_types::SolType>::RustType,
             );
             #[cfg(test)]
@@ -2567,18 +2567,15 @@ pub mod IPlonkVerifier {
         impl alloy_sol_types::SolCall for verifyCall {
             type Parameters<'a> = (
                 VerifyingKey,
-                alloy::sol_types::sol_data::FixedArray<
-                    alloy::sol_types::sol_data::Uint<256>,
-                    8usize,
-                >,
+                alloy::sol_types::sol_data::Array<alloy::sol_types::sol_data::Uint<256>>,
                 PlonkProof,
             );
             type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
             type Return = verifyReturn;
             type ReturnTuple<'a> = (alloy::sol_types::sol_data::Bool,);
             type ReturnToken<'a> = <Self::ReturnTuple<'a> as alloy_sol_types::SolType>::Token<'a>;
-            const SIGNATURE: &'static str = "verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[8],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))";
-            const SELECTOR: [u8; 4] = [100u8, 228u8, 197u8, 158u8];
+            const SIGNATURE: &'static str = "verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))";
+            const SELECTOR: [u8; 4] = [226u8, 96u8, 80u8, 16u8];
             #[inline]
             fn new<'a>(
                 tuple: <Self::Parameters<'a> as alloy_sol_types::SolType>::RustType,
@@ -2588,10 +2585,11 @@ pub mod IPlonkVerifier {
             #[inline]
             fn tokenize(&self) -> Self::Token<'_> {
                 (
-                    <VerifyingKey as alloy_sol_types::SolType>::tokenize(&self.verifyingKey),
-                    <alloy::sol_types::sol_data::FixedArray<
+                    <VerifyingKey as alloy_sol_types::SolType>::tokenize(
+                        &self.verifyingKey,
+                    ),
+                    <alloy::sol_types::sol_data::Array<
                         alloy::sol_types::sol_data::Uint<256>,
-                        8usize,
                     > as alloy_sol_types::SolType>::tokenize(&self.publicInput),
                     <PlonkProof as alloy_sol_types::SolType>::tokenize(&self.proof),
                 )
@@ -2621,12 +2619,12 @@ pub mod IPlonkVerifier {
         /// No guarantees are made about the order of the selectors.
         ///
         /// Prefer using `SolInterface` methods instead.
-        pub const SELECTORS: &'static [[u8; 4usize]] = &[[100u8, 228u8, 197u8, 158u8]];
+        pub const SELECTORS: &'static [[u8; 4usize]] = &[[226u8, 96u8, 80u8, 16u8]];
     }
     #[automatically_derived]
     impl alloy_sol_types::SolInterface for IPlonkVerifierCalls {
         const NAME: &'static str = "IPlonkVerifierCalls";
-        const MIN_DATA_LENGTH: usize = 704usize;
+        const MIN_DATA_LENGTH: usize = 512usize;
         const COUNT: usize = 1usize;
         #[inline]
         fn selector(&self) -> [u8; 4] {
@@ -2858,7 +2856,9 @@ pub mod IPlonkVerifier {
         pub fn verify(
             &self,
             verifyingKey: <VerifyingKey as alloy::sol_types::SolType>::RustType,
-            publicInput: [alloy::sol_types::private::primitives::aliases::U256; 8usize],
+            publicInput: alloy::sol_types::private::Vec<
+                alloy::sol_types::private::primitives::aliases::U256,
+            >,
             proof: <PlonkProof as alloy::sol_types::SolType>::RustType,
         ) -> alloy_contract::SolCallBuilder<T, &P, verifyCall, N> {
             self.call_builder(&verifyCall {
