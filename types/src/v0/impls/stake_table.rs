@@ -126,7 +126,7 @@ pub struct EpochCommittees {
     /// And the DrbResult to use before that epoch
     initial_drb_result: Option<(Epoch, DrbResult)>,
 
-    /// Methods for persisting the stake table
+    /// Methods for stake table persistence.
     #[debug(skip)]
     persistence: Arc<dyn MembershipPersistence>,
 }

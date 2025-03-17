@@ -1906,6 +1906,7 @@ impl MembershipPersistence for Persistence {
         tx.commit().await
     }
 }
+
 #[async_trait]
 impl Provider<SeqTypes, VidCommonRequest> for Persistence {
     #[tracing::instrument(skip(self))]
