@@ -512,16 +512,29 @@ contract StakeTable_register_Test is Test {
         stakeTable.claimWithdrawal(validator);
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 2 ether);
 
-        // Request undelegation of rest of funds
-        stakeTable.undelegate(validator, 2 ether);
+        vm.stopPrank();
 
-        // Try to undelegate more
-        vm.expectRevert(abi.encodeWithSelector(S.InsufficientBalance.selector, 0));
+        // Validator exit
+        vm.prank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+
+        vm.startPrank(delegator);
+
+        // Withdraw too early
+        vm.expectRevert(S.PrematureWithdrawal.selector);
+        stakeTable.claimValidatorExit(validator);
+
+        // Try to undelegate after validator exit
+        vm.expectRevert(S.ValidatorInactive.selector);
         stakeTable.undelegate(validator, 1);
 
         // Withdraw after escrow period
         vm.warp(block.timestamp + ESCROW_PERIOD);
-        stakeTable.claimWithdrawal(validator);
+        stakeTable.claimValidatorExit(validator);
+
+        // The delegator withdrew all their funds
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
 
         vm.stopPrank();

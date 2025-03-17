@@ -397,7 +397,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Withdraw previously delegated funds after a validator has exited
     /// @param validator The validator to withdraw from
     function claimValidatorExit(address validator) external virtual {
-        uint256 unlocksAt = validatorExits[msg.sender];
+        uint256 unlocksAt = validatorExits[validator];
         if (unlocksAt == 0) {
             revert ValidatorNotExited();
         }
