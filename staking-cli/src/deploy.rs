@@ -71,7 +71,7 @@ impl TestSystem {
             .clone();
 
         let proxy = ERC1967Proxy::deploy(provider.clone(), *token.address(), data).await?;
-        let token = EspToken::new(proxy.address().clone(), provider.clone());
+        let token = EspToken::new(*proxy.address(), provider.clone());
 
         // `StakeTable.sol`
         let stake_table = StakeTable::deploy(provider.clone()).await?;

@@ -7,18 +7,18 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 
 pub fn parse_bls_priv_key(s: &str) -> Result<BLSPrivKey, Tb64Error> {
-    Ok(TaggedBase64::parse(s)?.try_into()?)
+    TaggedBase64::parse(s)?.try_into()
 }
 
 pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
-    Ok(TaggedBase64::parse(s)?.try_into()?)
+    TaggedBase64::parse(s)?.try_into()
 }
 
 #[derive(Debug, Copy, Clone)]
 pub struct Commission(u16);
 
 impl Commission {
-    pub fn to_evm(&self) -> u16 {
+    pub fn to_evm(self) -> u16 {
         self.0
     }
 }

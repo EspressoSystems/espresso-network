@@ -32,13 +32,13 @@ fn cmd() -> Command {
 }
 
 #[test]
-fn test_version() -> Result<()> {
+fn test_cli_version() -> Result<()> {
     cmd().arg("version").output()?.assert_success();
     Ok(())
 }
 
 #[test]
-fn test_created_and_remove_config_file() -> anyhow::Result<()> {
+fn test_cli_created_and_remove_config_file() -> anyhow::Result<()> {
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
 
