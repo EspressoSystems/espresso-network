@@ -278,6 +278,8 @@ pub async fn main() -> Result<()> {
     let stake_table = StakeTableInstance::new(config.stake_table_address, provider.clone());
 
     let result = match config.commands {
+        // TODO: The info command is not implemented yet. It's not very useful for local testing or
+        // the demo and requires code that is not yet merged into main, so it's left for later.
         Commands::Info => todo!(),
         Commands::RegisterValidator {
             consensus_private_key,
