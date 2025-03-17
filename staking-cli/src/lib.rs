@@ -10,18 +10,14 @@ use anyhow::Result;
 use claim::{claim_validator_exit, claim_withdrawal};
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
-use contract_bindings_alloy::{
-    esptoken::EspToken::EspTokenInstance, staketable::StakeTable::StakeTableInstance,
-};
+use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
 use delegation::{delegate, undelegate};
 use demo::stake_for_demo;
 pub(crate) use hotshot_types::{
     light_client::{StateSignKey, StateVerKey},
-    signature_key::{BLSPrivKey, BLSPubKey},
+    signature_key::BLSPrivKey,
 };
-pub(crate) use jf_signature::{
-    bls_over_bn254::KeyPair as BLSKeyPair, schnorr::KeyPair as SchnorrKeyPair,
-};
+pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use parse::Commission;
 use registration::{deregister_validator, register_validator};
 use serde::{Deserialize, Serialize};

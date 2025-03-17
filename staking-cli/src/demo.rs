@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use alloy::{
     network::EthereumWallet,
     primitives::{utils::parse_ether, Address},

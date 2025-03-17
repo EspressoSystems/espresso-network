@@ -1,12 +1,11 @@
 use alloy::{
-    primitives::{Address, Log, U256},
+    primitives::{Address, U256},
     providers::Provider,
     rpc::types::TransactionReceipt,
-    sol_types::{SolEvent, SolInterface},
     transports::Transport,
 };
 use anyhow::Result;
-use contract_bindings_alloy::staketable::StakeTable::{StakeTableErrors, StakeTableInstance};
+use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
 
 pub async fn delegate<P: Provider<T>, T: Transport + Clone>(
     stake_table: StakeTableInstance<T, P>,

@@ -16,7 +16,7 @@ use hotshot_contract_adapter::{
 };
 use jf_signature::constants::CS_ID_BLS_BN254;
 
-use crate::{parse::Commission, BLSKeyPair, SchnorrKeyPair, StateVerKey};
+use crate::{parse::Commission, BLSKeyPair, StateVerKey};
 
 fn to_alloy_g1_point(p: ParsedG1Point) -> G1Point {
     G1Point {
