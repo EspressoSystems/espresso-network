@@ -138,7 +138,7 @@ pub mod availability_tests {
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockTypes},
+            mocks::{mock_transaction, MockTypes, MockVersions},
             setup_test,
         },
         types::HeightIndexed,
@@ -289,7 +289,7 @@ pub mod availability_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -364,7 +364,7 @@ pub mod availability_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
         network.start().await;
 
@@ -462,7 +462,7 @@ pub mod availability_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
         network.start().await;
 
@@ -792,7 +792,7 @@ pub mod node_tests {
         node::{BlockId, NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockPayload, MockTypes},
+            mocks::{mock_transaction, MockPayload, MockTypes, MockVersions},
             setup_test, sleep,
         },
         types::HeightIndexed,
@@ -1051,7 +1051,7 @@ pub mod node_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1136,7 +1136,7 @@ pub mod node_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1215,7 +1215,7 @@ pub mod node_tests {
     pub async fn test_timestamp_window<D: TestableDataSource>() {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1405,7 +1405,7 @@ pub mod status_tests {
         status::StatusDataSource,
         testing::{
             consensus::{DataSourceLifeCycle, MockNetwork},
-            mocks::mock_transaction,
+            mocks::{mock_transaction, MockVersions},
             setup_test, sleep,
         },
     };
@@ -1414,7 +1414,7 @@ pub mod status_tests {
     pub async fn test_metrics<D: DataSourceLifeCycle + StatusDataSource>() {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         {

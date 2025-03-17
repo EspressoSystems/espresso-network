@@ -17,7 +17,7 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
-    data::{Leaf2, QuorumProposalWrapper},
+    data::{vid_disperse::vid_total_weight, Leaf2, QuorumProposalWrapper},
     drb::DrbComputation,
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
@@ -243,7 +243,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.upgrade_lock.clone(),
             self.view_number,
             Arc::clone(&self.instance_state),
-            Arc::clone(&self.storage),
             &leaf,
             &vid_share,
             parent_view_number,
@@ -626,14 +625,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     "VID share was not sent by a DA member or the view leader."
                 );
 
-                let membership_total_nodes = self
-                    .membership
-                    .membership_for_epoch(target_epoch)
-                    .await?
-                    .total_nodes()
-                    .await;
+                let total_weight = vid_total_weight::<TYPES>(
+                    self.membership
+                        .membership_for_epoch(target_epoch)
+                        .await?
+                        .stake_table()
+                        .await,
+                    target_epoch,
+                );
 
-                if let Err(()) = share.data.verify_share(membership_total_nodes) {
+                if let Err(()) = share.data.verify_share(total_weight) {
                     bail!("Failed to verify VID share");
                 }
 
@@ -754,7 +755,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             self.upgrade_lock.clone(),
             proposal.data.view_number(),
             Arc::clone(&self.instance_state),
-            Arc::clone(&self.storage),
             &proposed_leaf,
             &updated_vid,
             Some(parent_leaf.view_number()),
