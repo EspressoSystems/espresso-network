@@ -24,27 +24,27 @@ test-ci-5:
 
 test-ci-6-1:
   echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:1/6
+  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition count:1/6
 
 test-ci-6-2:
   echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:2/6
+  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition count:2/6
 
 test-ci-6-3:
   echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:3/6
+  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition count:3/6
 
 test-ci-6-4:
   echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:4/6
+  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition count:4/6
 
 test-ci-6-5:
   echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:5/6
+  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition count:5/6
 
 test-ci-6-6:
   echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:6/6
+  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition count:6/6
 
 # Usage:
 #
