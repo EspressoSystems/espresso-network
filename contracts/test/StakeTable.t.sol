@@ -538,5 +538,4 @@ contract StakeTable_register_Test is Test {
     function test_revertIf_undelegate_AfterValidatorExit() public {
         // TODO
     }
-
 }
