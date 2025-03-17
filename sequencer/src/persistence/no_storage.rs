@@ -235,8 +235,8 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Vec<IndexedStake>> {
-        todo!();
+    async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
     }
 
     async fn store_stake(&self, _epoch: EpochNumber, _stake: StakeTables) -> anyhow::Result<()> {

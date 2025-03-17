@@ -1865,7 +1865,7 @@ impl MembershipPersistence for Persistence {
             .transpose()
     }
 
-    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Vec<IndexedStake>> {
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         let mut tx = self.db.write().await?;
 
         let rows = match query_as::<(i64, Vec<u8>)>(
@@ -1886,7 +1886,7 @@ impl MembershipPersistence for Persistence {
             .map(|(id, bytes)| -> anyhow::Result<_> {
                 let st: StakeTables =
                     bincode::deserialize(&bytes).context("deserializing stake table")?;
-                Ok((EpochNumber::new(id as u64), st))
+                Ok(Some((EpochNumber::new(id as u64), st)))
             })
             .collect()
     }
@@ -2744,7 +2744,7 @@ mod test {
             .store_stake(EpochNumber::new(11), st2.clone())
             .await?;
 
-        let tables = storage.load_latest_stake(4).await?;
+        let tables = storage.load_latest_stake(4).await?.unwrap();
         let mut iter = tables.iter();
         assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
         assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());

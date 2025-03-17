@@ -499,7 +499,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>>;
 
     /// Load stake tables for storage for latest `n` known epochs
-    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Vec<IndexedStake>>;
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()>;

@@ -1288,7 +1288,7 @@ impl MembershipPersistence for Persistence {
         ))
     }
 
-    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Vec<IndexedStake>> {
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         let limit = limit as usize;
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
@@ -1303,11 +1303,11 @@ impl MembershipPersistence for Persistence {
         };
         slice
             .iter()
-            .map(|(epoch, path)| -> anyhow::Result<IndexedStake> {
+            .map(|(epoch, path)| -> anyhow::Result<Option<IndexedStake>> {
                 let bytes = fs::read(path).context("read")?;
                 let st =
                     bincode::deserialize(&bytes).context("deserialize combined stake table")?;
-                Ok((*epoch, st))
+                Ok(Some((*epoch, st)))
             })
             .collect()
     }
@@ -1945,7 +1945,7 @@ mod test {
             .store_stake(EpochNumber::new(11), st2.clone())
             .await?;
 
-        let tables = storage.load_latest_stake(4).await?;
+        let tables = storage.load_latest_stake(4).await?.unwrap();
         let mut iter = tables.iter();
         assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
         assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
