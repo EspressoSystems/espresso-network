@@ -320,7 +320,6 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
             }
         }
 
-        res.leaf_views.push(info.clone());
         // If the block payload is available for this leaf, include it in
         // the leaf chain that we send to the client.
         if let Some(payload) = consensus_reader
@@ -338,6 +337,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         }
 
         current_leaf_info = consensus_reader.parent_leaf_info(&info.leaf, public_key);
+        res.leaf_views.push(info.clone());
     }
 
     if !txns.is_empty() {
