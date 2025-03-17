@@ -73,7 +73,7 @@ contract StakeTable_register_Test is Test {
         );
     }
 
-    function setUpCustom() public {
+    function setUp() public {
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
         validator = makeAddr("validator");
         delegator = makeAddr("delegator");
@@ -105,13 +105,7 @@ contract StakeTable_register_Test is Test {
         stakeTable = StakeTableMock(proxy);
     }
 
-    // TODO remove?
-    function setUp() public {
-        setUpCustom();
-    }
-
     function test_Deployment_StoresBlockNumber() public {
-        setUp();
         assertEq(stakeTable.initializedAtBlock(), block.number);
     }
 
