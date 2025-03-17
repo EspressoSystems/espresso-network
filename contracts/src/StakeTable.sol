@@ -123,8 +123,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice The `delegatedAmount` excludes funds that are currently marked for withdrawal via
     /// undelegation or validator exit.
     struct Validator {
-        ValidatorStatus status;
         uint256 delegatedAmount;
+        ValidatorStatus status;
     }
 
     /// @notice The status of a validator.
