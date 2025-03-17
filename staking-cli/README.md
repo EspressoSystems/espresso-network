@@ -14,7 +14,7 @@ and once that is started up
 
     cargo run --bin staking-cli -p staking-cli -- stake-for-demo
 
-it should that validators are being registered
+it should show that validators are being registered
 
     2025-03-14T16:10:06.635922Z  INFO staking_cli::demo: Deploying validator 0 with commission 0.00 %
     2025-03-14T16:10:10.665231Z  INFO staking_cli::demo: Deploying validator 1 with commission 1.00 %
