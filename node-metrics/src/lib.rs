@@ -134,7 +134,7 @@ pub struct Options {
     /// URL.
     /// Example:
     ///   - https://query.cappuccino.testnet.espresso.network/v0/
-    #[clap(long, env = "ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL")]
+    #[arg(long, env = "ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL")]
     stake_table_source_base_url: Url,
 
     /// leaf_stream_base_url is the base URL for the availability API endpoint
@@ -144,12 +144,11 @@ pub struct Options {
     /// URL.
     /// Example:
     ///   - https://query.cappuccino.testnet.espresso.network/v0/
-    ///
-    #[clap(long, env = "ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL")]
+    #[arg(long, env = "ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL")]
     leaf_stream_base_url: Url,
 
     /// initial_node_public_base_urls is a list of URLs that are the initial
-    /// public base URLs of the nodes that are in the network.  These can be
+    /// public base URLs of the nodes that are in the network. These can be
     /// supplied as an initial source of URLS to scrape for node identity.
     ///
     /// These urls are expected to point to the root path of the URL for the
@@ -158,7 +157,7 @@ pub struct Options {
     ///
     /// Example URL:
     ///  - https://query-1.cappuccino.testnet.espresso.network/
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS",
         value_delimiter = ','
@@ -168,9 +167,8 @@ pub struct Options {
     /// port is the port that the node validator service will listen on.
     /// This port is expected to be a valid port number that is available
     /// for the service to bind to.
-    #[clap(
+    #[arg(
         long,
-        value_parser,
         env = "ESPRESSO_NODE_VALIDATOR_PORT",
         default_value = "9000"
     )]
@@ -180,7 +178,7 @@ pub struct Options {
     ///
     /// This endpoint is optional, and if it is not provided, then the CDN
     /// service will not be utilized.
-    #[clap(long, env = "ESPRESSO_NODE_VALIDATOR_CDN_MARSHAL_ENDPOINT")]
+    #[arg(long, env = "ESPRESSO_NODE_VALIDATOR_CDN_MARSHAL_ENDPOINT")]
     cdn_marshal_endpoint: Option<String>,
 }
 

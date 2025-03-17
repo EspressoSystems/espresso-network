@@ -46,7 +46,7 @@ use crate::{api, persistence, proposal_fetcher::ProposalFetcherConfig};
 #[derivative(Debug(bound = ""))]
 pub struct Options {
     /// URL of the HotShot orchestrator.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "ESPRESSO_SEQUENCER_ORCHESTRATOR_URL",
@@ -55,9 +55,13 @@ pub struct Options {
     #[derivative(Debug(format_with = "Display::fmt"))]
     pub orchestrator_url: Url,
 
+    /// Libp2p bind address for incoming connections
+    #[arg(long, env = "ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS", default_value = "0.0.0.0:0")]
+    pub libp2p_bind_address: String,
+    
     /// The socket address of the HotShot CDN's main entry point (the marshal)
     /// in `IP:port` form
-    #[clap(
+    #[arg(
         short,
         long,
         env = "ESPRESSO_SEQUENCER_CDN_ENDPOINT",
@@ -66,19 +70,18 @@ pub struct Options {
     pub cdn_endpoint: String,
 
     /// The address to bind to for Libp2p (in `host:port` form)
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_LIBP2P_BIND_ADDRESS",
         default_value = "0.0.0.0:1769"
     )]
-    pub libp2p_bind_address: String,
 
     /// Time between each Libp2p heartbeat
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_HEARTBEAT_INTERVAL", default_value = "1s", value_parser = parse_duration)]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_LIBP2P_HEARTBEAT_INTERVAL", default_value = "1s", value_parser = parse_duration)]
     pub libp2p_heartbeat_interval: Duration,
 
     /// Number of past heartbeats to gossip about on Libp2p
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_LIBP2P_HISTORY_GOSSIP",
         default_value = "3"
@@ -86,7 +89,7 @@ pub struct Options {
     pub libp2p_history_gossip: usize,
 
     /// Number of heartbeats to keep in the Libp2p `memcache`
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_LIBP2P_HISTORY_LENGTH",
         default_value = "5"
@@ -94,11 +97,11 @@ pub struct Options {
     pub libp2p_history_length: usize,
 
     /// Target number of peers for the Libp2p mesh network
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_N", default_value = "8")]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_N", default_value = "8")]
     pub libp2p_mesh_n: usize,
 
     /// Maximum number of peers in the Libp2p mesh network before removing some
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_N_HIGH",
         default_value = "12"
@@ -106,7 +109,7 @@ pub struct Options {
     pub libp2p_mesh_n_high: usize,
 
     /// Minimum number of peers in the Libp2p mesh network before adding more
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_N_LOW",
         default_value = "6"
@@ -114,7 +117,7 @@ pub struct Options {
     pub libp2p_mesh_n_low: usize,
 
     /// Minimum number of outbound Libp2p peers in the mesh network before adding more
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_LIBP2P_MESH_OUTBOUND_MIN",
         default_value = "2"
@@ -122,7 +125,7 @@ pub struct Options {
     pub libp2p_mesh_outbound_min: usize,
 
     /// The maximum number of messages to include in a Libp2p IHAVE message
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_LIBP2P_MAX_IHAVE_LENGTH",
         default_value = "5000"

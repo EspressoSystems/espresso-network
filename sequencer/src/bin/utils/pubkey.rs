@@ -37,8 +37,8 @@ pub struct Options {
     /// The private key to get the public key for.
     key: PrivateKey,
 
-    // Whether or not to derive the libp2p peer ID from the private key.
-    #[clap(long, short)]
+    /// Whether or not to derive the libp2p peer ID from the private key.
+    #[arg(long, short)]
     libp2p: bool,
 }
 

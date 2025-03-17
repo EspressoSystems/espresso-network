@@ -14,62 +14,40 @@ use vec1::Vec1;
 #[derive(Parser)]
 struct Args {
     /// Port to run the server on.
-    #[clap(short, long, env = "ESPRESSO_ORCHESTRATOR_PORT")]
+    #[arg(short, long, env = "ESPRESSO_ORCHESTRATOR_PORT")]
     port: u16,
 
     /// Port to run the server on.
-    #[clap(short, long, env = "ESPRESSO_ORCHESTRATOR_MANUAL_START_PASSWORD")]
+    #[arg(short, long, env = "ESPRESSO_ORCHESTRATOR_MANUAL_START_PASSWORD")]
     manual_start_password: Option<String>,
 
     /// Number of nodes in the network.
-    #[clap(short, long, env = "ESPRESSO_ORCHESTRATOR_NUM_NODES")]
+    #[arg(short, long, env = "ESPRESSO_ORCHESTRATOR_NUM_NODES")]
     num_nodes: NonZeroUsize,
 
     /// Duration to wait after all nodes are connected before starting the run.
-    #[clap(long, env = "ESPRESSO_ORCHESTRATOR_START_DELAY", default_value = "10s", value_parser = parse_duration)]
+    #[arg(long, env = "ESPRESSO_ORCHESTRATOR_START_DELAY", default_value = "10s", value_parser = parse_duration)]
     start_delay: Duration,
 
     /// Base duration for next-view timeout.
-    #[arg(
-        long,
-        env = "ESPRESSO_ORCHESTRATOR_NEXT_VIEW_TIMEOUT",
-        default_value = "60s",
-        value_parser = parse_duration
-    )]
+    #[arg(long, env = "ESPRESSO_ORCHESTRATOR_NEXT_VIEW_TIMEOUT", default_value = "60s", value_parser = parse_duration)]
     next_view_timeout: Duration,
 
     /// The exponential backoff ratio for the next-view timeout.
-    #[arg(
-        long,
-        env = "ESPRESSO_ORCHESTRATOR_TIMEOUT_RATIO",
-        default_value = "11:10"
-    )]
+    #[arg(long, env = "ESPRESSO_ORCHESTRATOR_TIMEOUT_RATIO", default_value = "11:10")]
     timeout_ratio: Ratio,
 
     /// The threshold
-    #[arg(
-        long,
-        env = "ESPRESSO_ORCHESTRATOR_START_THRESHOLD",
-        default_value = "8:10"
-    )]
+    #[arg(long, env = "ESPRESSO_ORCHESTRATOR_START_THRESHOLD", default_value = "8:10")]
     start_threshold: Ratio,
 
     /// The delay a leader inserts before starting pre-commit.
-    #[arg(
-        long,
-        env = "ESPRESSO_ORCHESTRATOR_ROUND_START_DELAY",
-        default_value = "1ms",
-        value_parser = parse_duration
-    )]
+    #[arg(long, env = "ESPRESSO_ORCHESTRATOR_ROUND_START_DELAY", default_value = "1ms", value_parser = parse_duration)]
     round_start_delay: Duration,
 
     /// The number of nodes a Libp2p node should try to maintain
     /// a connection with at one time.
-    #[arg(
-        long,
-        env = "ESPRESSO_ORCHESTRATOR_LIBP2P_MESH_N",
-        default_value = "20"
-    )]
+    #[arg(long, env = "ESPRESSO_ORCHESTRATOR_LIBP2P_MESH_N", default_value = "20")]
     libp2p_mesh_n: usize,
 
     /// Seed to use for generating node keys.
@@ -86,15 +64,10 @@ struct Args {
     ///
     /// If the consensus leader is unable to get a block from a builder within this time, it will
     /// propose an empty block instead.
-    #[arg(
-        long,
-        env = "ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT",
-        default_value = "1s",
-        value_parser = parse_duration
-    )]
+    #[arg(long, env = "ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT", default_value = "1s", value_parser = parse_duration)]
     builder_timeout: Duration,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 

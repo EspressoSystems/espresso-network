@@ -8,7 +8,7 @@ use vbs::version::StaticVersionType;
 #[derive(Parser)]
 struct Args {
     /// Port to run the server on.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "ESPRESSO_STATE_RELAY_SERVER_PORT",
@@ -19,14 +19,14 @@ struct Args {
     /// Total amount of stake.
     /// WARNING: this is a temporary flag, should remove after integrating with stake table.
     /// Related issue: [https://github.com/EspressoSystems/espresso-sequencer/issues/1022]
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_STATE_SIGNATURE_TOTAL_STAKE",
         default_value = "5"
     )]
     total_stake: u64,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 

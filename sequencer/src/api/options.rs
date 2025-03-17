@@ -521,15 +521,15 @@ impl Options {
 #[derive(Parser, Clone, Copy, Debug)]
 pub struct Http {
     /// Port that the HTTP API will use.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_API_PORT", default_value = "8080")]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_API_PORT", default_value = "8080")]
     pub port: u16,
 
     /// Maximum number of concurrent HTTP connections the server will allow.
     ///
-    /// Connections exceeding this will receive and immediate 429 response and be closed.
+    /// Connections exceeding this will receive an immediate 429 response and be closed.
     ///
     /// Leave unset for no connection limit.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_MAX_CONNECTIONS")]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
 }
 
@@ -563,7 +563,7 @@ pub struct Config;
 #[derive(Parser, Clone, Debug, Default)]
 pub struct Query {
     /// Peers for fetching missing data for the query service.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_API_PEERS", value_delimiter = ',')]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_API_PEERS", value_delimiter = ',')]
     pub peers: Vec<Url>,
 }
 
@@ -575,7 +575,7 @@ pub struct State;
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct HotshotEvents {
     /// Port that the HTTP Hotshot Event streaming API will use.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT")]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT")]
     pub events_service_port: u16,
 }
 
