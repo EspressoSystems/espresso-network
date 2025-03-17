@@ -1296,10 +1296,10 @@ impl MembershipPersistence for Persistence {
             .sorted_unstable_by_key(|t| t.0)
             .collect::<Vec<_>>();
 
-        let l = sorted.len();
+        let len = sorted.len();
         let mut slice = &sorted[..];
-        if l > limit {
-            slice = &sorted[l - limit..l - 1]
+        if len > limit {
+            slice = &sorted[len - limit..len - 1]
         };
         slice
             .iter()
