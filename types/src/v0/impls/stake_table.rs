@@ -250,57 +250,11 @@ pub struct EpochCommittees {
 
     /// Peers for catching up the stake table
     #[debug(skip)]
-    peers: Option<Arc<dyn StateCatchup>>,
+    peers: Arc<dyn StateCatchup>,
     /// Contains the epoch after which initial_drb_result will not be used (set_first_epoch.epoch + 2)
     /// And the DrbResult to use before that epoch
     initial_drb_result: Option<(Epoch, DrbResult)>,
 }
-
-#[derive(Clone)]
-enum StakeTableChange {
-    Add(ValidatorRegistered),
-    Remove(ValidatorExit),
-}
-
-impl PartialEq for StakeTableChange {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (StakeTableChange::Add(a), StakeTableChange::Add(b)) => a.account == b.account,
-            (StakeTableChange::Remove(a), StakeTableChange::Remove(b)) => {
-                a.validator == b.validator
-            },
-            _ => false,
-        }
-    }
-}
-
-#[derive(Clone)]
-enum DelegationChange {
-    Add(Delegated),
-    Remove(Undelegated),
-}
-
-impl PartialEq for DelegationChange {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (DelegationChange::Add(a), DelegationChange::Add(b)) => {
-                a.validator == b.validator && a.amount == b.amount && a.delegator == b.delegator
-            },
-            (DelegationChange::Remove(a), DelegationChange::Remove(b)) => {
-                a.delegator == b.delegator && a.validator == b.validator && a.amount == b.amount
-            },
-            _ => false,
-        }
-    }
-}
-// impl StakeTableChange {
-//     pub(crate) fn key(&self) -> BLSPubKey {
-//         match self {
-//             StakeTableChange::Add(validator) => bls_alloy_to_jf2(validator.blsVk)
-//             StakeTableChange::Remove(validator) =>  bls_alloy_to_jf2(validator.blsVk)
-//         }
-//     }
-// }
 
 /// Holds Stake table and da stake
 #[derive(Clone, Debug)]
@@ -497,7 +451,7 @@ impl EpochCommittees {
             l1_client,
             contract_address,
             randomized_committees: BTreeMap::new(),
-            peers: Some(peers),
+            peers,
             initial_drb_result: None,
         }
     }
@@ -722,9 +676,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<(Header, DrbResult)> {
-        let Some(ref peers) = self.peers else {
-            anyhow::bail!("No Peers Configured for Catchup");
-        };
+        let peers = self.peers.clone();
         // Fetch leaves from peers
         let leaf: Leaf2 = peers
             .fetch_leaf(block_height, self, epoch, epoch_height)

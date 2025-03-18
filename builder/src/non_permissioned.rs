@@ -18,6 +18,7 @@ use hotshot_builder_core::{
 };
 use hotshot_types::{
     data::{fake_commitment, vid_commitment, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::{
         block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics,
         node_implementation::Versions, EncodeBytes,
@@ -54,19 +55,24 @@ pub fn build_instance_state<V: Versions>(
         &NoMetrics,
     ));
 
-    NodeState::new(
-        u64::MAX, // dummy node ID, only used for debugging
-        chain_config,
-        l1_client.clone(),
-        peers.clone(),
-        V::Base::version(),
+    let coordinator = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            l1_client,
+            l1_client.clone(),
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
-            peers,
+            peers.clone(),
         ))),
+        100,
+    );
+
+    NodeState::new(
+        u64::MAX, // dummy node ID, only used for debugging
+        chain_config,
+        l1_client,
+        peers,
+        V::Base::version(),
+        coordinator,
     )
 }
 
