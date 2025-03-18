@@ -14,7 +14,7 @@ use contract_bindings_alloy::permissionedstaketable::{
     PermissionedStakeTable::NodeInfo as NodeInfoAlloy, BN254::G2Point as G2PointAlloy,
 };
 use contract_bindings_ethers::permissioned_stake_table::{self, EdOnBN254Point, NodeInfo};
-use diff_test_bn254::ParsedG2Point;
+pub use diff_test_bn254::ParsedG2Point;
 use ethers::{
     abi::AbiDecode,
     prelude::{AbiError, EthAbiCodec, EthAbiType},
