@@ -29,6 +29,7 @@ use hotshot_types::{
     message::Proposal,
     traits::node_implementation::ConsensusTime,
     utils::epoch_from_block_number,
+    vote::HasViewNumber,
 };
 use jf_merkle_tree::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
@@ -215,23 +216,51 @@ impl CatchupStorage for SqlStorage {
             .read()
             .await
             .context(format!("opening transaction to fetch leaf at {height}"))?;
-        let h = usize::try_from(height)?;
-        let query_leaf_chain = tx
-            .get_leaf_range(h..=(h + 2))
+        let leaf = tx
+            .get_leaf((height as usize).into())
             .await
-            .context(format!("leaf chain {height} not available"))?;
-        let mut chain = vec![];
+            .context(format!("leaf {height} not available"))?;
+        let mut last_leaf: Leaf2 = leaf.leaf().clone();
+        let mut chain = vec![last_leaf.clone()];
+        let mut h = height + 1;
 
-        if query_leaf_chain.len() < 3 {
-            bail!("chain not long enough {}", query_leaf_chain.len());
+        let mut found = false;
+        while !found {
+            for leaf in tx.get_leaves(h).await? {
+                let leaf = leaf.leaf();
+
+                if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                    chain.push(leaf.clone());
+                } else {
+                    h += 1;
+                    continue;
+                }
+
+                // just one away from deciding
+                if leaf.view_number() == last_leaf.view_number() + 1 {
+                    last_leaf = leaf.clone();
+                    h += 1;
+                    found = true;
+                    break;
+                }
+                h += 1;
+                last_leaf = leaf.clone();
+            }
         }
 
-        for query_result in query_leaf_chain {
-            let Ok(leaf_query) = query_result else {
-                bail!(format!("leaf chain {height} not available"));
-            };
-            chain.push(leaf_query.leaf().clone());
+        found = false;
+        while !found {
+            for leaf in tx.get_leaves(h).await? {
+                let leaf = leaf.leaf();
+                if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                    chain.push(leaf.clone());
+                    found = true;
+                    break;
+                }
+                h += 1;
+            }
         }
+
         Ok(chain)
     }
 }
