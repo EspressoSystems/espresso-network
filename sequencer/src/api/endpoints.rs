@@ -7,7 +7,9 @@ use std::{
 
 use anyhow::Result;
 use committable::Committable;
-use espresso_types::{v0_1::RewardAccount, FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction};
+use espresso_types::{
+    v0_1::RewardAccount, FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
+};
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},

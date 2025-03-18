@@ -5,7 +5,9 @@ use std::sync::Arc;
 use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
-    v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence}, v0_1::RewardMerkleTree, BlockMerkleTree, PubKey
+    v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
+    v0_1::RewardMerkleTree,
+    BlockMerkleTree, PubKey,
 };
 use futures::{
     channel::oneshot,
