@@ -13,10 +13,10 @@ use std::{
     num::NonZeroU64,
 };
 
+use alloy::primitives::U256;
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
-use primitive_types::U256;
 use tracing::error;
 
 use crate::{
@@ -213,7 +213,7 @@ impl<
         *total_stake_casted += stake_table_entry.stake_table_entry.stake();
         total_vote_map.insert(key, (vote.signature(), vote_commitment));
 
-        if *total_stake_casted >= threshold.into() {
+        if *total_stake_casted >= threshold.try_into().unwrap() {
             // Assemble QC
             let real_qc_pp: <<TYPES as NodeType>::SignatureKey as SignatureKey>::QcParams =
                 <TYPES::SignatureKey as SignatureKey>::public_parameter(

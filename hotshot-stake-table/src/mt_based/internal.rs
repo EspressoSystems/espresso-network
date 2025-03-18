@@ -6,12 +6,12 @@
 
 //! Utilities and internals for maintaining a local stake table
 
+use alloy::primitives::U256;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{hash::Hash, sync::Arc, vec, vec::Vec};
 use hotshot_types::traits::stake_table::StakeTableError;
 use jf_crhf::CRHF;
 use jf_utils::canonical;
-use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
@@ -249,7 +249,7 @@ impl<K: Key> PersistentMerkleNode<K> {
     /// Returns the total stakes in this subtree
     pub fn total_stakes(&self) -> U256 {
         match self {
-            PersistentMerkleNode::Empty => U256::zero(),
+            PersistentMerkleNode::Empty => U256::ZERO,
             PersistentMerkleNode::Branch {
                 comm: _,
                 children: _,
@@ -391,7 +391,7 @@ impl<K: Key> PersistentMerkleNode<K> {
             let total_stakes = children
                 .iter()
                 .map(|child| child.total_stakes())
-                .fold(U256::zero(), |sum, val| sum + val);
+                .fold(U256::ZERO, |sum, val| sum + val);
             let comm = Digest::evaluate(children.clone().map(|child| child.commitment()))
                 .map_err(|_| StakeTableError::RescueError)?[0];
             Ok(Arc::new(PersistentMerkleNode::Branch {
@@ -429,7 +429,7 @@ impl<K: Key> PersistentMerkleNode<K> {
                 let total_stakes = children
                     .iter()
                     .map(|child| child.total_stakes())
-                    .fold(U256::zero(), |sum, val| sum + val);
+                    .fold(U256::ZERO, |sum, val| sum + val);
                 let comm = Digest::evaluate(children.clone().map(|child| child.commitment()))
                     .map_err(|_| StakeTableError::RescueError)?[0];
                 Ok((
@@ -505,7 +505,7 @@ impl<K: Key> PersistentMerkleNode<K> {
                     let total_stakes = children
                         .iter()
                         .map(|child| child.total_stakes())
-                        .fold(U256::zero(), |sum, val| sum + val);
+                        .fold(U256::ZERO, |sum, val| sum + val);
                     let comm = Digest::evaluate(children.clone().map(|child| child.commitment()))
                         .map_err(|_| StakeTableError::RescueError)?[0];
                     Ok((
@@ -625,6 +625,7 @@ pub fn from_merkle_path(path: &[usize]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::U256;
     use ark_std::{
         rand::{Rng, RngCore},
         sync::Arc,
@@ -632,7 +633,6 @@ mod tests {
         vec::Vec,
     };
     use jf_utils::test_rng;
-    use primitive_types::U256;
 
     use super::{super::config, to_merkle_path, PersistentMerkleNode};
 

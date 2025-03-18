@@ -6,8 +6,8 @@
 
 //! Utilities to help building a stake table.
 
+use alloy::primitives::U256;
 use ark_ff::{Field, PrimeField};
-use primitive_types::U256;
 
 /// A trait that converts into a field element.
 pub trait ToFields<F: Field> {

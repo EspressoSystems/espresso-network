@@ -67,6 +67,7 @@ alloy = { version = "0.12.5", default-features = false, features = [
     "signers",
     "sol-types",
     "transports",
+    "getrandom",
 ] }
 anyhow = "^1.0"
 ark-std = "0.4"
@@ -124,9 +125,6 @@ dashmap = "6"
 memoize = { version = "0.4", features = ["full"] }
 derive_builder = "0.20"
 parking_lot = { version = "0.12", features = ["send_guard"] }
-primitive-types = { version = "0.12.2", default-features = false, features = [
-    "serde",
-] }
 
 # Builder imports
 marketplace-builder-core = { path = "marketplace-builder-core" }

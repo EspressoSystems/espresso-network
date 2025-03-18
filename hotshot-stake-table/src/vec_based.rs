@@ -6,6 +6,7 @@
 
 //! A vector based stake table implementation. The commitment is the rescue hash of the list of (key, amount) pairs;
 
+use alloy::primitives::{U256, U512};
 use ark_std::{collections::HashMap, hash::Hash, rand::SeedableRng};
 use digest::crypto_common::rand_core::CryptoRngCore;
 use hotshot_types::{
@@ -14,7 +15,6 @@ use hotshot_types::{
 };
 use jf_crhf::CRHF;
 use jf_rescue::{crhf::VariableLengthRescueCRHF, RescueParameter};
-use primitive_types::{U256, U512};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -127,7 +127,7 @@ where
         match self.bls_mapping.get(existing_key) {
             Some(pos) => {
                 self.head_total_stake -= self.head.stake_amount[*pos];
-                self.head.stake_amount[*pos] = U256::zero();
+                self.head.stake_amount[*pos] = U256::ZERO;
                 Ok(())
             },
             None => Err(StakeTableError::KeyNotFound),
@@ -277,9 +277,9 @@ where
             head: StakeTableSnapshot::default(),
             epoch_start: StakeTableSnapshot::default(),
             last_epoch_start: StakeTableSnapshot::default(),
-            head_total_stake: U256::zero(),
-            epoch_start_total_stake: U256::zero(),
-            last_epoch_start_total_stake: U256::zero(),
+            head_total_stake: U256::ZERO,
+            epoch_start_total_stake: U256::ZERO,
+            last_epoch_start_total_stake: U256::ZERO,
             bls_mapping: HashMap::new(),
             epoch_start_comm: default_comm,
             last_epoch_start_comm: default_comm,
@@ -415,13 +415,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::U256;
     use ark_std::{rand::SeedableRng, vec::Vec};
     use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme};
     use jf_signature::{
         bls_over_bn254::BLSOverBN254CurveSignatureScheme, schnorr::SchnorrSignatureScheme,
         SignatureScheme,
     };
-    use primitive_types::U256;
 
     use super::{
         config::{FieldType as F, QCVerKey, StateVerKey},
