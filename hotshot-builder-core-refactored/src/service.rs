@@ -1,54 +1,64 @@
-use hotshot::types::Event;
-use hotshot_builder_api::v0_1::{
-    block_info::{AvailableBlockData, AvailableBlockHeaderInput, AvailableBlockInfo},
-    builder::{define_api, submit_api, BuildError, Error as BuilderApiError, TransactionStatus},
-    data_source::{AcceptsTxnSubmits, BuilderDataSource},
-};
-use hotshot_types::traits::block_contents::{advz_commitment, Transaction};
-use hotshot_types::traits::EncodeBytes;
-use hotshot_types::{
-    event::EventType,
-    traits::{
-        block_contents::BlockPayload,
-        node_implementation::{ConsensusTime, NodeType},
-        signature_key::{BuilderSignatureKey, SignatureKey},
+use std::{
+    fmt::Display,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
     },
-    utils::BuilderCommitment,
-    vid::VidCommitment,
+    time::{Duration, Instant},
 };
-use marketplace_builder_shared::coordinator::BuilderStateLookup;
-use marketplace_builder_shared::error::Error;
-use marketplace_builder_shared::state::BuilderState;
-use marketplace_builder_shared::utils::{BuilderKeys, WaitAndKeep};
-use marketplace_builder_shared::{
-    block::{BlockId, BuilderStateId, ReceivedTransaction, TransactionSource},
-    coordinator::BuilderStateCoordinator,
-};
-use tide_disco::app::AppError;
-use tokio::spawn;
-use tokio::time::{sleep, timeout};
-use tracing::{error, info, instrument, trace, warn};
-use vbs::version::StaticVersion;
 
-use crate::block_size_limits::BlockSizeLimits;
-use crate::block_store::{BlockInfo, BlockStore};
 pub use async_broadcast::{broadcast, RecvError, TryRecvError};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::Commitment;
-use futures::{future::BoxFuture, Stream};
 use futures::{
+    future::BoxFuture,
     stream::{FuturesOrdered, FuturesUnordered, StreamExt},
-    TryStreamExt,
+    Stream, TryStreamExt,
 };
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{fmt::Display, time::Instant};
+use hotshot::types::Event;
+use hotshot_builder_api::{
+    v0_1::{
+        block_info::{AvailableBlockData, AvailableBlockInfo},
+        builder::{
+            define_api, submit_api, BuildError, Error as BuilderApiError, TransactionStatus,
+        },
+        data_source::{AcceptsTxnSubmits, BuilderDataSource},
+    },
+    v0_2::block_info::AvailableBlockHeaderInputV1,
+};
+use hotshot_types::{
+    data::VidCommitment,
+    event::EventType,
+    traits::{
+        block_contents::{BlockPayload, Transaction},
+        node_implementation::{ConsensusTime, NodeType},
+        signature_key::{BuilderSignatureKey, SignatureKey},
+        EncodeBytes,
+    },
+    utils::BuilderCommitment,
+};
+use marketplace_builder_shared::{
+    block::{BlockId, BuilderStateId, ReceivedTransaction, TransactionSource},
+    coordinator::{BuilderStateCoordinator, BuilderStateLookup},
+    error::Error,
+    state::BuilderState,
+    utils::BuilderKeys,
+};
 use tagged_base64::TaggedBase64;
-use tide_disco::{method::ReadState, App};
-use tokio::task::JoinHandle;
+use tide_disco::{app::AppError, method::ReadState, App};
+use tokio::{
+    spawn,
+    task::JoinHandle,
+    time::{sleep, timeout},
+};
+use tracing::{error, info, instrument, trace, warn};
+use vbs::version::StaticVersion;
+
+use crate::{
+    block_size_limits::BlockSizeLimits,
+    block_store::{BlockInfo, BlockStore},
+};
 
 /// Proportion of overall allotted time to wait for optimal builder state
 /// to appear before resorting to highest view builder state
@@ -196,7 +206,7 @@ where
             match event.event {
                 EventType::Error { error } => {
                     error!("Error event in HotShot: {:?}", error);
-                }
+                },
                 EventType::Transactions { transactions } => {
                     let this = Arc::clone(&self);
                     spawn(async move {
@@ -212,7 +222,7 @@ where
                             .collect::<Vec<_>>()
                             .await;
                     });
-                }
+                },
                 EventType::Decide { leaf_chain, .. } => {
                     let prune_cutoff = leaf_chain[0].leaf.view_number();
 
@@ -221,16 +231,16 @@ where
 
                     let this = Arc::clone(&self);
                     spawn(async move { this.block_store.write().await.prune(prune_cutoff) });
-                }
+                },
                 EventType::DaProposal { proposal, .. } => {
                     let coordinator = Arc::clone(&self.coordinator);
                     spawn(async move { coordinator.handle_da_proposal(proposal.data).await });
-                }
+                },
                 EventType::QuorumProposal { proposal, .. } => {
                     let coordinator = Arc::clone(&self.coordinator);
                     spawn(async move { coordinator.handle_quorum_proposal(proposal.data).await });
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     }
@@ -282,10 +292,10 @@ where
                 BuilderStateLookup::Found(builder) => break Ok(builder),
                 BuilderStateLookup::Decided => {
                     return Err(Error::AlreadyDecided);
-                }
+                },
                 BuilderStateLookup::NotFound => {
                     sleep(check_period).await;
-                }
+                },
             };
         }
     }
@@ -369,7 +379,7 @@ where
                 Err(error) => {
                     warn!(?error, "Failed to build block payload");
                     return Err(Error::BuildBlock(error));
-                }
+                },
             };
 
         // count the number of txns
@@ -397,16 +407,6 @@ where
         let block_size: u64 = encoded_txns.len() as u64;
         let offered_fee: u64 = self.base_fee * block_size;
 
-        // Get the number of nodes stored while processing the `claim_block_with_num_nodes` request
-        // or upon initialization.
-        let num_nodes = self.num_nodes.load(Ordering::Relaxed);
-
-        let fut = async move {
-            let join_handle =
-                tokio::task::spawn_blocking(move || advz_commitment(&encoded_txns, num_nodes));
-            join_handle.await.unwrap()
-        };
-
         info!(
             builder_id = %builder.id(),
             txn_count = actual_txn_count,
@@ -418,7 +418,6 @@ where
             block_payload: payload,
             block_size,
             metadata,
-            vid_data: WaitAndKeep::new(Box::pin(fut)),
             offered_fee,
             truncated,
         }))
@@ -448,7 +447,7 @@ where
                 // Timeout waiting for ideal state, get the highest view builder instead
                 warn!("Couldn't find the ideal builder state");
                 self.coordinator.highest_view_builder().await
-            }
+            },
             Ok(Err(e)) => {
                 // State already decided
                 let lowest_view = self.coordinator.lowest_view().await;
@@ -457,7 +456,7 @@ where
                     "get_available_blocks request for decided view"
                 );
                 return Err(e);
-            }
+            },
         };
 
         let Some(builder) = builder else {
@@ -491,7 +490,7 @@ where
                 }
 
                 Ok(vec![response])
-            }
+            },
             // Success, but no block: we don't have transactions and aren't prioritizing finalization
             Ok(Ok(None)) => Ok(vec![]),
             // Error building block, try to respond with a cached one as last-ditch attempt
@@ -501,7 +500,7 @@ where
                 } else {
                     Err(e)
                 }
-            }
+            },
         }
     }
 
@@ -561,11 +560,10 @@ where
     pub(crate) async fn claim_block_header_input_implementation(
         &self,
         block_id: BlockId<Types>,
-    ) -> Result<(bool, AvailableBlockHeaderInput<Types>), Error<Types>> {
+    ) -> Result<(bool, AvailableBlockHeaderInputV1<Types>), Error<Types>> {
         let metadata;
         let offered_fee;
         let truncated;
-        let vid_data;
         {
             // We store this read lock guard separately to make it explicit
             // that this will end up holding a lock for the duration of this
@@ -583,32 +581,16 @@ where
             metadata = block_info.metadata.clone();
             offered_fee = block_info.offered_fee;
             truncated = block_info.truncated;
-            vid_data = block_info.vid_data.clone();
         };
 
-        let vid_commitment = vid_data.resolve().await;
+        // TODO Add precompute back.
 
-        // sign over the vid commitment
-        let signature_over_vid_commitment =
-            <Types as NodeType>::BuilderSignatureKey::sign_builder_message(
-                &self.builder_keys.1,
-                vid_commitment.as_ref(),
-            )
-            .map_err(Error::Signing)?;
+        let signature_over_fee_info =
+            Types::BuilderSignatureKey::sign_fee(&self.builder_keys.1, offered_fee, &metadata)
+                .map_err(Error::Signing)?;
 
-        let signature_over_fee_info = Types::BuilderSignatureKey::sign_fee(
-            &self.builder_keys.1,
-            offered_fee,
-            &metadata,
-            &vid_commitment,
-        )
-        .map_err(Error::Signing)?;
-
-        let response = AvailableBlockHeaderInput::<Types> {
-            vid_commitment,
-            vid_precompute_data: None,
+        let response = AvailableBlockHeaderInputV1::<Types> {
             fee_signature: signature_over_fee_info,
-            message_signature: signature_over_vid_commitment,
             sender: self.builder_keys.0.clone(),
         };
         info!("Sending Claim Block Header Input response");
@@ -723,7 +705,7 @@ where
         view_number: u64,
         sender: Types::SignatureKey,
         signature: &<<Types as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInput<Types>, BuildError> {
+    ) -> Result<AvailableBlockHeaderInputV1<Types>, BuildError> {
         let start = Instant::now();
         // verify the signature
         if !sender.validate(signature, block_hash.as_ref()) {

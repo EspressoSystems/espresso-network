@@ -19,11 +19,9 @@ use hotshot_testing::block_builder::{
     BuilderTask, RandomBuilderImplementation, TestBuilderImplementation,
 };
 use hotshot_types::{
+    data::vid_commitment,
     network::RandomBuilderConfig,
-    traits::{
-        block_contents::advz_commitment, node_implementation::NodeType, signature_key::SignatureKey,
-        BlockPayload,
-    },
+    traits::{node_implementation::NodeType, signature_key::SignatureKey, BlockPayload},
 };
 use tide_disco::Url;
 use tokio::time::sleep;
@@ -33,6 +31,9 @@ use vbs::version::StaticVersion;
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_random_block_builder() {
+    use hotshot_example_types::node_types::TestVersions;
+    use vbs::version::Version;
+
     let port = portpicker::pick_unused_port().expect("No free ports");
     let api_url = Url::parse(&format!("http://localhost:{port}")).expect("Valid URL");
     let task: Box<dyn BuilderTask<TestTypes>> = RandomBuilderImplementation::start(
@@ -62,7 +63,7 @@ async fn test_random_block_builder() {
         // Test getting blocks
         let blocks = client
             .available_blocks(
-                advz_commitment(&[], 1),
+                vid_commitment::<TestVersions>(&[], &[], 1, Version { major: 0, minor: 0 }),
                 dummy_view_number,
                 pub_key,
                 &signature,

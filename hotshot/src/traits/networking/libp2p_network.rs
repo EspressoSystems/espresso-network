@@ -52,7 +52,6 @@ use hotshot_types::{
     data::ViewNumber,
     network::NetworkConfig,
     traits::{
-        election::Membership,
         metrics::{Counter, Gauge, Metrics, NoMetrics},
         network::{ConnectedNetwork, NetworkError, Topic},
         node_implementation::{ConsensusTime, NodeType},
@@ -76,7 +75,7 @@ use tokio::{
 };
 use tracing::{error, info, instrument, trace, warn};
 
-use crate::BroadcastDelay;
+use crate::{BroadcastDelay, EpochMembershipCoordinator};
 
 /// Libp2p-specific metrics
 #[derive(Clone, Debug)]
@@ -290,7 +289,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                             Ok(network) => network,
                             Err(err) => {
                                 panic!("Failed to create libp2p network: {err:?}");
-                            }
+                            },
                         },
                     )
                 })
@@ -373,7 +372,7 @@ pub fn derive_libp2p_multiaddr(addr: &String) -> anyhow::Result<Multiaddr> {
             }
 
             format!("/dns/{host}/udp/{port}/quic-v1")
-        }
+        },
     };
 
     // Convert the multiaddr string to a `Multiaddr`
@@ -681,7 +680,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 sender.try_send(msg).map_err(|err| {
                     NetworkError::ChannelSendError(format!("failed to send gossip message: {err}"))
                 })?;
-            }
+            },
             DirectRequest(msg, _pid, chan) => {
                 sender.try_send(msg).map_err(|err| {
                     NetworkError::ChannelSendError(format!(
@@ -703,12 +702,12 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 {
                     error!("failed to ack!");
                 };
-            }
-            DirectResponse(_msg, _) => {}
+            },
+            DirectResponse(_msg, _) => {},
             NetworkEvent::IsBootstrapped => {
                 error!("handle_recvd_events received `NetworkEvent::IsBootstrapped`, which should be impossible.");
-            }
-            NetworkEvent::ConnectedPeersUpdate(_) => {}
+            },
+            NetworkEvent::ConnectedPeersUpdate(_) => {},
         }
         Ok::<(), NetworkError>(())
     }
@@ -910,7 +909,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
                 return Err(NetworkError::LookupError(format!(
                     "failed to look up node for direct message: {err}"
                 )));
-            }
+            },
         };
 
         #[cfg(feature = "hotshot-testing")]
@@ -942,7 +941,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             Err(e) => {
                 self.inner.metrics.num_failed_messages.add(1);
                 Err(e)
-            }
+            },
         }
     }
 
@@ -992,21 +991,27 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         &'a self,
         view: u64,
         epoch: Option<u64>,
-        membership: Arc<RwLock<TYPES::Membership>>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
     ) where
         TYPES: NodeType<SignatureKey = T::SignatureKey> + 'a,
     {
         let future_view = <TYPES as NodeType>::View::new(view) + LOOK_AHEAD;
         let epoch = epoch.map(<TYPES as NodeType>::Epoch::new);
 
-        let future_leader = match membership.read().await.leader(future_view, epoch) {
+        let membership = match membership_coordinator.membership_for_epoch(epoch).await {
+            Ok(m) => m,
+            Err(e) => {
+                return tracing::warn!(e.message);
+            },
+        };
+        let future_leader = match membership.leader(future_view).await {
             Ok(l) => l,
             Err(e) => {
                 return tracing::info!(
                     "Failed to calculate leader for view {:?}: {e}",
                     future_view
                 );
-            }
+            },
         };
 
         let _ = self

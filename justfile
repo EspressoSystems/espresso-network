@@ -12,6 +12,10 @@ demo *args:
 demo-native *args: build
     scripts/demo-native {{args}}
 
+fmt:
+    cargo fmt --all
+    cargo fmt -- hotshot-testing/tests/**/*.rs
+
 lint:
     #!/usr/bin/env bash
     set -euxo pipefail
@@ -20,22 +24,16 @@ lint:
     cargo clippy --workspace --features testing --all-targets -- -D warnings
     cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml -- -D warnings
 
-build profile="test" features="":
+build profile="test":
     #!/usr/bin/env bash
     set -euxo pipefail
     # Use the same target dir for both `build` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
-    cargo build --profile {{profile}} {{features}}
-    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
+    cargo build --profile {{profile}}
+    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml
 
 demo-native-mp *args: build
     scripts/demo-native -f process-compose.yaml -f process-compose-mp.yml {{args}}
-
-demo-native-pos *args: (build "test" "--features fee,pos")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
-
-demo-native-pos-base *args: build
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -77,16 +75,10 @@ test-all:
     cargo nextest run --locked --release --workspace --verbose --profile all
 
 test-integration:
-	@echo 'NOTE that demo-native must be running for this test to succeed.'
-	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run --all-features --nocapture --profile integration smoke
+	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 test-integration-mp:
-    @echo 'NOTE that demo-native-mp must be running for this test to succeed.'
-    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run --all-features --nocapture --profile integration
-
-test-integration-pos:
-    @echo 'NOTE that demo-native-pos must be running for this test to succeed.'
-    INTEGRATION_TEST_SEQUENCER_VERSION=3 cargo nextest run --all-features --nocapture --profile integration smoke
+    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
 
 clippy:
     @echo 'features: "embedded-db"'
@@ -95,6 +87,31 @@ clippy:
 
 check-features *args:
     cargo hack check --each-feature {{args}}
+
+check-features-ci *args:
+    # check each pair of features plus `default` and `--no-default-features`
+    cargo hack check --feature-powerset \
+        --depth 2 \
+        --exclude contract-bindings-alloy \
+        --exclude contract-bindings-ethers \
+        --exclude hotshot \
+        --exclude hotshot-builder-api \
+        --exclude hotshot-contract-adapter \
+        --exclude hotshot-events-service \
+        --exclude hotshot-example-types \
+        --exclude hotshot-libp2p-networking \
+        --exclude hotshot-macros \
+        --exclude hotshot-orchestrator \
+        --exclude hotshot-query-service \
+        --exclude hotshot-stake-table \
+        --exclude hotshot-state-prover \
+        --exclude hotshot-task \
+        --exclude hotshot-task-impls \
+        --exclude hotshot-testing \
+        --exclude hotshot-types \
+        --exclude hotshot-utils \
+        --exclude vid \
+        {{args}}
 
 # Helpful shortcuts for local development
 dev-orchestrator:
@@ -116,14 +133,16 @@ dev-sequencer:
 build-docker-images:
     scripts/build-docker-images-native
 
-# generate rust bindings for contracts
-REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$"
+# generate rust bindings for contracts, the ethers bindings are deprecated,
+# please only add alloy bindings for new contracts.
+ETHERS_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$"
+ALLOY_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$|^StakeTable$|^EspToken$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
     # Generate the ethers bindings
-    forge bind --contracts ./contracts/src/ --ethers --crate-name contract-bindings-ethers --bindings-path contract-bindings-ethers --select "{{REGEXP}}" --overwrite --force
+    nix develop .#legacyFoundry -c forge bind --contracts ./contracts/src/ --ethers --crate-name contract-bindings-ethers --bindings-path contract-bindings-ethers --select "{{ETHERS_REGEXP}}" --overwrite --force
 
     # Foundry doesn't include bytecode in the bindings for LightClient.sol, since it links with
     # libraries. However, this bytecode is still needed to link and deploy the contract. Copy it to
@@ -140,7 +159,7 @@ gen-bindings:
 
     # Generate the alloy bindings
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0x5fbdb2315678afecb367f032d93f642f64180aa3 --alloy --contracts ./contracts/src/ --crate-name contract-bindings-alloy --bindings-path contract-bindings-alloy --select "{{REGEXP}}" --overwrite --force
+    forge bind --skip test --skip script --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0x5fbdb2315678afecb367f032d93f642f64180aa3 --alloy --contracts ./contracts/src/ --crate-name contract-bindings-alloy --bindings-path contract-bindings-alloy --select "{{ALLOY_REGEXP}}" --overwrite --force
 
     # For some reason `alloy` likes to use the wrong version of itself in `contract-bindings`.
     # Use the workspace version.
@@ -160,9 +179,10 @@ sol-lint:
 
 # Build diff-test binary and forge test
 # Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-sequencer/issues/979
-sol-test:
-    cargo build --profile test --bin diff-test
-    forge test
+sol-test *args:
+    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
+    cargo build --release --bin diff-test
+    env PATH="${CARGO_TARGET_DIR}/release:$PATH" forge test {{ args }}
 
 # Deploys the light client contract on Sepolia and call it for profiling purposes.
 NUM_INIT_VALIDATORS := "5"

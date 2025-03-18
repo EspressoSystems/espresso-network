@@ -1,7 +1,6 @@
-use hotshot_query_service::{VidCommitment, VidCommon};
 use hotshot_types::{
     traits::EncodeBytes,
-    vid::{advz_scheme, VidSchemeType},
+    vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon, ADVZScheme},
 };
 use jf_vid::{
     payload_prover::{PayloadProver, Statement},
@@ -19,14 +18,14 @@ impl TxProof {
     pub fn new(
         index: &Index,
         payload: &Payload,
-        common: &VidCommon,
+        common: &ADVZCommon,
     ) -> Option<(Transaction, Self)> {
         let payload_byte_len = payload.byte_len();
         if !payload_byte_len.is_consistent(common) {
             tracing::warn!(
                 "payload byte len {} inconsistent with common {}",
                 payload_byte_len,
-                VidSchemeType::get_payload_byte_len(common)
+                ADVZScheme::get_payload_byte_len(common)
             );
             return None; // error: payload byte len inconsistent with common
         }
@@ -42,7 +41,7 @@ impl TxProof {
         let ns_byte_len = ns_range.byte_len();
         let ns_payload = payload.read_ns_payload(&ns_range);
         let vid = advz_scheme(
-            VidSchemeType::get_num_storage_nodes(common)
+            ADVZScheme::get_num_storage_nodes(common)
                 .try_into()
                 .unwrap(),
         );
@@ -113,10 +112,10 @@ impl TxProof {
         &self,
         ns_table: &NsTable,
         tx: &Transaction,
-        commit: &VidCommitment,
-        common: &VidCommon,
+        commit: &ADVZCommitment,
+        common: &ADVZCommon,
     ) -> Option<bool> {
-        VidSchemeType::is_consistent(commit, common).ok()?;
+        ADVZScheme::is_consistent(commit, common).ok()?;
         let Some(ns_index) = ns_table.find_ns_id(&tx.namespace()) else {
             tracing::info!("ns id {} does not exist", tx.namespace());
             return None; // error: ns id does not exist
@@ -130,7 +129,7 @@ impl TxProof {
         }
 
         let vid = advz_scheme(
-            VidSchemeType::get_num_storage_nodes(common)
+            ADVZScheme::get_num_storage_nodes(common)
                 .try_into()
                 .unwrap(),
         );
@@ -200,19 +199,19 @@ impl TxProof {
                     {
                         return Some(false);
                     }
-                }
-                (None, true) => {} // 0-length tx, nothing to verify
+                },
+                (None, true) => {}, // 0-length tx, nothing to verify
                 (None, false) => {
                     tracing::error!(
                         "tx verify: missing proof for nonempty tx payload range {:?}",
                         range
                     );
                     return None;
-                }
+                },
                 (Some(_), true) => {
                     tracing::error!("tx verify: unexpected proof for empty tx payload range");
                     return None;
-                }
+                },
             }
         }
 

@@ -13,14 +13,13 @@ use std::{
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
-    data::{BlockError, Leaf2},
+    data::{BlockError, Leaf2, VidCommitment},
     traits::{
         block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
         node_implementation::NodeType,
         BlockPayload, ValidatedState,
     },
     utils::BuilderCommitment,
-    vid::{VidCommitment, VidCommon},
 };
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -298,6 +297,22 @@ impl TestBlockHeader {
     }
 }
 
+impl Default for TestBlockHeader {
+    fn default() -> Self {
+        let metadata = TestMetadata {
+            num_transactions: 0,
+        };
+        Self {
+            block_number: 0,
+            payload_commitment: Default::default(),
+            builder_commitment: Default::default(),
+            metadata,
+            timestamp: 0,
+            random: 0,
+        }
+    }
+}
+
 impl<
         TYPES: NodeType<
             BlockHeader = Self,
@@ -317,7 +332,6 @@ impl<
         builder_commitment: BuilderCommitment,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         _builder_fee: BuilderFee<TYPES>,
-        _vid_common: VidCommon,
         _version: Version,
     ) -> Result<Self, Self::Error> {
         Self::run_delay_settings_from_config(&instance_state.delay_config).await;
@@ -338,7 +352,6 @@ impl<
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         _builder_fee: Vec<BuilderFee<TYPES>>,
         _view_number: u64,
-        _vid_common: VidCommon,
         _auction_results: Option<TYPES::AuctionResult>,
         _version: Version,
     ) -> Result<Self, Self::Error> {
@@ -401,9 +414,7 @@ impl Committable for TestBlockHeader {
             )
             .constant_str("payload commitment")
             .fixed_size_bytes(
-                <TestBlockHeader as BlockHeader<TestTypes>>::payload_commitment(self)
-                    .as_ref()
-                    .as_ref(),
+                <TestBlockHeader as BlockHeader<TestTypes>>::payload_commitment(self).as_ref(),
             )
             .finalize()
     }

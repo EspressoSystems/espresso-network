@@ -230,6 +230,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
     /// @dev Randomly pick a coordinate of a point among points in a proof
     /// mutate it to another value so that the point is no longer valid,
     /// test if our check will revert.
+    /// forge-config: default.allow_internal_expect_revert = true
     function testFuzz_RevertIfProofContainsInvalidGroup(uint256 nthPoint, bool testX) external {
         // a valid proof
         IPlonkVerifier.PlonkProof memory proof = dummyProof(42);
@@ -251,12 +252,13 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
             }
         }
 
-        vm.expectRevert();
+        vm.expectRevert("Bn254: invalid G1 point");
         V._validateProof(proof);
     }
 
     /// @dev Randomly pick field in a proof mutate it to invalid value
     /// test if our check will revert.
+    /// forge-config: default.allow_internal_expect_revert = true
     function testFuzz_RevertIfProofContainsInvalidField(uint256 nthField) external {
         // a valid proof
         IPlonkVerifier.PlonkProof memory proof = dummyProof(42);
@@ -271,7 +273,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
             mstore(add(start, mul(nthField, 0x20)), invalidField)
         }
 
-        vm.expectRevert();
+        vm.expectRevert(bytes("Bn254: invalid scalar field"));
         V._validateProof(proof);
     }
 }

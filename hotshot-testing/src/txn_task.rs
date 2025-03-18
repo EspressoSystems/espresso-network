@@ -52,7 +52,7 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> TxnTask
             match handles.get(idx) {
                 None => {
                     tracing::error!("couldn't get node in txn task");
-                }
+                },
                 Some(node) => {
                     // use rand::seq::IteratorRandom;
                     // we're assuming all nodes have the same leaf.
@@ -64,7 +64,7 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> TxnTask
                         .submit_transaction(txn.clone())
                         .await
                         .expect("Could not send transaction");
-                }
+                },
             }
         }
     }

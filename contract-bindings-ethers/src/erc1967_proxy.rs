@@ -320,7 +320,7 @@ pub mod erc1967_proxy {
                 Self::AddressEmptyCode(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::ERC1967InvalidImplementation(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::ERC1967NonPayable(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::FailedInnerCall(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::RevertString(s) => ::ethers::core::abi::AbiEncode::encode(s),
@@ -333,21 +333,21 @@ pub mod erc1967_proxy {
                 [0x08, 0xc3, 0x79, 0xa0] => true,
                 _ if selector == <AddressEmptyCode as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector
                     == <ERC1967InvalidImplementation as ::ethers::contract::EthError>::selector(
                     ) =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <ERC1967NonPayable as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector == <FailedInnerCall as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ => false,
             }
         }
@@ -358,7 +358,7 @@ pub mod erc1967_proxy {
                 Self::AddressEmptyCode(element) => ::core::fmt::Display::fmt(element, f),
                 Self::ERC1967InvalidImplementation(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::ERC1967NonPayable(element) => ::core::fmt::Display::fmt(element, f),
                 Self::FailedInnerCall(element) => ::core::fmt::Display::fmt(element, f),
                 Self::RevertString(s) => ::core::fmt::Display::fmt(s, f),

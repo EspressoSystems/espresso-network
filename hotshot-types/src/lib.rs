@@ -11,7 +11,7 @@ use bincode::Options;
 use displaydoc::Display;
 use light_client::StateVerKey;
 use tracing::error;
-use traits::signature_key::SignatureKey;
+use traits::{node_implementation::NodeType, signature_key::SignatureKey};
 use url::Url;
 use vec1::Vec1;
 
@@ -22,6 +22,8 @@ pub mod constants;
 pub mod data;
 /// Holds the types and functions for DRB computation.
 pub mod drb;
+/// Epoch Membership wrappers
+pub mod epoch_membership;
 pub mod error;
 pub mod event;
 /// Holds the configuration file specification for a HotShot node.
@@ -117,9 +119,11 @@ impl<KEY: SignatureKey> Default for ValidatorConfig<KEY> {
 #[serde(bound(deserialize = ""))]
 /// structure of peers' config, including public key, stake value, and state key.
 pub struct PeerConfig<KEY: SignatureKey> {
-    /// The peer's public key and stake value
+    ////The peer's public key and stake value. The key is the BLS Public Key used to
+    /// verify Stake Holder in the application layer.
     pub stake_table_entry: KEY::StakeTableEntry,
-    /// the peer's state public key
+    //// The peer's state public key. This is the Schnorr Public Key used to
+    /// verify HotShot state in the state-prover.
     pub state_ver_key: StateVerKey,
 }
 
@@ -132,7 +136,7 @@ impl<KEY: SignatureKey> PeerConfig<KEY> {
             Err(e) => {
                 error!(?e, "Failed to serialize public key");
                 vec![]
-            }
+            },
         }
     }
 
@@ -146,7 +150,7 @@ impl<KEY: SignatureKey> PeerConfig<KEY> {
             Err(e) => {
                 error!(?e, "Failed to deserialize public key");
                 None
-            }
+            },
         }
     }
 }
@@ -155,6 +159,21 @@ impl<KEY: SignatureKey> Default for PeerConfig<KEY> {
     fn default() -> Self {
         let default_validator_config = ValidatorConfig::<KEY>::default();
         default_validator_config.public_config()
+    }
+}
+
+pub struct StakeTableEntries<TYPES: NodeType>(
+    pub Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry>,
+);
+
+impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES::SignatureKey>>> for StakeTableEntries<TYPES> {
+    fn from(peers: Vec<PeerConfig<TYPES::SignatureKey>>) -> Self {
+        Self(
+            peers
+                .into_iter()
+                .map(|peer| peer.stake_table_entry)
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -206,6 +225,8 @@ pub struct HotShotConfig<KEY: SignatureKey> {
     pub stop_voting_time: u64,
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+    /// Epoch start block
+    pub epoch_start_block: u64,
 }
 
 impl<KEY: SignatureKey> HotShotConfig<KEY> {

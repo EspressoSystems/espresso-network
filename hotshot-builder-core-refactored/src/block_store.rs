@@ -2,24 +2,19 @@ use std::marker::PhantomData;
 
 use hotshot::traits::BlockPayload;
 use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
-use hotshot_types::traits::signature_key::BuilderSignatureKey;
-use hotshot_types::vid::VidCommitment;
-use marketplace_builder_shared::error::Error;
-use marketplace_builder_shared::utils::{BuilderKeys, WaitAndKeep};
+use hotshot_types::traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey};
 use marketplace_builder_shared::{
-    block::BuilderStateId, coordinator::tiered_view_map::TieredViewMap,
+    block::{BlockId, BuilderStateId},
+    coordinator::tiered_view_map::TieredViewMap,
+    error::Error,
+    utils::BuilderKeys,
 };
-
-use marketplace_builder_shared::block::BlockId;
-
-use hotshot_types::traits::node_implementation::NodeType;
 
 // It holds all the necessary information for a block
 #[derive(Debug, Clone)]
 pub struct BlockInfo<Types: NodeType> {
     pub block_payload: Types::BlockPayload,
     pub metadata: <<Types as NodeType>::BlockPayload as BlockPayload<Types>>::Metadata,
-    pub vid_data: WaitAndKeep<VidCommitment>,
     pub block_size: u64,
     pub offered_fee: u64,
     // Could we have included more transactions with this block, but chose not to?

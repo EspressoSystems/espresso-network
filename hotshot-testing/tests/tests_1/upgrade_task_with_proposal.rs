@@ -55,9 +55,8 @@ async fn test_upgrade_task_with_proposal() {
 
     hotshot::helpers::initialize_logging();
 
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(3)
-        .await
-        .0;
+    let (handle, _, _, node_key_map) =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(3).await;
 
     let other_handles = futures::future::join_all((0..=9).map(build_system_handle)).await;
 
@@ -83,9 +82,14 @@ async fn test_upgrade_task_with_proposal() {
     let consensus = handle.hotshot.consensus();
     let mut consensus_writer = consensus.write().await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
+    let epoch_1_mem = membership
+        .membership_for_epoch(Some(EpochNumber::new(1)))
+        .await
+        .unwrap();
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(Arc::clone(&membership));
+    let mut generator =
+        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
 
     for view in (&mut generator).take(1).collect::<Vec<_>>().await {
         proposals.push(view.quorum_proposal.clone());
@@ -126,10 +130,6 @@ async fn test_upgrade_task_with_proposal() {
     let genesis_cert = proposals[0].data.justify_qc().clone();
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
     let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
-        membership
-            .read()
-            .await
-            .total_nodes(Some(EpochNumber::new(1))),
         <TestVersions as Versions>::Base::VERSION,
         *ViewNumber::new(1),
     )
@@ -161,9 +161,8 @@ async fn test_upgrade_task_with_proposal() {
             Qc2Formed(either::Left(genesis_cert.clone())),
             SendPayloadCommitmentAndMetadata(
                 build_payload_commitment::<TestTypes, TestVersions>(
-                    &membership,
+                    &epoch_1_mem,
                     ViewNumber::new(1),
-                    Some(EpochNumber::new(1)),
                     version_1,
                 )
                 .await,
@@ -182,9 +181,8 @@ async fn test_upgrade_task_with_proposal() {
             Qc2Formed(either::Left(proposals[1].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
                 build_payload_commitment::<TestTypes, TestVersions>(
-                    &membership,
+                    &epoch_1_mem,
                     ViewNumber::new(2),
-                    Some(EpochNumber::new(1)),
                     version_2,
                 )
                 .await,
@@ -202,9 +200,8 @@ async fn test_upgrade_task_with_proposal() {
             Qc2Formed(either::Left(proposals[2].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
                 build_payload_commitment::<TestTypes, TestVersions>(
-                    &membership,
+                    &epoch_1_mem,
                     ViewNumber::new(3),
-                    Some(EpochNumber::new(1)),
                     version_3,
                 )
                 .await,

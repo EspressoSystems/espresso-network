@@ -41,13 +41,12 @@ async fn test_quorum_vote_task_success() {
 
     hotshot::helpers::initialize_logging();
 
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2)
-        .await
-        .0;
+    let (handle, _, _, node_key_map) =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership);
+    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
 
     let mut proposals = Vec::new();
     let mut leaves = Vec::new();
@@ -108,13 +107,12 @@ async fn test_quorum_vote_task_miss_dependency() {
 
     hotshot::helpers::initialize_logging();
 
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2)
-        .await
-        .0;
+    let (handle, _, _, node_key_map) =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership);
+    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -192,13 +190,12 @@ async fn test_quorum_vote_task_incorrect_dependency() {
 
     hotshot::helpers::initialize_logging();
 
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2)
-        .await
-        .0;
+    let (handle, _, _, node_key_map) =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
+    let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership);
+    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
 
     let mut proposals = Vec::new();
     let mut leaves = Vec::new();

@@ -17,7 +17,7 @@ use futures::future::join_all;
 use hotshot::{
     traits::TestableNodeImplementation,
     types::{Event, SystemContextHandle},
-    HotShotInitializer, MarketplaceConfig, SystemContext,
+    HotShotInitializer, InitializerEpochInfo, MarketplaceConfig, SystemContext,
 };
 use hotshot_example_types::{
     auction_results_provider_types::TestAuctionResultsProvider,
@@ -31,13 +31,14 @@ use hotshot_types::{
     consensus::ConsensusMetricsValue,
     constants::EVENT_CHANNEL_SIZE,
     data::Leaf2,
+    drb::INITIAL_DRB_RESULT,
+    epoch_membership::EpochMembershipCoordinator,
     simple_certificate::QuorumCertificate2,
     traits::{
         election::Membership,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
     },
-    utils::genesis_epoch_from_version,
     HotShotConfig, ValidatorConfig,
 };
 use tide_disco::Url;
@@ -178,6 +179,8 @@ where
 
         let spinning_task_state = SpinningTask {
             epoch_height: launcher.metadata.test_config.epoch_height,
+            epoch_start_block: launcher.metadata.test_config.epoch_start_block,
+            start_epoch_info: Vec::new(), // #2652 REVIEW NOTE: Same as other instances of start_epoch_info
             handles: Arc::clone(&handles),
             late_start,
             latest_view: None,
@@ -278,12 +281,12 @@ where
                 Ok(res) => match res {
                     TestResult::Pass => {
                         info!("Task shut down successfully");
-                    }
+                    },
                     TestResult::Fail(e) => error_list.push(e),
                 },
                 Err(e) => {
                     tracing::error!("Error Joining the test task {:?}", e);
-                }
+                },
             }
         }
 
@@ -318,7 +321,6 @@ where
 
     pub async fn init_builders<B: TestBuilderImplementation<TYPES>>(
         &self,
-        num_nodes: usize,
     ) -> (Vec<Box<dyn BuilderTask<TYPES>>>, Vec<Url>, Url) {
         let config = self.launcher.metadata.test_config.clone();
         let mut builder_tasks = Vec::new();
@@ -328,7 +330,7 @@ where
             let builder_url =
                 Url::parse(&format!("http://localhost:{builder_port}")).expect("Invalid URL");
             let builder_task = B::start(
-                num_nodes,
+                0, // This field gets updated while the test is running, 0 is just to seed it
                 builder_url.clone(),
                 B::Config::default(),
                 metadata.changes.clone(),
@@ -393,15 +395,10 @@ where
         let mut results = vec![];
         let config = self.launcher.metadata.test_config.clone();
 
-        // TODO This is only a workaround. Number of nodes changes from epoch to epoch. Builder should be made epoch-aware.
-        let temp_memberships = <TYPES as NodeType>::Membership::new(
-            config.known_nodes_with_stake.clone(),
-            config.known_da_nodes.clone(),
-        );
-        // #3967 is it enough to check versions now? Or should we also be checking epoch_height?
-        let num_nodes = temp_memberships.total_nodes(genesis_epoch_from_version::<V, TYPES>());
+        // Num_nodes is updated on the fly now via claim_block_with_num_nodes. This stays around to seed num_nodes
+        // in the builders for tests which don't update that field.
         let (mut builder_tasks, builder_urls, fallback_builder_url) =
-            self.init_builders::<B>(num_nodes).await;
+            self.init_builders::<B>().await;
 
         if self.launcher.metadata.start_solver {
             self.add_solver(builder_urls.clone()).await;
@@ -419,11 +416,6 @@ where
             let node_id = self.next_node_id;
             self.next_node_id += 1;
             tracing::debug!("launch node {}", i);
-
-            //let memberships =Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
-            //config.known_nodes_with_stake.clone(),
-            //config.known_da_nodes.clone(),
-            //)));
 
             config.builder_urls = builder_urls
                 .clone()
@@ -475,6 +467,12 @@ where
                     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
                         TestInstanceState::new(self.launcher.metadata.async_delay_config.clone()),
                         config.epoch_height,
+                        config.epoch_start_block,
+                        vec![InitializerEpochInfo::<TYPES> {
+                            epoch: TYPES::Epoch::new(1),
+                            drb_result: INITIAL_DRB_RESULT,
+                            block_header: None,
+                        }],
                     )
                     .await
                     .unwrap();
@@ -562,14 +560,14 @@ where
                     if let Some(task) = builder_tasks.pop() {
                         task.start(Box::new(handle.event_stream()))
                     }
-                }
+                },
                 std::cmp::Ordering::Equal => {
                     // If we have more builder tasks than DA nodes, pin them all on the last node.
                     while let Some(task) = builder_tasks.pop() {
                         task.start(Box::new(handle.event_stream()))
                     }
-                }
-                std::cmp::Ordering::Greater => {}
+                },
+                std::cmp::Ordering::Greater => {},
             }
 
             self.nodes.push(Node {
@@ -599,13 +597,14 @@ where
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
         let public_key = validator_config.public_key.clone();
+        let epoch_height = config.epoch_height;
 
         SystemContext::new(
             public_key,
             private_key,
             node_id,
             config,
-            Arc::new(RwLock::new(memberships)),
+            EpochMembershipCoordinator::new(Arc::new(RwLock::new(memberships)), epoch_height),
             network,
             initializer,
             ConsensusMetricsValue::default(),
@@ -637,13 +636,14 @@ where
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
         let public_key = validator_config.public_key.clone();
+        let epoch_height = config.epoch_height;
 
         SystemContext::new_from_channels(
             public_key,
             private_key,
             node_id,
             config,
-            memberships,
+            EpochMembershipCoordinator::new(memberships, epoch_height),
             network,
             initializer,
             ConsensusMetricsValue::default(),

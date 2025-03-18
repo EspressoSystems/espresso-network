@@ -1,3 +1,5 @@
+use std::collections::{HashSet, VecDeque};
+
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -30,7 +32,6 @@ use jf_merkle_tree::{
     LookupResult, MerkleTreeScheme,
 };
 use sqlx::{Encode, Type};
-use std::collections::{HashSet, VecDeque};
 
 use super::{
     data_source::{Provider, SequencerDataSource},
@@ -66,6 +67,7 @@ impl SequencerDataSource for DataSource {
         }
 
         if opt.lightweight {
+            tracing::warn!("enabling light weight mode..");
             builder = builder.leaf_only();
         }
 
@@ -144,7 +146,7 @@ impl CatchupStorage for SqlStorage {
                 LookupResult::Ok(_, proof) => Ok(proof),
                 _ => {
                     bail!("state snapshot {view:?},{height} was found but does not contain frontier at height {}; this should not be possible", height - 1);
-                }
+                },
             }
         }
     }
@@ -157,6 +159,27 @@ impl CatchupStorage for SqlStorage {
             "opening transaction to fetch chain config {commitment}"
         ))?;
         load_chain_config(&mut tx, commitment).await
+    }
+
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        let mut tx = self
+            .read()
+            .await
+            .context(format!("opening transaction to fetch leaf at {height}"))?;
+        let h = usize::try_from(height)?;
+        let query_leaf_chain = tx
+            .get_leaf_range(h..=(h + 2))
+            .await
+            .context(format!("leaf chain {height} not available"))?;
+        let mut chain = vec![];
+
+        for query_result in query_leaf_chain {
+            let Ok(leaf_query) = query_result else {
+                bail!(format!("leaf chain {height} not available"));
+            };
+            chain.push(leaf_query.leaf().clone());
+        }
+        Ok(chain)
     }
 }
 
@@ -188,6 +211,9 @@ impl CatchupStorage for DataSource {
     ) -> anyhow::Result<ChainConfig> {
         self.as_ref().get_chain_config(commitment).await
     }
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        self.as_ref().get_leaf_chain(height).await
+    }
 }
 
 #[async_trait]
@@ -202,7 +228,6 @@ impl ChainConfigPersistence for Transaction<Write> {
             [(commitment.to_string(), data)],
         )
         .await
-        .map_err(Into::into)
     }
 }
 
@@ -251,13 +276,13 @@ async fn load_accounts<Mode: TransactionMode>(
         ))? {
             MerkleNode::Leaf { pos, elem, .. } => {
                 snapshot.remember(*pos, *elem, proof)?;
-            }
+            },
             MerkleNode::Empty => {
                 snapshot.non_membership_remember(*account, proof)?;
-            }
+            },
             _ => {
                 bail!("Invalid proof");
-            }
+            },
         }
     }
 
@@ -418,7 +443,7 @@ async fn header_dependencies<Mode: TransactionMode>(
                     // so the STF will be able to look it up later.
                     catchup.add_chain_config(cf);
                     cf
-                }
+                },
             }
         };
 

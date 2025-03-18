@@ -42,6 +42,14 @@ jobs:
           cache-all-crates: true
           cache-provider: buildjet
 
+      - name: Show memory
+        run: free -h
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - name: Build and archive tests
         run: cargo nextest archive --locked --workspace --archive-file nextest-archive-postgres.tar.zst
 
@@ -68,6 +76,14 @@ jobs:
         with:
           cache-all-crates: true
           cache-provider: buildjet
+
+      - name: Show memory
+        run: free -h
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
 
       - name: Build and archive tests
         run: cargo nextest archive --locked --features "embedded-db testing" --workspace --archive-file nextest-archive-sqlite.tar.zst
@@ -118,6 +134,7 @@ jobs:
             target/debug/keygen
             target/debug/permissionless-builder
             target/debug/nasty-client
+            target/debug/update-permissioned-stake-table
             target/debug/espresso-dev-node
             target/debug/pub-key
             target/debug/espresso-bridge
@@ -193,16 +210,14 @@ jobs:
     needs: [build-test-bins, build-test-artifacts-postgres]
     strategy:
       matrix:
-        version: [03]
+        version: [02,99]
         include:
           - version: 02
-            compose: "-f process-compose.yaml -D"
-          - version: 03
-            env:
-              ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml
-            compose: "-f process-compose.yaml -D"
+            test-name: test_native_demo_basic
+
           - version: 99
-            compose: "-f process-compose.yaml -f process-compose-mp.yml -D"
+            test-name: test_native_demo_upgrade
+
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
@@ -229,18 +244,20 @@ jobs:
       - name: Install process-compose
         run: nix profile install nixpkgs#process-compose
 
-      - name: Run Demo-Native ${{matrix.version}}
-        run: bash -x scripts/demo-native ${{matrix.compose}} --tui=false > ${{ env.PC_LOGS }} 2>&1 &
-
       - name: Test Integration
         env:
           RUST_LOG: debug
           NEXTEST_PROFILE: integration
           INTEGRATION_TEST_SEQUENCER_VERSION: ${{ matrix.version }}
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast \
-          --workspace-remap $PWD $(if [ "${{ matrix.version }}" == "2" ]; then echo " smoke"; fi)
+          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
+          --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 10
+
+      - name: Show end of logs
+        if: always()
+        run: |
+          tail -n 1000 ${{ env.PC_LOGS }}
 
       - name: Upload process compose logs
         if: always()
@@ -248,6 +265,7 @@ jobs:
         with:
           name: process-compose-logs-integration-v${{ matrix.version  }}
           path: ${{ env.PC_LOGS }}
+
 
   demo-native:
     needs: build-test-bins

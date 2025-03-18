@@ -1,5 +1,9 @@
+use std::{fmt::Debug, marker::PhantomData, sync::Arc};
+
 use async_broadcast::broadcast;
+use hotshot::rand::{self, seq::SliceRandom, thread_rng};
 use hotshot_builder_api::v0_99::data_source::{AcceptsTxnSubmits, BuilderDataSource};
+use hotshot_example_types::block_types::TestTransaction;
 use hotshot_types::{bundle::Bundle, traits::node_implementation::ConsensusTime};
 use marketplace_builder_shared::{block::BuilderStateId, testing::consensus::SimulatedChainState};
 use tracing_test::traced_test;
@@ -8,12 +12,6 @@ use crate::{
     hooks::NoHooks,
     service::{BuilderConfig, GlobalState, ProxyGlobalState},
 };
-
-use std::{fmt::Debug, marker::PhantomData, sync::Arc};
-
-use hotshot_example_types::block_types::TestTransaction;
-
-use hotshot::rand::{self, seq::SliceRandom, thread_rng};
 
 /// [`RoundTransactionBehavior`] is an enum that is used to represent different
 /// behaviors that we may want to simulate during a round.  This applies to
@@ -64,12 +62,12 @@ impl RoundTransactionBehavior {
                     ]),
                 );
                 transactions
-            }
+            },
             RoundTransactionBehavior::AdjustRemoveTail => {
                 let mut transactions = transactions.clone();
                 transactions.pop();
                 transactions
-            }
+            },
             RoundTransactionBehavior::ProposeInAdvance(propose_in_advance_round) => {
                 let mut transactions = transactions.clone();
                 transactions.push(TestTransaction::new(vec![
@@ -77,12 +75,12 @@ impl RoundTransactionBehavior {
                     0_u8,
                 ]));
                 transactions
-            }
+            },
             RoundTransactionBehavior::AdjustRemove => {
                 let mut transactions = transactions.clone();
                 transactions.remove(rand::random::<usize>() % (transactions.len() - 1));
                 transactions
-            }
+            },
         }
     }
 }

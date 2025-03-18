@@ -13,24 +13,21 @@ use anyhow::{bail, Result};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper,
+        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
+        VidCommitment,
     },
+    drb::DrbResult,
     event::HotShotAction,
-    message::Proposal,
+    message::{convert_proposal, Proposal},
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         storage::Storage,
     },
-    utils::View,
-    vid::VidSchemeType,
     vote::HasViewNumber,
 };
-use jf_vid::VidScheme;
 
 use crate::testable_delay::{DelayConfig, SupportedTraitTypesForAsyncDelay, TestableDelay};
 
@@ -58,6 +55,8 @@ pub struct TestStorageState<TYPES: NodeType> {
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
     action: TYPES::View,
     epoch: Option<TYPES::Epoch>,
+    drb_results: BTreeMap<TYPES::Epoch, DrbResult>,
+    epoch_roots: BTreeMap<TYPES::Epoch, TYPES::BlockHeader>,
 }
 
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
@@ -75,6 +74,8 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             high_qc2: None,
             action: TYPES::View::genesis(),
             epoch: None,
+            drb_results: BTreeMap::new(),
+            epoch_roots: BTreeMap::new(),
         }
     }
 }
@@ -176,7 +177,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
     async fn append_da(
         &self,
         proposal: &Proposal<TYPES, DaProposal<TYPES>>,
-        _vid_commit: <VidSchemeType as VidScheme>::Commit,
+        _vid_commit: VidCommitment,
     ) -> Result<()> {
         if self.should_return_err {
             bail!("Failed to append DA proposal to storage");
@@ -192,7 +193,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
     async fn append_da2(
         &self,
         proposal: &Proposal<TYPES, DaProposal2<TYPES>>,
-        _vid_commit: <VidSchemeType as VidScheme>::Commit,
+        _vid_commit: VidCommitment,
     ) -> Result<()> {
         if self.should_return_err {
             bail!("Failed to append DA proposal (2) to storage");
@@ -331,30 +332,6 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn update_undecided_state(
-        &self,
-        _leaves: CommitmentMap<Leaf<TYPES>>,
-        _state: BTreeMap<TYPES::View, View<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err {
-            bail!("Failed to update high qc to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        Ok(())
-    }
-
-    async fn update_undecided_state2(
-        &self,
-        _leaves: CommitmentMap<Leaf2<TYPES>>,
-        _state: BTreeMap<TYPES::View, View<TYPES>>,
-    ) -> Result<()> {
-        if self.should_return_err {
-            bail!("Failed to update high qc to storage");
-        }
-        Self::run_delay_settings_from_config(&self.delay_config).await;
-        Ok(())
-    }
-
     async fn update_decided_upgrade_certificate(
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
@@ -364,13 +341,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn migrate_consensus(
-        &self,
-        _convert_leaf: fn(Leaf<TYPES>) -> Leaf2<TYPES>,
-        convert_proposal: fn(
-            Proposal<TYPES, QuorumProposal<TYPES>>,
-        ) -> Proposal<TYPES, QuorumProposal2<TYPES>>,
-    ) -> Result<()> {
+    async fn migrate_consensus(&self) -> Result<()> {
         let mut storage_writer = self.inner.write().await;
 
         for (view, proposal) in storage_writer.proposals.clone().iter() {
@@ -378,6 +349,26 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
                 .proposals2
                 .insert(*view, convert_proposal(proposal.clone()));
         }
+
+        Ok(())
+    }
+
+    async fn add_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()> {
+        let mut inner = self.inner.write().await;
+
+        inner.drb_results.insert(epoch, drb_result);
+
+        Ok(())
+    }
+
+    async fn add_epoch_root(
+        &self,
+        epoch: TYPES::Epoch,
+        block_header: TYPES::BlockHeader,
+    ) -> Result<()> {
+        let mut inner = self.inner.write().await;
+
+        inner.epoch_roots.insert(epoch, block_header);
 
         Ok(())
     }

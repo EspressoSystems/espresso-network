@@ -18,16 +18,12 @@ use ark_serialize::SerializationError;
 use bitvec::prelude::*;
 use committable::Committable;
 use jf_signature::SignatureError;
-use jf_vid::VidScheme;
 use primitive_types::U256;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tagged_base64::{TaggedBase64, Tb64Error};
 
 use super::EncodeBytes;
-use crate::{
-    bundle::Bundle, traits::node_implementation::NodeType, utils::BuilderCommitment,
-    vid::VidSchemeType,
-};
+use crate::{bundle::Bundle, traits::node_implementation::NodeType, utils::BuilderCommitment};
 
 /// Type representing stake table entries in a `StakeTable`
 pub trait StakeTableEntryType<K> {
@@ -223,12 +219,8 @@ pub trait BuilderSignatureKey:
         signature: &Self::BuilderSignature,
         fee_amount: u64,
         metadata: &Metadata,
-        vid_commitment: &<VidSchemeType as VidScheme>::Commit,
     ) -> bool {
-        self.validate_builder_signature(
-            signature,
-            &aggregate_fee_data(fee_amount, metadata, vid_commitment),
-        )
+        self.validate_builder_signature(signature, &aggregate_fee_data(fee_amount, metadata))
     }
 
     /// validate signature over sequencing fee information
@@ -281,22 +273,18 @@ pub trait BuilderSignatureKey:
         data: &[u8],
     ) -> Result<Self::BuilderSignature, Self::SignError>;
 
-    /// sign sequencing fee offer for proposed payload
+    /// sign sequencing fee offer
     /// # Errors
     /// If unable to sign the data with the key
     fn sign_fee<Metadata: EncodeBytes>(
         private_key: &Self::BuilderPrivateKey,
         fee_amount: u64,
         metadata: &Metadata,
-        vid_commitment: &<VidSchemeType as VidScheme>::Commit,
     ) -> Result<Self::BuilderSignature, Self::SignError> {
-        Self::sign_builder_message(
-            private_key,
-            &aggregate_fee_data(fee_amount, metadata, vid_commitment),
-        )
+        Self::sign_builder_message(private_key, &aggregate_fee_data(fee_amount, metadata))
     }
 
-    /// sign fee offer for proposed payload (marketplace version)
+    /// sign fee offer (marketplace version)
     /// # Errors
     /// If unable to sign the data with the key
     fn sign_sequencing_fee_marketplace(
@@ -345,15 +333,10 @@ pub trait BuilderSignatureKey:
 }
 
 /// Aggregate all inputs used for signature over fee data
-fn aggregate_fee_data<Metadata: EncodeBytes>(
-    fee_amount: u64,
-    metadata: &Metadata,
-    vid_commitment: &<VidSchemeType as VidScheme>::Commit,
-) -> Vec<u8> {
+fn aggregate_fee_data<Metadata: EncodeBytes>(fee_amount: u64, metadata: &Metadata) -> Vec<u8> {
     let mut fee_info = Vec::new();
     fee_info.extend_from_slice(fee_amount.to_be_bytes().as_ref());
     fee_info.extend_from_slice(metadata.encode().as_ref());
-    fee_info.extend_from_slice(vid_commitment.as_ref());
     fee_info
 }
 

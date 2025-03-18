@@ -4,12 +4,11 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::marker::PhantomData;
+use std::{hash::Hash, marker::PhantomData};
 
 use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey, BlockPayload},
     utils::BuilderCommitment,
-    vid::VidCommitment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -46,32 +45,41 @@ impl<TYPES: NodeType> AvailableBlockData<TYPES> {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(bound = "")]
-pub struct AvailableBlockHeaderInput<TYPES: NodeType> {
-    pub vid_commitment: VidCommitment,
-    #[serde(default)]
-    pub vid_precompute_data: Option<serde_json::Value>,
+pub struct AvailableBlockHeaderInputV1<TYPES: NodeType> {
+    // TODO Add precompute back.
     // signature over vid_commitment, BlockPayload::Metadata, and offered_fee
     pub fee_signature:
-        <<TYPES as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::BuilderSignature,
-    // signature over the current response
-    pub message_signature:
         <<TYPES as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::BuilderSignature,
     pub sender: <TYPES as NodeType>::BuilderSignatureKey,
 }
 
-impl<TYPES: NodeType> AvailableBlockHeaderInput<TYPES> {
+impl<TYPES: NodeType> AvailableBlockHeaderInputV1<TYPES> {
     pub fn validate_signature(
         &self,
         offered_fee: u64,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> bool {
         self.sender
-            .validate_builder_signature(&self.message_signature, self.vid_commitment.as_ref())
-            && self.sender.validate_fee_signature(
-                &self.fee_signature,
-                offered_fee,
-                metadata,
-                &self.vid_commitment,
-            )
+            .validate_fee_signature(&self.fee_signature, offered_fee, metadata)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(bound = "")]
+pub struct AvailableBlockHeaderInputV2<TYPES: NodeType> {
+    // signature over vid_commitment, BlockPayload::Metadata, and offered_fee
+    pub fee_signature:
+        <<TYPES as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::BuilderSignature,
+    pub sender: <TYPES as NodeType>::BuilderSignatureKey,
+}
+
+impl<TYPES: NodeType> AvailableBlockHeaderInputV2<TYPES> {
+    pub fn validate_signature(
+        &self,
+        offered_fee: u64,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ) -> bool {
+        self.sender
+            .validate_fee_signature(&self.fee_signature, offered_fee, metadata)
     }
 }

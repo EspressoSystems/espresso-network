@@ -25,8 +25,9 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use committable::Committable;
 use hotshot_query_service::{availability::QueryablePayload, testing::mocks::MockVersions};
-use hotshot_types::traits::{
-    block_contents::vid_commitment, signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes,
+use hotshot_types::{
+    data::vid_commitment,
+    traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
 };
 use jf_merkle_tree::MerkleTreeScheme;
 use pretty_assertions::assert_eq;
@@ -125,15 +126,11 @@ async fn reference_header(version: Version) -> Header {
     let fee_info = reference_fee_info();
     let payload = reference_payload().await;
     let ns_table = payload.ns_table().clone();
-    let payload_commitment = vid_commitment::<MockVersions>(&payload.encode(), 1, version);
+    let payload_commitment =
+        vid_commitment::<MockVersions>(&payload.encode(), &ns_table.encode(), 1, version);
     let builder_commitment = payload.builder_commitment(&ns_table);
-    let builder_signature = FeeAccount::sign_fee(
-        &builder_key,
-        fee_info.amount().as_u64().unwrap(),
-        &ns_table,
-        &payload_commitment,
-    )
-    .unwrap();
+    let builder_signature =
+        FeeAccount::sign_fee(&builder_key, fee_info.amount().as_u64().unwrap(), &ns_table).unwrap();
 
     let state = ValidatedState::default();
 
@@ -156,7 +153,7 @@ async fn reference_header(version: Version) -> Header {
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
-const REFERENCE_V99_HEADER_COMMITMENT: &str = "BLOCK~nzcKNbVZPDIO-6AepK2pRQKxMXeIi3U98p-CpVv8HNUt";
+const REFERENCE_V99_HEADER_COMMITMENT: &str = "BLOCK~2FW3kAbMvo3UVx3sFbv5nG-xz76LBzMDGnzTGpuITRt6";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where

@@ -18,6 +18,7 @@ use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, RequestPar
 use vbs::version::StaticVersionType;
 
 use super::{
+    block_info::AvailableBlockHeaderInputV2,
     data_source::{AcceptsTxnSubmits, BuilderDataSource},
     Version,
 };
@@ -206,6 +207,27 @@ where
                         source,
                         resource: block_hash.to_string(),
                     })
+            }
+            .boxed()
+        })?
+        .get("claim_header_input_v2", |req, state| {
+            async move {
+                let block_hash: BuilderCommitment = req.blob_param("block_hash")?;
+                let view_number = req.integer_param("view_number")?;
+                let signature = try_extract_param(&req, "signature")?;
+                let sender = try_extract_param(&req, "sender")?;
+                let out = state
+                    .claim_block_header_input(&block_hash, view_number, sender, &signature)
+                    .await
+                    .map_err(|source| Error::BlockClaim {
+                        source,
+                        resource: block_hash.to_string(),
+                    });
+
+                out.map(|input| AvailableBlockHeaderInputV2::<Types> {
+                    fee_signature: input.fee_signature,
+                    sender: input.sender,
+                })
             }
             .boxed()
         })?

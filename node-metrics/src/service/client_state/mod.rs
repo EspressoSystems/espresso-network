@@ -1,20 +1,21 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use async_lock::{RwLock, RwLockWriteGuard};
+use bitvec::vec::BitVec;
+use espresso_types::SeqTypes;
+use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
+use tokio::{spawn, task::JoinHandle};
+
 use super::{
     client_id::ClientId,
     client_message::{ClientMessage, InternalClientMessage},
     data_state::{DataState, NodeIdentity},
     server_message::ServerMessage,
 };
-use bitvec::vec::BitVec;
-use espresso_types::SeqTypes;
-use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
-use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-use tokio::{spawn, task::JoinHandle};
-
-use async_lock::{RwLock, RwLockWriteGuard};
 
 /// ClientState represents the service state of the connected clients.
 /// It maintains and represents the connected clients, and their subscriptions.
@@ -112,7 +113,7 @@ impl std::fmt::Display for HandleConnectedError {
         match self {
             HandleConnectedError::ClientSendError(err) => {
                 write!(f, "handle connected error: client send error: {}", err)
-            }
+            },
         }
     }
 }
@@ -235,7 +236,7 @@ impl std::fmt::Display for HandleRequestBlocksSnapshotsError {
                     "handle request blocks snapshot error: client send error:: {}",
                     err
                 )
-            }
+            },
         }
     }
 }
@@ -306,7 +307,7 @@ impl std::fmt::Display for HandleRequestNodeIdentitySnapshotError {
                     "handle request node identity snapshot error: client send error: {}",
                     err
                 )
-            }
+            },
         }
     }
 }
@@ -374,7 +375,7 @@ impl std::fmt::Display for HandleRequestHistogramSnapshotError {
                     "handle request histogram snapshot error: client send error: {}",
                     err
                 )
-            }
+            },
         }
     }
 }
@@ -461,7 +462,7 @@ impl std::fmt::Display for HandleRequestVotersSnapshotError {
                     "handle request voters snapshot error: client send error: {}",
                     err
                 )
-            }
+            },
         }
     }
 }
@@ -557,27 +558,27 @@ impl std::fmt::Display for ProcessClientMessageError {
         match self {
             ProcessClientMessageError::Connected(err) => {
                 write!(f, "process client message error: connected: {}", err)
-            }
+            },
             ProcessClientMessageError::BlocksSnapshot(err) => {
                 write!(f, "process client message error: blocks snapshot: {}", err)
-            }
+            },
             ProcessClientMessageError::NodeIdentitySnapshot(err) => {
                 write!(
                     f,
                     "process client message error: node identity snapshot: {}",
                     err
                 )
-            }
+            },
             ProcessClientMessageError::HistogramSnapshot(err) => {
                 write!(
                     f,
                     "process client message error: histogram snapshot: {}",
                     err
                 )
-            }
+            },
             ProcessClientMessageError::VotersSnapshot(err) => {
                 write!(f, "process client message error: voters snapshot: {}", err)
-            }
+            },
         }
     }
 }
@@ -615,27 +616,27 @@ where
         InternalClientMessage::Connected(sender) => {
             handle_client_message_connected(sender, client_thread_state).await?;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Disconnected(client_id) => {
             handle_client_message_disconnected(client_id, client_thread_state).await;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::SubscribeLatestBlock) => {
             handle_client_message_subscribe_latest_block(client_id, client_thread_state).await;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::SubscribeNodeIdentity) => {
             handle_client_message_subscribe_node_identity(client_id, client_thread_state).await;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::SubscribeVoters) => {
             handle_client_message_subscribe_voters(client_id, client_thread_state).await;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestBlocksSnapshot) => {
             handle_client_message_request_blocks_snapshot(
@@ -645,7 +646,7 @@ where
             )
             .await?;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestNodeIdentitySnapshot) => {
             handle_client_message_request_node_identity_snapshot(
@@ -655,7 +656,7 @@ where
             )
             .await?;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestHistogramSnapshot) => {
             handle_client_message_request_histogram_snapshot(
@@ -665,7 +666,7 @@ where
             )
             .await?;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestVotersSnapshot) => {
             handle_client_message_request_voters_snapshot(
@@ -675,7 +676,7 @@ where
             )
             .await?;
             Ok(())
-        }
+        },
     }
 }
 
@@ -1180,6 +1181,22 @@ impl Drop for ProcessDistributeVotersHandlingTask {
 
 #[cfg(test)]
 pub mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use async_lock::RwLock;
+    use bitvec::vec::BitVec;
+    use espresso_types::{Leaf2, NodeState, ValidatedState};
+    use futures::{
+        channel::mpsc::{self, Sender},
+        SinkExt, StreamExt,
+    };
+    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+    use tokio::{
+        spawn,
+        time::{sleep, timeout},
+    };
+
     use super::{ClientThreadState, InternalClientMessageProcessingTask};
     use crate::service::{
         client_id::ClientId,
@@ -1193,20 +1210,6 @@ pub mod tests {
             ProcessLeafStreamTask,
         },
         server_message::ServerMessage,
-    };
-    use async_lock::RwLock;
-    use bitvec::vec::BitVec;
-    use espresso_types::{Leaf2, NodeState, ValidatedState};
-    use futures::{
-        channel::mpsc::{self, Sender},
-        SinkExt, StreamExt,
-    };
-    use hotshot_example_types::node_types::TestVersions;
-    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
-    use std::{sync::Arc, time::Duration};
-    use tokio::{
-        spawn,
-        time::{sleep, timeout},
     };
 
     pub fn create_test_client_thread_state() -> ClientThreadState<Sender<ServerMessage>> {

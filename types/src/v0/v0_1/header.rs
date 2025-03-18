@@ -6,7 +6,7 @@ use super::{
 };
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot_types::{utils::BuilderCommitment, vid::VidCommitment};
+use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
 use serde::{
     de::{self, SeqAccess},
     Deserialize, Serialize,
@@ -54,7 +54,7 @@ impl Committable for Header {
             .u64_field("l1_head", self.l1_head)
             .optional("l1_finalized", &self.l1_finalized)
             .constant_str("payload_commitment")
-            .fixed_size_bytes(self.payload_commitment.as_ref().as_ref())
+            .fixed_size_bytes(self.payload_commitment.as_ref())
             .constant_str("builder_commitment")
             .fixed_size_bytes(self.builder_commitment.as_ref())
             .field("ns_table", self.ns_table.commit())

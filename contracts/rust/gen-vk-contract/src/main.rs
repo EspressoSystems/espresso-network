@@ -5,12 +5,11 @@
 
 use std::{fs::OpenOptions, io::Write, path::PathBuf, process::Command};
 
+use clap::Parser;
 use ethers::core::abi::AbiEncode;
 use hotshot_contract_adapter::jellyfish::ParsedVerifyingKey;
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use jf_pcs::prelude::UnivariateUniversalParams;
-
-use clap::Parser;
 
 #[derive(Parser)]
 struct Cli {

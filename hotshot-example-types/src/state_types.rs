@@ -17,7 +17,6 @@ use hotshot_types::{
         states::{InstanceState, StateDelta, TestableState, ValidatedState},
         BlockPayload,
     },
-    vid::VidCommon,
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -105,7 +104,7 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
         instance: &Self::Instance,
         _parent_leaf: &Leaf2<TYPES>,
         _proposed_header: &TYPES::BlockHeader,
-        _vid_common: VidCommon,
+        _payload_byte_len: u32,
         _version: Version,
         _view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {

@@ -2,8 +2,6 @@
 
 use std::marker::PhantomData;
 
-use crate::block::BuilderStateId;
-use crate::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
 use async_broadcast::Sender;
 use committable::Committable;
 use hotshot::{
@@ -17,17 +15,22 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
-    data::{DaProposal2, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    data::{
+        vid_commitment, DaProposal2, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper,
+        ViewNumber,
+    },
     message::Proposal,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
     traits::{
-        block_contents::vid_commitment,
         node_implementation::{ConsensusTime, Versions},
+        EncodeBytes,
     },
 };
 use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;
+
+use crate::{block::BuilderStateId, testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION};
 
 pub struct SimulatedChainState {
     epoch: Option<EpochNumber>,
@@ -54,12 +57,13 @@ impl SimulatedChainState {
         let num_transactions = transactions.len() as u64;
         let encoded_transactions = TestTransaction::encode(&transactions);
         let block_payload = TestBlockPayload { transactions };
+        let metadata = TestMetadata { num_transactions };
         let block_vid_commitment = vid_commitment::<TestVersions>(
             &encoded_transactions,
+            &metadata.encode(),
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
         );
-        let metadata = TestMetadata { num_transactions };
         let block_builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
                 &block_payload,
@@ -106,7 +110,7 @@ impl SimulatedChainState {
                     &TestInstanceState::default(),
                 )
                 .await
-            }
+            },
             Some(prev_proposal) => {
                 let prev_justify_qc = &prev_proposal.justify_qc();
                 let quorum_data = QuorumData2::<TestTypes> {
@@ -122,7 +126,7 @@ impl SimulatedChainState {
                     prev_justify_qc.signatures.clone(),
                     PhantomData,
                 )
-            }
+            },
         };
 
         tracing::debug!("Iteration: {} justify_qc: {:?}", self.round, justify_qc);

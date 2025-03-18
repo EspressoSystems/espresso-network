@@ -149,11 +149,11 @@ impl StateRelayServerDataSource for StateRelayServerState {
                     StatusCode::BAD_REQUEST,
                     "A signature of this light client state is already posted at this block height for this key.".to_owned(),
                 ));
-            }
+            },
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(signature);
                 bundle.accumulated_weight += *weight;
-            }
+            },
         }
 
         if bundle.accumulated_weight >= self.threshold {
@@ -204,7 +204,7 @@ where
                 reason: err.to_string(),
             })?;
             Api::<State, Error, ApiVer>::new(toml)?
-        }
+        },
     };
 
     api.get("getlateststate", |_req, state| {

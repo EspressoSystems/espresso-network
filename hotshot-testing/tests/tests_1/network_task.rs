@@ -36,6 +36,7 @@ async fn test_network_task() {
     use std::collections::BTreeMap;
 
     use futures::StreamExt;
+    use hotshot_types::epoch_membership::EpochMembershipCoordinator;
 
     hotshot::helpers::initialize_logging();
 
@@ -43,9 +44,8 @@ async fn test_network_task() {
         TestDescription::default_multiple_rounds();
     let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
     let node_id = 1;
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id)
-        .await
-        .0;
+    let (handle, _, _, node_key_map) =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
     let launcher = builder.gen_launcher();
 
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
@@ -62,12 +62,13 @@ async fn test_network_task() {
         all_nodes.clone(),
         all_nodes,
     )));
+    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height);
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             network: network.clone(),
             view: ViewNumber::new(0),
             epoch: None,
-            membership: Arc::clone(&membership),
+            membership_coordinator: coordinator.clone(),
             upgrade_lock: upgrade_lock.clone(),
             storage,
             consensus,
@@ -80,7 +81,7 @@ async fn test_network_task() {
     let task = Task::new(network_state, tx.clone(), rx);
     task_reg.run_task(task);
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership);
+    let mut generator = TestViewGenerator::<TestVersions>::generate(coordinator, node_key_map);
     let view = generator.next().await.unwrap();
 
     let (out_tx_internal, mut out_rx_internal) = async_broadcast::broadcast(10);
@@ -209,15 +210,15 @@ async fn test_network_storage_fail() {
     use std::collections::BTreeMap;
 
     use futures::StreamExt;
+    use hotshot_types::epoch_membership::EpochMembershipCoordinator;
 
     hotshot::helpers::initialize_logging();
 
     let builder: TestDescription<TestTypes, MemoryImpl, TestVersions> =
         TestDescription::default_multiple_rounds();
     let node_id = 1;
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id)
-        .await
-        .0;
+    let (handle, _, _, node_key_map) =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
     let launcher = builder.gen_launcher();
 
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
@@ -235,12 +236,13 @@ async fn test_network_storage_fail() {
         all_nodes.clone(),
         all_nodes,
     )));
+    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height);
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             network: network.clone(),
             view: ViewNumber::new(0),
             epoch: None,
-            membership: Arc::clone(&membership),
+            membership_coordinator: coordinator.clone(),
             upgrade_lock: upgrade_lock.clone(),
             storage,
             consensus,
@@ -253,7 +255,7 @@ async fn test_network_storage_fail() {
     let task = Task::new(network_state, tx.clone(), rx);
     task_reg.run_task(task);
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership);
+    let mut generator = TestViewGenerator::<TestVersions>::generate(coordinator, node_key_map);
     let view = generator.next().await.unwrap();
 
     let (out_tx_internal, mut out_rx_internal): (Sender<Arc<HotShotEvent<TestTypes>>>, _) =

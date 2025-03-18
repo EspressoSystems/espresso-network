@@ -26,10 +26,10 @@
 //! chain which is tabulated by this specific node and not subject to full consensus agreement, try
 //! the [node](crate::node) API.
 
-use crate::{api::load_api, Payload, QueryError};
+use std::{fmt::Display, path::PathBuf, time::Duration};
+
 use derive_more::From;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-
 use hotshot_types::{
     data::{Leaf, Leaf2, QuorumProposal},
     simple_certificate::QuorumCertificate,
@@ -37,9 +37,10 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, Snafu};
-use std::{fmt::Display, path::PathBuf, time::Duration};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
+
+use crate::{api::load_api, Payload, QueryError};
 
 pub(crate) mod data_source;
 mod fetch;
@@ -193,12 +194,10 @@ fn downgrade_leaf<Types: NodeType>(leaf2: Leaf2<Types>) -> Leaf<Types> {
     leaf
 }
 
-impl<Types: NodeType> From<LeafQueryData<Types>> for Leaf1QueryData<Types> {
-    fn from(value: LeafQueryData<Types>) -> Self {
-        Self {
-            leaf: downgrade_leaf(value.leaf),
-            qc: value.qc.to_qc(),
-        }
+fn downgrade_leaf_query_data<Types: NodeType>(leaf: LeafQueryData<Types>) -> Leaf1QueryData<Types> {
+    Leaf1QueryData {
+        leaf: downgrade_leaf(leaf.leaf),
+        qc: leaf.qc.to_qc(),
     }
 }
 
@@ -284,7 +283,7 @@ where
     if api_ver.major == 0 {
         api.at("get_leaf", move |req, state| {
             get_leaf_handler(req, state, timeout)
-                .map(|res| res.map(Leaf1QueryData::from))
+                .map(|res| res.map(downgrade_leaf_query_data))
                 .boxed()
         })?;
 
@@ -293,7 +292,7 @@ where
                 .map(|res| {
                     res.map(|r| {
                         r.into_iter()
-                            .map(Into::into)
+                            .map(downgrade_leaf_query_data)
                             .collect::<Vec<Leaf1QueryData<_>>>()
                     })
                 })
@@ -309,7 +308,7 @@ where
                             Ok(state
                                 .subscribe_leaves(height)
                                 .await
-                                .map(|leaf| Ok(Leaf1QueryData::from(leaf))))
+                                .map(|leaf| Ok(downgrade_leaf_query_data(leaf))))
                         }
                         .boxed()
                     })
@@ -340,6 +339,7 @@ where
             .boxed()
         })?;
     }
+
     api.at("get_header", move |req, state| {
         async move {
             let id = if let Some(height) = req.opt_integer_param("height")? {
@@ -528,7 +528,7 @@ where
                         .context(FetchTransactionSnafu {
                             resource: hash.to_string(),
                         })
-                }
+                },
                 None => {
                     let height: u64 = req.integer_param("height")?;
                     let fetch = state
@@ -544,7 +544,7 @@ where
                         .context(InvalidTransactionIndexSnafu { height, index: i })?;
                     TransactionQueryData::new(&block, index, i)
                         .context(InvalidTransactionIndexSnafu { height, index: i })
-                }
+                },
             }
         }
         .boxed()
@@ -609,34 +609,32 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), Er
 
 #[cfg(test)]
 mod test {
+    use std::{fmt::Debug, time::Duration};
+
+    use async_lock::RwLock;
+    use committable::Committable;
+    use futures::future::FutureExt;
+    use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
+    use portpicker::pick_unused_port;
+    use serde::de::DeserializeOwned;
+    use surf_disco::{Client, Error as _};
+    use tempfile::TempDir;
+    use tide_disco::App;
+    use toml::toml;
+
     use super::*;
-    use crate::data_source::storage::AvailabilityStorage;
-    use crate::data_source::VersionedDataSource;
-    use crate::testing::mocks::MockVersions;
     use crate::{
-        data_source::ExtensibleDataSource,
+        data_source::{storage::AvailabilityStorage, ExtensibleDataSource, VersionedDataSource},
         status::StatusDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes},
+            mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MockVersions},
             setup_test,
         },
         types::HeightIndexed,
         ApiState, Error, Header,
     };
-    use async_lock::RwLock;
-    use committable::Committable;
-    use futures::future::FutureExt;
-    use hotshot_types::data::Leaf2;
-    use hotshot_types::simple_certificate::QuorumCertificate2;
-    use portpicker::pick_unused_port;
-    use serde::de::DeserializeOwned;
-    use std::{fmt::Debug, time::Duration};
-    use surf_disco::{Client, Error as _};
-    use tempfile::TempDir;
-    use tide_disco::App;
-    use toml::toml;
 
     /// Get the current ledger height and a list of non-empty leaf/block pairs.
     async fn get_non_empty_blocks(
@@ -658,7 +656,7 @@ mod test {
                         let leaf = client.get(&format!("leaf/{}", i)).send().await.unwrap();
                         blocks.push((leaf, block));
                     }
-                }
+                },
                 Err(Error::Availability {
                     source: super::Error::FetchBlock { .. },
                 }) => {
@@ -666,7 +664,7 @@ mod test {
                         "found end of ledger at height {i}, non-empty blocks are {blocks:?}",
                     );
                     return (i, blocks);
-                }
+                },
                 Err(err) => panic!("unexpected error {}", err),
             }
         }
@@ -896,7 +894,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1101,7 +1099,7 @@ mod test {
         let small_object_range_limit = 3;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1193,7 +1191,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         network.start().await;
 
         // Start the web server.
@@ -1235,7 +1233,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init_with_leaf_ds().await;
+        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init_with_leaf_ds().await;
         network.start().await;
 
         // Start the web server.

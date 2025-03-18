@@ -17,7 +17,7 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:main
-    command: deploy --only fee-contract,permissioned-stake-table
+    command: deploy --only fee-contract,permissioned-stake-table,esp-token,stake-table
     environment:
       - ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH=/data/initial_stake_table.toml
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
@@ -344,7 +344,7 @@ services:
     image: ghcr.io/espressosystems/espresso-sequencer/sequencer:main
     ports:
       - "$ESPRESSO_SEQUENCER2_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
-    command: sequencer -- http -- query -- storage-fs
+    command: sequencer -- http
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
       - ESPRESSO_SEQUENCER_GENESIS_FILE

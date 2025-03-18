@@ -1,9 +1,5 @@
-use std::{future::Future, hash::Hash, sync::Arc};
+use std::hash::Hash;
 
-use futures::{
-    future::{RemoteHandle, Shared},
-    FutureExt,
-};
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{DaProposal2, QuorumProposalWrapper},
@@ -13,7 +9,6 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use tokio::{spawn, sync::Notify};
 
 pub mod rotating_set;
 pub use rotating_set::RotatingSet;
@@ -67,49 +62,5 @@ where
 
     pub fn builder_commitment(&self) -> &BuilderCommitment {
         &self.builder_commitment
-    }
-}
-
-#[derive(derive_more::Debug, Clone)]
-pub struct WaitAndKeep<T>
-where
-    T: Clone + Sync + Send + 'static,
-{
-    handle: Shared<RemoteHandle<T>>,
-    notifier: Arc<Notify>,
-}
-
-impl<T> WaitAndKeep<T>
-where
-    T: Clone + Sync + Send + 'static,
-{
-    /// Creates a new [`WaitAndKeep`] wrapping the provided future.
-    /// Future will be essentially paused until [`WaitAndKeep::start`] is called
-    pub fn new<F: Future<Output = T> + Send + 'static>(fut: F) -> Self {
-        let notifier = Arc::new(Notify::new());
-        let (fut, handle) = {
-            let notifier = Arc::clone(&notifier);
-            async move {
-                let _ = notifier.notified().await;
-                fut.await
-            }
-            .remote_handle()
-        };
-        spawn(fut);
-        Self {
-            notifier,
-            handle: handle.shared(),
-        }
-    }
-
-    /// Signals the underlying future to start running
-    pub fn start(&self) {
-        self.notifier.notify_one();
-    }
-
-    /// Will consume self and return result of underlying future
-    pub async fn resolve(self) -> T {
-        self.start();
-        self.handle.await
     }
 }

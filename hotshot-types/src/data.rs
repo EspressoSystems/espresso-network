@@ -20,16 +20,18 @@ use async_lock::RwLock;
 use bincode::Options;
 use committable::{Commitment, CommitmentBoundsArkless, Committable, RawCommitmentBuilder};
 use hotshot_utils::anytrace::*;
-use jf_vid::VidDisperse as JfVidDisperse;
+use jf_vid::VidScheme;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use tagged_base64::TaggedBase64;
 use thiserror::Error;
-use vbs::version::Version;
+use vbs::version::{StaticVersionType, Version};
 use vec1::Vec1;
-use vid_disperse::{ADVZDisperse, ADVZDisperseShare, VidDisperseShare2};
+use vid_disperse::{ADVZDisperse, ADVZDisperseShare, AvidMDisperse, VidDisperseShare2};
 
 use crate::{
     drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
     impl_has_epoch, impl_has_none_epoch,
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
@@ -40,8 +42,7 @@ use crate::{
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
         block_contents::{
-            vid_commitment, BlockHeader, BuilderFee, EncodeBytes, TestableBlock,
-            GENESIS_VID_NUM_STORAGE_NODES,
+            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, GENESIS_VID_NUM_STORAGE_NODES,
         },
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
@@ -49,7 +50,10 @@ use crate::{
         BlockPayload,
     },
     utils::{bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number},
-    vid::{VidCommitment, VidCommon, VidSchemeType},
+    vid::{
+        advz::{advz_scheme, ADVZCommitment, ADVZShare},
+        avidm::{init_avidm_param, AvidMCommitment, AvidMScheme, AvidMShare},
+    },
     vote::{Certificate, HasViewNumber},
 };
 
@@ -203,6 +207,173 @@ where
     pub view_number: TYPES::View,
 }
 
+/// VID Commitment type
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
+#[serde(
+    try_from = "tagged_base64::TaggedBase64",
+    into = "tagged_base64::TaggedBase64"
+)]
+pub enum VidCommitment {
+    V0(ADVZCommitment),
+    V1(AvidMCommitment),
+}
+
+impl Default for VidCommitment {
+    fn default() -> Self {
+        Self::V0(Default::default())
+    }
+}
+
+impl Display for VidCommitment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::write!(f, "{}", TaggedBase64::from(self))
+    }
+}
+
+impl From<VidCommitment> for TaggedBase64 {
+    fn from(val: VidCommitment) -> Self {
+        match val {
+            VidCommitment::V0(comm) => comm.into(),
+            VidCommitment::V1(comm) => comm.into(),
+        }
+    }
+}
+
+impl From<&VidCommitment> for TaggedBase64 {
+    fn from(val: &VidCommitment) -> Self {
+        match val {
+            VidCommitment::V0(comm) => comm.into(),
+            VidCommitment::V1(comm) => comm.into(),
+        }
+    }
+}
+
+impl TryFrom<TaggedBase64> for VidCommitment {
+    type Error = tagged_base64::Tb64Error;
+
+    fn try_from(value: TaggedBase64) -> std::result::Result<Self, Self::Error> {
+        ADVZCommitment::try_from(&value)
+            .map(Self::V0)
+            .or(AvidMCommitment::try_from(value).map(Self::V1))
+    }
+}
+
+impl<'a> TryFrom<&'a TaggedBase64> for VidCommitment {
+    type Error = tagged_base64::Tb64Error;
+
+    fn try_from(value: &'a TaggedBase64) -> std::result::Result<Self, Self::Error> {
+        ADVZCommitment::try_from(value)
+            .map(Self::V0)
+            .or(AvidMCommitment::try_from(value).map(Self::V1))
+    }
+}
+
+impl std::str::FromStr for VidCommitment {
+    type Err = tagged_base64::Tb64Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        use core::convert::TryFrom;
+        Self::try_from(TaggedBase64::from_str(s)?)
+            .map_err(|_| tagged_base64::Tb64Error::InvalidData)
+    }
+}
+
+// TODO(Chengyu): cannot have this because of `impl<H> From<Output<H>> for HasherNode<H>`.
+// impl From<ADVZCommitment> for VidCommitment {
+//     fn from(comm: ADVZCommitment) -> Self {
+//         Self::V0(comm)
+//     }
+// }
+
+impl From<AvidMCommitment> for VidCommitment {
+    fn from(comm: AvidMCommitment) -> Self {
+        Self::V1(comm)
+    }
+}
+
+impl AsRef<[u8]> for VidCommitment {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::V0(comm) => comm.as_ref(),
+            Self::V1(comm) => comm.as_ref(),
+        }
+    }
+}
+
+impl AsRef<[u8; 32]> for VidCommitment {
+    fn as_ref(&self) -> &[u8; 32] {
+        match self {
+            Self::V0(comm) => comm.as_ref().as_ref(),
+            Self::V1(comm) => comm.as_ref(),
+        }
+    }
+}
+
+impl VidCommitment {
+    /// Unwrap an ADVZCommitment. Panic if incorrect version.
+    pub fn unwrap_v0(self) -> ADVZCommitment {
+        match self {
+            VidCommitment::V0(comm) => comm,
+            _ => panic!("Unexpected version for this commitment"),
+        }
+    }
+    /// Unwrap an AvidMCommitment. Panic if incorrect version.
+    pub fn unwrap_v1(self) -> AvidMCommitment {
+        match self {
+            VidCommitment::V1(comm) => comm,
+            _ => panic!("Unexpected version for this commitment"),
+        }
+    }
+}
+
+/// Compute the VID payload commitment.
+/// TODO(Gus) delete this function?
+/// # Panics
+/// If the VID computation fails.
+#[must_use]
+#[allow(clippy::panic)]
+pub fn vid_commitment<V: Versions>(
+    encoded_transactions: &[u8],
+    metadata: &[u8],
+    total_weight: usize,
+    version: Version,
+) -> VidCommitment {
+    if version < V::Epochs::VERSION {
+        let encoded_tx_len = encoded_transactions.len();
+        advz_scheme(total_weight).commit_only(encoded_transactions).map(VidCommitment::V0).unwrap_or_else(|err| panic!("VidScheme::commit_only failure:(total_weight,payload_byte_len)=({total_weight},{encoded_tx_len}) error: {err}"))
+    } else {
+        let param = init_avidm_param(total_weight).unwrap();
+        let encoded_tx_len = encoded_transactions.len();
+        AvidMScheme::commit(
+            &param,
+            encoded_transactions,
+            ns_table::parse_ns_table(encoded_tx_len, metadata),
+        )
+        .map(VidCommitment::V1)
+        .unwrap()
+    }
+}
+
+/// VID share type
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum VidShare {
+    V0(ADVZShare),
+    V1(AvidMShare),
+}
+
+// TODO(Chengyu): cannot have this
+// impl From<ADVZShare> for VidShare {
+//     fn from(share: ADVZShare) -> Self {
+//         Self::V0(share)
+//     }
+// }
+
+impl From<AvidMShare> for VidShare {
+    fn from(share: AvidMShare) -> Self {
+        Self::V1(share)
+    }
+}
+
+pub mod ns_table;
 pub mod vid_disperse;
 
 /// VID dispersal data
@@ -216,7 +387,7 @@ pub enum VidDisperse<TYPES: NodeType> {
     /// Disperse type for first VID version
     V0(vid_disperse::ADVZDisperse<TYPES>),
     /// Place holder for VID upgrade
-    V1(vid_disperse::ADVZDisperse<TYPES>),
+    V1(vid_disperse::AvidMDisperse<TYPES>),
 }
 
 impl<TYPES: NodeType> From<vid_disperse::ADVZDisperse<TYPES>> for VidDisperse<TYPES> {
@@ -225,10 +396,17 @@ impl<TYPES: NodeType> From<vid_disperse::ADVZDisperse<TYPES>> for VidDisperse<TY
     }
 }
 
+impl<TYPES: NodeType> From<vid_disperse::AvidMDisperse<TYPES>> for VidDisperse<TYPES> {
+    fn from(disperse: vid_disperse::AvidMDisperse<TYPES>) -> Self {
+        Self::V1(disperse)
+    }
+}
+
 impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
     fn view_number(&self) -> TYPES::View {
         match self {
-            Self::V0(disperse) | Self::V1(disperse) => disperse.view_number(),
+            Self::V0(disperse) => disperse.view_number(),
+            Self::V1(disperse) => disperse.view_number(),
         }
     }
 }
@@ -236,36 +414,13 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for VidDisperse<TYPES> {
 impl<TYPES: NodeType> HasEpoch<TYPES> for VidDisperse<TYPES> {
     fn epoch(&self) -> Option<TYPES::Epoch> {
         match self {
-            Self::V0(disperse) | Self::V1(disperse) => disperse.epoch(),
+            Self::V0(disperse) => disperse.epoch(),
+            Self::V1(disperse) => disperse.epoch(),
         }
     }
 }
 
 impl<TYPES: NodeType> VidDisperse<TYPES> {
-    /// Create VID dispersal from a specified membership for the target epoch.
-    /// Uses the specified function to calculate share dispersal
-    /// Allows for more complex stake table functionality
-    pub async fn from_membership(
-        view_number: TYPES::View,
-        vid_disperse: JfVidDisperse<VidSchemeType>,
-        membership: &Arc<RwLock<TYPES::Membership>>,
-        target_epoch: Option<TYPES::Epoch>,
-        data_epoch: Option<TYPES::Epoch>,
-        data_epoch_payload_commitment: Option<VidCommitment>,
-    ) -> Self {
-        Self::V0(
-            ADVZDisperse::from_membership(
-                view_number,
-                vid_disperse,
-                membership,
-                target_epoch,
-                data_epoch,
-                data_epoch_payload_commitment,
-            )
-            .await,
-        )
-    }
-
     /// Calculate the vid disperse information from the payload given a view, epoch and membership,
     /// If the sender epoch is missing, it means it's the same as the target epoch.
     ///
@@ -274,48 +429,59 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     #[allow(clippy::panic)]
     pub async fn calculate_vid_disperse<V: Versions>(
         payload: &TYPES::BlockPayload,
-        membership: &Arc<RwLock<TYPES::Membership>>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
-        _upgrade_lock: &UpgradeLock<TYPES, V>,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<Self> {
-        ADVZDisperse::calculate_vid_disperse(payload, membership, view, target_epoch, data_epoch)
+        let version = upgrade_lock.version_infallible(view).await;
+        if version < V::Epochs::VERSION {
+            ADVZDisperse::calculate_vid_disperse(
+                payload,
+                membership,
+                view,
+                target_epoch,
+                data_epoch,
+            )
             .await
-            .map(|result| match data_epoch {
-                None => Self::V0(result),
-                Some(_) => Self::V1(result),
-            })
-    }
-
-    /// Return a reference to the internal VidCommon field.
-    /// TODO(Chengyu): rewrite this after VID upgrade
-    pub fn vid_common_ref(&self) -> &VidCommon {
-        match self {
-            Self::V0(disperse) | Self::V1(disperse) => &disperse.common,
+            .map(|disperse| Self::V0(disperse))
+        } else {
+            AvidMDisperse::calculate_vid_disperse(
+                payload,
+                membership,
+                view,
+                target_epoch,
+                data_epoch,
+                metadata,
+            )
+            .await
+            .map(|disperse| Self::V1(disperse))
         }
     }
 
     /// Return the internal payload commitment
-    /// TODO(Chengyu): rewrite this after VID upgrade
     pub fn payload_commitment(&self) -> VidCommitment {
         match self {
-            Self::V0(disperse) | Self::V1(disperse) => disperse.payload_commitment,
+            Self::V0(disperse) => VidCommitment::V0(disperse.payload_commitment),
+            Self::V1(disperse) => disperse.payload_commitment.into(),
         }
     }
 
-    /// Unwrap self
-    /// TODO(Chengyu): remove this after VID upgrade
-    pub fn as_advz(self) -> ADVZDisperse<TYPES> {
+    /// Return a slice reference to the payload commitment. Should be used for signature.
+    pub fn payload_commitment_ref(&self) -> &[u8] {
         match self {
-            Self::V0(disperse) | Self::V1(disperse) => disperse,
+            Self::V0(disperse) => disperse.payload_commitment.as_ref(),
+            Self::V1(disperse) => disperse.payload_commitment.as_ref(),
         }
     }
 
     /// Set the view number
     pub fn set_view_number(&mut self, view_number: <TYPES as NodeType>::View) {
         match self {
-            Self::V0(share) | Self::V1(share) => share.view_number = view_number,
+            Self::V0(share) => share.view_number = view_number,
+            Self::V1(share) => share.view_number = view_number,
         }
     }
 }
@@ -339,13 +505,13 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
                     .into_iter()
                     .map(|share| Self::V0(share))
                     .collect()
-            }
+            },
             VidDisperse::V1(vid_disperse) => {
                 VidDisperseShare2::<TYPES>::from_vid_disperse(vid_disperse)
                     .into_iter()
                     .map(|share| Self::V1(share))
                     .collect()
-            }
+            },
         }
     }
 
@@ -399,6 +565,14 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         }
     }
 
+    /// Return the payload length in bytes.
+    pub fn payload_byte_len(&self) -> u32 {
+        match self {
+            Self::V0(share) => share.payload_byte_len(),
+            Self::V1(share) => share.payload_byte_len(),
+        }
+    }
+
     /// Return a reference to the internal payload VID commitment
     pub fn payload_commitment_ref(&self) -> &[u8] {
         match self {
@@ -408,33 +582,14 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
     }
 
     /// Return the internal payload VID commitment
-    /// TODO(Chengyu): restructure this, since payload commitment will have different types given different version.
     pub fn payload_commitment(&self) -> VidCommitment {
         match self {
-            Self::V0(share) => share.payload_commitment,
-            Self::V1(share) => share.payload_commitment,
-        }
-    }
-    /// Return the internal data epoch payload VID commitment
-    /// TODO(Chengyu): restructure this, since payload commitment will have different types given different version.
-    pub fn data_epoch_payload_commitment(&self) -> Option<VidCommitment> {
-        match self {
-            Self::V0(_) => None,
-            Self::V1(share) => share.data_epoch_payload_commitment,
-        }
-    }
-
-    /// Return a reference to the internal VidCommon field.
-    /// TODO(Chengyu): remove this after VID upgrade
-    pub fn vid_common_ref(&self) -> &VidCommon {
-        match self {
-            Self::V0(share) => &share.common,
-            Self::V1(share) => &share.common,
+            Self::V0(share) => VidCommitment::V0(share.payload_commitment),
+            Self::V1(share) => share.payload_commitment.into(),
         }
     }
 
     /// Return the target epoch
-    /// TODO(Chengyu): remove this?
     pub fn target_epoch(&self) -> Option<<TYPES as NodeType>::Epoch> {
         match self {
             Self::V0(_) => None,
@@ -492,16 +647,6 @@ impl<TYPES: NodeType> From<vid_disperse::VidDisperseShare2<TYPES>> for VidDisper
     }
 }
 
-// TODO(Chengyu): this conversion may not be done after vid upgrade. Sync with storage `append_vid2` change later.
-impl<TYPES: NodeType> From<VidDisperseShare<TYPES>> for vid_disperse::VidDisperseShare2<TYPES> {
-    fn from(share: VidDisperseShare<TYPES>) -> vid_disperse::VidDisperseShare2<TYPES> {
-        match share {
-            VidDisperseShare::V0(share) => share.into(),
-            VidDisperseShare::V1(share) => share,
-        }
-    }
-}
-
 /// Helper type to encapsulate the various ways that proposal certificates can be captured and
 /// stored.
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
@@ -527,10 +672,10 @@ impl<TYPES: NodeType> ViewChangeEvidence<TYPES> {
         match self {
             ViewChangeEvidence::Timeout(timeout_cert) => {
                 ViewChangeEvidence2::Timeout(timeout_cert.to_tc2())
-            }
+            },
             ViewChangeEvidence::ViewSync(view_sync_cert) => {
                 ViewChangeEvidence2::ViewSync(view_sync_cert.to_vsc2())
-            }
+            },
         }
     }
 }
@@ -560,10 +705,10 @@ impl<TYPES: NodeType> ViewChangeEvidence2<TYPES> {
         match self {
             ViewChangeEvidence2::Timeout(timeout_cert) => {
                 ViewChangeEvidence::Timeout(timeout_cert.to_tc())
-            }
+            },
             ViewChangeEvidence2::ViewSync(view_sync_cert) => {
                 ViewChangeEvidence::ViewSync(view_sync_cert.to_vsc())
-            }
+            },
         }
     }
 }
@@ -957,6 +1102,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
         let payload_commitment = vid_commitment::<V>(
             &payload_bytes,
+            &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
             genesis_version,
         );
@@ -1046,7 +1192,12 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         version: Version,
     ) -> std::result::Result<(), BlockError> {
         let encoded_txns = block_payload.encode();
-        let commitment = vid_commitment::<V>(&encoded_txns, num_storage_nodes, version);
+        let commitment = vid_commitment::<V>(
+            &encoded_txns,
+            &self.block_header.metadata().encode(),
+            num_storage_nodes,
+            version,
+        );
         if commitment != self.block_header.payload_commitment() {
             return Err(BlockError::InconsistentPayloadCommitment);
         }
@@ -1091,7 +1242,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
             //   - if the parent didn't have a certificate, but we see one now, it just means that we have begun an upgrade: again, this is always fine.
-            (None | Some(_), None) => {}
+            (None | Some(_), None) => {},
             // If we no longer see a cert, we have to make sure that we either:
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
@@ -1101,13 +1252,13 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
                     || (self.view_number() > parent_cert.data.decide_by && decided_upgrade_certificate_read.is_none()),
                        "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
                 );
-            }
+            },
             // If we both have a certificate, they should be identical.
             // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
             // I think this is a fairly lax restriction.
             (Some(cert), Some(parent_cert)) => {
                 ensure!(cert == parent_cert, "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate.");
-            }
+            },
         }
 
         // This check should be added once we sort out the genesis leaf/justify_qc issue.
@@ -1342,6 +1493,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
         let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
         let payload_commitment = vid_commitment::<V>(
             &payload_bytes,
+            &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
             genesis_version,
         );
@@ -1419,7 +1571,12 @@ impl<TYPES: NodeType> Leaf<TYPES> {
         version: Version,
     ) -> std::result::Result<(), BlockError> {
         let encoded_txns = block_payload.encode();
-        let commitment = vid_commitment::<V>(&encoded_txns, num_storage_nodes, version);
+        let commitment = vid_commitment::<V>(
+            &encoded_txns,
+            &self.block_header.metadata().encode(),
+            num_storage_nodes,
+            version,
+        );
         if commitment != self.block_header.payload_commitment() {
             return Err(BlockError::InconsistentPayloadCommitment);
         }
@@ -1464,7 +1621,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             // Easiest cases are:
             //   - no upgrade certificate on either: this is the most common case, and is always fine.
             //   - if the parent didn't have a certificate, but we see one now, it just means that we have begun an upgrade: again, this is always fine.
-            (None | Some(_), None) => {}
+            (None | Some(_), None) => {},
             // If we no longer see a cert, we have to make sure that we either:
             //    - no longer care because we have passed new_version_first_view, or
             //    - no longer care because we have passed `decide_by` without deciding the certificate.
@@ -1474,13 +1631,13 @@ impl<TYPES: NodeType> Leaf<TYPES> {
                     || (self.view_number() > parent_cert.data.decide_by && decided_upgrade_certificate_read.is_none()),
                        "The new leaf is missing an upgrade certificate that was present in its parent, and should still be live."
                 );
-            }
+            },
             // If we both have a certificate, they should be identical.
             // Technically, this prevents us from initiating a new upgrade in the view immediately following an upgrade.
             // I think this is a fairly lax restriction.
             (Some(cert), Some(parent_cert)) => {
                 ensure!(cert == parent_cert, "The new leaf does not extend the parent leaf, because it has attached a different upgrade certificate.");
-            }
+            },
         }
 
         // This check should be added once we sort out the genesis leaf/justify_qc issue.
@@ -1638,13 +1795,14 @@ pub mod null_block {
     use vbs::version::StaticVersionType;
 
     use crate::{
+        data::VidCommitment,
         traits::{
             block_contents::BuilderFee,
             node_implementation::{NodeType, Versions},
             signature_key::BuilderSignatureKey,
             BlockPayload,
         },
-        vid::{advz_scheme, VidCommitment},
+        vid::advz::advz_scheme,
     };
 
     /// The commitment for a null block payload.
@@ -1660,7 +1818,7 @@ pub mod null_block {
         let vid_result = advz_scheme(num_storage_nodes).commit_only(Vec::new());
 
         match vid_result {
-            Ok(r) => Some(r),
+            Ok(r) => Some(VidCommitment::V0(r)),
             Err(_) => None,
         }
     }
@@ -1668,7 +1826,6 @@ pub mod null_block {
     /// Builder fee data for a null block payload
     #[must_use]
     pub fn builder_fee<TYPES: NodeType, V: Versions>(
-        num_storage_nodes: usize,
         version: vbs::version::Version,
         view_number: u64,
     ) -> Option<BuilderFee<TYPES>> {
@@ -1697,12 +1854,8 @@ pub mod null_block {
             let (_null_block, null_block_metadata) =
                 <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
 
-            match TYPES::BuilderSignatureKey::sign_fee(
-                &priv_key,
-                FEE_AMOUNT,
-                &null_block_metadata,
-                &commitment::<V>(num_storage_nodes)?,
-            ) {
+            match TYPES::BuilderSignatureKey::sign_fee(&priv_key, FEE_AMOUNT, &null_block_metadata)
+            {
                 Ok(sig) => Some(BuilderFee {
                     fee_amount: FEE_AMOUNT,
                     fee_account: pub_key,

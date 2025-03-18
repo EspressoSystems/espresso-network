@@ -26,22 +26,22 @@ use hotshot::{
 use hotshot_builder_api::{
     v0_1::{
         self,
-        block_info::{AvailableBlockData, AvailableBlockHeaderInput, AvailableBlockInfo},
+        block_info::{AvailableBlockData, AvailableBlockInfo},
         builder::{BuildError, Error, Options},
     },
+    v0_2::block_info::AvailableBlockHeaderInputV1,
     v0_99,
 };
-use hotshot_example_types::node_types::TestVersions;
 use hotshot_types::{
     bundle::Bundle,
     constants::{LEGACY_BUILDER_MODULE, MARKETPLACE_BUILDER_MODULE},
+    data::VidCommitment,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
-        node_implementation::{NodeType, Versions},
+        node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },
     utils::BuilderCommitment,
-    vid::VidCommitment,
 };
 use lru::LruCache;
 use tide_disco::{method::ReadState, App, Url};
@@ -247,16 +247,8 @@ where
             return Ok(vec![]);
         }
 
-        // Let new VID scheme ships with Epochs upgrade
-        let version = <TestVersions as Versions>::Epochs::VERSION;
-        let block_entry = build_block::<TYPES, TestVersions>(
-            transactions,
-            self.num_nodes.clone(),
-            self.pub_key.clone(),
-            self.priv_key.clone(),
-            version,
-        )
-        .await;
+        let block_entry =
+            build_block::<TYPES>(transactions, self.pub_key.clone(), self.priv_key.clone()).await;
 
         let metadata = block_entry.metadata.clone();
 
@@ -320,7 +312,7 @@ where
         _view_number: u64,
         _sender: TYPES::SignatureKey,
         _signature: &<TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInput<TYPES>, BuildError> {
+    ) -> Result<AvailableBlockHeaderInputV1<TYPES>, BuildError> {
         if self.should_fail_claims.load(Ordering::Relaxed) {
             return Err(BuildError::Missing);
         }
@@ -390,7 +382,7 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                 match stream.next().await {
                     None => {
                         break;
-                    }
+                    },
                     Some(evt) => match evt.event {
                         EventType::ViewFinished { view_number } => {
                             if let Some(change) = self.changes.remove(&view_number) {
@@ -400,14 +392,14 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                                         should_build_blocks = false;
                                         self.transactions.write().await.clear();
                                         self.blocks.write().await.clear();
-                                    }
+                                    },
                                     BuilderChange::FailClaims(value) => {
                                         self.should_fail_claims.store(value, Ordering::Relaxed);
-                                    }
+                                    },
                                 }
                                 let _ = self.change_sender.broadcast(change).await;
                             }
-                        }
+                        },
                         EventType::Decide { leaf_chain, .. } if should_build_blocks => {
                             let mut queue = self.transactions.write().await;
                             for leaf_info in leaf_chain.iter() {
@@ -421,7 +413,7 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                                 }
                             }
                             self.blocks.write().await.clear();
-                        }
+                        },
                         EventType::DaProposal { proposal, .. } if should_build_blocks => {
                             let payload = TYPES::BlockPayload::from_bytes(
                                 &proposal.data.encoded_transactions,
@@ -437,7 +429,7 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                                     txn.claimed = Some(now);
                                 }
                             }
-                        }
+                        },
                         EventType::Transactions { transactions } if should_build_blocks => {
                             let mut queue = self.transactions.write().await;
                             for transaction in transactions {
@@ -451,8 +443,8 @@ impl<TYPES: NodeType> BuilderTask<TYPES> for SimpleBuilderTask<TYPES> {
                                     );
                                 }
                             }
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     },
                 }
             }

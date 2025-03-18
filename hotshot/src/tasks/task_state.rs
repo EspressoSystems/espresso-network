@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{atomic::AtomicBool, Arc},
+    time::Instant,
 };
 
 use async_trait::async_trait;
@@ -51,7 +52,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
             view: handle.cur_view().await,
             delay: handle.hotshot.config.data_request_delay,
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
             id: handle.hotshot.id,
@@ -72,7 +73,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             cur_view: handle.cur_view().await,
             cur_epoch: handle.cur_epoch().await,
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             vote_collectors: BTreeMap::default(),
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
@@ -122,7 +123,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             cur_view: handle.cur_view().await,
             cur_epoch: handle.cur_epoch().await,
             network: Arc::clone(&handle.hotshot.network),
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
             id: handle.hotshot.id,
@@ -140,7 +141,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
         Self {
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             network: Arc::clone(&handle.hotshot.network),
             cur_view: handle.cur_view().await,
             cur_epoch: handle.cur_epoch().await,
@@ -165,7 +166,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             cur_view,
             next_view: cur_view,
             cur_epoch: handle.cur_epoch().await,
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
             num_timeouts_tracked: 0,
@@ -192,7 +193,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             consensus: OuterConsensus::new(handle.hotshot.consensus()),
             cur_view: handle.cur_view().await,
             cur_epoch: handle.cur_epoch().await,
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
             instance_state: handle.hotshot.instance_state(),
@@ -237,13 +238,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             latest_voted_view: handle.cur_view().await,
             vote_dependencies: BTreeMap::new(),
             network: Arc::clone(&handle.hotshot.network),
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership: handle.hotshot.membership_coordinator.clone(),
             drb_computation: None,
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             id: handle.hotshot.id,
             storage: Arc::clone(&handle.storage),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
+            epoch_upgrade_block_height: handle.hotshot.config.epoch_start_block,
+            staged_epoch_upgrade_certificate: None,
             consensus_metrics,
         }
     }
@@ -262,7 +265,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             proposal_dependencies: BTreeMap::new(),
             consensus: OuterConsensus::new(consensus),
             instance_state: handle.hotshot.instance_state(),
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
             storage: Arc::clone(&handle.storage),
@@ -289,7 +292,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             consensus: OuterConsensus::new(consensus),
             cur_view: handle.cur_view().await,
             cur_epoch: handle.cur_epoch().await,
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership: handle.hotshot.membership_coordinator.clone(),
             timeout: handle.hotshot.config.next_view_timeout,
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             storage: Arc::clone(&handle.storage),
@@ -313,7 +316,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             private_key: handle.private_key().clone(),
             instance_state: handle.hotshot.instance_state(),
             network: Arc::clone(&handle.hotshot.network),
-            membership: Arc::clone(&handle.hotshot.memberships),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             vote_collectors: BTreeMap::default(),
             next_epoch_vote_collectors: BTreeMap::default(),
             timeout_vote_collectors: BTreeMap::default(),
@@ -327,6 +330,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
+            view_start_time: Instant::now(),
         }
     }
 }

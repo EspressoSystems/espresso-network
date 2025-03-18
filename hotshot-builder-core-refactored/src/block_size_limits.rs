@@ -1,6 +1,7 @@
+use std::sync::atomic::Ordering;
+
 use atomic::Atomic;
 use coarsetime::{Duration, Instant};
-use std::sync::atomic::Ordering;
 
 #[derive(Debug, Clone, Copy, bytemuck::NoUninit)]
 #[repr(C)]

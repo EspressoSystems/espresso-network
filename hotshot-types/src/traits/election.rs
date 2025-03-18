@@ -7,18 +7,15 @@
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 use std::{collections::BTreeSet, fmt::Debug, num::NonZeroU64};
 
-use async_trait::async_trait;
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
-use crate::{traits::signature_key::SignatureKey, PeerConfig};
+use crate::{drb::DrbResult, PeerConfig};
 
-#[async_trait]
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
-
     /// Create a committee
     fn new(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
@@ -28,16 +25,10 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     ) -> Self;
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES::SignatureKey>>;
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn da_stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES::SignatureKey>>;
 
     /// Get all participants in the committee for a specific view for a specific epoch
     fn committee_members(
@@ -66,7 +57,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
+    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
 
     /// Get the DA stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
@@ -74,7 +65,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>;
+    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
 
     /// See if a node has stake in the committee in a specific epoch
     fn has_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<TYPES::Epoch>) -> bool;
@@ -132,24 +123,44 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Returns the threshold required to upgrade the network protocol
     fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> NonZeroU64;
 
+    /// Returns if the stake table is available for the current Epoch
+    fn has_epoch(&self, epoch: TYPES::Epoch) -> bool;
+
+    /// Gets the validated block header and epoch number of the epoch root
+    /// at the given block height
+    fn get_epoch_root_and_drb(
+        &self,
+        _block_height: u64,
+        _epoch_height: u64,
+        _epoch: TYPES::Epoch,
+    ) -> impl std::future::Future<Output = anyhow::Result<(TYPES::BlockHeader, DrbResult)>> + Send
+    {
+        async {
+            anyhow::bail!("Not implemented");
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     /// Handles notifications that a new epoch root has been created
     /// Is called under a read lock to the Membership. Return a callback
     /// with Some to have that callback invoked under a write lock.
     ///
     /// #3967 REVIEW NOTE: this is only called if epoch is Some. Is there any reason to do otherwise?
-    async fn add_epoch_root(
+    fn add_epoch_root(
         &self,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        None
+    ) -> impl std::future::Future<Output = Option<Box<dyn FnOnce(&mut Self) + Send>>> + Send {
+        async { None }
     }
 
-    #[allow(clippy::type_complexity)]
-    /// Called after add_epoch_root runs and any callback has been invoked.
-    /// Causes a read lock to be reacquired for this functionality.
-    async fn sync_l1(&self) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        None
-    }
+    /// Called to notify the Membership when a new DRB result has been calculated.
+    /// Observes the same semantics as add_epoch_root
+    fn add_drb_result(&mut self, _epoch: TYPES::Epoch, _drb_result: DrbResult);
+
+    /// Called to notify the Membership that Epochs are enabled.
+    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
+    /// when this is called. The value of initial_drb_result should be used for DRB
+    /// calculations for epochs (epoch+1) and earlier.
+    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult);
 }

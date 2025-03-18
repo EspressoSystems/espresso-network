@@ -12,6 +12,11 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
+
 use hotshot_types::traits::metrics;
 use itertools::Itertools;
 use prometheus::{
@@ -19,8 +24,6 @@ use prometheus::{
     Encoder, HistogramVec, Opts, Registry, TextEncoder,
 };
 use snafu::Snafu;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Snafu)]
 pub enum MetricsError {
@@ -444,10 +447,11 @@ impl metrics::MetricsFamily<()> for TextFamily {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::testing::setup_test;
     use metrics::Metrics;
     use tide_disco::metrics::Metrics as _;
+
+    use super::*;
+    use crate::testing::setup_test;
 
     #[test]
     fn test_prometheus_metrics() {

@@ -11,6 +11,31 @@
 // see <https://www.gnu.org/licenses/>.
 
 #![cfg(feature = "sql-data-source")]
+use std::{cmp::min, fmt::Debug, str::FromStr, time::Duration};
+
+use anyhow::Context;
+use async_trait::async_trait;
+use chrono::Utc;
+use committable::Committable;
+#[cfg(not(feature = "embedded-db"))]
+use futures::future::FutureExt;
+use hotshot_types::{
+    data::{Leaf, Leaf2, VidShare},
+    simple_certificate::{QuorumCertificate, QuorumCertificate2},
+    traits::{metrics::Metrics, node_implementation::NodeType},
+    vid::advz::ADVZShare,
+};
+use itertools::Itertools;
+use log::LevelFilter;
+#[cfg(not(feature = "embedded-db"))]
+use sqlx::postgres::{PgConnectOptions, PgSslMode};
+#[cfg(feature = "embedded-db")]
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{
+    pool::{Pool, PoolOptions},
+    ConnectOptions, Row,
+};
+
 use crate::{
     data_source::{
         storage::pruning::{PruneStorage, PrunerCfg, PrunerConfig},
@@ -21,31 +46,6 @@ use crate::{
     status::HasMetrics,
     QueryError, QueryResult,
 };
-use anyhow::Context;
-use async_trait::async_trait;
-use chrono::Utc;
-use committable::Committable;
-use hotshot_types::{
-    data::{Leaf, Leaf2},
-    simple_certificate::{QuorumCertificate, QuorumCertificate2},
-    traits::{metrics::Metrics, node_implementation::NodeType},
-};
-
-use itertools::Itertools;
-use log::LevelFilter;
-
-#[cfg(not(feature = "embedded-db"))]
-use futures::future::FutureExt;
-use serde_json::Value;
-#[cfg(not(feature = "embedded-db"))]
-use sqlx::postgres::{PgConnectOptions, PgSslMode};
-#[cfg(feature = "embedded-db")]
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{
-    pool::{Pool, PoolOptions},
-    ConnectOptions, Row,
-};
-use std::{cmp::min, fmt::Debug, str::FromStr, time::Duration};
 pub extern crate sqlx;
 pub use sqlx::{Database, Sqlite};
 
@@ -55,10 +55,6 @@ mod queries;
 mod transaction;
 
 pub use anyhow::Error;
-// This needs to be reexported so that we can reference it by absolute path relative to this crate
-// in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
-// crate which doesn't have `include_dir` as a dependency.
-pub use crate::include_migrations;
 pub use db::*;
 pub use include_dir::include_dir;
 pub use queries::QueryBuilder;
@@ -66,6 +62,10 @@ pub use refinery::Migration;
 pub use transaction::*;
 
 use self::{migrate::Migrator, transaction::PoolMetrics};
+// This needs to be reexported so that we can reference it by absolute path relative to this crate
+// in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
+// crate which doesn't have `include_dir` as a dependency.
+pub use crate::include_migrations;
 
 /// Embed migrations from the given directory into the current binary for PostgreSQL or SQLite.
 ///
@@ -577,11 +577,11 @@ impl SqlStorage {
             match runner.run_async(&mut Migrator::from(&mut conn)).await {
                 Ok(report) => {
                     tracing::info!("ran DB migrations: {report:?}");
-                }
+                },
                 Err(err) => {
                     tracing::error!("DB migrations failed: {:?}", err.report());
                     Err(err)?;
-                }
+                },
             }
         }
 
@@ -709,7 +709,7 @@ impl PruneStorage for SqlStorage {
                 };
 
                 height
-            }
+            },
         };
 
         // Prune data exceeding target retention in batches
@@ -735,6 +735,13 @@ impl PruneStorage for SqlStorage {
                 pruner.pruned_height = Some(height);
                 return Ok(Some(height));
             }
+        }
+
+        #[cfg(feature = "embedded-db")]
+        {
+            let mut conn = self.pool().acquire().await?;
+            query("VACUUM").execute(conn.as_mut()).await?;
+            conn.close().await?;
         }
 
         // If threshold is set, prune data exceeding minimum retention in batches
@@ -771,6 +778,13 @@ impl PruneStorage for SqlStorage {
                             message: format!("failed to commit {e}"),
                         })?;
 
+                        #[cfg(feature = "embedded-db")]
+                        {
+                            let mut conn = self.pool().acquire().await?;
+                            query("VACUUM").execute(conn.as_mut()).await?;
+                            conn.close().await?;
+                        }
+
                         pruner.pruned_height = Some(height);
 
                         return Ok(Some(height));
@@ -802,15 +816,14 @@ impl VersionedDataSource for SqlStorage {
     }
 }
 
-struct Leaf2Row {
-    height: i64,
-    hash: String,
-    block_hash: String,
-    leaf2: Value,
-    qc2: Value,
+#[async_trait]
+pub trait MigrateTypes<Types: NodeType> {
+    async fn migrate_types(&self) -> anyhow::Result<()>;
 }
-impl SqlStorage {
-    pub async fn migrate_types<Types: NodeType>(&self) -> anyhow::Result<()> {
+
+#[async_trait]
+impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
+    async fn migrate_types(&self) -> anyhow::Result<()> {
         let mut offset = 0;
         let limit = 10000;
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
@@ -818,14 +831,17 @@ impl SqlStorage {
         })?;
 
         let (is_migration_completed,) =
-            query_as::<(bool,)>("SELECT completed from leaf_migration LIMIT 1 ")
+            query_as::<(bool,)>("SELECT completed from types_migration LIMIT 1 ")
                 .fetch_one(tx.as_mut())
                 .await?;
 
         if is_migration_completed {
-            tracing::info!("leaf1 to leaf2 migration already completed");
+            tracing::info!("types migration already completed");
             return Ok(());
         }
+
+        tracing::warn!("migrating query service types storage");
+
         loop {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
@@ -833,7 +849,7 @@ impl SqlStorage {
 
             let rows = QueryBuilder::default()
                 .query(&format!(
-                    "SELECT leaf, qc FROM leaf ORDER BY height LIMIT {} OFFSET {}",
+                    "SELECT leaf, qc, common as vid_common, share as vid_share FROM leaf INNER JOIN vid on leaf.height = vid.height ORDER BY leaf.height LIMIT {} OFFSET {}",
                     limit, offset
                 ))
                 .fetch_all(tx.as_mut())
@@ -846,6 +862,7 @@ impl SqlStorage {
             }
 
             let mut leaf_rows = Vec::new();
+            let mut vid_rows = Vec::new();
 
             for row in rows.iter() {
                 let leaf1 = row.try_get("leaf")?;
@@ -862,24 +879,54 @@ impl SqlStorage {
                     serde_json::to_value(leaf2.clone()).context("failed to serialize leaf2")?;
                 let qc2_json = serde_json::to_value(qc2).context("failed to serialize QC2")?;
 
-                leaf_rows.push(Leaf2Row {
-                    height: leaf2.height() as i64,
-                    hash: commit.to_string(),
-                    block_hash: leaf2.block_header().commit().to_string(),
-                    leaf2: leaf2_json,
-                    qc2: qc2_json,
-                })
+                // TODO (abdul): revisit after V1 VID has common field
+                let vid_common_bytes: Vec<u8> = row.try_get("vid_common")?;
+                let vid_share_bytes: Vec<u8> = row.try_get("vid_share")?;
+
+                let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
+                    .context("failed to serialize vid_share")?;
+
+                let new_vid_share_bytes = bincode::serialize(&VidShare::V0(vid_share))
+                    .context("failed to serialize vid_share")?;
+
+                vid_rows.push((leaf2.height() as i64, vid_common_bytes, new_vid_share_bytes));
+                leaf_rows.push((
+                    leaf2.height() as i64,
+                    commit.to_string(),
+                    leaf2.block_header().commit().to_string(),
+                    leaf2_json,
+                    qc2_json,
+                ));
             }
 
+            // migrate leaf2
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO leaf2 (height, hash, block_hash, leaf, qc) ");
 
             query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
-                b.push_bind(row.height)
-                    .push_bind(row.hash)
-                    .push_bind(row.block_hash)
-                    .push_bind(row.leaf2)
-                    .push_bind(row.qc2);
+                b.push_bind(row.0)
+                    .push_bind(row.1)
+                    .push_bind(row.2)
+                    .push_bind(row.3)
+                    .push_bind(row.4);
+            });
+
+            let query = query_builder.build();
+
+            let mut tx = self.write().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+
+            query.execute(tx.as_mut()).await?;
+
+            tx.commit().await?;
+            tracing::warn!("inserted {} rows into leaf2 table", offset);
+            // migrate vid
+            let mut query_builder: sqlx::QueryBuilder<Db> =
+                sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
+
+            query_builder.push_values(vid_rows.into_iter(), |mut b, row| {
+                b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
             });
 
             let query = query_builder.build();
@@ -892,6 +939,8 @@ impl SqlStorage {
 
             tx.commit().await?;
 
+            tracing::warn!("inserted {} rows into vid2 table", offset);
+
             if rows.len() < limit {
                 break;
             }
@@ -903,8 +952,17 @@ impl SqlStorage {
             message: err.to_string(),
         })?;
 
-        tx.upsert("leaf_migration", ["completed"], ["id"], [(true,)])
-            .await?;
+        tracing::warn!("query service types migration is completed!");
+
+        tx.upsert(
+            "types_migration",
+            ["id", "completed"],
+            ["id"],
+            [(0_i64, true)],
+        )
+        .await?;
+
+        tracing::info!("updated types_migration table");
 
         tx.commit().await?;
         Ok(())
@@ -915,21 +973,19 @@ impl SqlStorage {
 #[cfg(all(any(test, feature = "testing"), not(target_os = "windows")))]
 pub mod testing {
     #![allow(unused_imports)]
-    use refinery::Migration;
     use std::{
         env,
         process::{Command, Stdio},
         str::{self, FromStr},
         time::Duration,
     };
-    use tokio::net::TcpStream;
-    use tokio::time::timeout;
 
     use portpicker::pick_unused_port;
+    use refinery::Migration;
+    use tokio::{net::TcpStream, time::timeout};
 
     use super::Config;
-    use crate::availability::query_data::QueryableHeader;
-    use crate::testing::sleep;
+    use crate::{availability::query_data::QueryableHeader, testing::sleep};
     #[derive(Debug)]
     pub struct TmpDb {
         #[cfg(not(feature = "embedded-db"))]
@@ -1217,25 +1273,28 @@ pub mod testing {
 // These tests run the `postgres` Docker image, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
+    use std::time::Duration;
+
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         node_types::TestVersions,
         state_types::{TestInstanceState, TestValidatedState},
     };
-    use hotshot_types::traits::{node_implementation::Versions, EncodeBytes};
     use hotshot_types::{
-        data::{QuorumProposal, ViewNumber},
+        data::{vid_commitment, QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
         traits::{
-            block_contents::{vid_commitment, BlockHeader},
-            node_implementation::ConsensusTime,
+            block_contents::BlockHeader,
+            node_implementation::{ConsensusTime, Versions},
+            EncodeBytes,
         },
+        vid::advz::advz_scheme,
     };
     use jf_merkle_tree::{
         prelude::UniversalMerkleTree, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
     };
-    use std::time::Duration;
+    use jf_vid::VidScheme;
     use tokio::time::sleep;
     use vbs::version::StaticVersionType;
 
@@ -1624,15 +1683,15 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_leaf_migration() {
+    async fn test_types_migration() {
         setup_test();
 
-        let num_leaves = 200;
+        let num_rows = 200;
         let db = TmpDb::init().await;
 
         let storage = SqlStorage::connect(db.config()).await.unwrap();
 
-        for i in 0..num_leaves {
+        for i in 0..num_rows {
             let view = ViewNumber::new(i);
             let validated_state = TestValidatedState::default();
             let instance_state = TestInstanceState::default();
@@ -1650,6 +1709,7 @@ mod test {
 
             let payload_commitment = vid_commitment::<MockVersions>(
                 &payload_bytes,
+                &metadata.encode(),
                 4,
                 <MockVersions as Versions>::Base::VERSION,
             );
@@ -1685,7 +1745,7 @@ mod test {
 
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<MockVersions>(
-                payload,
+                payload.clone(),
                 4,
                 <MockVersions as Versions>::Base::VERSION,
             )
@@ -1735,19 +1795,42 @@ mod test {
             )
             .await
             .unwrap();
+
+            let mut vid = advz_scheme(2);
+            let disperse = vid.disperse(payload.encode()).unwrap();
+            let common = Some(disperse.common);
+            let share = disperse.shares[0].clone();
+
+            let common_bytes = bincode::serialize(&common).unwrap();
+            let share_bytes = bincode::serialize(&share).unwrap();
+
+            tx.upsert(
+                "vid",
+                ["height", "common", "share"],
+                ["height"],
+                [(height, common_bytes, share_bytes)],
+            )
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
         }
 
-        storage
-            .migrate_types::<MockTypes>()
+        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage)
             .await
             .expect("failed to migrate");
+
         let mut tx = storage.read().await.unwrap();
-        let (count,) = query_as::<(i64,)>("SELECT COUNT(*) from leaf2")
+        let (leaf_count,) = query_as::<(i64,)>("SELECT COUNT(*) from leaf2")
             .fetch_one(tx.as_mut())
             .await
             .unwrap();
 
-        assert_eq!(count as u64, num_leaves, "not all leaves migrated");
+        let (vid_count,) = query_as::<(i64,)>("SELECT COUNT(*) from vid2")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+
+        assert_eq!(leaf_count as u64, num_rows, "not all leaves migrated");
+        assert_eq!(vid_count as u64, num_rows, "not all vid migrated");
     }
 }

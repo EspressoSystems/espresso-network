@@ -10,10 +10,11 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use crate::{types::HeightIndexed, Header, Metadata, Payload, Transaction, VidCommon, VidShare};
+use std::fmt::Debug;
+
 use committable::{Commitment, Committable};
 use hotshot_types::{
-    data::{Leaf, Leaf2},
+    data::{Leaf, Leaf2, VidCommitment, VidShare},
     simple_certificate::QuorumCertificate2,
     traits::{
         self,
@@ -21,12 +22,13 @@ use hotshot_types::{
         node_implementation::{NodeType, Versions},
         EncodeBytes,
     },
-    vid::{advz_scheme, VidCommitment},
+    vid::advz::advz_scheme,
 };
 use jf_vid::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
-use std::fmt::Debug;
+
+use crate::{types::HeightIndexed, Header, Metadata, Payload, Transaction, VidCommon};
 
 pub type LeafHash<Types> = Commitment<Leaf2<Types>>;
 pub type QcHash<Types> = Commitment<QuorumCertificate2<Types>>;
@@ -482,7 +484,7 @@ impl<Types: NodeType> VidCommonQueryData<Types> {
             .disperse(bytes)
             .unwrap();
 
-        Self::new(leaf.block_header().clone(), disperse.common)
+        Self::new(leaf.block_header().clone(), VidCommon::V0(disperse.common))
     }
 
     pub fn block_hash(&self) -> BlockHash<Types> {

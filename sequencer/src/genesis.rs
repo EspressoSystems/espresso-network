@@ -134,9 +134,8 @@ impl Genesis {
 
 mod version_ser {
 
-    use vbs::version::Version;
-
     use serde::{de, Deserialize, Deserializer, Serializer};
+    use vbs::version::Version;
 
     pub fn serialize<S>(ver: &Version, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -256,12 +255,12 @@ mod upgrade_ser {
                             return Err(de::Error::custom(
                                 "both view and time mode parameters are set",
                             ))
-                        }
+                        },
                         (None, None) => {
                             return Err(de::Error::custom(
                                 "no view or time mode parameters provided",
                             ))
-                        }
+                        },
                         (None, Some(v)) => {
                             if v.start_proposing_view > v.stop_proposing_view {
                                 return Err(de::Error::custom(
@@ -276,7 +275,7 @@ mod upgrade_ser {
                                     upgrade_type: fields.upgrade_type,
                                 },
                             );
-                        }
+                        },
                         (Some(t), None) => {
                             if t.start_proposing_time.unix_timestamp()
                                 > t.stop_proposing_time.unix_timestamp()
@@ -293,7 +292,7 @@ mod upgrade_ser {
                                     upgrade_type: fields.upgrade_type.clone(),
                                 },
                             );
-                        }
+                        },
                     }
                 }
 
@@ -323,25 +322,25 @@ impl Genesis {
 
 #[cfg(test)]
 mod test {
-    use ethers::middleware::Middleware;
-    use ethers::prelude::*;
-    use ethers::signers::Signer;
-    use ethers::utils::{Anvil, AnvilInstance};
-    use sequencer_utils::deployer::test_helpers::{
-        deploy_fee_contract, deploy_fee_contract_as_proxy,
-    };
     use std::sync::Arc;
 
     use anyhow::Result;
-
     use contract_bindings_ethers::fee_contract::FeeContract;
     use espresso_types::{
         L1BlockInfo, TimeBasedUpgrade, Timestamp, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
-
-    use sequencer_utils::deployer;
-    use sequencer_utils::ser::FromStringOrInteger;
-    use sequencer_utils::test_utils::setup_test;
+    use ethers::{
+        middleware::Middleware,
+        prelude::*,
+        signers::Signer,
+        utils::{Anvil, AnvilInstance},
+    };
+    use sequencer_utils::{
+        deployer,
+        deployer::test_helpers::{deploy_fee_contract, deploy_fee_contract_as_proxy},
+        ser::FromStringOrInteger,
+        test_utils::setup_test,
+    };
     use toml::toml;
 
     use super::*;

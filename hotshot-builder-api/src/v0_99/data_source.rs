@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use hotshot_types::{bundle::Bundle, traits::node_implementation::NodeType, vid::VidCommitment};
+use hotshot_types::{bundle::Bundle, data::VidCommitment, traits::node_implementation::NodeType};
 
 use super::builder::BuildError;
 /// No changes to these types

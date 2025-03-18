@@ -1,17 +1,40 @@
+<<<<<<< HEAD
 use crate::common::{test_stake_table_update, TestConfig};
 use anyhow::{Context, Result};
+||||||| bac363751
+use crate::common::TestConfig;
+use anyhow::Result;
+=======
+use std::time::Instant;
+
+use anyhow::Result;
+>>>>>>> origin/main
 use futures::StreamExt;
+<<<<<<< HEAD
 use sequencer_utils::test_utils::setup_test;
 use std::time::Instant;
+||||||| bac363751
+use std::time::Instant;
+=======
+
+use crate::common::{NativeDemo, TestConfig};
+>>>>>>> origin/main
 
 /// We allow for no change in state across this many consecutive iterations.
 const MAX_STATE_NOT_INCREMENTING: u8 = 1;
 /// We allow for no new transactions across this many consecutive iterations.
 const MAX_TXNS_NOT_INCREMENTING: u8 = 5;
 
+<<<<<<< HEAD
 #[tokio::test(flavor = "multi_thread")]
 async fn test_smoke() -> Result<()> {
     setup_test();
+||||||| bac363751
+#[tokio::test(flavor = "multi_thread")]
+async fn test_smoke() -> Result<()> {
+=======
+pub async fn assert_native_demo_works() -> Result<()> {
+>>>>>>> origin/main
     let start = Instant::now();
     dotenvy::dotenv()?;
 
@@ -21,7 +44,7 @@ async fn test_smoke() -> Result<()> {
     let _ = testing.readiness().await?;
 
     let initial = testing.test_state().await;
-    println!("Initial State:{}", initial);
+    println!("Initial State: {}", initial);
 
     let mut sub = testing
         .espresso
@@ -48,7 +71,9 @@ async fn test_smoke() -> Result<()> {
         }
 
         // test that we progress EXPECTED_BLOCK_HEIGHT blocks from where we started
-        if new.block_height.unwrap() >= testing.expected_block_height() + testing.initial_height {
+        if new.block_height.unwrap()
+            >= testing.expected_block_height() + initial.block_height.unwrap()
+        {
             println!("Reached {} block(s)!", testing.expected_block_height());
             if new.txn_count - initial.txn_count < 1 {
                 panic!("Did not receive transactions");
@@ -94,4 +119,10 @@ async fn test_smoke() -> Result<()> {
         test_stake_table_update(testing.sequencer_clients).await?;
     }
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_basic() -> Result<()> {
+    let _child = NativeDemo::run(None);
+    assert_native_demo_works().await
 }

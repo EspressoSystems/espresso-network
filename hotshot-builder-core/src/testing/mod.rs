@@ -1,48 +1,45 @@
-use std::{collections::VecDeque, marker::PhantomData};
+use std::{collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration};
 
-use crate::{
-    builder_state::{
-        BuilderState, DAProposalInfo, DaProposalMessage, MessageType, QuorumProposalMessage,
-    },
-    service::ReceivedTransaction,
-};
-use async_broadcast::broadcast;
-use async_broadcast::Sender as BroadcastSender;
+use async_broadcast::{broadcast, Sender as BroadcastSender};
+use async_lock::RwLock;
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::{
     traits::BlockPayload,
     types::{BLSPubKey, SignatureKey},
 };
-use hotshot_types::{
-    data::{DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
-    message::Proposal,
-    simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
-    simple_vote::QuorumData2,
-    traits::{
-        block_contents::vid_commitment,
-        node_implementation::{ConsensusTime, Versions},
-    },
-    utils::BuilderCommitment,
-};
-use vbs::version::StaticVersionType;
-
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TestTypes, TestVersions},
     state_types::{TestInstanceState, TestValidatedState},
 };
-use sha2::{Digest, Sha256};
-
-use crate::service::GlobalState;
-use async_lock::RwLock;
-use committable::{Commitment, CommitmentBoundsArkless, Committable};
+use hotshot_types::{
+    data::{
+        vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber,
+    },
+    message::Proposal,
+    simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
+    simple_vote::QuorumData2,
+    traits::{
+        node_implementation::{ConsensusTime, Versions},
+        EncodeBytes,
+    },
+    utils::BuilderCommitment,
+};
 use marketplace_builder_shared::{
     block::{BuilderStateId, ParentBlockReferences},
     testing::constants::{
         TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM, TEST_PROTOCOL_MAX_BLOCK_SIZE,
     },
 };
-use std::sync::Arc;
-use std::time::Duration;
+use sha2::{Digest, Sha256};
+use vbs::version::StaticVersionType;
+
+use crate::{
+    builder_state::{
+        BuilderState, DAProposalInfo, DaProposalMessage, MessageType, QuorumProposalMessage,
+    },
+    service::{GlobalState, ReceivedTransaction},
+};
 
 mod basic_test;
 pub mod finalization_test;
@@ -67,7 +64,7 @@ pub async fn create_builder_state<V: Versions>(
         broadcast::<Arc<ReceivedTransaction<TestTypes>>>(channel_capacity);
 
     let genesis_vid_commitment =
-        vid_commitment::<V>(&[], num_storage_nodes, <V as Versions>::Base::VERSION);
+        vid_commitment::<V>(&[], &[], num_storage_nodes, <V as Versions>::Base::VERSION);
     let genesis_builder_commitment = BuilderCommitment::from_bytes([]);
 
     // instantiate the global state
@@ -129,12 +126,13 @@ pub async fn calc_proposal_msg<V: Versions>(
     let num_transactions = transactions.len() as u64;
     let encoded_transactions = TestTransaction::encode(&transactions);
     let block_payload = TestBlockPayload { transactions };
+    let metadata = TestMetadata { num_transactions };
     let block_vid_commitment = vid_commitment::<V>(
         &encoded_transactions,
+        &metadata.encode(),
         num_storage_nodes,
         <V as Versions>::Base::VERSION,
     );
-    let metadata = TestMetadata { num_transactions };
     let block_builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
             &block_payload,
@@ -189,7 +187,7 @@ pub async fn calc_proposal_msg<V: Versions>(
                 &TestInstanceState::default(),
             )
             .await
-        }
+        },
         Some(prev_proposal) => {
             let prev_justify_qc = prev_proposal.justify_qc();
             let quorum_data = QuorumData2::<TestTypes> {
@@ -205,7 +203,7 @@ pub async fn calc_proposal_msg<V: Versions>(
                 prev_justify_qc.signatures.clone(),
                 PhantomData,
             )
-        }
+        },
     };
 
     tracing::debug!("Iteration: {} justify_qc: {:?}", round, justify_qc);

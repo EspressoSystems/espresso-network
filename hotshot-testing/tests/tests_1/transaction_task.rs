@@ -9,10 +9,7 @@ use hotshot_task_impls::{
 use hotshot_testing::helpers::build_system_handle;
 use hotshot_types::{
     data::{null_block, EpochNumber, PackedBundle, ViewNumber},
-    traits::{
-        election::Membership,
-        node_implementation::{ConsensusTime, Versions},
-    },
+    traits::node_implementation::{ConsensusTime, Versions},
 };
 use vbs::version::StaticVersionType;
 
@@ -52,12 +49,6 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
         Some(EpochNumber::new(1)),
         vec1::vec1![
             null_block::builder_fee::<TestConsecutiveLeaderTypes, TestVersions>(
-                handle
-                    .hotshot
-                    .memberships
-                    .read()
-                    .await
-                    .total_nodes(Some(EpochNumber::new(0))),
                 <TestVersions as Versions>::Base::VERSION,
                 *ViewNumber::new(4),
             )

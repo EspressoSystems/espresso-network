@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use anyhow::bail;
 use committable::{Commitment, Committable};
 use ethers::types::Address;
@@ -9,7 +11,6 @@ use hotshot_types::{
         block_contents::BlockHeader, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
-    vid::{VidCommon, VidSchemeType},
 };
 use itertools::Itertools;
 use jf_merkle_tree::{
@@ -18,10 +19,8 @@ use jf_merkle_tree::{
     LookupResult, MerkleCommitment, MerkleTreeError, MerkleTreeScheme,
     PersistentUniversalMerkleTreeScheme, UniversalMerkleTreeScheme,
 };
-use jf_vid::VidScheme;
 use num_traits::CheckedSub;
 use serde::{Deserialize, Serialize};
-use std::ops::Add;
 use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
@@ -685,7 +684,6 @@ fn validate_builder_fee(
                     &signature,
                     fee_info.amount().as_u64().unwrap(),
                     proposed_header.metadata(),
-                    &proposed_header.payload_commitment(),
                 )
                 .then_some(())
                 .ok_or(BuilderValidationError::InvalidBuilderSignature)?;
@@ -905,7 +903,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         instance: &Self::Instance,
         parent_leaf: &Leaf2,
         proposed_header: &Header,
-        vid_common: VidCommon,
+        payload_byte_len: u32,
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
@@ -927,10 +925,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         let validated_state = ValidatedTransition::new(
             validated_state,
             parent_leaf.block_header(),
-            Proposal::new(
-                proposed_header,
-                VidSchemeType::get_payload_byte_len(&vid_common),
-            ),
+            Proposal::new(proposed_header, payload_byte_len),
             view_number,
         )
         .validate()?
@@ -1065,9 +1060,9 @@ mod test {
     use ethers::types::U256;
     use hotshot::{helpers::initialize_logging, traits::BlockPayload};
     use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
-    use hotshot_types::traits::{
-        block_contents::vid_commitment, node_implementation::Versions,
-        signature_key::BuilderSignatureKey, EncodeBytes,
+    use hotshot_types::{
+        data::vid_commitment,
+        traits::{node_implementation::Versions, signature_key::BuilderSignatureKey, EncodeBytes},
     };
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
@@ -1094,6 +1089,7 @@ mod test {
 
             let payload_commitment = vid_commitment::<MockVersions>(
                 &payload_bytes,
+                &metadata.encode(),
                 1,
                 <MockVersions as Versions>::Base::VERSION,
             );
@@ -1123,7 +1119,7 @@ mod test {
                 }),
                 Header::V99(_) => {
                     panic!("You called `Header.next()` on unimplemented version (v3)")
-                }
+                },
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1135,7 +1131,6 @@ mod test {
                 &key_pair,
                 fee_info.amount().as_u64().unwrap(),
                 self.metadata(),
-                &self.payload_commitment(),
             )
             .unwrap();
 
@@ -1153,7 +1148,7 @@ mod test {
                 }),
                 Header::V99(_) => {
                     panic!("You called `Header.sign()` on unimplemented version (v3)")
-                }
+                },
             }
         }
 
@@ -1167,7 +1162,6 @@ mod test {
                 &key_pair2,
                 fee_info.amount().as_u64().unwrap(),
                 self.metadata(),
-                &self.payload_commitment(),
             )
             .unwrap();
 
@@ -1764,7 +1758,6 @@ mod test {
                 .into();
         let header = parent.block_header().clone();
         let metadata = parent.block_header().metadata();
-        let vid_commitment = parent.payload_commitment();
 
         debug!("{:?}", header.version());
 
@@ -1781,7 +1774,7 @@ mod test {
             .unwrap();
 
         // test v1 sig
-        let sig = FeeAccount::sign_fee(&key_pair, data, metadata, &vid_commitment).unwrap();
+        let sig = FeeAccount::sign_fee(&key_pair, data, metadata).unwrap();
 
         let header = match header {
             Header::V1(header) => Header::V1(v0_1::Header {

@@ -22,7 +22,7 @@ contract LightClientArbitrumTest is Test {
         lc = new LightClientArbitrum();
     }
 
-    function testCurrentBlockNumber() public {
+    function testCurrentBlockNumber() public view {
         assertNotEq(lc.currentBlockNumber(), block.number);
         assertEq(lc.currentBlockNumber(), ArbSys(address(uint160(100))).arbBlockNumber());
     }

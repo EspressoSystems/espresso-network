@@ -1,4 +1,5 @@
-use crate::jellyfish::u256_to_field;
+use std::str::FromStr;
+
 use ark_ec::{
     short_weierstrass,
     twisted_edwards::{self, Affine, TECurveConfig},
@@ -13,7 +14,7 @@ use contract_bindings_alloy::permissionedstaketable::{
     PermissionedStakeTable::NodeInfo as NodeInfoAlloy, BN254::G2Point as G2PointAlloy,
 };
 use contract_bindings_ethers::permissioned_stake_table::{self, EdOnBN254Point, NodeInfo};
-use diff_test_bn254::ParsedG2Point;
+pub use diff_test_bn254::ParsedG2Point;
 use ethers::{
     abi::AbiDecode,
     prelude::{AbiError, EthAbiCodec, EthAbiType},
@@ -26,9 +27,11 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
     traits::signature_key::SignatureKey as _,
+    PeerConfig,
 };
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+
+use crate::jellyfish::u256_to_field;
 
 // TODO: (alex) maybe move these commonly shared util to a crate
 /// convert a field element to U256, panic if field size is larger than 256 bit
@@ -212,6 +215,18 @@ impl From<NodeInfoJf> for StakeTableEntry<BLSPubKey> {
         StakeTableEntry {
             stake_key: value.stake_table_key,
             stake_amount: U256::from(1), // dummy stake amount
+        }
+    }
+}
+
+impl From<NodeInfoJf> for PeerConfig<BLSPubKey> {
+    fn from(value: NodeInfoJf) -> Self {
+        Self {
+            stake_table_entry: StakeTableEntry {
+                stake_key: value.stake_table_key,
+                stake_amount: U256::from(1), // dummy stake amount
+            },
+            state_ver_key: value.state_ver_key,
         }
     }
 }

@@ -6,6 +6,7 @@ import { PermissionedStakeTable } from "../src/PermissionedStakeTable.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { InitializedAt } from "../src/InitializedAt.sol";
 
 contract PermissionedStakeTableTest is Test {
     PermissionedStakeTable stakeTable;
@@ -58,6 +59,11 @@ contract PermissionedStakeTableTest is Test {
     // Empty array of BLS keys
     // solhint-disable-next-line no-empty-blocks
     function emptyKeys() private pure returns (BN254.G2Point[] memory keys) { }
+
+    function testDeploymentStoresBlockNumber() public {
+        setUp();
+        assertEq(stakeTable.initializedAtBlock(), block.number);
+    }
 
     function testInsert() public {
         vm.prank(owner);

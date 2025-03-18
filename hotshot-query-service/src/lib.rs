@@ -428,29 +428,30 @@ pub mod task;
 pub mod testing;
 pub mod types;
 
-pub use error::Error;
-pub use resolvable::Resolvable;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use derive_more::{Deref, From, Into};
+pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
 use hotshot_types::traits::{
     node_implementation::{NodeImplementation, NodeType, Versions},
     BlockPayload,
 };
+pub use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
+pub use resolvable::Resolvable;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use std::sync::Arc;
 use task::BackgroundTask;
 use tide_disco::{method::ReadState, App, StatusCode};
 use vbs::version::StaticVersionType;
 
-pub use hotshot_types::{
-    data::Leaf2,
-    simple_certificate::QuorumCertificate,
-    vid::{VidCommitment, VidCommon, VidShare},
-};
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub enum VidCommon {
+    V0(hotshot_types::vid::advz::ADVZCommon),
+    V1(hotshot_types::vid::avidm::AvidMCommon),
+}
 
 pub type Payload<Types> = <Types as NodeType>::BlockPayload;
 pub type Header<Types> = <Types as NodeType>::BlockHeader;
@@ -591,6 +592,23 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::{
+        ops::{Bound, RangeBounds},
+        time::Duration,
+    };
+
+    use async_lock::RwLock;
+    use async_trait::async_trait;
+    use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
+    use futures::future::FutureExt;
+    use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
+    use portpicker::pick_unused_port;
+    use surf_disco::Client;
+    use tempfile::TempDir;
+    use testing::mocks::MockBase;
+    use tide_disco::App;
+    use toml::toml;
+
     use super::*;
     use crate::{
         availability::{
@@ -606,19 +624,6 @@ mod test {
             mocks::{MockHeader, MockPayload, MockTypes},
         },
     };
-    use async_lock::RwLock;
-    use async_trait::async_trait;
-    use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
-    use futures::future::FutureExt;
-    use hotshot_types::simple_certificate::QuorumCertificate2;
-    use portpicker::pick_unused_port;
-    use std::ops::{Bound, RangeBounds};
-    use std::time::Duration;
-    use surf_disco::Client;
-    use tempfile::TempDir;
-    use testing::mocks::MockBase;
-    use tide_disco::App;
-    use toml::toml;
 
     struct CompositeState {
         store: AtomicStore,

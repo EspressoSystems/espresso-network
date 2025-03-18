@@ -1,3 +1,12 @@
+use std::{
+    cmp::{min, Ordering},
+    num::NonZeroUsize,
+    pin::Pin,
+    result::Result as StdResult,
+    sync::Arc,
+    time::Instant,
+};
+
 use alloy::{
     eips::BlockId,
     hex,
@@ -6,7 +15,7 @@ use alloy::{
     rpc::{
         client::RpcClient,
         json_rpc::{RequestPacket, ResponsePacket},
-        types::BlockTransactionsKind,
+        types::{Block, BlockTransactionsKind},
     },
     transports::{http::Http, RpcError, TransportErrorKind},
 };
@@ -28,14 +37,6 @@ use futures::{
 use hotshot_types::traits::metrics::Metrics;
 use lru::LruCache;
 use parking_lot::RwLock;
-use std::result::Result as StdResult;
-use std::{
-    cmp::{min, Ordering},
-    num::NonZeroUsize,
-    pin::Pin,
-    sync::Arc,
-    time::Instant,
-};
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard, Notify},
@@ -48,7 +49,7 @@ use url::Url;
 use super::{
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
     v0_3::StakeTables,
-    L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
+    L1BlockInfo, L1BlockInfoWithParent, L1ClientMetrics, L1State, L1UpdateTask,
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 
@@ -61,6 +62,25 @@ impl PartialOrd for L1BlockInfo {
 impl Ord for L1BlockInfo {
     fn cmp(&self, other: &Self) -> Ordering {
         self.number.cmp(&other.number)
+    }
+}
+
+impl From<&Block> for L1BlockInfo {
+    fn from(block: &Block) -> Self {
+        Self {
+            number: block.header.number,
+            timestamp: ethers::types::U256::from(block.header.timestamp),
+            hash: block.header.hash.to_ethers(),
+        }
+    }
+}
+
+impl From<&Block> for L1BlockInfoWithParent {
+    fn from(block: &Block) -> Self {
+        Self {
+            info: block.into(),
+            parent_hash: block.header.parent_hash,
+        }
     }
 }
 
@@ -312,7 +332,7 @@ impl Service<RequestPacket> for SwitchingTransport {
                     // If it's okay, log the success to the status
                     current_transport.status.write().log_success();
                     Ok(res)
-                }
+                },
                 Err(err) => {
                     // Increment the failure metric
                     if let Some(f) = self_clone
@@ -364,7 +384,7 @@ impl Service<RequestPacket> for SwitchingTransport {
                     }
 
                     Err(err)
-                }
+                },
             }
         })
     }
@@ -525,17 +545,15 @@ impl L1Client {
                                     .await
                                     .ok();
                             }
-                            if finalized > state.snapshot.finalized {
-                                tracing::info!(
-                                    ?finalized,
-                                    old_finalized = ?state.snapshot.finalized,
-                                    "L1 finalized updated",
-                                );
-                                if let Some(finalized) = finalized {
-                                    metrics.finalized.set(finalized.number as usize);
-                                }
-                                state.snapshot.finalized = finalized;
-                                if let Some(finalized) = finalized {
+                            if let Some(finalized) = finalized {
+                                if Some(finalized.info) > state.snapshot.finalized {
+                                    tracing::info!(
+                                        ?finalized,
+                                        old_finalized = ?state.snapshot.finalized,
+                                        "L1 finalized updated",
+                                    );
+                                    metrics.finalized.set(finalized.info.number as usize);
+                                    state.snapshot.finalized = Some(finalized.info);
                                     sender
                                         .broadcast_direct(L1Event::NewFinalized { finalized })
                                         .await
@@ -635,12 +653,11 @@ impl L1Client {
                 let L1Event::NewFinalized { finalized } = event else {
                     continue;
                 };
-                if finalized.number >= number {
+                let mut state = self.state.lock().await;
+                state.put_finalized(finalized);
+                if finalized.info.number >= number {
                     tracing::info!(number, ?finalized, "got finalized L1 block");
-                    return self
-                        .get_finalized_block(self.state.lock().await, number)
-                        .await
-                        .1;
+                    return self.get_finalized_block(state, number).await.1;
                 }
                 tracing::debug!(number, ?finalized, "waiting for finalized L1 block");
             }
@@ -680,9 +697,9 @@ impl L1Client {
                 let L1Event::NewFinalized { finalized } = event else {
                     continue;
                 };
-                if finalized.timestamp >= timestamp.to_ethers() {
+                if finalized.info.timestamp >= timestamp.to_ethers() {
                     tracing::info!(%timestamp, ?finalized, "got finalized block");
-                    break 'outer (self.state.lock().await, finalized);
+                    break 'outer (self.state.lock().await, finalized.info);
                 }
                 tracing::debug!(%timestamp, ?finalized, "waiting for L1 finalized block");
             }
@@ -709,52 +726,85 @@ impl L1Client {
         mut state: MutexGuard<'a, L1State>,
         number: u64,
     ) -> (MutexGuard<'a, L1State>, L1BlockInfo) {
-        // Try to get the block from the finalized block cache.
+        let latest_finalized = state
+            .snapshot
+            .finalized
+            .expect("get_finalized_block called before any blocks are finalized");
         assert!(
-            state.snapshot.finalized.is_some()
-                && number <= state.snapshot.finalized.unwrap().number,
+            number <= latest_finalized.number,
             "requesting a finalized block {number} that isn't finalized; snapshot: {:?}",
             state.snapshot,
         );
-        if let Some(block) = state.finalized.get(&number) {
-            let block = *block;
-            return (state, block);
-        }
-        drop(state);
 
-        // If not in cache, fetch the block from the L1 provider.
-        let block = loop {
-            let block = match self
-                .provider
-                .get_block(BlockId::number(number), BlockTransactionsKind::Hashes)
-                .await
-            {
-                Ok(Some(block)) => block,
-                Ok(None) => {
-                    tracing::warn!(
-                        number,
-                        "provider error: finalized L1 block should always be available"
-                    );
-                    self.retry_delay().await;
-                    continue;
-                }
-                Err(err) => {
-                    tracing::warn!(number, "failed to get finalized L1 block: {err:#}");
-                    self.retry_delay().await;
-                    continue;
-                }
-            };
-            break L1BlockInfo {
-                number: block.header.number,
-                hash: block.header.hash.to_ethers(),
-                timestamp: ethers::types::U256::from(block.header.timestamp),
-            };
+        // To get this block and be sure we are getting the correct finalized block, we first need
+        // to find an equal or later block so we can find the expected hash of this block. If we
+        // were to just look up the block by number, there could be problems if we failed over to a
+        // different (lagging) L1 provider, which has yet to finalize this block and reports a
+        // different block with the same number.
+        let mut successor_number = number;
+        let mut successor = loop {
+            if let Some(block) = state.finalized.get(&successor_number) {
+                break *block;
+            }
+            successor_number += 1;
+            if successor_number > latest_finalized.number {
+                // We don't have any cached finalized block after the requested one; fetch the
+                // current finalized block from the network.
+                // Don't hold state lock while fetching from network.
+                drop(state);
+                let block = loop {
+                    match get_finalized_block(&self.provider).await {
+                        Ok(Some(block)) => {
+                            break block;
+                        },
+                        Ok(None) => {
+                            tracing::warn!("no finalized block even though finalized snapshot is Some; this can be caused by an L1 client failover");
+                            self.retry_delay().await;
+                        },
+                        Err(err) => {
+                            tracing::warn!("Error getting finalized block: {err:#}");
+                            self.retry_delay().await;
+                        },
+                    }
+                };
+                state = self.state.lock().await;
+                state.put_finalized(block);
+                break block;
+            }
         };
 
-        // After fetching, add the block to the cache.
-        let mut state = self.state.lock().await;
-        state.put_finalized(block);
-        (state, block)
+        // Work backwards from the known finalized successor, fetching blocks by parent hash so we
+        // know we are getting the correct block.
+        while successor.info.number > number {
+            drop(state);
+            successor = loop {
+                let block = match self
+                    .provider
+                    .get_block(successor.parent_hash.into(), BlockTransactionsKind::Hashes)
+                    .await
+                {
+                    Ok(Some(block)) => block,
+                    Ok(None) => {
+                        tracing::warn!(
+                            number,
+                            "provider error: finalized L1 block should always be available"
+                        );
+                        self.retry_delay().await;
+                        continue;
+                    },
+                    Err(err) => {
+                        tracing::warn!(number, "failed to get finalized L1 block: {err:#}");
+                        self.retry_delay().await;
+                        continue;
+                    },
+                };
+                break (&block).into();
+            };
+            state = self.state.lock().await;
+            state.put_finalized(successor);
+        }
+
+        (state, successor.info)
     }
 
     /// Get fee info for each `Deposit` occurring between `prev`
@@ -815,7 +865,7 @@ impl L1Client {
                         Err(err) => {
                             tracing::warn!(from, to, %err, "Fee L1Event Error");
                             sleep(retry_delay).await;
-                        }
+                        },
                     }
                 }
             }
@@ -891,19 +941,19 @@ impl L1State {
         }
     }
 
-    fn put_finalized(&mut self, info: L1BlockInfo) {
+    fn put_finalized(&mut self, block: L1BlockInfoWithParent) {
         assert!(
             self.snapshot.finalized.is_some()
-                && info.number <= self.snapshot.finalized.unwrap().number,
-            "inserting a finalized block {info:?} that isn't finalized; snapshot: {:?}",
+                && block.info.number <= self.snapshot.finalized.unwrap().number,
+            "inserting a finalized block {block:?} that isn't finalized; snapshot: {:?}",
             self.snapshot,
         );
 
-        if let Some((old_number, old_info)) = self.finalized.push(info.number, info) {
-            if old_number == info.number {
+        if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block) {
+            if old_number == block.info.number {
                 tracing::error!(
-                    ?old_info,
-                    ?info,
+                    ?old_block,
+                    ?block,
                     "got different info for the same finalized height; something has gone very wrong with the L1",
                 );
             }
@@ -913,7 +963,7 @@ impl L1State {
 
 async fn get_finalized_block(
     rpc: &RootProvider<SwitchingTransport>,
-) -> anyhow::Result<Option<L1BlockInfo>> {
+) -> anyhow::Result<Option<L1BlockInfoWithParent>> {
     let Some(block) = rpc
         .get_block(BlockId::finalized(), BlockTransactionsKind::Hashes)
         .await?
@@ -926,16 +976,12 @@ async fn get_finalized_block(
         return Ok(None);
     };
 
-    Ok(Some(L1BlockInfo {
-        number: block.header.number,
-        timestamp: ethers::types::U256::from(block.header.timestamp),
-        hash: block.header.hash.to_ethers(),
-    }))
+    Ok(Some((&block).into()))
 }
 
 #[cfg(test)]
 mod test {
-    use std::ops::Add;
+    use std::{ops::Add, time::Duration};
 
     use ethers::{
         middleware::SignerMiddleware,
@@ -948,7 +994,6 @@ mod test {
     use hotshot_contract_adapter::stake_table::NodeInfoJf;
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use std::time::Duration;
     use time::OffsetDateTime;
 
     use super::*;
@@ -1342,6 +1387,24 @@ mod test {
         let deployer_client = Arc::new(deployer_client);
 
         // deploy the stake_table contract
+
+        // MA: The first deployment may run out of gas, it's not currently clear
+        // to me why. Likely the gas estimation for the deployment transaction
+        // is off, maybe because block.number is incorrect when doing the gas
+        // estimation but this would be quite surprising.
+        //
+        // This only happens on block 0, so we can first send a TX to increment
+        // the block number and then do the deployment.
+        deployer_client
+            .send_transaction(
+                ethers::types::TransactionRequest::new()
+                    .to(deployer_client.address())
+                    .value(0),
+                None,
+            )
+            .await?
+            .await?;
+
         let stake_table_contract =
             contract_bindings_ethers::permissioned_stake_table::PermissionedStakeTable::deploy(
                 deployer_client.clone(),
@@ -1371,7 +1434,7 @@ mod test {
             .unwrap();
 
         let result = nodes.stake_table.0[0].clone();
-        assert_eq!(result.stake_amount.as_u64(), 1);
+        assert_eq!(result.stake_table_entry.stake_amount.as_u64(), 1);
         Ok(())
     }
 

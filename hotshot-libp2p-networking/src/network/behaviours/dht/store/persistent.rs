@@ -281,10 +281,10 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
             .await
             .map_err(|_| anyhow::anyhow!("save operation timed out"))
             {
-                Ok(Ok(())) => {}
+                Ok(Ok(())) => {},
                 Ok(Err(error)) | Err(error) => {
                     warn!("Failed to save DHT to persistent storage: {error}");
-                }
+                },
             };
 
             // Reset the record delta
@@ -324,10 +324,10 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
                             err
                         );
                     }
-                }
+                },
                 Err(err) => {
                     warn!("Failed to parse record from persistent storage: {:?}", err);
-                }
+                },
             };
         }
 

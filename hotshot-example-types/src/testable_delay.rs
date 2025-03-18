@@ -85,16 +85,16 @@ pub trait TestableDelay {
     /// Add a delay from settings
     async fn handle_async_delay(settings: &DelaySettings) {
         match settings.delay_option {
-            DelayOptions::None => {}
+            DelayOptions::None => {},
             DelayOptions::Fixed => {
                 sleep(Duration::from_millis(settings.fixed_time_in_milliseconds)).await;
-            }
+            },
             DelayOptions::Random => {
                 let sleep_in_millis = rand::thread_rng().gen_range(
                     settings.min_time_in_milliseconds..=settings.max_time_in_milliseconds,
                 );
                 sleep(Duration::from_millis(sleep_in_millis)).await;
-            }
+            },
         }
     }
 
@@ -124,7 +124,7 @@ impl Iterator for SupportedTraitTypesForAsyncDelayIterator {
             _ => {
                 assert_eq!(self.index, 3, "Need to ensure that newly added or removed `SupportedTraitTypesForAsyncDelay` enum is handled in iterator");
                 return None;
-            }
+            },
         };
         self.index += 1;
         supported_type

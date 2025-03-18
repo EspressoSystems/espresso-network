@@ -67,7 +67,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
 
                 consensus.write().await.reset_actions();
                 result
-            }
+            },
             _ => vec![event.clone()],
         }
     }
@@ -94,9 +94,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> EventTransforme
         _consensus: Arc<RwLock<Consensus<TYPES>>>,
     ) -> Vec<HotShotEvent<TYPES>> {
         match event {
-            HotShotEvent::QuorumProposalSend(_, _) | HotShotEvent::QuorumVoteSend(_) => {
+            HotShotEvent::QuorumProposalSend(..) | HotShotEvent::QuorumVoteSend(_) => {
                 vec![event.clone(), event.clone()]
-            }
+            },
             _ => vec![event.clone()],
         }
     }
@@ -182,11 +182,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
                     self.handle_proposal_send_event(event, proposal, sender)
                         .await,
                 ];
-            }
+            },
             HotShotEvent::QuorumProposalValidated(proposal, _) => {
                 self.validated_proposals.push(proposal.data.clone());
-            }
-            _ => {}
+            },
+            _ => {},
         }
         vec![event.clone()]
     }
@@ -339,13 +339,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
         &self,
         handle: &mut SystemContextHandle<TYPES, I, V>,
         network: Arc<<I as NodeImplementation<TYPES>>::Network>,
-        membership: Arc<RwLock<TYPES::Membership>>,
     ) {
         let network_state: NetworkEventTaskState<_, V, _, _> = NetworkEventTaskState {
             network,
             view: TYPES::View::genesis(),
             epoch: None,
-            membership,
+            membership_coordinator: handle.membership_coordinator.clone(),
             storage: Arc::clone(&handle.storage()),
             consensus: OuterConsensus::new(handle.consensus()),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
@@ -413,7 +412,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
                     .unwrap();
                     return vec![HotShotEvent::QuorumVoteSend(vote)];
                 }
-            }
+            },
             HotShotEvent::TimeoutVoteSend(vote) => {
                 // Check if this view was a dishonest proposal view, if true dont send timeout
                 let dishonest_proposals = self.dishonest_proposal_view_numbers.read().await;
@@ -422,11 +421,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
                     // So, dont send the timeout to the next leader from this byzantine replica
                     return vec![];
                 }
-            }
+            },
             HotShotEvent::QuorumVoteSend(vote) => {
                 self.votes_sent.push(vote.clone());
-            }
-            _ => {}
+            },
+            _ => {},
         }
         vec![event.clone()]
     }

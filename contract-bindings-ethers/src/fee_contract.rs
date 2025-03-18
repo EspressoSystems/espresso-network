@@ -1071,32 +1071,32 @@ pub mod fee_contract {
                 Self::DepositTooSmall(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::ERC1967InvalidImplementation(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::ERC1967NonPayable(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::FailedInnerCall(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::FunctionDoesNotExist(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::InvalidInitialization(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::InvalidUserAddress(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::NoFunctionCalled(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::NotInitializing(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::OwnableInvalidOwner(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::OwnableUnauthorizedAccount(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::UUPSUnauthorizedCallContext(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::UUPSUnsupportedProxiableUUID(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::RevertString(s) => ::ethers::core::abi::AbiEncode::encode(s),
             }
         }
@@ -1107,70 +1107,70 @@ pub mod fee_contract {
                 [0x08, 0xc3, 0x79, 0xa0] => true,
                 _ if selector == <AddressEmptyCode as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector == <DepositTooLarge as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector == <DepositTooSmall as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector
                     == <ERC1967InvalidImplementation as ::ethers::contract::EthError>::selector(
                     ) =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <ERC1967NonPayable as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector == <FailedInnerCall as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector
                     == <FunctionDoesNotExist as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <InvalidInitialization as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <InvalidUserAddress as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector == <NoFunctionCalled as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector == <NotInitializing as ::ethers::contract::EthError>::selector() => {
                     true
-                }
+                },
                 _ if selector
                     == <OwnableInvalidOwner as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <OwnableUnauthorizedAccount as ::ethers::contract::EthError>::selector() =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <UUPSUnauthorizedCallContext as ::ethers::contract::EthError>::selector(
                     ) =>
                 {
                     true
-                }
+                },
                 _ if selector
                     == <UUPSUnsupportedProxiableUUID as ::ethers::contract::EthError>::selector(
                     ) =>
                 {
                     true
-                }
+                },
                 _ => false,
             }
         }
@@ -1183,7 +1183,7 @@ pub mod fee_contract {
                 Self::DepositTooSmall(element) => ::core::fmt::Display::fmt(element, f),
                 Self::ERC1967InvalidImplementation(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::ERC1967NonPayable(element) => ::core::fmt::Display::fmt(element, f),
                 Self::FailedInnerCall(element) => ::core::fmt::Display::fmt(element, f),
                 Self::FunctionDoesNotExist(element) => ::core::fmt::Display::fmt(element, f),
@@ -1196,7 +1196,7 @@ pub mod fee_contract {
                 Self::UUPSUnauthorizedCallContext(element) => ::core::fmt::Display::fmt(element, f),
                 Self::UUPSUnsupportedProxiableUUID(element) => {
                     ::core::fmt::Display::fmt(element, f)
-                }
+                },
                 Self::RevertString(s) => ::core::fmt::Display::fmt(s, f),
             }
         }
@@ -1754,7 +1754,7 @@ pub mod fee_contract {
             match self {
                 Self::UpgradeInterfaceVersion(element) => {
                     ::ethers::core::abi::AbiEncode::encode(element)
-                }
+                },
                 Self::Balances(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::Deposit(element) => ::ethers::core::abi::AbiEncode::encode(element),
                 Self::GetVersion(element) => ::ethers::core::abi::AbiEncode::encode(element),

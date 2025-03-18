@@ -13,11 +13,12 @@ use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
     merklized_state::{
-        self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence,
+        self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
-    node, ApiState, Error,
+    node,
+    node::NodeDataSource,
+    ApiState, Error, VidCommon,
 };
-use hotshot_query_service::{merklized_state::Snapshot, node::NodeDataSource};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{
@@ -134,14 +135,18 @@ where
                         })
                 }
             )?;
-
+            let VidCommon::V0(common) = &common.common().clone() else {
+                return Err(availability::Error::Custom {
+                    message: format!("failed to make proof for namespace {ns_id}"),
+                    status: StatusCode::NOT_FOUND,
+                });
+            };
             if let Some(ns_index) = block.payload().ns_table().find_ns_id(&ns_id) {
-                let proof = NsProof::new(block.payload(), &ns_index, common.common()).context(
-                    CustomSnafu {
+                let proof =
+                    NsProof::new(block.payload(), &ns_index, common).context(CustomSnafu {
                         message: format!("failed to make proof for namespace {ns_id}"),
                         status: StatusCode::NOT_FOUND,
-                    },
-                )?;
+                    })?;
 
                 Ok(NamespaceProofQueryData {
                     transactions: proof.export_all_txs(&ns_id),
@@ -379,6 +384,18 @@ where
 
             state
                 .get_chain_config(commitment)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
+    .get("leafchain", |req, state| {
+        async move {
+            let height = req
+                .integer_param("height")
+                .map_err(Error::from_request_error)?;
+            state
+                .get_leaf_chain(height)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }

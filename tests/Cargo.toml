@@ -19,6 +19,7 @@ futures = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 sequencer-utils = { path = "../utils" }
 surf-disco = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }

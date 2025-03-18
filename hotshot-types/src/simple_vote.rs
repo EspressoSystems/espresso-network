@@ -19,13 +19,12 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::version::Version;
 
 use crate::{
-    data::{Leaf, Leaf2},
+    data::{Leaf, Leaf2, VidCommitment},
     message::UpgradeLock,
     traits::{
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
     },
-    vid::VidCommitment,
     vote::{HasViewNumber, Vote},
 };
 
@@ -63,6 +62,8 @@ pub struct DaData {
 pub struct DaData2<TYPES: NodeType> {
     /// Commitment to a block payload
     pub payload_commit: VidCommitment,
+    /// An optional commitment to a block payload calculated for the next epoch (epoch + 1)
+    pub next_epoch_payload_commit: Option<VidCommitment>,
     /// Epoch number
     pub epoch: Option<TYPES::Epoch>,
 }
@@ -413,11 +414,16 @@ impl<TYPES: NodeType> Committable for DaData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
         let DaData2 {
             payload_commit,
+            next_epoch_payload_commit,
             epoch,
         } = self;
 
         let mut cb = committable::RawCommitmentBuilder::new("DA data")
             .var_size_bytes(payload_commit.as_ref());
+
+        if let Some(ref next_epoch_payload_commit) = *next_epoch_payload_commit {
+            cb = cb.var_size_bytes(next_epoch_payload_commit.as_ref());
+        }
 
         if let Some(ref epoch) = *epoch {
             cb = cb.u64_field("epoch number", **epoch);
@@ -672,6 +678,7 @@ impl<TYPES: NodeType> DaVote<TYPES> {
         let signature = self.signature;
         let data = DaData2 {
             payload_commit: self.data.payload_commit,
+            next_epoch_payload_commit: None,
             epoch: None,
         };
         let view_number = self.view_number;

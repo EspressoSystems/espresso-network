@@ -33,12 +33,10 @@ async fn test_vote_dependency_handle() {
     // We use a node ID of 2 here arbitrarily. We just need it to build the system handle.
     let node_id = 2;
     // Construct the system handle for the node ID to build all of the state objects.
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id)
-        .await
-        .0;
-    let membership = Arc::clone(&handle.hotshot.memberships);
-
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership);
+    let (handle, _, _, node_key_map) =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+    let membership = handle.hotshot.membership_coordinator.clone();
+    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
 
     // Generate our state for the test
     let mut proposals = Vec::new();
@@ -90,7 +88,7 @@ async fn test_vote_dependency_handle() {
                 consensus: OuterConsensus::new(consensus.clone()),
                 consensus_metrics: Arc::clone(&consensus.read().await.metrics),
                 instance_state: handle.hotshot.instance_state(),
-                membership: Arc::clone(&handle.hotshot.memberships),
+                membership_coordinator: handle.hotshot.membership_coordinator.clone(),
                 storage: Arc::clone(&handle.storage()),
                 view_number,
                 sender: event_sender.clone(),

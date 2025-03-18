@@ -1,17 +1,29 @@
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    ops::RangeInclusive,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
 use anyhow::{anyhow, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0_3::StakeTables,
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
+use hotshot::InitializerEpochInfo;
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
-        vid_disperse::ADVZDisperseShare, DaProposal, DaProposal2, EpochNumber, QuorumProposal,
-        QuorumProposal2, QuorumProposalWrapper, VidDisperseShare,
+        vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
+        QuorumProposalWrapper, VidCommitment, VidDisperseShare,
     },
+    drb::DrbResult,
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -19,25 +31,12 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
-        node_implementation::ConsensusTime,
+        node_implementation::{ConsensusTime, NodeType},
     },
-    utils::View,
-    vid::VidSchemeType,
     vote::HasViewNumber,
-};
-use jf_vid::VidScheme;
-use std::sync::Arc;
-use std::{
-    collections::{BTreeMap, HashSet},
-    fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    ops::RangeInclusive,
-    path::{Path, PathBuf},
 };
 
 use crate::ViewNumber;
-
-use espresso_types::upgrade_commitment_map;
 
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]
@@ -45,9 +44,6 @@ pub struct Options {
     /// Storage path for persistent data.
     #[clap(long, env = "ESPRESSO_SEQUENCER_STORAGE_PATH")]
     path: PathBuf,
-
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STORE_UNDECIDED_STATE", hide = true)]
-    store_undecided_state: bool,
 
     /// Number of views to retain in consensus storage before data that hasn't been archived is
     /// garbage collected.
@@ -78,7 +74,6 @@ impl Options {
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            store_undecided_state: false,
             consensus_view_retention: 130000,
         }
     }
@@ -98,7 +93,6 @@ impl PersistenceOptions for Options {
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let path = self.path.clone();
-        let store_undecided_state = self.store_undecided_state;
         let view_retention = self.consensus_view_retention;
 
         let migration_path = path.join("migration");
@@ -111,7 +105,6 @@ impl PersistenceOptions for Options {
         };
 
         Ok(Persistence {
-            store_undecided_state,
             inner: Arc::new(RwLock::new(Inner {
                 path,
                 migrated,
@@ -128,8 +121,6 @@ impl PersistenceOptions for Options {
 /// File system backed persistence.
 #[derive(Clone, Debug)]
 pub struct Persistence {
-    store_undecided_state: bool,
-
     // We enforce mutual exclusion on access to the data source, as the current file system
     // implementation does not support transaction isolation for concurrent reads and writes. We can
     // improve this in the future by switching to a SQLite-based file system implementation.
@@ -186,14 +177,6 @@ impl Inner {
         self.path.join("da2")
     }
 
-    fn undecided_state_path(&self) -> PathBuf {
-        self.path.join("undecided_state")
-    }
-
-    fn undecided2_state_path(&self) -> PathBuf {
-        self.path.join("undecided_state2")
-    }
-
     fn quorum_proposals_dir_path(&self) -> PathBuf {
         self.path.join("quorum_proposals")
     }
@@ -206,8 +189,20 @@ impl Inner {
         self.path.join("upgrade_certificate")
     }
 
+    fn stake_table_dir_path(&self) -> PathBuf {
+        self.path.join("stake_table")
+    }
+
     fn next_epoch_qc(&self) -> PathBuf {
         self.path.join("next_epoch_quorum_certificate")
+    }
+
+    fn epoch_drb_result_dir_path(&self) -> PathBuf {
+        self.path.join("epoch_drb_result")
+    }
+
+    fn epoch_root_block_header_dir_path(&self) -> PathBuf {
+        self.path.join("epoch_root_block_header")
     }
 
     fn update_migration(&mut self) -> anyhow::Result<()> {
@@ -367,8 +362,7 @@ impl Inner {
 
             let info = LeafInfo {
                 leaf,
-                vid_share: vid_share.map(Into::into),
-
+                vid_share,
                 // Note: the following fields are not used in Decide event processing, and should be
                 // removed. For now, we just default them.
                 state: Default::default(),
@@ -598,7 +592,7 @@ impl SequencerPersistence for Persistence {
                 // managed to persist the decided leaves successfully, and the event processing will
                 // just run again at the next decide.
                 tracing::warn!(?view, "event processing failed: {err:#}");
-            }
+            },
             Ok(intervals) => {
                 if let Err(err) = inner.collect_garbage(view, &intervals) {
                     // Similarly, garbage collection is not an error. We have done everything we
@@ -606,7 +600,7 @@ impl SequencerPersistence for Persistence {
                     // error but do not return it.
                     tracing::warn!(?view, "GC failed: {err:#}");
                 }
-            }
+            },
         }
 
         Ok(())
@@ -616,20 +610,6 @@ impl SequencerPersistence for Persistence {
         &self,
     ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
         self.inner.read().await.load_anchor_leaf()
-    }
-
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>> {
-        let inner = self.inner.read().await;
-        let path = inner.undecided2_state_path();
-        if !path.is_file() {
-            return Ok(None);
-        }
-        let bytes = fs::read(&path).context("read")?;
-        let value: (CommitmentMap<Leaf2>, _) =
-            bincode::deserialize(&bytes).context("deserialize")?;
-        Ok(Some((value.0, value.1)))
     }
 
     async fn load_da_proposal(
@@ -672,10 +652,40 @@ impl SequencerPersistence for Persistence {
             },
         )
     }
+    async fn append_vid2(
+        &self,
+        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let view_number = proposal.data.view_number().u64();
+
+        let dir_path = inner.vid2_dir_path();
+
+        fs::create_dir_all(dir_path.clone()).context("failed to create vid dir")?;
+
+        let file_path = dir_path.join(view_number.to_string()).with_extension("txt");
+
+        inner.replace(
+            &file_path,
+            |_| {
+                // Don't overwrite an existing share, but warn about it as this is likely not intended
+                // behavior from HotShot.
+                tracing::warn!(view_number, "duplicate VID share");
+                Ok(false)
+            },
+            |mut file| {
+                let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
+                    convert_proposal(proposal.clone());
+                let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
+                file.write_all(&proposal_bytes)?;
+                Ok(())
+            },
+        )
+    }
     async fn append_da(
         &self,
         proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
-        _vid_commit: <VidSchemeType as VidScheme>::Commit,
+        _vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let view_number = proposal.data.view_number().u64();
@@ -730,31 +740,7 @@ impl SequencerPersistence for Persistence {
             },
         )
     }
-    async fn update_undecided_state2(
-        &self,
-        leaves: CommitmentMap<Leaf2>,
-        state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        if !self.store_undecided_state {
-            return Ok(());
-        }
 
-        let mut inner = self.inner.write().await;
-        let path = &inner.undecided2_state_path();
-        inner.replace(
-            path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes =
-                    bincode::serialize(&(leaves, state)).context("serializing undecided state")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
     async fn append_quorum_proposal2(
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
@@ -808,7 +794,7 @@ impl SequencerPersistence for Persistence {
                         // some unintended file whose name happened to match the naming convention.
                         tracing::warn!(?view, "ignoring malformed quorum proposal file: {err:#}");
                         continue;
-                    }
+                    },
                 };
             let proposal2 = convert_proposal(proposal);
 
@@ -844,6 +830,43 @@ impl SequencerPersistence for Persistence {
         Ok(Some(
             bincode::deserialize(&bytes).context("deserialize upgrade certificate")?,
         ))
+    }
+
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+        let inner = self.inner.read().await;
+        let path = &inner.stake_table_dir_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+
+        let file_path = path.join(epoch.to_string()).with_extension("txt");
+        let bytes = fs::read(&file_path).context("read")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize combined stake table")?,
+        ))
+    }
+
+    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let dir_path = &inner.stake_table_dir_path();
+
+        fs::create_dir_all(dir_path.clone()).context("failed to create proposals dir")?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                let bytes =
+                    bincode::serialize(&stake).context("serializing combined stake table")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
     }
 
     async fn store_upgrade_certificate(
@@ -906,37 +929,10 @@ impl SequencerPersistence for Persistence {
         ))
     }
 
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let view_number = proposal.data.view_number().u64();
-        let dir_path = inner.vid2_dir_path();
-
-        fs::create_dir_all(dir_path.clone()).context("failed to create vid2 dir")?;
-
-        let file_path = dir_path.join(view_number.to_string()).with_extension("txt");
-        inner.replace(
-            &file_path,
-            |_| {
-                // Don't overwrite an existing share, but warn about it as this is likely not intended
-                // behavior from HotShot.
-                tracing::warn!(view_number, "duplicate VID share");
-                Ok(false)
-            },
-            |mut file| {
-                let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
-                file.write_all(&proposal_bytes)?;
-                Ok(())
-            },
-        )
-    }
-
     async fn append_da2(
         &self,
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        _vid_commit: <VidSchemeType as VidScheme>::Commit,
+        _vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let view_number = proposal.data.view_number().u64();
@@ -972,20 +968,21 @@ impl SequencerPersistence for Persistence {
         let mut inner = self.inner.write().await;
 
         if inner.migrated.contains("anchor_leaf") {
+            tracing::info!("decided leaves already migrated");
             return Ok(());
         }
 
-        let decided_leaf2_path = inner.decided_leaf2_path();
+        let new_leaf_dir = inner.decided_leaf2_path();
 
-        fs::create_dir_all(decided_leaf2_path.clone())
-            .context("failed to create anchor leaf 2  dir")?;
+        fs::create_dir_all(new_leaf_dir.clone()).context("failed to create anchor leaf 2  dir")?;
 
-        let decided_leaf_path = inner.decided_leaf_path();
-        if !decided_leaf_path.is_dir() {
+        let old_leaf_dir = inner.decided_leaf_path();
+        if !old_leaf_dir.is_dir() {
             return Ok(());
         }
 
-        for entry in fs::read_dir(decided_leaf_path)? {
+        tracing::warn!("migrating decided leaves..");
+        for entry in fs::read_dir(old_leaf_dir)? {
             let entry = entry?;
             let path = entry.path();
 
@@ -1004,12 +1001,10 @@ impl SequencerPersistence for Persistence {
             let leaf2: Leaf2 = leaf.into();
             let qc2 = qc.to_qc2();
 
-            let file_path = decided_leaf2_path
-                .join(view.to_string())
-                .with_extension("txt");
+            let new_leaf_path = new_leaf_dir.join(view.to_string()).with_extension("txt");
 
             inner.replace(
-                &file_path,
+                &new_leaf_path,
                 |_| {
                     tracing::warn!(view, "duplicate decided leaf");
                     Ok(false)
@@ -1020,30 +1015,37 @@ impl SequencerPersistence for Persistence {
                     Ok(())
                 },
             )?;
+
+            if view % 100 == 0 {
+                tracing::info!(view, "decided leaves migration progress");
+            }
         }
 
         inner.migrated.insert("anchor_leaf".to_string());
         inner.update_migration()?;
-
+        tracing::warn!("successfully migrated decided leaves");
         Ok(())
     }
     async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
 
         if inner.migrated.contains("da_proposal") {
+            tracing::info!("da proposals already migrated");
             return Ok(());
         }
 
-        let da2_path = inner.da2_dir_path();
+        let new_da_dir = inner.da2_dir_path();
 
-        fs::create_dir_all(da2_path.clone()).context("failed to create da proposals 2 dir")?;
+        fs::create_dir_all(new_da_dir.clone()).context("failed to create da proposals 2 dir")?;
 
-        let da_dir = inner.da_dir_path();
-        if !da_dir.is_dir() {
+        let old_da_dir = inner.da_dir_path();
+        if !old_da_dir.is_dir() {
             return Ok(());
         }
 
-        for entry in fs::read_dir(da_dir)? {
+        tracing::warn!("migrating da proposals..");
+
+        for entry in fs::read_dir(old_da_dir)? {
             let entry = entry?;
             let path = entry.path();
 
@@ -1059,12 +1061,12 @@ impl SequencerPersistence for Persistence {
             let proposal = bincode::deserialize::<Proposal<SeqTypes, DaProposal<SeqTypes>>>(&bytes)
                 .context(format!("parsing da proposal {}", path.display()))?;
 
-            let file_path = da2_path.join(view.to_string()).with_extension("txt");
+            let new_da_path = new_da_dir.join(view.to_string()).with_extension("txt");
 
             let proposal2: Proposal<SeqTypes, DaProposal2<SeqTypes>> = convert_proposal(proposal);
 
             inner.replace(
-                &file_path,
+                &new_da_path,
                 |_| {
                     tracing::warn!(view, "duplicate DA proposal 2");
                     Ok(false)
@@ -1075,28 +1077,37 @@ impl SequencerPersistence for Persistence {
                     Ok(())
                 },
             )?;
+
+            if view % 100 == 0 {
+                tracing::info!(view, "DA proposals migration progress");
+            }
         }
 
         inner.migrated.insert("da_proposal".to_string());
-        inner.update_migration()
+        inner.update_migration()?;
+        tracing::warn!("successfully migrated da proposals");
+        Ok(())
     }
     async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
 
         if inner.migrated.contains("vid_share") {
+            tracing::info!("vid shares already migrated");
             return Ok(());
         }
 
-        let vid2_path = inner.vid2_dir_path();
+        let new_vid_dir = inner.vid2_dir_path();
 
-        fs::create_dir_all(vid2_path.clone()).context("failed to create vid shares 2 dir")?;
+        fs::create_dir_all(new_vid_dir.clone()).context("failed to create vid shares 2 dir")?;
 
-        let vid_dir = inner.vid_dir_path();
-        if !vid_dir.is_dir() {
+        let old_vid_dir = inner.vid_dir_path();
+        if !old_vid_dir.is_dir() {
             return Ok(());
         }
 
-        for entry in fs::read_dir(vid_dir)? {
+        tracing::warn!("migrating vid shares..");
+
+        for entry in fs::read_dir(old_vid_dir)? {
             let entry = entry?;
             let path = entry.path();
 
@@ -1112,13 +1123,13 @@ impl SequencerPersistence for Persistence {
                 bincode::deserialize::<Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>>(&bytes)
                     .context(format!("parsing vid share {}", path.display()))?;
 
-            let file_path = vid2_path.join(view.to_string()).with_extension("txt");
+            let new_vid_path = new_vid_dir.join(view.to_string()).with_extension("txt");
 
             let proposal2: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
                 convert_proposal(proposal);
 
             inner.replace(
-                &file_path,
+                &new_vid_path,
                 |_| {
                     tracing::warn!(view, "duplicate VID share ");
                     Ok(false)
@@ -1129,63 +1140,39 @@ impl SequencerPersistence for Persistence {
                     Ok(())
                 },
             )?;
+
+            if view % 100 == 0 {
+                tracing::info!(view, "VID shares migration progress");
+            }
         }
 
         inner.migrated.insert("vid_share".to_string());
-        inner.update_migration()
+        inner.update_migration()?;
+        tracing::warn!("successfully migrated vid shares");
+        Ok(())
     }
-    async fn migrate_undecided_state(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        if inner.migrated.contains("undecided_state") {
-            return Ok(());
-        }
 
-        let undecided_state2_path = &inner.undecided2_state_path();
-
-        let undecided_state_path = inner.undecided_state_path();
-
-        if !undecided_state_path.is_file() {
-            return Ok(());
-        }
-
-        let bytes = fs::read(&undecided_state_path).context("read")?;
-        let (leaves, state): (CommitmentMap<Leaf>, QuorumCertificate<SeqTypes>) =
-            bincode::deserialize(&bytes).context("deserialize")?;
-
-        let leaves2 = upgrade_commitment_map(leaves);
-        let state2 = state.to_qc2();
-
-        inner.replace(
-            undecided_state2_path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes = bincode::serialize(&(leaves2, state2))
-                    .context("serializing undecided state2")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
 
         if inner.migrated.contains("quorum_proposals") {
+            tracing::info!("quorum proposals already migrated");
             return Ok(());
         }
 
-        let qp2_path = inner.quorum_proposals2_dir_path();
+        let new_quorum_proposals_dir = inner.quorum_proposals2_dir_path();
 
-        fs::create_dir_all(qp2_path.clone()).context("failed to create quorum proposals 2 dir")?;
+        fs::create_dir_all(new_quorum_proposals_dir.clone())
+            .context("failed to create quorum proposals 2 dir")?;
 
-        let qp_dir = inner.quorum_proposals_dir_path();
-        if !qp_dir.is_dir() {
+        let old_quorum_proposals_dir = inner.quorum_proposals_dir_path();
+        if !old_quorum_proposals_dir.is_dir() {
+            tracing::info!("no existing quorum proposals found for migration");
             return Ok(());
         }
 
-        for entry in fs::read_dir(qp_dir)? {
+        tracing::warn!("migrating quorum proposals..");
+        for entry in fs::read_dir(old_quorum_proposals_dir)? {
             let entry = entry?;
             let path = entry.path();
 
@@ -1202,13 +1189,15 @@ impl SequencerPersistence for Persistence {
                 bincode::deserialize::<Proposal<SeqTypes, QuorumProposal<SeqTypes>>>(&bytes)
                     .context(format!("parsing quorum proposal {}", path.display()))?;
 
-            let file_path = qp2_path.join(view.to_string()).with_extension("txt");
+            let new_file_path = new_quorum_proposals_dir
+                .join(view.to_string())
+                .with_extension("txt");
 
             let proposal2: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
                 convert_proposal(proposal);
 
             inner.replace(
-                &file_path,
+                &new_file_path,
                 |_| {
                     tracing::warn!(view, "duplicate Quorum proposal2 ");
                     Ok(false)
@@ -1219,13 +1208,104 @@ impl SequencerPersistence for Persistence {
                     Ok(())
                 },
             )?;
+
+            if view % 100 == 0 {
+                tracing::info!(view, "Quorum proposals migration progress");
+            }
         }
 
         inner.migrated.insert("quorum_proposals".to_string());
-        inner.update_migration()
+        inner.update_migration()?;
+        tracing::warn!("successfully migrated quorum proposals");
+        Ok(())
     }
     async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn add_drb_result(
+        &self,
+        epoch: EpochNumber,
+        drb_result: DrbResult,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.write().await;
+        let dir_path = inner.epoch_drb_result_dir_path();
+
+        fs::create_dir_all(dir_path.clone()).context("failed to create epoch drb result dir")?;
+
+        let drb_result_bytes = bincode::serialize(&drb_result).context("serialize drb result")?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        fs::write(file_path, drb_result_bytes)
+            .context(format!("writing epoch drb result file for epoch {epoch:?}"))?;
+
+        Ok(())
+    }
+
+    async fn add_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: <SeqTypes as NodeType>::BlockHeader,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.write().await;
+        let dir_path = inner.epoch_root_block_header_dir_path();
+
+        fs::create_dir_all(dir_path.clone())
+            .context("failed to create epoch root block header dir")?;
+
+        let block_header_bytes =
+            bincode::serialize(&block_header).context("serialize block header")?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        fs::write(file_path, block_header_bytes).context(format!(
+            "writing epoch root block header file for epoch {epoch:?}"
+        ))?;
+
+        Ok(())
+    }
+
+    async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let drb_dir_path = inner.epoch_drb_result_dir_path();
+        let block_header_dir_path = inner.epoch_root_block_header_dir_path();
+
+        let mut result = Vec::new();
+
+        if drb_dir_path.is_dir() {
+            for (epoch, path) in epoch_files(drb_dir_path)? {
+                let bytes = fs::read(&path)
+                    .context(format!("reading epoch drb result {}", path.display()))?;
+                let drb_result = bincode::deserialize::<DrbResult>(&bytes)
+                    .context(format!("parsing epoch drb result {}", path.display()))?;
+
+                let block_header_path = block_header_dir_path
+                    .join(epoch.to_string())
+                    .with_extension("txt");
+                let block_header = if block_header_path.is_file() {
+                    let bytes = fs::read(&block_header_path).context(format!(
+                        "reading epoch root block header {}",
+                        block_header_path.display()
+                    ))?;
+                    Some(
+                        bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes)
+                            .context(format!(
+                                "parsing epoch root block header {}",
+                                block_header_path.display()
+                            ))?,
+                    )
+                } else {
+                    None
+                };
+
+                result.push(InitializerEpochInfo::<SeqTypes> {
+                    epoch,
+                    drb_result,
+                    block_header,
+                });
+            }
+        }
+
+        Ok(result)
     }
 }
 
@@ -1314,6 +1394,32 @@ fn view_files(
     }))
 }
 
+/// Get all paths under `dir` whose name is of the form <epoch number>.txt.
+/// Should probably be made generic and merged with view_files.
+fn epoch_files(
+    dir: impl AsRef<Path>,
+) -> anyhow::Result<impl Iterator<Item = (EpochNumber, PathBuf)>> {
+    Ok(fs::read_dir(dir.as_ref())?.filter_map(move |entry| {
+        let dir = dir.as_ref().display();
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_file() {
+            tracing::debug!(%dir, ?entry, "ignoring non-file in data directory");
+            return None;
+        }
+        let path = entry.path();
+        if path.extension()? != "txt" {
+            tracing::debug!(%dir, ?entry, "ignoring non-text file in data directory");
+            return None;
+        }
+        let file_name = path.file_stem()?;
+        let Ok(epoch_number) = file_name.to_string_lossy().parse::<u64>() else {
+            tracing::debug!(%dir, ?file_name, "ignoring extraneous file in data directory");
+            return None;
+        };
+        Some((EpochNumber::new(epoch_number), entry.path().to_owned()))
+    }))
+}
+
 #[cfg(test)]
 mod testing {
     use tempfile::TempDir;
@@ -1346,33 +1452,27 @@ mod generic_tests {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{NodeState, PubKey};
+    use std::marker::PhantomData;
+
+    use committable::{Commitment, CommitmentBoundsArkless, Committable};
+    use espresso_types::{Header, Leaf, NodeState, PubKey, ValidatedState};
     use hotshot::types::SignatureKey;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
-    use hotshot_types::data::QuorumProposal2;
-    use hotshot_types::traits::node_implementation::Versions;
-    use hotshot_types::vid::advz_scheme;
-    use sequencer_utils::test_utils::setup_test;
-    use vbs::version::StaticVersionType;
-
-    use serde_json::json;
-    use std::marker::PhantomData;
-
-    use super::*;
-    use crate::persistence::testing::TestablePersistence;
-
-    use crate::BLSPubKey;
-    use committable::Committable;
-    use committable::{Commitment, CommitmentBoundsArkless};
-    use espresso_types::{Header, Leaf, ValidatedState};
-
     use hotshot_types::{
+        data::{vid_commitment, QuorumProposal2},
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
-        traits::{block_contents::vid_commitment, EncodeBytes},
+        traits::{node_implementation::Versions, EncodeBytes},
+        vid::advz::advz_scheme,
     };
     use jf_vid::VidScheme;
+    use sequencer_utils::test_utils::setup_test;
+    use serde_json::json;
+    use vbs::version::StaticVersionType;
+
+    use super::*;
+    use crate::{persistence::testing::TestablePersistence, BLSPubKey};
 
     #[test]
     fn test_config_migrations_add_builder_urls() {
@@ -1504,6 +1604,7 @@ mod test {
 
             let payload_commitment = vid_commitment::<TestVersions>(
                 &payload_bytes,
+                &metadata.encode(),
                 4,
                 <TestVersions as Versions>::Base::VERSION,
             );
@@ -1631,24 +1732,12 @@ mod test {
 
             tracing::debug!("inserting da for {view}");
             storage
-                .append_da(&da_proposal, disperse.commit)
+                .append_da(&da_proposal, VidCommitment::V0(disperse.commit))
                 .await
                 .unwrap();
         }
 
-        let qp_fn = |v: Proposal<SeqTypes, QuorumProposal<SeqTypes>>| {
-            let qc = v.data;
-
-            let qc2 = qc.into();
-
-            Proposal {
-                data: qc2,
-                signature: v.signature,
-                _pd: PhantomData,
-            }
-        };
-
-        storage.migrate_consensus(Leaf2::from, qp_fn).await.unwrap();
+        storage.migrate_consensus().await.unwrap();
         let inner = storage.inner.read().await;
         let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
         let decided_leaves_count = decided_leaves

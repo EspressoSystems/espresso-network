@@ -47,16 +47,18 @@ pub use update::{Transaction, UpdateDataSource, VersionedDataSource};
 
 #[cfg(any(test, feature = "testing"))]
 mod test_helpers {
+    use std::ops::{Bound, RangeBounds};
+
+    use futures::{
+        future,
+        stream::{BoxStream, StreamExt},
+    };
+
     use crate::{
         availability::{BlockQueryData, Fetch, LeafQueryData},
         node::NodeDataSource,
         testing::{consensus::TestableDataSource, mocks::MockTypes},
     };
-    use futures::{
-        future,
-        stream::{BoxStream, StreamExt},
-    };
-    use std::ops::{Bound, RangeBounds};
 
     /// Apply an upper bound to a range based on the currently available block height.
     async fn bound_range<R, D>(ds: &D, range: R) -> impl RangeBounds<usize>
@@ -119,6 +121,16 @@ mod test_helpers {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod availability_tests {
+    use std::{
+        collections::HashMap,
+        fmt::Debug,
+        ops::{Bound, RangeBounds},
+    };
+
+    use committable::Committable;
+    use futures::stream::StreamExt;
+    use hotshot_types::data::Leaf2;
+
     use super::test_helpers::*;
     use crate::{
         availability::{payload_size, BlockId},
@@ -126,17 +138,11 @@ pub mod availability_tests {
         node::NodeDataSource,
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockTypes},
+            mocks::{mock_transaction, MockTypes, MockVersions},
             setup_test,
         },
         types::HeightIndexed,
     };
-    use committable::Committable;
-    use futures::stream::StreamExt;
-    use hotshot_types::data::Leaf2;
-    use std::collections::HashMap;
-    use std::fmt::Debug;
-    use std::ops::{Bound, RangeBounds};
 
     async fn validate(ds: &impl TestableDataSource) {
         // Check the consistency of every block/leaf pair. Keep track of payloads and transactions
@@ -283,7 +289,7 @@ pub mod availability_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -358,7 +364,7 @@ pub mod availability_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
         network.start().await;
 
@@ -456,7 +462,7 @@ pub mod availability_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
         network.start().await;
 
@@ -537,6 +543,10 @@ pub mod availability_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
+    use committable::Committable;
+    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
+    use hotshot_types::simple_certificate::QuorumCertificate2;
+
     use crate::{
         availability::{BlockQueryData, LeafQueryData},
         data_source::{
@@ -552,9 +562,6 @@ pub mod persistence_tests {
         types::HeightIndexed,
         Leaf2,
     };
-    use committable::Committable;
-    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
-    use hotshot_types::simple_certificate::QuorumCertificate2;
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_revert<D: TestableDataSource>()
@@ -756,6 +763,24 @@ pub mod persistence_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod node_tests {
+    use std::time::Duration;
+
+    use committable::Committable;
+    use futures::{future::join_all, stream::StreamExt};
+    use hotshot::traits::BlockPayload;
+    use hotshot_example_types::{
+        block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
+        node_types::TestTypes,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
+    use hotshot_types::{
+        data::{vid_commitment, VidCommitment, VidShare},
+        traits::{block_contents::EncodeBytes, node_implementation::Versions},
+        vid::advz::{advz_scheme, ADVZScheme},
+    };
+    use jf_vid::VidScheme;
+    use vbs::version::StaticVersionType;
+
     use crate::{
         availability::{
             BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, VidCommonQueryData,
@@ -767,32 +792,12 @@ pub mod node_tests {
         node::{BlockId, NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
         testing::{
             consensus::{MockNetwork, TestableDataSource},
-            mocks::{mock_transaction, MockPayload, MockTypes},
+            mocks::{mock_transaction, MockPayload, MockTypes, MockVersions},
             setup_test, sleep,
         },
         types::HeightIndexed,
-        Header, VidShare,
+        Header, VidCommon,
     };
-    use committable::Committable;
-    use futures::{future::join_all, stream::StreamExt};
-    use hotshot::traits::BlockPayload;
-    use hotshot_example_types::{
-        block_types::TestBlockPayload, node_types::TestTypes, state_types::TestValidatedState,
-    };
-    use hotshot_example_types::{
-        block_types::{TestBlockHeader, TestMetadata},
-        state_types::TestInstanceState,
-    };
-    use hotshot_types::{
-        traits::{
-            block_contents::{vid_commitment, EncodeBytes},
-            node_implementation::Versions,
-        },
-        vid::{advz_scheme, VidSchemeType},
-    };
-    use jf_vid::VidScheme;
-    use std::time::Duration;
-    use vbs::version::StaticVersionType;
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_sync_status<D: TestableDataSource>()
@@ -840,7 +845,10 @@ pub mod node_tests {
             .iter()
             .map(|leaf| {
                 (
-                    VidCommonQueryData::new(leaf.header().clone(), disperse.common.clone()),
+                    VidCommonQueryData::new(
+                        leaf.header().clone(),
+                        VidCommon::V0(disperse.common.clone()),
+                    ),
                     disperse.shares[0].clone(),
                 )
             })
@@ -898,16 +906,16 @@ pub mod node_tests {
         {
             let mut tx = ds.write().await.unwrap();
             tx.insert_block(blocks[0].clone()).await.unwrap();
-            tx.insert_vid(vid[0].0.clone(), Some(vid[0].1.clone()))
+            tx.insert_vid(vid[0].0.clone(), Some(VidShare::V0(vid[0].1.clone())))
                 .await
                 .unwrap();
             tx.insert_leaf(leaves[1].clone()).await.unwrap();
             tx.insert_block(blocks[1].clone()).await.unwrap();
-            tx.insert_vid(vid[1].0.clone(), Some(vid[1].1.clone()))
+            tx.insert_vid(vid[1].0.clone(), Some(VidShare::V0(vid[1].1.clone())))
                 .await
                 .unwrap();
             tx.insert_block(blocks[2].clone()).await.unwrap();
-            tx.insert_vid(vid[2].0.clone(), Some(vid[2].1.clone()))
+            tx.insert_vid(vid[2].0.clone(), Some(VidShare::V0(vid[2].1.clone())))
                 .await
                 .unwrap();
             tx.commit().await.unwrap();
@@ -975,6 +983,7 @@ pub mod node_tests {
             let encoded = payload.encode();
             let payload_commitment = vid_commitment::<TestVersions>(
                 &encoded,
+                &metadata.encode(),
                 1,
                 <TestVersions as Versions>::Base::VERSION,
             );
@@ -1042,7 +1051,7 @@ pub mod node_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1086,19 +1095,22 @@ pub mod node_tests {
             &TestInstanceState::default(),
         )
         .await;
-        let common = VidCommonQueryData::new(leaf.header().clone(), disperse.common);
+        let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
         ds.append(BlockInfo::new(
             leaf,
             None,
             Some(common.clone()),
-            Some(disperse.shares[0].clone()),
+            Some(VidShare::V0(disperse.shares[0].clone())),
         ))
         .await
         .unwrap();
 
         {
             assert_eq!(ds.get_vid_common(0).await.await, common);
-            assert_eq!(ds.vid_share(0).await.unwrap(), disperse.shares[0]);
+            assert_eq!(
+                ds.vid_share(0).await.unwrap(),
+                VidShare::V0(disperse.shares[0].clone())
+            );
         }
 
         // Re-insert the common data, without a share. This should not overwrite the share we
@@ -1110,7 +1122,10 @@ pub mod node_tests {
         }
         {
             assert_eq!(ds.get_vid_common(0).await.await, common);
-            assert_eq!(ds.vid_share(0).await.unwrap(), disperse.shares[0]);
+            assert_eq!(
+                ds.vid_share(0).await.unwrap(),
+                VidShare::V0(disperse.shares[0].clone())
+            );
         }
     }
 
@@ -1121,7 +1136,7 @@ pub mod node_tests {
     {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1142,7 +1157,11 @@ pub mod node_tests {
             tracing::info!(height = block.height(), "empty block");
         };
         let height = block.height() as usize;
-        let commit = block.payload_hash();
+        let commit = if let VidCommitment::V0(commit) = block.payload_hash() {
+            commit
+        } else {
+            panic!("expect ADVZ commitment")
+        };
 
         // Set up a test VID scheme.
         let vid = advz_scheme(network.num_nodes());
@@ -1150,14 +1169,16 @@ pub mod node_tests {
         // Get VID common data and verify it.
         tracing::info!("fetching common data");
         let common = ds.get_vid_common(height).await.await;
-        let common = common.common();
-        VidSchemeType::is_consistent(&commit, common).unwrap();
+        let VidCommon::V0(common) = &common.common() else {
+            panic!("expect ADVZ common");
+        };
+        ADVZScheme::is_consistent(&commit, common).unwrap();
 
         // Collect shares from each node.
         tracing::info!("fetching shares");
         let network = &network;
         let vid = &vid;
-        let shares: Vec<VidShare> = join_all((0..network.num_nodes()).map(|i| async move {
+        let shares: Vec<_> = join_all((0..network.num_nodes()).map(|i| async move {
             let ds = network.data_source_index(i);
 
             // Wait until the node has processed up to the desired block; since we have thus far
@@ -1165,9 +1186,13 @@ pub mod node_tests {
             let mut leaves = ds.subscribe_leaves(height).await;
             let leaf = leaves.next().await.unwrap();
             assert_eq!(leaf.height(), height as u64);
-            assert_eq!(leaf.payload_hash(), commit);
+            assert_eq!(leaf.payload_hash(), VidCommitment::V0(commit));
 
-            let share = ds.vid_share(height).await.unwrap();
+            let share = if let VidShare::V0(share) = ds.vid_share(height).await.unwrap() {
+                share
+            } else {
+                panic!("expect ADVZ share")
+            };
             vid.verify_share(&share, common, &commit).unwrap().unwrap();
             share
         }))
@@ -1190,7 +1215,7 @@ pub mod node_tests {
     pub async fn test_timestamp_window<D: TestableDataSource>() {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         network.start().await;
@@ -1374,21 +1399,22 @@ pub mod node_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod status_tests {
+    use std::time::Duration;
+
     use crate::{
         status::StatusDataSource,
         testing::{
             consensus::{DataSourceLifeCycle, MockNetwork},
-            mocks::mock_transaction,
+            mocks::{mock_transaction, MockVersions},
             setup_test, sleep,
         },
     };
-    use std::time::Duration;
 
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_metrics<D: DataSourceLifeCycle + StatusDataSource>() {
         setup_test();
 
-        let mut network = MockNetwork::<D>::init().await;
+        let mut network = MockNetwork::<D, MockVersions>::init().await;
         let ds = network.data_source();
 
         {

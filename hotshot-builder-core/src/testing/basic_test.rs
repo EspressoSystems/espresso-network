@@ -1,4 +1,3 @@
-pub use crate::builder_state::{BuilderState, MessageType};
 pub use async_broadcast::broadcast;
 pub use hotshot::traits::election::static_committee::StaticCommittee;
 pub use hotshot_types::{
@@ -12,52 +11,49 @@ pub use hotshot_types::{
     },
 };
 use vbs::version::StaticVersionType;
+
+pub use crate::builder_state::{BuilderState, MessageType};
 /// The following tests are performed:
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-    use std::{hash::Hash, marker::PhantomData};
+    use std::{collections::VecDeque, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
 
-    use hotshot::types::SignatureKey;
-    use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
-    use hotshot_example_types::auction_results_provider_types::TestAuctionResult;
-    use hotshot_example_types::node_types::TestVersions;
-    use hotshot_types::data::{DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper};
-    use hotshot_types::simple_vote::QuorumData2;
-    use hotshot_types::traits::node_implementation::Versions;
-    use hotshot_types::{
-        signature_key::BuilderKey,
-        traits::block_contents::{vid_commitment, BlockHeader},
-        utils::BuilderCommitment,
-    };
-
-    use hotshot_example_types::{
-        block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-        state_types::{TestInstanceState, TestValidatedState},
-    };
-    use marketplace_builder_shared::block::ParentBlockReferences;
-    use marketplace_builder_shared::testing::constants::{
-        TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM, TEST_NUM_NODES_IN_VID_COMPUTATION,
-        TEST_PROTOCOL_MAX_BLOCK_SIZE,
-    };
-    use tokio::time::error::Elapsed;
-    use tokio::time::timeout;
-    use tracing_subscriber::EnvFilter;
-
-    use crate::builder_state::{
-        DaProposalMessage, DecideMessage, QuorumProposalMessage, TransactionSource,
-    };
-    use crate::service::{
-        handle_received_txns, GlobalState, ProxyGlobalState, ReceivedTransaction,
-    };
     use async_lock::RwLock;
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
-    use sha2::{Digest, Sha256};
-    use std::sync::Arc;
-    use std::time::Duration;
-
+    use hotshot::types::SignatureKey;
+    use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
+    use hotshot_example_types::{
+        auction_results_provider_types::TestAuctionResult,
+        block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
+        node_types::TestVersions,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
+    use hotshot_types::{
+        data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
+        signature_key::BuilderKey,
+        simple_vote::QuorumData2,
+        traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
+        utils::BuilderCommitment,
+    };
+    use marketplace_builder_shared::{
+        block::ParentBlockReferences,
+        testing::constants::{
+            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
+        },
+    };
     use serde::{Deserialize, Serialize};
+    use sha2::{Digest, Sha256};
+    use tokio::time::{error::Elapsed, timeout};
+    use tracing_subscriber::EnvFilter;
+
+    use super::*;
+    use crate::{
+        builder_state::{
+            DaProposalMessage, DecideMessage, QuorumProposalMessage, TransactionSource,
+        },
+        service::{handle_received_txns, GlobalState, ProxyGlobalState, ReceivedTransaction},
+    };
     /// This test simulates multiple builder states receiving messages from the channels and processing them
     #[tokio::test]
     //#[instrument]
@@ -118,6 +114,7 @@ mod tests {
             BLSPubKey::generated_from_seed_indexed(seed, 2011_u64);
         // instantiate the global state also
         let initial_commitment = vid_commitment::<TestVersions>(
+            &[],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
@@ -339,6 +336,7 @@ mod tests {
 
                     let block_payload_commitment = vid_commitment::<TestVersions>(
                         &encoded_transactions,
+                        &metadata.encode(),
                         NUM_NODES_IN_VID_COMPUTATION,
                         <TestVersions as Versions>::Base::VERSION,
                     );
@@ -460,7 +458,7 @@ mod tests {
                                 )
                                 .unwrap();
                             current_leaf
-                        }
+                        },
                     };
 
                     DecideMessage::<TestTypes> {

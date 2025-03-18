@@ -3,6 +3,7 @@ pub mod catchup;
 pub mod context;
 pub mod genesis;
 mod proposal_fetcher;
+mod request_response;
 
 mod external_event_handler;
 pub mod options;
@@ -12,46 +13,55 @@ mod restart_tests;
 
 mod message_compat_tests;
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use catchup::StatePeers;
 use context::SequencerContext;
-use espresso_types::EpochCommittees;
 use espresso_types::{
-    traits::EventConsumer, BackoffParams, L1ClientOptions, NodeState, PubKey, SeqTypes,
-    SolverAuctionResultsProvider, ValidatedState,
+    traits::EventConsumer, BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey,
+    SeqTypes, SolverAuctionResultsProvider, ValidatedState,
 };
 use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
+<<<<<<< HEAD
 use proposal_fetcher::ProposalFetcherConfig;
 use sequencer_utils::stake_table::PermissionedStakeTableUpdate;
 use std::sync::Arc;
 use tokio::select;
+||||||| bac363751
+use proposal_fetcher::ProposalFetcherConfig;
+use std::sync::Arc;
+use tokio::select;
+=======
+>>>>>>> origin/main
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
+use proposal_fetcher::ProposalFetcherConfig;
 use state_signature::static_stake_table_commitment;
+use tokio::select;
 use tracing::info;
 use url::Url;
 pub mod persistence;
 pub mod state;
+use std::{fmt::Debug, marker::PhantomData, time::Duration};
+
 use derivative::Derivative;
 use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
-use hotshot::traits::implementations::{
-    derive_libp2p_multiaddr, CombinedNetworks, GossipConfig, Libp2pNetwork, RequestResponseConfig,
-};
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_peer_id, CdnMetricsValue, CdnTopic, KeyPair, MemoryNetwork, PushCdnNetwork,
-        WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
+        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
+        RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
     MarketplaceConfig,
 };
-use hotshot_orchestrator::client::get_complete_config;
-use hotshot_orchestrator::client::OrchestratorClient;
+use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
     light_client::{StateKeyPair, StateSignKey},
@@ -66,8 +76,6 @@ use hotshot_types::{
 };
 pub use options::Options;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use std::{fmt::Debug, marker::PhantomData};
 use vbs::version::{StaticVersion, StaticVersionType};
 pub mod network;
 
@@ -312,7 +320,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         (Some(config), _) => {
             tracing::info!("loaded network config from storage, rejoining existing network");
             (config, false)
-        }
+        },
         // If we were told to fetch the config from an already-started peer, do so.
         (None, Some(peers)) => {
             tracing::info!(?peers, "loading network config from peers");
@@ -330,7 +338,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
             );
             persistence.save_config(&config).await?;
             (config, false)
-        }
+        },
         // Otherwise, this is a fresh network; load from the orchestrator.
         (None, None) => {
             tracing::info!("loading network config from orchestrator");
@@ -356,7 +364,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
             persistence.save_config(&config).await?;
             tracing::error!("all nodes connected");
             (config, true)
-        }
+        },
     };
 
     if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
@@ -454,7 +462,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
                     ethers::types::U256::from(timestamp.unix_timestamp()).to_alloy(),
                 )
                 .await
-        }
+        },
     };
 
     let mut genesis_state = ValidatedState {
@@ -552,7 +560,6 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         Some(network_params.state_relay_server_url),
         metrics,
         genesis.stake_table.capacity,
-        network_params.public_api_url,
         event_consumer,
         seq_versions,
         marketplace_config,
@@ -600,20 +607,22 @@ pub mod testing {
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
-    use hotshot_types::traits::network::Topic;
-    use hotshot_types::traits::signature_key::StakeTableEntryType;
     use hotshot_types::{
         event::LeafInfo,
         light_client::{CircuitField, StateKeyPair, StateVerKey},
-        traits::signature_key::BuilderSignatureKey,
-        traits::{block_contents::BlockHeader, metrics::NoMetrics, stake_table::StakeTableScheme},
+        traits::{
+            block_contents::BlockHeader,
+            metrics::NoMetrics,
+            network::Topic,
+            signature_key::{BuilderSignatureKey, StakeTableEntryType},
+            stake_table::StakeTableScheme,
+        },
         HotShotConfig, PeerConfig,
     };
     use marketplace_builder_core::{
         hooks::NoHooks,
         service::{BuilderConfig, GlobalState},
     };
-
     use portpicker::pick_unused_port;
     use tokio::spawn;
     use vbs::version::Version;
@@ -760,6 +769,11 @@ pub mod testing {
             self
         }
 
+        pub fn epoch_height(mut self, epoch_height: u64) -> Self {
+            self.config.epoch_height = epoch_height;
+            self
+        }
+
         pub fn build(self) -> TestConfig<NUM_NODES> {
             TestConfig {
                 config: self.config,
@@ -827,6 +841,7 @@ pub mod testing {
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
                 epoch_height: 150,
+                epoch_start_block: 0,
             };
 
             Self {
@@ -1019,7 +1034,6 @@ pub mod testing {
                 self.state_relay_url.clone(),
                 metrics,
                 stake_table_capacity,
-                None, // The public API URL
                 event_consumer,
                 bind_version,
                 MarketplaceConfig::<SeqTypes, Node<network::Memory, P::Persistence>> {
@@ -1080,9 +1094,10 @@ mod test {
     use hotshot::types::EventType::Decide;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
+        data::vid_commitment,
         event::LeafInfo,
         traits::block_contents::{
-            vid_commitment, BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES,
+            BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES,
         },
     };
     use sequencer_utils::{test_utils::setup_test, AnvilOptions};
@@ -1170,6 +1185,7 @@ mod test {
                 let payload_bytes = genesis_payload.encode();
                 vid_commitment::<TestVersions>(
                     &payload_bytes,
+                    &genesis_ns_table.encode(),
                     GENESIS_VID_NUM_STORAGE_NODES,
                     <TestVersions as Versions>::Base::VERSION,
                 )

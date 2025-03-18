@@ -7,13 +7,13 @@
 use async_trait::async_trait;
 use committable::Commitment;
 use hotshot_types::{
+    data::VidCommitment,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
-    vid::VidCommitment,
 };
 
 use super::{
-    block_info::{AvailableBlockData, AvailableBlockHeaderInput, AvailableBlockInfo},
+    block_info::{AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockInfo},
     builder::{BuildError, TransactionStatus},
 };
 
@@ -55,7 +55,7 @@ pub trait BuilderDataSource<TYPES: NodeType> {
         view_number: u64,
         sender: TYPES::SignatureKey,
         signature: &<TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
-    ) -> Result<AvailableBlockHeaderInput<TYPES>, BuildError>;
+    ) -> Result<AvailableBlockHeaderInputV1<TYPES>, BuildError>;
 
     /// To get the builder's address
     async fn builder_address(&self) -> Result<TYPES::BuilderSignatureKey, BuildError>;

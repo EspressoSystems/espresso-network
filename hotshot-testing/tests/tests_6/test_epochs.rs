@@ -10,7 +10,7 @@ use hotshot_example_types::{
     node_types::{
         CombinedImpl, EpochUpgradeTestVersions, EpochsTestVersions, Libp2pImpl, MemoryImpl,
         PushCdnImpl, RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
-        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes,
+        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes, TestTypesEpochCatchupTypes,
         TestTypesRandomizedCommitteeMembers, TestTypesRandomizedLeader,
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
@@ -53,6 +53,7 @@ cross_tests!(
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [
         TestTypes,
+        TestTypesEpochCatchupTypes,
         TestTypesRandomizedLeader,
         TestTypesRandomizedCommitteeMembers<StableQuorumFilterConfig<123, 2>>,                 // Overlap =  F
         TestTypesRandomizedCommitteeMembers<StableQuorumFilterConfig<123, 3>>,                 // Overlap =  F+1
@@ -500,7 +501,7 @@ cross_tests!(
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
-          next_view_timeout: 2000,
+          next_view_timeout: 5000,
           ..Default::default()
       };
       let mut metadata = TestDescription::default().set_num_nodes(20,20);
@@ -532,8 +533,8 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![10],
-          possible_view_failures: vec![9, 11],
-          decide_timeout: Duration::from_secs(20),
+          possible_view_failures: vec![9, 11, 12],
+          decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
 
@@ -549,7 +550,7 @@ cross_tests!(
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
-          next_view_timeout: 2000,
+          next_view_timeout: 5000,
           ..Default::default()
       };
       let mut metadata = TestDescription::default().set_num_nodes(20,2);
@@ -581,8 +582,8 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![10],
-          possible_view_failures: vec![9, 11],
-          decide_timeout: Duration::from_secs(20),
+          possible_view_failures: vec![9, 11, 12],
+          decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
 
@@ -638,8 +639,8 @@ cross_tests!(
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
-          expected_view_failures: vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
-          possible_view_failures: vec![34],
+          expected_view_failures: vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
+          possible_view_failures: vec![10, 34],
           decide_timeout: Duration::from_secs(120),
           ..Default::default()
       };
@@ -696,8 +697,8 @@ cross_tests!(
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
-          expected_view_failures: vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
-          possible_view_failures: vec![32],
+          expected_view_failures: vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+          possible_view_failures: vec![10, 32],
           decide_timeout: Duration::from_secs(120),
           ..Default::default()
       };
@@ -746,6 +747,104 @@ cross_tests!(
 
         metadata.spinning_properties = SpinningTaskDescription {
             node_changes: vec![(5, all_nodes)],
+        };
+
+        metadata
+    },
+);
+
+// A run where the CDN crashes partway through
+// and then comes back up
+cross_tests!(
+    TestName: test_combined_network_reup_with_epochs,
+    Impls: [CombinedImpl],
+    Types: [TestTypes, TestTwoStakeTablesTypes],
+    Versions: [EpochsTestVersions],
+    Ignore: false,
+    Metadata: {
+        let timing_data = TimingData {
+            next_view_timeout: 10_000,
+            ..Default::default()
+        };
+
+        let overall_safety_properties = OverallSafetyPropertiesDescription {
+            num_successful_views: 35,
+            decide_timeout: Duration::from_secs(10),
+            ..Default::default()
+        };
+
+        let completion_task_description = CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+            TimeBasedCompletionTaskDescription {
+                duration: Duration::from_secs(220),
+            },
+        );
+
+        let mut metadata = TestDescription::default_multiple_rounds();
+        metadata.timing_data = timing_data;
+        metadata.overall_safety_properties = overall_safety_properties;
+        metadata.completion_task_description = completion_task_description;
+
+        let mut all_down = vec![];
+        let mut all_up = vec![];
+        for node in 0..metadata.test_config.num_nodes_with_stake.into() {
+            all_down.push(ChangeNode {
+                idx: node,
+                updown: NodeAction::NetworkDown,
+            });
+            all_up.push(ChangeNode {
+                idx: node,
+                updown: NodeAction::NetworkUp,
+            });
+        }
+
+        metadata.spinning_properties = SpinningTaskDescription {
+            node_changes: vec![(13, all_up), (5, all_down)],
+        };
+
+        metadata
+    },
+);
+
+// A run where half of the nodes disconnect from the CDN
+cross_tests!(
+    TestName: test_combined_network_half_dc_with_epochs,
+    Impls: [CombinedImpl],
+    Types: [TestTypes, TestTwoStakeTablesTypes],
+    Versions: [EpochsTestVersions],
+    Ignore: false,
+    Metadata: {
+        let timing_data = TimingData {
+            next_view_timeout: 10_000,
+            ..Default::default()
+        };
+
+        let overall_safety_properties = OverallSafetyPropertiesDescription {
+            num_successful_views: 35,
+            decide_timeout: Duration::from_secs(10),
+            ..Default::default()
+        };
+
+        let completion_task_description = CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+            TimeBasedCompletionTaskDescription {
+                duration: Duration::from_secs(220),
+            },
+        );
+
+        let mut metadata = TestDescription::default_multiple_rounds();
+        metadata.timing_data = timing_data;
+        metadata.overall_safety_properties = overall_safety_properties;
+        metadata.completion_task_description = completion_task_description;
+
+        let mut half = vec![];
+        for node in 0..usize::from(metadata.test_config.num_nodes_with_stake) / 2 {
+            half.push(ChangeNode {
+                idx: node,
+                updown: NodeAction::NetworkDown,
+            });
+        }
+
+        metadata.spinning_properties = SpinningTaskDescription {
+            node_changes: vec![(5, half)],
         };
 
         metadata

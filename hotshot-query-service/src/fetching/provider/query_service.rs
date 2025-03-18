@@ -10,24 +10,28 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use super::Provider;
-
-use crate::{
-    availability::{LeafQueryData, PayloadQueryData, VidCommonQueryData},
-    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
-    types::HeightIndexed,
-    Error, Payload, VidCommon,
-};
 use async_trait::async_trait;
 use committable::Committable;
 use futures::try_join;
 use hotshot_types::{
-    traits::{node_implementation::NodeType, EncodeBytes},
-    vid::{advz_scheme, VidSchemeType},
+    data::{ns_table, VidCommitment},
+    traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
+    vid::{
+        advz::{advz_scheme, ADVZScheme},
+        avidm::{init_avidm_param, AvidMScheme},
+    },
 };
 use jf_vid::VidScheme;
 use surf_disco::{Client, Url};
 use vbs::version::StaticVersionType;
+
+use super::Provider;
+use crate::{
+    availability::{LeafQueryData, PayloadQueryData, VidCommonQueryData},
+    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
+    types::HeightIndexed,
+    Error, Header, Payload, VidCommon,
+};
 
 /// Data availability provider backed by another instance of this query service.
 ///
@@ -66,30 +70,83 @@ where
                 ))
                 .send()
         );
+
         match res {
             Ok((payload, common)) => {
-                // Verify that the data we retrieved is consistent with the request we made.
-                let num_storage_nodes =
-                    VidSchemeType::get_num_storage_nodes(common.common()) as usize;
-                let bytes = payload.data().encode();
-                let commit = match advz_scheme(num_storage_nodes).commit_only(bytes) {
-                    Ok(commit) => commit,
-                    Err(err) => {
-                        tracing::error!(%err, "unable to compute VID commitment");
-                        return None;
-                    }
-                };
-                if commit != req.0 {
-                    tracing::error!(?req, ?commit, "received inconsistent payload");
-                    return None;
+                match common.common() {
+                    VidCommon::V0(common) => {
+                        // Verify that the data we retrieved is consistent with the request we made.
+                        let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common) as usize;
+                        let bytes = payload.data().encode();
+                        let commit = VidCommitment::V0(
+                            match advz_scheme(num_storage_nodes).commit_only(bytes) {
+                                Ok(commit) => commit,
+                                Err(err) => {
+                                    tracing::error!(%err, "unable to compute VID commitment");
+                                    return None;
+                                },
+                            },
+                        );
+                        if commit != req.0 {
+                            tracing::error!(?req, ?commit, "received inconsistent payload");
+                            return None;
+                        }
+                    },
+                    VidCommon::V1(common) => {
+                        let bytes = payload.data().encode();
+                        // Initialize AVIDM parameters
+                        let avidm_param = match init_avidm_param(common.total_weights) {
+                            Ok(param) => param,
+                            Err(err) => {
+                                tracing::error!(%err, "unable to initialize AVIDM parameters");
+                                return None;
+                            },
+                        };
+
+                        let header = self
+                            .client
+                            .get::<Header<Types>>(&format!(
+                                "availability/header/{}",
+                                payload.height()
+                            ))
+                            .send()
+                            .await
+                            .ok()?;
+
+                        if header.payload_commitment() != req.0 {
+                            tracing::error!(?req, ?header, "received inconsistent payload");
+                            return None;
+                        }
+
+                        let metadata = header.metadata().encode();
+
+                        // Calculate AVIDM commitment
+                        let commit = match AvidMScheme::commit(
+                            &avidm_param,
+                            &bytes,
+                            ns_table::parse_ns_table(bytes.len(), &metadata),
+                        ) {
+                            Ok(commit) => VidCommitment::V1(commit),
+                            Err(err) => {
+                                tracing::error!(%err, "unable to compute AVIDM commitment");
+                                return None;
+                            },
+                        };
+
+                        // Compare calculated commitment with requested commitment
+                        if commit != req.0 {
+                            tracing::error!("commitment type mismatch for AVIDM check");
+                            return None;
+                        }
+                    },
                 }
 
                 Some(payload.data)
-            }
+            },
             Err(err) => {
                 tracing::error!("failed to fetch payload {req:?}: {err}");
                 None
-            }
+            },
         }
     }
 }
@@ -128,11 +185,11 @@ where
                 leaf.leaf.unfill_block_payload();
 
                 Some(leaf)
-            }
+            },
             Err(err) => {
                 tracing::error!("failed to fetch leaf {req:?}: {err}");
                 None
-            }
+            },
         }
     }
 }
@@ -152,17 +209,33 @@ where
             .send()
             .await
         {
-            Ok(res) if VidSchemeType::is_consistent(&req.0, &res.common).is_ok() => {
-                Some(res.common)
-            }
-            Ok(res) => {
-                tracing::error!(?req, ?res, "fetched inconsistent VID common data");
-                None
-            }
+            Ok(res) => match req.0 {
+                VidCommitment::V0(commit) => {
+                    if let VidCommon::V0(common) = res.common {
+                        if ADVZScheme::is_consistent(&commit, &common).is_ok() {
+                            Some(VidCommon::V0(common))
+                        } else {
+                            tracing::error!(?req, ?common, "fetched inconsistent VID common data");
+                            None
+                        }
+                    } else {
+                        tracing::error!(?req, ?res, "Expect VID common data but found None");
+                        None
+                    }
+                },
+                VidCommitment::V1(_) => {
+                    if let VidCommon::V1(common) = res.common {
+                        Some(VidCommon::V1(common))
+                    } else {
+                        tracing::error!(?req, ?res, "Expect VID common data but found None");
+                        None
+                    }
+                },
+            },
             Err(err) => {
                 tracing::error!("failed to fetch VID common {req:?}: {err}");
                 None
-            }
+            },
         }
     }
 }
@@ -170,8 +243,21 @@ where
 // These tests run the `postgres` Docker image, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
-    use super::*;
+    use std::{future::IntoFuture, time::Duration};
 
+    use committable::Committable;
+    use futures::{
+        future::{join, FutureExt},
+        stream::StreamExt,
+    };
+    use generic_array::GenericArray;
+    use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
+    use hotshot_types::traits::node_implementation::Versions;
+    use portpicker::pick_unused_port;
+    use rand::RngCore;
+    use tide_disco::{error::ServerError, App};
+
+    use super::*;
     use crate::{
         api::load_api,
         availability::{
@@ -193,25 +279,15 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{mock_transaction, MockBase, MockTypes},
+            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
             setup_test, sleep,
         },
         types::HeightIndexed,
-        ApiState, VidCommitment,
+        ApiState,
     };
-    use committable::Committable;
-    use futures::{
-        future::{join, FutureExt},
-        stream::StreamExt,
-    };
-    use generic_array::GenericArray;
-    use hotshot_example_types::node_types::TestVersions;
-    use portpicker::pick_unused_port;
-    use rand::RngCore;
-    use std::{future::IntoFuture, time::Duration};
-    use tide_disco::{error::ServerError, App};
 
     type Provider = TestProvider<QueryServiceProvider<MockBase>>;
+    type EpochProvider = TestProvider<QueryServiceProvider<<EpochsTestVersions as Versions>::Base>>;
 
     fn ignore<T>(_: T) {}
 
@@ -242,7 +318,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -466,11 +542,246 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_fetch_on_request_epoch_version() {
+        // This test verifies that our provider can handle fetching things by their hashes,
+        // specifically focused on epoch version transitions
+        tracing::info!("Starting test_fetch_on_request_epoch_version");
+
+        setup_test();
+
+        // Create the consensus network.
+        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+
+        // Start a web server that the non-consensus node can use to fetch blocks.
+        let port = pick_unused_port().unwrap();
+        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+        app.register_module(
+            "availability",
+            define_api(
+                &Default::default(),
+                <EpochsTestVersions as Versions>::Base::instance(),
+                "1.0.0".parse().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        network.spawn(
+            "server",
+            app.serve(
+                format!("0.0.0.0:{port}"),
+                <EpochsTestVersions as Versions>::Base::instance(),
+            ),
+        );
+
+        // Start a data source which is not receiving events from consensus, only from a peer.
+        // Use our special test provider that handles epoch version transitions
+        let db = TmpDb::init().await;
+        let provider = EpochProvider::new(QueryServiceProvider::new(
+            format!("http://localhost:{port}").parse().unwrap(),
+            <EpochsTestVersions as Versions>::Base::instance(),
+        ));
+        let data_source = data_source(&db, &provider).await;
+
+        // Start consensus.
+        network.start().await;
+
+        // Wait until the block height reaches 6. This gives us the genesis block, one additional
+        // block at the end, and then one block to play around with fetching each type of resource:
+        // * Leaf
+        // * Block
+        // * Payload
+        // * VID common
+        let leaves = network.data_source().subscribe_leaves(1).await;
+        let leaves = leaves.take(5).collect::<Vec<_>>().await;
+        let test_leaf = &leaves[0];
+        let test_block = &leaves[1];
+        let test_payload = &leaves[2];
+        let test_common = &leaves[3];
+
+        // Make requests for missing data that should _not_ trigger an active fetch:
+        let mut fetches = vec![];
+        // * An unknown leaf hash.
+        fetches.push(data_source.get_leaf(test_leaf.hash()).await.map(ignore));
+        // * An unknown leaf height.
+        fetches.push(
+            data_source
+                .get_leaf(test_leaf.height() as usize)
+                .await
+                .map(ignore),
+        );
+        // * An unknown block hash.
+        fetches.push(
+            data_source
+                .get_block(test_block.block_hash())
+                .await
+                .map(ignore),
+        );
+        fetches.push(
+            data_source
+                .get_payload(test_payload.block_hash())
+                .await
+                .map(ignore),
+        );
+        fetches.push(
+            data_source
+                .get_vid_common(test_common.block_hash())
+                .await
+                .map(ignore),
+        );
+        // * An unknown block height.
+        fetches.push(
+            data_source
+                .get_block(test_block.height() as usize)
+                .await
+                .map(ignore),
+        );
+        fetches.push(
+            data_source
+                .get_payload(test_payload.height() as usize)
+                .await
+                .map(ignore),
+        );
+        fetches.push(
+            data_source
+                .get_vid_common(test_common.height() as usize)
+                .await
+                .map(ignore),
+        );
+        // * Genesis VID common (no VID for genesis)
+        fetches.push(data_source.get_vid_common(0).await.map(ignore));
+        // * An unknown transaction.
+        fetches.push(
+            data_source
+                .get_transaction(mock_transaction(vec![]).commit())
+                .await
+                .map(ignore),
+        );
+
+        // Even if we give data extra time to propagate, these requests will not resolve, since we
+        // didn't trigger any active fetches.
+        sleep(Duration::from_secs(1)).await;
+        for (i, fetch) in fetches.into_iter().enumerate() {
+            tracing::info!("checking fetch {i} is unresolved");
+            fetch.try_resolve().unwrap_err();
+        }
+
+        // Now we will actually fetch the missing data. First, since our node is not really
+        // connected to consensus, we need to give it a leaf after the range of interest so it
+        // learns about the correct block height. We will temporarily lock requests to the provider
+        // so that we can verify that without the provider, the node does _not_ get the data.
+        provider.block().await;
+        data_source
+            .append(leaves.last().cloned().unwrap().into())
+            .await
+            .unwrap();
+
+        let req_leaf = data_source.get_leaf(test_leaf.height() as usize).await;
+        let req_block = data_source.get_block(test_block.height() as usize).await;
+        let req_payload = data_source
+            .get_payload(test_payload.height() as usize)
+            .await;
+        let req_common = data_source
+            .get_vid_common(test_common.height() as usize)
+            .await;
+
+        // Give the requests some extra time to complete, and check that they still haven't
+        // resolved, since the provider is blocked. This just ensures the integrity of the test by
+        // checking the node didn't mysteriously get the block from somewhere else, so that when we
+        // unblock the provider and the node finally gets the block, we know it came from the
+        // provider.
+        sleep(Duration::from_secs(1)).await;
+        req_leaf.try_resolve().unwrap_err();
+        req_block.try_resolve().unwrap_err();
+        req_payload.try_resolve().unwrap_err();
+        req_common.try_resolve().unwrap_err();
+
+        // Unblock the request and see that we eventually receive the data.
+        provider.unblock().await;
+        let leaf = data_source
+            .get_leaf(test_leaf.height() as usize)
+            .await
+            .await;
+        let block = data_source
+            .get_block(test_block.height() as usize)
+            .await
+            .await;
+        let payload = data_source
+            .get_payload(test_payload.height() as usize)
+            .await
+            .await;
+        let common = data_source
+            .get_vid_common(test_common.height() as usize)
+            .await
+            .await;
+        {
+            // Verify the data.
+            let truth = network.data_source();
+            assert_eq!(
+                leaf,
+                truth.get_leaf(test_leaf.height() as usize).await.await
+            );
+            assert_eq!(
+                block,
+                truth.get_block(test_block.height() as usize).await.await
+            );
+            assert_eq!(
+                payload,
+                truth
+                    .get_payload(test_payload.height() as usize)
+                    .await
+                    .await
+            );
+            assert_eq!(
+                common,
+                truth
+                    .get_vid_common(test_common.height() as usize)
+                    .await
+                    .await
+            );
+        }
+
+        // Fetching the block and payload should have also fetched the corresponding leaves, since
+        // we have an invariant that we should not store a block in the database without its
+        // corresponding leaf and header. Thus we should be able to get the leaves even if the
+        // provider is blocked.
+        provider.block().await;
+        for leaf in [test_block, test_payload] {
+            tracing::info!("fetching existing leaf {}", leaf.height());
+            let fetched_leaf = data_source.get_leaf(leaf.height() as usize).await.await;
+            assert_eq!(*leaf, fetched_leaf);
+        }
+
+        // On the other hand, fetching the block corresponding to `leaf` _will_ trigger a fetch,
+        // since fetching a leaf does not necessarily fetch the corresponding block. We can fetch by
+        // hash now, since the presence of the corresponding leaf allows us to confirm that a block
+        // with this hash exists, and trigger a fetch for it.
+        provider.unblock().await;
+        {
+            let block = data_source.get_block(test_leaf.block_hash()).await.await;
+            assert_eq!(block.hash(), leaf.block_hash());
+        }
+
+        // Test a similar scenario, but with payload instead of block: we are aware of
+        // `leaves.last()` but not the corresponding payload, but we can fetch that payload by block
+        // hash.
+        {
+            let leaf = leaves.last().unwrap();
+            let payload = data_source.get_payload(leaf.block_hash()).await.await;
+            assert_eq!(payload.height(), leaf.height());
+            assert_eq!(payload.block_hash(), leaf.block_hash());
+            assert_eq!(payload.hash(), leaf.payload_hash());
+        }
+
+        // Add more debug logs throughout the test
+        tracing::info!("Test completed successfully!");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_fetch_block_and_leaf_concurrently() {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -533,7 +844,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -600,7 +911,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -664,7 +975,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -725,7 +1036,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -801,7 +1112,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -875,7 +1186,7 @@ mod test {
     fn random_vid_commit() -> VidCommitment {
         let mut bytes = [0; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
-        VidCommitment::from(GenericArray::from(bytes))
+        VidCommitment::V0(GenericArray::from(bytes).into())
     }
 
     async fn malicious_server(port: u16) {
@@ -951,7 +1262,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1124,7 +1435,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1181,7 +1492,7 @@ mod test {
                     .as_ref()
                     .fail_begins_writable(FailableAction::Any)
                     .await
-            }
+            },
             FailureType::Write => data_source.as_ref().fail_writes(FailableAction::Any).await,
             FailureType::Commit => data_source.as_ref().fail_commits(FailableAction::Any).await,
         }
@@ -1228,7 +1539,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1284,19 +1595,19 @@ mod test {
                     .as_ref()
                     .fail_one_begin_writable(FailableAction::Any)
                     .await
-            }
+            },
             FailureType::Write => {
                 data_source
                     .as_ref()
                     .fail_one_write(FailableAction::Any)
                     .await
-            }
+            },
             FailureType::Commit => {
                 data_source
                     .as_ref()
                     .fail_one_commit(FailableAction::Any)
                     .await
-            }
+            },
         }
         assert_eq!(leaves[0], data_source.get_leaf(1).await.await);
 
@@ -1325,7 +1636,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1394,7 +1705,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1457,7 +1768,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1538,7 +1849,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1633,7 +1944,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1705,7 +2016,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1782,7 +2093,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let port = pick_unused_port().unwrap();
@@ -1862,7 +2173,7 @@ mod test {
                 for (leaf, payload) in leaves.iter().zip(payloads) {
                     assert_eq!(payload.block_hash, leaf.block_hash());
                 }
-            }
+            },
             MetadataType::Vid => {
                 let vids = data_source.subscribe_vid_common_metadata(1).await.take(3);
 
@@ -1875,7 +2186,7 @@ mod test {
                 for (leaf, vid) in leaves.iter().zip(vids) {
                     assert_eq!(vid.block_hash, leaf.block_hash());
                 }
-            }
+            },
         }
     }
 

@@ -99,7 +99,7 @@ impl<Types: NodeType> EventFilterSet<Types> {
             EventType::Decide { .. } => filter.contains(&EventFilter::Decide),
             EventType::ReplicaViewTimeout { .. } => {
                 filter.contains(&EventFilter::ReplicaViewTimeout)
-            }
+            },
             EventType::ViewFinished { .. } => filter.contains(&EventFilter::ViewFinished),
             EventType::ViewTimeout { .. } => filter.contains(&EventFilter::ViewTimeout),
             EventType::Transactions { .. } => filter.contains(&EventFilter::Transactions),

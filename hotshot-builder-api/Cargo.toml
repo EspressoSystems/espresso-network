@@ -13,7 +13,6 @@ derive_more = { workspace = true, features = ["from"] }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }
 tide-disco = { workspace = true }

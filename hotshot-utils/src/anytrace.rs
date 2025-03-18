@@ -24,21 +24,21 @@ impl Log for Error {
         match error_level {
             Level::Trace => {
                 tracing::trace!("{}", self.message);
-            }
+            },
             Level::Debug => {
                 tracing::debug!("{}", self.message);
-            }
+            },
             Level::Info => {
                 tracing::info!("{}", self.message);
-            }
+            },
             Level::Warn => {
                 tracing::warn!("{}", self.message);
-            }
+            },
             Level::Error => {
                 tracing::error!("{}", self.message);
-            }
+            },
             // impossible
-            Level::Unspecified => {}
+            Level::Unspecified => {},
         }
     }
 }
@@ -48,7 +48,7 @@ impl<T> Log for Result<T> {
         let error = match self {
             Ok(_) => {
                 return;
-            }
+            },
             Err(e) => e,
         };
 
@@ -60,21 +60,21 @@ impl<T> Log for Result<T> {
         match error_level {
             Level::Trace => {
                 tracing::trace!("{}", error.message);
-            }
+            },
             Level::Debug => {
                 tracing::debug!("{}", error.message);
-            }
+            },
             Level::Info => {
                 tracing::info!("{}", error.message);
-            }
+            },
             Level::Warn => {
                 tracing::warn!("{}", error.message);
-            }
+            },
             Level::Error => {
                 tracing::error!("{}", error.message);
-            }
+            },
             // impossible
-            Level::Unspecified => {}
+            Level::Unspecified => {},
         }
     }
 }

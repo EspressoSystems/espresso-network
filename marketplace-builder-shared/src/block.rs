@@ -3,12 +3,13 @@
 use std::time::Instant;
 
 use committable::{Commitment, Committable};
-use hotshot_types::data::{fake_commitment, Leaf2};
-use hotshot_types::traits::node_implementation::ConsensusTime;
 use hotshot_types::{
-    traits::{block_contents::Transaction, node_implementation::NodeType},
+    data::{fake_commitment, Leaf2, VidCommitment},
+    traits::{
+        block_contents::Transaction,
+        node_implementation::{ConsensusTime, NodeType},
+    },
     utils::BuilderCommitment,
-    vid::VidCommitment,
 };
 
 /// Enum to hold the different sources of the transaction
@@ -74,7 +75,7 @@ impl<Types: NodeType> std::fmt::Display for BlockId<Types> {
 /// and view of the block it targets to extend, i.e.
 /// builder with given state ID assumes blocks/bundles it's building
 /// are going to be included immediately after the parent block.
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct BuilderStateId<Types: NodeType> {
     /// View number of the parent block
     pub parent_view: Types::View,

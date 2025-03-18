@@ -155,10 +155,10 @@ impl<K: Key> MerkleProof<K> {
                             let comm = Digest::evaluate(input)
                                 .map_err(|_| StakeTableError::RescueError)?[0];
                             Ok(comm)
-                        }
+                        },
                         MerklePathEntry::Leaf { .. } => Err(StakeTableError::MalformedProof),
                     })
-            }
+            },
             _ => Err(StakeTableError::MalformedProof),
         }
     }
@@ -305,7 +305,7 @@ impl<K: Key> PersistentMerkleNode<K> {
                     siblings: siblings.try_into().unwrap(),
                 });
                 Ok(proof)
-            }
+            },
             PersistentMerkleNode::Leaf {
                 comm: _,
                 key,
@@ -341,7 +341,7 @@ impl<K: Key> PersistentMerkleNode<K> {
                         ptr += 1;
                     }
                     children[ptr].key_by_stake(stake_number)
-                }
+                },
                 PersistentMerkleNode::Leaf {
                     comm: _,
                     key,
@@ -441,7 +441,7 @@ impl<K: Key> PersistentMerkleNode<K> {
                     }),
                     value,
                 ))
-            }
+            },
             PersistentMerkleNode::Leaf {
                 comm: _,
                 key: node_key,
@@ -473,7 +473,7 @@ impl<K: Key> PersistentMerkleNode<K> {
                 } else {
                     Err(StakeTableError::MismatchedKey)
                 }
-            }
+            },
         }
     }
 
@@ -518,7 +518,7 @@ impl<K: Key> PersistentMerkleNode<K> {
                         old_value,
                     ))
                 }
-            }
+            },
             PersistentMerkleNode::Leaf {
                 comm: _,
                 key: cur_key,
@@ -541,7 +541,7 @@ impl<K: Key> PersistentMerkleNode<K> {
                 } else {
                     Err(StakeTableError::MismatchedKey)
                 }
-            }
+            },
         }
     }
 }
@@ -584,7 +584,7 @@ impl<K: Key> Iterator for IntoIter<K> {
                 // put the left-most child to the last, so it is visited first.
                 self.unvisited.extend(children.into_iter().rev());
                 self.next()
-            }
+            },
             PersistentMerkleNode::Leaf {
                 comm: _,
                 key,

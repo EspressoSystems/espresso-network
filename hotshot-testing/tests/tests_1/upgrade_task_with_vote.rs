@@ -45,9 +45,8 @@ async fn test_upgrade_task_with_vote() {
 
     hotshot::helpers::initialize_logging();
 
-    let handle = build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2)
-        .await
-        .0;
+    let (handle, _, _, node_key_map) =
+        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
     let old_version = Version { major: 0, minor: 1 };
     let new_version = Version { major: 0, minor: 2 };
@@ -70,8 +69,8 @@ async fn test_upgrade_task_with_vote() {
     let consensus = handle.hotshot.consensus().clone();
     let mut consensus_writer = consensus.write().await;
 
-    let membership = Arc::clone(&handle.hotshot.memberships);
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership);
+    let membership = handle.hotshot.membership_coordinator.clone();
+    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
 
     for view in (&mut generator).take(2).collect::<Vec<_>>().await {
         proposals.push(view.quorum_proposal.clone());

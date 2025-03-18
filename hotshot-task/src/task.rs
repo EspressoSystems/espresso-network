@@ -86,13 +86,13 @@ impl<S: TaskState + Send + 'static> Task<S> {
                             S::handle_event(&mut self.state, input, &self.sender, &self.receiver)
                                 .await
                                 .inspect_err(|e| tracing::debug!("{e}"));
-                    }
+                    },
                     Err(RecvError::Closed) => {
                         break self.boxed_state();
-                    }
+                    },
                     Err(e) => {
                         tracing::error!("Failed to receive from event stream Error: {}", e);
-                    }
+                    },
                 }
             }
         })

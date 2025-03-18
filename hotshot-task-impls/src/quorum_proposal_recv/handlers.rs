@@ -14,6 +14,7 @@ use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposal, QuorumProposalWrapper},
+    epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::QuorumCertificate,
     simple_vote::HasEpoch,
@@ -38,10 +39,11 @@ use crate::{
     events::HotShotEvent,
     helpers::{
         broadcast_event, fetch_proposal, validate_proposal_safety_and_liveness,
-        validate_proposal_view_and_certs,
+        validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc,
     },
     quorum_proposal_recv::{UpgradeLock, Versions},
 };
+
 /// Update states in the event that the parent state is not found for a given `proposal`.
 #[instrument(skip_all)]
 async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
@@ -58,19 +60,6 @@ async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<TYPES
 
     if let Err(e) = consensus_writer.update_leaf(leaf.clone(), state, None) {
         tracing::trace!("{e:?}");
-    }
-
-    if let Err(e) = validation_info
-        .storage
-        .write()
-        .await
-        .update_undecided_state2(
-            consensus_writer.saved_leaves().clone(),
-            consensus_writer.validated_state_map().clone(),
-        )
-        .await
-    {
-        tracing::warn!("Couldn't store undecided state.  Error: {:?}", e);
     }
 
     // #3967 REVIEW NOTE: Why are we cloning justify_qc here just to get the view_number out?
@@ -101,7 +90,7 @@ fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
     view: TYPES::View,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
-    membership: Arc<RwLock<TYPES::Membership>>,
+    membership: EpochMembershipCoordinator<TYPES>,
     consensus: OuterConsensus<TYPES>,
     sender_public_key: TYPES::SignatureKey,
     sender_private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -168,53 +157,14 @@ pub(crate) async fn handle_quorum_proposal_recv<
         validation_info.epoch_height,
     );
 
-    let membership_reader = validation_info.membership.read().await;
-    let membership_stake_table = membership_reader.stake_table(justify_qc.data.epoch);
-    let membership_success_threshold = membership_reader.success_threshold(justify_qc.data.epoch);
-    drop(membership_reader);
-
-    {
-        let consensus_reader = validation_info.consensus.read().await;
-        justify_qc
-            .is_valid_cert(
-                membership_stake_table,
-                membership_success_threshold,
-                &validation_info.upgrade_lock,
-            )
-            .await
-            .context(|e| {
-                consensus_reader.metrics.invalid_qc.update(1);
-
-                warn!("Invalid certificate for view {}: {}", *view_number, e)
-            })?;
-    }
-
-    if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
-        // If the next epoch justify qc exists, make sure it's equal to the justify qc
-        if justify_qc.view_number() != next_epoch_justify_qc.view_number()
-            || justify_qc.data.epoch != next_epoch_justify_qc.data.epoch
-            || justify_qc.data.leaf_commit != next_epoch_justify_qc.data.leaf_commit
-        {
-            bail!("Next epoch justify qc exists but it's not equal with justify qc.");
-        }
-
-        let membership_reader = validation_info.membership.read().await;
-        let membership_next_stake_table =
-            membership_reader.stake_table(justify_qc.data.epoch.map(|x| x + 1));
-        let membership_next_success_threshold =
-            membership_reader.success_threshold(justify_qc.data.epoch.map(|x| x + 1));
-        drop(membership_reader);
-
-        // Validate the next epoch justify qc as well
-        next_epoch_justify_qc
-            .is_valid_cert(
-                membership_next_stake_table,
-                membership_next_success_threshold,
-                &validation_info.upgrade_lock,
-            )
-            .await
-            .context(|e| warn!("Invalid certificate for view {}: {}", *view_number, e))?;
-    }
+    validate_qc_and_next_epoch_qc(
+        &justify_qc,
+        maybe_next_epoch_justify_qc.as_ref(),
+        &validation_info.consensus,
+        &validation_info.membership.coordinator,
+        &validation_info.upgrade_lock,
+    )
+    .await?;
 
     broadcast_event(
         Arc::new(HotShotEvent::QuorumProposalPreliminarilyValidated(
@@ -238,7 +188,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
             justify_qc.view_number(),
             event_sender.clone(),
             event_receiver.clone(),
-            Arc::clone(&validation_info.membership),
+            validation_info.membership.coordinator.clone(),
             OuterConsensus::new(Arc::clone(&validation_info.consensus.inner_consensus)),
             // Note that we explicitly use the node key here instead of the provided key in the signature.
             // This is because the key that we receive is for the prior leader, so the payload would be routed
@@ -258,7 +208,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
             } else {
                 bail!("Parent state not found! Consensus internally inconsistent");
             }
-        }
+        },
         None => None,
     };
 

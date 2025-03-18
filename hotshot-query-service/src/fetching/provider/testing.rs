@@ -12,18 +12,22 @@
 
 #![cfg(any(test, feature = "testing"))]
 
-use super::Provider;
-use crate::fetching::Request;
+use std::{
+    fmt::Debug,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+
 use async_lock::RwLock;
 use async_trait::async_trait;
 use derivative::Derivative;
 use hotshot_types::traits::node_implementation::NodeType;
-use std::sync::Arc;
-use std::{
-    fmt::Debug,
-    sync::atomic::{AtomicBool, Ordering},
-};
 use tokio::sync::broadcast;
+
+use super::Provider;
+use crate::fetching::Request;
 
 /// Adaptor to add test-only functionality to an existing [`Provider`].
 ///

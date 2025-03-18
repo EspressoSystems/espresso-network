@@ -20,15 +20,17 @@
 //! fully synced with the entire history of the chain. However, the node will _eventually_ sync and
 //! return the expected counts.
 
-use crate::{api::load_api, QueryError};
+use std::{fmt::Display, ops::Bound, path::PathBuf};
+
 use derive_more::From;
 use futures::FutureExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use std::{fmt::Display, ops::Bound, path::PathBuf};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
+
+use crate::{api::load_api, QueryError};
 
 pub(crate) mod data_source;
 pub(crate) mod query_data;
@@ -201,22 +203,13 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::{
-        data_source::ExtensibleDataSource,
-        task::BackgroundTask,
-        testing::{
-            consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes},
-            setup_test,
-        },
-        ApiState, Error, Header, VidShare,
-    };
+    use std::time::Duration;
+
     use async_lock::RwLock;
     use committable::Committable;
     use futures::{FutureExt, StreamExt};
     use hotshot_types::{
-        data::VidDisperseShare,
+        data::{VidDisperseShare, VidShare},
         event::{EventType, LeafInfo},
         traits::{
             block_contents::{BlockHeader, BlockPayload},
@@ -224,12 +217,23 @@ mod test {
         },
     };
     use portpicker::pick_unused_port;
-    use std::time::Duration;
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{App, Error as _};
     use tokio::time::sleep;
     use toml::toml;
+
+    use super::*;
+    use crate::{
+        data_source::ExtensibleDataSource,
+        task::BackgroundTask,
+        testing::{
+            consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
+            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            setup_test,
+        },
+        ApiState, Error, Header,
+    };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_api() {
@@ -238,7 +242,7 @@ mod test {
         let window_limit = 78;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
         let mut events = network.handle().event_stream();
         network.start().await;
 
@@ -329,7 +333,7 @@ mod test {
                     let VidDisperseShare::V0(new_share) = vid_share else {
                         panic!("VID share is not V0");
                     };
-                    assert_eq!(share, new_share.share);
+                    assert_eq!(share, VidShare::V0(new_share.share.clone()));
                 }
 
                 // Query various other ways.
@@ -417,7 +421,7 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         let mut events = network.handle().event_stream();
         network.start().await;
 

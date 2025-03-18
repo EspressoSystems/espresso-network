@@ -41,9 +41,11 @@ members = [
     "node-metrics",
     "request-response",
     "sequencer",
+    "staking-cli",
     "tests",
     "types",
-    "utils"
+    "utils",
+    "vid"
 ]
 
 exclude = ["sequencer-sqlite"]
@@ -55,6 +57,9 @@ alloy = { version = "0.9", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
+    "getrandom",
+    "network",
+    "node-bindings",
     "provider-ws",
     "providers",
     "reqwest",
@@ -91,6 +96,7 @@ circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
+diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git", tag = "v0.2.0" }
 either = "1"
 hex = "0.4"
 sha2 = "0.10"
@@ -151,6 +157,9 @@ hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 # Temporary, used to pull in the mock auction results provider
 hotshot-example-types = { path = "hotshot-example-types" }
 
+# VID import
+vid = { path = "vid", features = [ "parallel", "keccak256" ] }
+
 jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.5.1", features = [
     "test-apis",
 ] }
@@ -209,7 +218,7 @@ serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "^1.0.113"
 tempfile = "3.10"
 toml = "0.8"
-url = "2.3"
+url = { version = "2.3", features = [ "serde" ] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "8.3", features = ["git", "gitcl"] }
@@ -224,6 +233,20 @@ paste = "1.0"
 rand = "0.8.5"
 time = "0.3"
 trait-set = "0.3.0"
+
+[profile.dev]
+# Probably the least demanding setting in terms of compilation time and memory
+# that still provide tracebacks with line numbers.
+strip = "none"
+debug = "line-tables-only"
+
+[profile.dev-debug]
+# This profile should allow connecting debuggers. Compiles more slowly and
+# requires significantly more memory to compile.
+inherits = "dev"
+strip = "none"
+debug = "full"
+
 [profile.test]
 opt-level = 1
 [profile.test.package.tests]

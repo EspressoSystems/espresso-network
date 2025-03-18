@@ -14,7 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::future::join_all;
 use hotshot::{
-    traits::TestableNodeImplementation, types::EventType, HotShotInitializer, SystemContext,
+    traits::TestableNodeImplementation, types::EventType, HotShotInitializer, InitializerEpochInfo,
+    SystemContext,
 };
 use hotshot_example_types::{
     auction_results_provider_types::TestAuctionResultsProvider,
@@ -57,6 +58,10 @@ pub struct SpinningTask<
 > {
     /// epoch height
     pub epoch_height: u64,
+    /// Epoch start block
+    pub epoch_start_block: u64,
+    /// Saved epoch information. This must be sorted ascending by epoch.
+    pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
     /// handle to the nodes
     pub(crate) handles: Arc<RwLock<Vec<Node<TYPES, I, V>>>>,
     /// late start nodes
@@ -161,6 +166,8 @@ where
                                         let initializer = HotShotInitializer::<TYPES>::load(
                                             TestInstanceState::new(self.async_delay_config.clone()),
                                             self.epoch_height,
+                                            self.epoch_start_block,
+                                            self.start_epoch_info.clone(),
                                             self.last_decided_leaf.clone(),
                                             (
                                                 TYPES::View::genesis(),
@@ -192,10 +199,10 @@ where
                                             marketplace_config,
                                         )
                                         .await
-                                    }
+                                    },
                                     LateNodeContext::Restart => {
                                         panic!("Cannot spin up a node with Restart context")
-                                    }
+                                    },
                                 };
 
                                 let handle = context.run_tasks().await;
@@ -212,13 +219,13 @@ where
 
                                 self.handles.write().await.push(node);
                             }
-                        }
+                        },
                         NodeAction::Down => {
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
                                 tracing::error!("Node {} shutting down", idx);
                                 node.handle.shut_down().await;
                             }
-                        }
+                        },
                         NodeAction::RestartDown(delay_views) => {
                             let node_id = idx.try_into().unwrap();
                             if let Some(node) = self.handles.write().await.get_mut(idx) {
@@ -236,7 +243,7 @@ where
                                 };
 
                                 let storage = node.handle.storage().clone();
-                                let memberships = Arc::clone(&node.handle.memberships);
+                                let memberships = node.handle.membership_coordinator.clone();
                                 let config = node.handle.hotshot.config.clone();
                                 let marketplace_config =
                                     node.handle.hotshot.marketplace_config.clone();
@@ -268,6 +275,8 @@ where
                                 let initializer = HotShotInitializer::<TYPES>::load(
                                     TestInstanceState::new(self.async_delay_config.clone()),
                                     self.epoch_height,
+                                    self.epoch_start_block,
+                                    self.start_epoch_info.clone(),
                                     self.last_decided_leaf.clone(),
                                     (start_view, start_epoch),
                                     (high_qc, next_epoch_high_qc),
@@ -288,7 +297,7 @@ where
                                     TestRunner::<TYPES, I, V, N>::add_node_with_config_and_channels(
                                         node_id,
                                         generated_network.clone(),
-                                        memberships,
+                                        Arc::clone(memberships.membership()),
                                         initializer,
                                         config,
                                         validator_config,
@@ -318,25 +327,25 @@ where
                                     self.restart_contexts.insert(idx, new_ctx);
                                 }
                             }
-                        }
+                        },
                         NodeAction::RestartUp => {
                             if let Some(ctx) = self.restart_contexts.remove(&idx) {
                                 new_nodes.push((ctx.context, idx));
                                 new_networks.push(ctx.network.clone());
                             }
-                        }
+                        },
                         NodeAction::NetworkUp => {
                             if let Some(handle) = self.handles.write().await.get(idx) {
                                 tracing::error!("Node {} networks resuming", idx);
                                 handle.network.resume();
                             }
-                        }
+                        },
                         NodeAction::NetworkDown => {
                             if let Some(handle) = self.handles.write().await.get(idx) {
                                 tracing::error!("Node {} networks pausing", idx);
                                 handle.network.pause();
                             }
-                        }
+                        },
                     }
                 }
             }

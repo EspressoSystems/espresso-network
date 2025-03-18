@@ -19,20 +19,14 @@ use std::{
 
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use jf_vid::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use vbs::version::Version;
 
 use super::signature_key::BuilderSignatureKey;
 use crate::{
-    data::Leaf2,
-    traits::{
-        node_implementation::{NodeType, Versions},
-        states::InstanceState,
-        ValidatedState,
-    },
+    data::{Leaf2, VidCommitment},
+    traits::{node_implementation::NodeType, states::InstanceState, ValidatedState},
     utils::BuilderCommitment,
-    vid::{advz_scheme, VidCommitment, VidCommon, VidSchemeType},
 };
 
 /// Trait for structures that need to be unambiguously encoded as bytes.
@@ -143,34 +137,6 @@ pub trait TestableBlock<TYPES: NodeType>: BlockPayload<TYPES> + Debug {
     fn txn_count(&self) -> u64;
 }
 
-/// Compute the VID payload commitment.
-/// TODO(Gus) delete this function?
-/// TODO(Chengyu): use the version information
-/// # Panics
-/// If the VID computation fails.
-#[must_use]
-#[allow(clippy::panic)]
-pub fn vid_commitment<V: Versions>(
-    encoded_transactions: &[u8],
-    num_storage_nodes: usize,
-    _version: Version,
-) -> <VidSchemeType as VidScheme>::Commit {
-    advz_commitment(encoded_transactions, num_storage_nodes)
-}
-
-/// Compute the VID payload commitment using the (old) ADVZ VID scheme
-/// # Panics
-/// If the VID computation fails.
-#[must_use]
-#[allow(clippy::panic)]
-pub fn advz_commitment(
-    encoded_transactions: &[u8],
-    num_storage_nodes: usize,
-) -> <VidSchemeType as VidScheme>::Commit {
-    let encoded_tx_len = encoded_transactions.len();
-    advz_scheme(num_storage_nodes).commit_only(encoded_transactions).unwrap_or_else(|err| panic!("VidScheme::commit_only failure:(num_storage_nodes,payload_byte_len)=({num_storage_nodes},{encoded_tx_len}) error: {err}"))
-}
-
 /// The number of storage nodes to use when computing the genesis VID commitment.
 ///
 /// The number of storage nodes for the genesis VID commitment is arbitrary, since we don't actually
@@ -206,7 +172,6 @@ pub trait BlockHeader<TYPES: NodeType>:
         builder_commitment: BuilderCommitment,
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         builder_fee: BuilderFee<TYPES>,
-        vid_common: VidCommon,
         version: Version,
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
@@ -223,7 +188,6 @@ pub trait BlockHeader<TYPES: NodeType>:
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         builder_fee: Vec<BuilderFee<TYPES>>,
         view_number: u64,
-        vid_common: VidCommon,
         auction_results: Option<TYPES::AuctionResult>,
         version: Version,
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
