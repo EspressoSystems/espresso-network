@@ -141,7 +141,7 @@ gen-bindings:
 
     # Generate the alloy bindings
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --alloy --alloy-version "0.12.5" --contracts ./contracts/src/ --crate-name contract-bindings --bindings-path contract-bindings --select "{{REGEXP}}" --overwrite --force --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff
+    forge bind --skip test --skip script --alloy --alloy-version "0.12.5" --contracts ./contracts/src/ --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff
 
     cargo fmt --all
     cargo sort -g -w
