@@ -1856,17 +1856,22 @@ impl SequencerPersistence for Persistence {
     }
 
     async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>> {
-        let row = self
+        match self
             .db
             .read()
             .await?
             .fetch_one("SELECT state_cert, MAX(epoch) from state_cert GROUP BY epoch")
-            .await?;
-        if let Some(data) = row.get::<Option<Vec<u8>>, _>("state_cert") {
-            bincode::deserialize(&data)
-                .context("deserializing light client state update certificate")
-        } else {
-            Ok(LightClientStateUpdateCertificate::genesis())
+            .await
+        {
+            Ok(row) => {
+                if let Some(data) = row.get::<Option<Vec<u8>>, _>("state_cert") {
+                    bincode::deserialize(&data)
+                        .context("deserializing light client state update certificate")
+                } else {
+                    Ok(LightClientStateUpdateCertificate::genesis())
+                }
+            },
+            Err(_) => Ok(LightClientStateUpdateCertificate::genesis()),
         }
     }
 
