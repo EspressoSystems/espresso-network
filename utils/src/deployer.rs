@@ -322,7 +322,6 @@ pub async fn deploy(
     genesis: BoxFuture<'_, anyhow::Result<(ParsedLightClientState, ParsedStakeTableState)>>,
     permissioned_prover: Option<Address>,
     mut contracts: Contracts,
-    initial_stake_table: Option<Vec<NodeInfo>>,
 ) -> anyhow::Result<Contracts> {
     let provider = Provider::<Http>::try_from(l1url.to_string())?.interval(l1_interval);
     let chain_id = provider.get_chainid().await?.as_u64();
@@ -462,11 +461,10 @@ pub async fn deploy(
 
     // `PermissionedStakeTable.sol`
     if should_deploy(ContractGroup::PermissionedStakeTable, &only) {
-        let initial_stake_table: Vec<_> = initial_stake_table.unwrap_or_default();
         let stake_table_address = contracts
             .deploy_tx(
                 Contract::PermissonedStakeTable,
-                PermissionedStakeTable::deploy(l1.clone(), initial_stake_table)?,
+                PermissionedStakeTable::deploy(l1.clone(), Vec::<NodeInfo>::new())?,
             )
             .await?;
         let stake_table = PermissionedStakeTable::new(stake_table_address, l1.clone());

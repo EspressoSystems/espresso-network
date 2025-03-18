@@ -3,7 +3,7 @@ use std::time::Instant;
 use anyhow::Result;
 use futures::StreamExt;
 
-use crate::common::{NativeDemo, TestConfig};
+use crate::common::{test_stake_table_update, NativeDemo, TestConfig};
 
 /// We allow for no change in state across this many consecutive iterations.
 const MAX_STATE_NOT_INCREMENTING: u8 = 1;
@@ -80,6 +80,14 @@ pub async fn assert_native_demo_works() -> Result<()> {
 
         last = new;
     }
+
+    if let Some(epoch) = testing.espresso.current_epoch().await? {
+        tracing::info!("epoch before stake table update {epoch:?}");
+
+        tracing::info!("testing stake table update");
+        test_stake_table_update(testing.sequencer_clients).await?;
+    }
+
     Ok(())
 }
 

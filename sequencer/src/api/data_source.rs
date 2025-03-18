@@ -120,7 +120,18 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the stake table for  the current epoch if not provided
     fn get_stake_table_current(
         &self,
-    ) -> impl Send + Future<Output = Vec<PeerConfig<T::SignatureKey>>>;
+    ) -> impl Send + Future<Output = Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>>>;
+
+    fn get_current_epoch(&self) -> impl Send + Future<Output = Option<T::Epoch>>;
+
+    fn get_da_members(
+        &self,
+        epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    ) -> impl Send + Future<Output = Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>>>;
+    /// Get the stake table for the current epoch if not provided
+    fn get_da_members_current(
+        &self,
+    ) -> impl Send + Future<Output = Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {

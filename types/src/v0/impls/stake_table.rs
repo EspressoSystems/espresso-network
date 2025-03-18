@@ -7,8 +7,9 @@ use std::{
 };
 
 use anyhow::Context;
+use committable::Committable;
 use contract_bindings_alloy::permissionedstaketable::PermissionedStakeTable::StakersUpdated;
-use ethers::types::{Address, U256};
+use ethers::types::U256;
 use ethers_conv::ToAlloy;
 use hotshot::types::{BLSPubKey, SignatureKey as _};
 use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf, NodeInfoJf};
@@ -26,12 +27,13 @@ use hotshot_types::{
     },
     PeerConfig,
 };
-use itertools::Itertools;
+use indexmap::IndexMap;
 use thiserror::Error;
 
 use super::{
     traits::StateCatchup,
     v0_3::{DAMembers, StakeTable, StakeTables},
+    v0_99::ChainConfig,
     Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes,
 };
 
@@ -54,42 +56,39 @@ impl StakeTables {
     /// should not significantly affect performance to fetch all events and
     /// perform the computation in this functions once per epoch.
     pub fn from_l1_events(updates: Vec<StakersUpdated>) -> Self {
-        let changes_per_node = updates
-            .into_iter()
-            .flat_map(|event| {
-                event
-                    .removed
-                    .into_iter()
-                    .map(|key| StakeTableChange::Remove(bls_alloy_to_jf(key)))
-                    .chain(
-                        event
-                            .added
-                            .into_iter()
-                            .map(|node_info| StakeTableChange::Add(node_info.into())),
-                    )
-            })
-            .group_by(|change| change.key());
+        let mut index_map = IndexMap::new();
 
-        // If the last event for a stakers is `Added` the staker is currently
-        // staking, if the last event is removed or (or the staker is not present)
-        // they are not staking.
-        let currently_staking = changes_per_node
-            .into_iter()
-            .map(|(_pub_key, deltas)| deltas.last().expect("deltas non-empty").clone())
-            .filter_map(|change| match change {
-                StakeTableChange::Add(node_info) => Some(node_info),
-                StakeTableChange::Remove(_) => None,
-            });
-
-        let mut consensus_stake_table: Vec<PeerConfig<PubKey>> = vec![];
-        let mut da_members: Vec<PeerConfig<PubKey>> = vec![];
-        for node in currently_staking {
-            consensus_stake_table.push(node.clone().into());
-            if node.da {
-                da_members.push(node.into());
+        for event in updates {
+            for key in event.removed {
+                let change = StakeTableChange::Remove(bls_alloy_to_jf(key));
+                index_map.insert(change.key(), change);
+            }
+            for node_info in event.added {
+                let change = StakeTableChange::Add(node_info.into());
+                index_map.insert(change.key(), change);
             }
         }
-        Self::new(consensus_stake_table.into(), da_members.into())
+
+        let mut da_members = Vec::new();
+        let mut stake_table = Vec::new();
+
+        for change in index_map.values() {
+            if let StakeTableChange::Add(node_info_jf) = change {
+                let config = PeerConfig {
+                    stake_table_entry: node_info_jf.clone().into(),
+                    state_ver_key: node_info_jf.state_ver_key.clone(),
+                };
+                stake_table.push(config.clone());
+                if change.is_da() {
+                    da_members.push(config);
+                }
+            }
+        }
+
+        tracing::error!("DA={da_members:?}");
+        tracing::error!("ST={stake_table:?}");
+
+        Self::new(stake_table.into(), da_members.into())
     }
 }
 
@@ -108,15 +107,13 @@ pub struct EpochCommittees {
     /// L1 provider
     l1_client: L1Client,
 
-    /// Address of Stake Table Contract
-    contract_address: Option<Address>,
+    chain_config: ChainConfig,
+    #[debug("{}", peers.name())]
+    pub peers: Arc<dyn StateCatchup>,
 
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
 
-    /// Peers for catching up the stake table
-    #[debug(skip)]
-    peers: Option<Arc<dyn StateCatchup>>,
     /// Contains the epoch after which initial_drb_result will not be used (set_first_epoch.epoch + 2)
     /// And the DrbResult to use before that epoch
     initial_drb_result: Option<(Epoch, DrbResult)>,
@@ -133,6 +130,13 @@ impl StakeTableChange {
         match self {
             StakeTableChange::Add(node_info) => node_info.stake_table_key,
             StakeTableChange::Remove(key) => *key,
+        }
+    }
+
+    pub(crate) fn is_da(&self) -> bool {
+        match self {
+            StakeTableChange::Add(node_info) => node_info.da,
+            StakeTableChange::Remove(_) => false,
         }
     }
 }
@@ -164,7 +168,7 @@ impl EpochCommittees {
     /// to be called before calling `self.stake()` so that
     /// `Self.stake_table` only needs to be updated once in a given
     /// life-cycle but may be read from many times.
-    fn update_stake_table(&mut self, epoch: EpochNumber, st: StakeTables) -> Committee {
+    fn update_stake_table(&mut self, epoch: EpochNumber, st: StakeTables) {
         // This works because `get_stake_table` is fetching *all*
         // update events and building the table for us. We will need
         // more subtlety when start fetching only the events since last update.
@@ -203,6 +207,15 @@ impl EpochCommittees {
             .filter(|peer_config| peer_config.stake_table_entry.stake() > U256::zero())
             .collect();
 
+        let randomized_committee = generate_stake_cdf(
+            eligible_leaders
+                .clone()
+                .into_iter()
+                .map(|l| l.stake_table_entry)
+                .collect(),
+            [0u8; 32],
+        );
+
         let committee = Committee {
             eligible_leaders,
             stake_table,
@@ -212,7 +225,9 @@ impl EpochCommittees {
         };
 
         self.state.insert(epoch, committee.clone());
-        committee
+
+        self.randomized_committees
+            .insert(epoch, randomized_committee.clone());
     }
 
     // We need a constructor to match our concrete type.
@@ -266,6 +281,14 @@ impl EpochCommittees {
                 )
             })
             .collect();
+        let randomized_committee = generate_stake_cdf(
+            eligible_leaders
+                .clone()
+                .into_iter()
+                .map(|l| l.stake_table_entry)
+                .collect(),
+            [0u8; 32],
+        );
 
         let members = Committee {
             eligible_leaders,
@@ -275,19 +298,23 @@ impl EpochCommittees {
             indexed_da_members,
         };
 
+        let mut randomized_committees = BTreeMap::new();
+
+        // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1 and 2
         let mut map = HashMap::new();
-        map.insert(Epoch::genesis(), members.clone());
-        // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
-        map.insert(Epoch::genesis() + 1u64, members.clone());
+        for epoch in Epoch::genesis().u64()..=2 {
+            map.insert(Epoch::new(epoch), members.clone());
+            randomized_committees.insert(Epoch::new(epoch), randomized_committee.clone());
+        }
 
         Self {
             non_epoch_committee: members,
             state: map,
             _epoch_size: epoch_size,
             l1_client: instance_state.l1_client.clone(),
-            contract_address: instance_state.chain_config.stake_table_contract,
-            randomized_committees: BTreeMap::new(),
-            peers: Some(instance_state.peers.clone()),
+            chain_config: instance_state.chain_config,
+            peers: instance_state.peers.clone(),
+            randomized_committees,
             initial_drb_result: None,
         }
     }
@@ -315,9 +342,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         _committee_members: Vec<PeerConfig<PubKey>>,
         _da_members: Vec<PeerConfig<PubKey>>,
     ) -> Self {
-        panic!("This function has been replaced with new_stake()");
+        panic!("EpochCommittees::new() called. This function has been replaced with new_stake()");
     }
-
     /// Get the stake table for the current view
     fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
         if let Some(st) = self.state(&epoch) {
@@ -481,14 +507,25 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        let address = self.contract_address?;
+        let chain_config = get_chain_config(self.chain_config, &self.peers, &block_header)
+            .await
+            .ok()?;
+
+        let contract_address = chain_config.stake_table_contract;
+
+        if contract_address.is_none() {
+            tracing::error!("No stake table contract address found in Chain config");
+        }
+
+        let address = contract_address?;
+
         self.l1_client
             .get_stake_table(address.to_alloy(), block_header.height())
             .await
             .ok()
             .map(|stake_table| -> Box<dyn FnOnce(&mut Self) + Send> {
                 Box::new(move |committee: &mut Self| {
-                    let _ = committee.update_stake_table(epoch, stake_table);
+                    committee.update_stake_table(epoch, stake_table);
                 })
             })
     }
@@ -503,10 +540,9 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<(Header, DrbResult)> {
-        let Some(ref peers) = self.peers else {
-            anyhow::bail!("No Peers Configured for Catchup");
-        };
         // Fetch leaves from peers
+
+        let peers = self.peers.clone();
         let leaf: Leaf2 = peers
             .fetch_leaf(block_height, self, epoch, epoch_height)
             .await?;
@@ -548,6 +584,30 @@ impl Membership<SeqTypes> for EpochCommittees {
             .insert(epoch + 1, self.non_epoch_committee.clone());
         self.initial_drb_result = Some((epoch + 2, initial_drb_result));
     }
+}
+
+pub(crate) async fn get_chain_config(
+    chain_config: ChainConfig,
+    peers: &impl StateCatchup,
+    header: &Header,
+) -> anyhow::Result<ChainConfig> {
+    let header_cf = header.chain_config();
+    if chain_config.commit() == header_cf.commit() {
+        return Ok(chain_config);
+    }
+
+    let cf = match header_cf.resolve() {
+        Some(cf) => cf,
+        None => peers
+            .fetch_chain_config(header_cf.commit())
+            .await
+            .map_err(|err| {
+                tracing::error!("failed to get chain_config from peers. err: {err:?}");
+                err
+            })?,
+    };
+
+    Ok(cf)
 }
 
 #[cfg(test)]

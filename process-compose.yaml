@@ -5,8 +5,7 @@ environment:
   - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://localhost:$ESPRESSO_ORCHESTRATOR_PORT
   - ESPRESSO_SEQUENCER_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
   - ESPRESSO_SEQUENCER_L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
-  - ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml
-  - ESPRESSO_BUILDER_GENESIS_FILE=data/genesis/demo.toml
+  - ESPRESSO_BUILDER_GENESIS_FILE=$ESPRESSO_SEQUENCER_GENESIS_FILE
   - ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH=data/initial_stake_table.toml
   - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:$ESPRESSO_STATE_RELAY_SERVER_PORT
   - QUERY_SERVICE_URI=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT/v0/
@@ -28,7 +27,9 @@ processes:
     command:
       unset ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS
       ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
-      && deploy --only fee-contract,permissioned-stake-table
+      && deploy --only fee-contract
+      && unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+      && deploy --only permissioned-stake-table
     namespace: setup
     depends_on:
       demo-l1-network:
@@ -111,6 +112,21 @@ processes:
         condition: process_healthy
       deploy-prover-contracts:
         condition: process_completed
+  
+  update-permissioned-stake-table:
+    command: update-permissioned-stake-table
+    environment:
+      - ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS
+      - ESPRESSO_SEQUENCER_STATE_PEERS=http://localhost:$ESPRESSO_SEQUENCER_API_PORT
+      - ESPRESSO_SEQUENCER_ETH_MNEMONIC
+      - ESPRESSO_SEQUENCER_L1_PROVIDER
+    depends_on:
+      deploy-prover-contracts:
+        condition: process_completed
+      sequencer0:
+        condition: process_healthy
+
+
 
   sequencer0:
     command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config

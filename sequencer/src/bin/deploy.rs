@@ -9,7 +9,6 @@ use hotshot_state_prover::service::light_client_genesis;
 use sequencer_utils::{
     deployer::{deploy, ContractGroup, Contracts, DeployedContracts},
     logging,
-    stake_table::PermissionedStakeTableConfig,
 };
 use url::Url;
 
@@ -122,22 +121,6 @@ struct Options {
     /// If the light client contract is not being deployed, this option is ignored.
     #[clap(long, env = "ESPRESSO_SEQUENCER_PERMISSIONED_PROVER")]
     permissioned_prover: Option<Address>,
-
-    /// A toml file with the initial stake table.
-    ///
-    /// Schema:
-    ///
-    /// public_keys = [
-    ///   {
-    ///     stake_table_key = "BLS_VER_KEY~...",
-    ///     state_ver_key = "SCHNORR_VER_KEY~...",
-    ///     da = true,
-    ///     stake = 1, # this value is ignored, but needs to be set
-    ///   },
-    /// ]
-    #[clap(long, env = "ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH")]
-    initial_stake_table_path: Option<PathBuf>,
-
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -153,13 +136,6 @@ async fn main() -> anyhow::Result<()> {
 
     let genesis = light_client_genesis(&sequencer_url, opt.stake_table_capacity).boxed();
 
-    let initial_stake_table = if let Some(path) = opt.initial_stake_table_path {
-        tracing::info!("Loading initial stake table from {:?}", path);
-        Some(PermissionedStakeTableConfig::from_toml_file(&path)?.into())
-    } else {
-        None
-    };
-
     let contracts = deploy(
         opt.rpc_url,
         opt.l1_polling_interval,
@@ -171,7 +147,6 @@ async fn main() -> anyhow::Result<()> {
         genesis,
         opt.permissioned_prover,
         contracts,
-        initial_stake_table,
     )
     .await?;
 
