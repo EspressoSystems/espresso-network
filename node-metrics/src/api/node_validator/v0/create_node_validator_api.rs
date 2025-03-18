@@ -1,16 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
 use async_lock::RwLock;
-use espresso_types::{PubKey, SeqTypes};
+use espresso_types::SeqTypes;
 use futures::{
     channel::mpsc::{self, Receiver, SendError, Sender},
-    Sink, SinkExt, Stream, StreamExt,
+    Sink, SinkExt,
 };
-use hotshot_types::{
-    data::Leaf2,
-    event::{Event, EventType},
-};
-use serde::{Deserialize, Serialize};
 use tokio::{spawn, task::JoinHandle};
 use url::Url;
 
@@ -47,220 +42,6 @@ pub struct NodeValidatorConfig {
 #[derive(Debug)]
 pub enum CreateNodeValidatorProcessingError {
     FailedToGetStakeTable(hotshot_query_service::Error),
-}
-
-/// An external message that can be sent to or received from a node
-#[derive(Serialize, Deserialize, Clone)]
-pub enum ExternalMessage {
-    /// A request for a node to respond with its identifier
-    /// Contains the public key of the node that is requesting the roll call
-    RollCallRequest(PubKey),
-
-    /// A response to a roll call request
-    /// Contains the identifier of the node
-    RollCallResponse(RollCallInfo),
-}
-
-/// Information about a node that is used in a roll call response
-#[derive(Serialize, Deserialize, Clone)]
-pub struct RollCallInfo {
-    // The public API URL of the node
-    pub public_api_url: Url,
-}
-
-/// [HotShotEventProcessingTask] is a task that is capable of processing events
-/// that are coming in from a HotShot event stream.  This task will keep an
-/// eye out for ExternalMessageReceived events that can be decoded as a
-/// RollCallResponse.  When a RollCallResponse is received, the public API URL
-/// of the node that sent the message will be sent to the provided url_sender.
-///
-/// Additionally, this can receive Decide events and send the discovered leaves
-/// to the provided leaf_sender.  This can can be used as a means of receiving
-/// leaves that doesn't involve hitting an external service like the task
-/// [ProcessProduceLeafStreamTask] does.
-pub struct HotShotEventProcessingTask {
-    pub task_handle: Option<JoinHandle<()>>,
-}
-
-impl HotShotEventProcessingTask {
-    /// [new] creates a new [HotShotEventProcessingTask] that will process
-    /// events from the provided event_stream.
-    ///
-    /// Calls to [new] will spawn a new task that will start processing
-    /// immediately. The task handle will be stored in the returned structure.
-    pub fn new<S, K1, K2>(event_stream: S, url_sender: K1, leaf_sender: K2) -> Self
-    where
-        S: Stream<Item = Event<SeqTypes>> + Send + Unpin + 'static,
-        K1: Sink<Url, Error = SendError> + Send + Unpin + 'static,
-        K2: Sink<Leaf2<SeqTypes>, Error = SendError> + Send + Unpin + 'static,
-    {
-        let task_handle = spawn(Self::process_messages(
-            event_stream,
-            url_sender,
-            leaf_sender,
-        ));
-
-        Self {
-            task_handle: Some(task_handle),
-        }
-    }
-
-    /// [process_messages] is a function that will process messages from the
-    /// provided event stream.
-    async fn process_messages<S, K1, K2>(event_receiver: S, url_sender: K1, leaf_sender: K2)
-    where
-        S: Stream<Item = Event<SeqTypes>> + Send + Unpin + 'static,
-        K1: Sink<Url, Error = SendError> + Unpin,
-        K2: Sink<Leaf2<SeqTypes>, Error = SendError> + Unpin,
-    {
-        let mut event_stream = event_receiver;
-        let mut url_sender = url_sender;
-        let mut leaf_sender = leaf_sender;
-        loop {
-            let event_result = event_stream.next().await;
-            let event = match event_result {
-                Some(event) => event,
-                None => {
-                    tracing::info!("event stream closed");
-                    break;
-                },
-            };
-
-            let Event { event, .. } = event;
-
-            match event {
-                EventType::Decide { leaf_chain, .. } => {
-                    for leaf_info in leaf_chain.iter().rev() {
-                        let leaf = leaf_info.leaf.clone();
-
-                        let send_result = leaf_sender.send(leaf).await;
-                        if let Err(err) = send_result {
-                            tracing::error!("leaf sender closed: {}", err);
-                            panic!("HotShotEventProcessingTask leaf sender is closed, unrecoverable, the block state will stagnate.");
-                        }
-                    }
-                },
-
-                EventType::ExternalMessageReceived { data, .. } => {
-                    let roll_call_info = match bincode::deserialize(&data) {
-                        Ok(ExternalMessage::RollCallResponse(roll_call_info)) => roll_call_info,
-
-                        Err(err) => {
-                            tracing::info!(
-                                "failed to deserialize external message, unrecognized: {}",
-                                err
-                            );
-                            continue;
-                        },
-
-                        _ => {
-                            // Ignore any other potentially recognized messages
-                            continue;
-                        },
-                    };
-
-                    let public_api_url = roll_call_info.public_api_url;
-
-                    // Send the discovered public url to the sink
-                    let send_result = url_sender.send(public_api_url).await;
-                    if let Err(err) = send_result {
-                        tracing::error!("url sender closed: {}", err);
-                        panic!("HotShotEventProcessingTask url sender is closed, unrecoverable, the node state will stagnate.");
-                    }
-                },
-                _ => {
-                    // Ignore all other events
-                    continue;
-                },
-            }
-        }
-    }
-}
-
-/// [Drop] implementation for [HotShotEventProcessingTask] that will cancel the
-/// task when the structure is dropped.
-impl Drop for HotShotEventProcessingTask {
-    fn drop(&mut self) {
-        if let Some(task_handle) = self.task_handle.take() {
-            task_handle.abort();
-        }
-    }
-}
-
-/// [ProcessExternalMessageHandlingTask] is a task that is capable of processing
-/// external messages that are coming in from an external message stream.  This
-/// task will keep an eye out for ExternalMessageReceived events that can be
-/// decoded as a RollCallResponse.  When a RollCallResponse is received, the
-/// public API URL of the node that sent the message will be sent to the
-/// provided url_sender.
-///
-/// This task can be used as a means of processing [ExternalMessage]s that are
-/// not being provided by a HotShot event stream.  It can be used as an
-/// alternative to the [HotShotEventProcessingTask] for processing external
-/// messages.
-pub struct ProcessExternalMessageHandlingTask {
-    pub task_handle: Option<JoinHandle<()>>,
-}
-
-impl ProcessExternalMessageHandlingTask {
-    /// [new] creates a new [ProcessExternalMessageHandlingTask] that will
-    /// process external messages from the provided external_message_receiver.
-    ///
-    /// Calls to [new] will spawn a new task that will start processing
-    /// immediately. The task handle will be stored in the returned structure.
-    pub fn new<S, K>(external_message_receiver: S, url_sender: K) -> Self
-    where
-        S: Stream<Item = ExternalMessage> + Send + Unpin + 'static,
-        K: Sink<Url, Error = SendError> + Send + Unpin + 'static,
-    {
-        let task_handle = spawn(Self::process_external_messages(
-            external_message_receiver,
-            url_sender,
-        ));
-
-        Self {
-            task_handle: Some(task_handle),
-        }
-    }
-
-    /// [process_external_messages] is a function that will process messages from
-    /// the provided external message stream.
-    async fn process_external_messages<S, K>(external_message_receiver: S, url_sender: K)
-    where
-        S: Stream<Item = ExternalMessage> + Send + Unpin + 'static,
-        K: Sink<Url, Error = SendError> + Send + Unpin + 'static,
-    {
-        let mut external_message_receiver = external_message_receiver;
-        let mut url_sender = url_sender;
-
-        loop {
-            let external_message_result = external_message_receiver.next().await;
-            let external_message = match external_message_result {
-                Some(external_message) => external_message,
-                None => {
-                    tracing::error!("external message receiver closed");
-                    break;
-                },
-            };
-
-            match external_message {
-                ExternalMessage::RollCallResponse(roll_call_info) => {
-                    let public_api_url = roll_call_info.public_api_url;
-
-                    let send_result = url_sender.send(public_api_url).await;
-                    if let Err(err) = send_result {
-                        tracing::error!("url sender closed: {}", err);
-                        break;
-                    }
-                },
-
-                _ => {
-                    // Ignore all other messages
-                    continue;
-                },
-            }
-        }
-    }
 }
 
 /// [SubmitPublicUrlsToScrapeTask] is a task that is capable of submitting
@@ -306,16 +87,6 @@ impl SubmitPublicUrlsToScrapeTask {
 
             // Sleep for 5 minutes before sending the urls again
             tokio::time::sleep(PUBLIC_URL_RESUBMIT_INTERVAL).await;
-        }
-    }
-}
-
-/// [Drop] implementation for [ProcessExternalMessageHandlingTask] that will
-/// cancel the task when the structure is dropped.
-impl Drop for ProcessExternalMessageHandlingTask {
-    fn drop(&mut self) {
-        if let Some(task_handle) = self.task_handle.take() {
-            task_handle.abort();
         }
     }
 }
@@ -464,11 +235,13 @@ mod test {
             },
         }
 
-        let client = surf_disco::Client::new(
+        let client = surf_disco::Client::builder(
             "https://query.main.net.espresso.network/v0/"
                 .parse()
                 .unwrap(),
-        );
+        )
+        .content_type(surf_disco::ContentType::Json)
+        .build();
 
         // Let's get the current starting block height.
         let block_height = {

@@ -1,4 +1,3 @@
-pub mod cdn;
 pub mod create_node_validator_api;
 
 use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
@@ -9,10 +8,12 @@ use futures::{
     future::{BoxFuture, Either},
     pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt,
 };
-use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
+use hotshot_query_service::{
+    availability::{BlockQueryData, Leaf1QueryData},
+    types::HeightIndexed,
+};
 use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
-    data::Leaf2,
     light_client::{CircuitField, StateVerKey},
     signature_key::BLSPubKey,
     traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme},
@@ -459,7 +460,9 @@ pub trait SurfDiscoAvailabilityAPIPathResolver {
     fn resolve_path_for_height(&self, height: u64) -> String;
 }
 
-impl SurfDiscoAvailabilityAPIPathResolver for SurfDiscoAvailabilityAPIStream<'_, Leaf2<SeqTypes>> {
+impl SurfDiscoAvailabilityAPIPathResolver
+    for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
+{
     fn resolve_path_for_height(&self, height: u64) -> String {
         format!("availability/stream/leaves/{}", height)
     }
@@ -487,14 +490,14 @@ pub trait UpdateBlockHeightForEntry<T> {
     fn update_block_height_for_entry(&mut self, entry: &T);
 }
 
-impl UpdateBlockHeightForEntry<Leaf2<SeqTypes>>
-    for SurfDiscoAvailabilityAPIStream<'_, Leaf2<SeqTypes>>
+impl UpdateBlockHeightForEntry<Leaf1QueryData<SeqTypes>>
+    for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
 {
-    fn block_height_for_entry(&self, entry: &Leaf2<SeqTypes>) -> u64 {
-        entry.height()
+    fn block_height_for_entry(&self, entry: &Leaf1QueryData<SeqTypes>) -> u64 {
+        entry.leaf().height()
     }
 
-    fn update_block_height_for_entry(&mut self, entry: &Leaf2<SeqTypes>) {
+    fn update_block_height_for_entry(&mut self, entry: &Leaf1QueryData<SeqTypes>) {
         self.last_received_block = self.block_height_for_entry(entry);
     }
 }
@@ -511,7 +514,7 @@ impl UpdateBlockHeightForEntry<BlockQueryData<SeqTypes>>
     }
 }
 
-impl SurfDiscoAvailabilityAPIStream<'_, Leaf2<SeqTypes>> {
+impl SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
     pub fn new_leaf_stream(
         client: surf_disco::Client<hotshot_query_service::Error, Version01>,
         starting_block: u64,
@@ -695,11 +698,11 @@ where
 /// AvailabilityAPILeafStream is a trait that represents a stream of [Leaf]s
 /// in their simplest form.  This acts as a simple type declaration for
 /// quick reference.
-pub trait AvailabilityAPILeafStream: Stream<Item = Leaf2<SeqTypes>> {}
+pub trait AvailabilityAPILeafStream: Stream<Item = Leaf1QueryData<SeqTypes>> {}
 
 /// We implicitly implement the [AvailabilityAPILeafStream] trait for any
 /// Stream that matches the produced item [Leaf]s.
-impl<S> AvailabilityAPILeafStream for S where S: Stream<Item = Leaf2<SeqTypes>> {}
+impl<S> AvailabilityAPILeafStream for S where S: Stream<Item = Leaf1QueryData<SeqTypes>> {}
 
 /// [ProcessProduceLeafStreamTask] is a task that produce a stream of
 /// [BlockQueryData]s. This acts as a simple type declaration for quick
@@ -712,20 +715,20 @@ impl<S> AvailabilityAPIBlockStream for S where S: Stream<Item = BlockQueryData<S
 
 /// [LeafAndBlock] is a tuple that contains a [Leaf] and a [BlockQueryData].
 /// This acts as a simple type declaration for quick reference.
-pub type LeafAndBlock<T> = (Leaf2<T>, BlockQueryData<T>);
+pub type LeafAndBlock<T> = (Leaf1QueryData<T>, BlockQueryData<T>);
 
-/// [LeafAndBlockPairStream] is a trait that represents a stream of [Leaf]s
+/// [LeafAndBlockPairStream] is a trait that represents a stream of [Leaf1QueryData]s
 /// and [BlockQueryData]s.  This acts as a simple type declaration for quick
 /// reference.
 pub trait LeafAndBlockPairStream: Stream<Item = LeafAndBlock<SeqTypes>> {}
 
 /// We implicitly implement the [LeafAndBlockPairStream] trait for any
-/// Stream that matches the produced a pair of [Leaf], and [BlockQueryData].
+/// Stream that matches the produced a pair of [Leaf1QueryData], and [BlockQueryData].
 impl<S> LeafAndBlockPairStream for S where S: Stream<Item = LeafAndBlock<SeqTypes>> {}
 
 /// [BridgeLeafAndBlockStreamToSenderTask] is a task that produce a stream of
-/// pairs of [Leaf]s and [BlockQueryData]s from the Hotshot Query Service. It
-/// will attempt to retrieve the [Leaf]s and [BlockQueryData]s from the Hotshot
+/// pairs of [Leaf1QueryData]s and [BlockQueryData]s from the Hotshot Query Service. It
+/// will attempt to retrieve the [Leaf1QueryData]s and [BlockQueryData]s from the Hotshot
 /// Query Service and then send them to the [Sink] provided.
 pub struct BridgeLeafAndBlockStreamToSenderTask {
     pub task_handle: Option<JoinHandle<()>>,
@@ -733,7 +736,7 @@ pub struct BridgeLeafAndBlockStreamToSenderTask {
 
 impl BridgeLeafAndBlockStreamToSenderTask {
     /// [new] creates a new [ProcessConsumeLeafStreamTask] that produces a
-    /// stream of [Leaf]s from the Hotshot Query Service.
+    /// stream of [Leaf1QueryData]s from the Hotshot Query Service.
     ///
     /// Calling this function will create an async task that will start
     /// processing immediately.  The task's handle will be stored in the
