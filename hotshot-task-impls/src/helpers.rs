@@ -938,12 +938,6 @@ pub async fn wait_for_next_epoch_qc<TYPES: NodeType>(
     })
     .await
     else {
-        // Check again, there is a chance we missed it
-        if let Some(next_epoch_qc) = consensus.read().await.next_epoch_high_qc() {
-            if next_epoch_qc.data.leaf_commit == high_qc.data.leaf_commit {
-                return Ok(next_epoch_qc.clone());
-            }
-        };
         return Err(warn!("Error while waiting for the next epoch QC."));
     };
     let HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) = event.as_ref() else {
