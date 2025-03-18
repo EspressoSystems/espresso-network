@@ -14,7 +14,9 @@ use anyhow::Context;
 use async_trait::async_trait;
 use contract_bindings_alloy::{
     permissionedstaketable::PermissionedStakeTable::StakersUpdated,
-    staketable::StakeTable::{Delegated, Undelegated, ValidatorExit, ValidatorRegistered},
+    staketable::StakeTable::{
+        ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
+    },
 };
 use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::{BLSPubKey, SignatureKey as _};
@@ -60,11 +62,25 @@ pub fn from_l1_events(
     deregistered: Vec<(ValidatorExit, Log)>,
     delegated: Vec<(Delegated, Log)>,
     undelegated: Vec<(Undelegated, Log)>,
+    keys_update: Vec<(ConsensusKeysUpdated, Log)>,
 ) -> IndexMap<Address, Validator<BLSPubKey>> {
     // TODO: return RESULT
     // TODO: Handle consensus keys update event
     let mut st_map = BTreeMap::new();
+    let mut bls_keys = HashSet::new();
+    let mut schnor_keys = HashSet::new();
     for (reg, log) in registered {
+        let bls = bls_alloy_to_jf2(reg.blsVk.clone());
+        let state_ver_key = edward_bn254point_to_state_ver(reg.schnorrVk.clone());
+        if bls_keys.contains(&bls) {
+            tracing::error!("bls key {bls:?} already used");
+            continue;
+        }
+
+        if schnor_keys.contains(&state_ver_key) {
+            tracing::error!("schnor verifying key {bls:?} already used");
+            continue;
+        }
         st_map.insert(
             (
                 log.block_number.unwrap(),
@@ -73,6 +89,9 @@ pub fn from_l1_events(
             ),
             StakeTableChange::Add(reg),
         );
+
+        bls_keys.insert(bls);
+        schnor_keys.insert(state_ver_key);
     }
 
     for (dereg, log) in deregistered {
@@ -182,6 +201,39 @@ pub fn from_l1_events(
                     }
                 }
             },
+        }
+    }
+
+    // sort events
+    let mut keys_update_map = BTreeMap::new();
+
+    for (update, log) in keys_update {
+        keys_update_map.insert(
+            (
+                log.block_number.unwrap(),
+                log.transaction_index.unwrap(),
+                log.log_index.unwrap(),
+            ),
+            update,
+        );
+    }
+
+    // get updated keys for each account address
+    let mut keys = HashMap::new();
+
+    for update in keys_update_map.values() {
+        keys.insert(update.account, update);
+    }
+
+    // update validators keys
+    for (key, update) in keys {
+        let validator = validators.get_mut(&key);
+        if let Some(validator) = validator {
+            let bls = bls_alloy_to_jf2(update.blsVK.clone());
+            let state_ver_key = edward_bn254point_to_state_ver(update.schnorrVK.clone());
+
+            validator.stake_table_key = bls;
+            validator.state_ver_key = state_ver_key;
         }
     }
 

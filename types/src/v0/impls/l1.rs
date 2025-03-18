@@ -866,11 +866,19 @@ impl L1Client {
             .query()
             .await?;
 
+        let keys_update = stake_table_contract
+            .ConsensusKeysUpdated_filter()
+            .from_block(0)
+            .to_block(block)
+            .query()
+            .await?;
+
         Ok(from_l1_events(
             registered,
             deregistered,
             delegated,
             undelegated,
+            keys_update,
         ))
     }
 
