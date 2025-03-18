@@ -485,11 +485,32 @@ pub async fn deploy(
     Ok(contracts)
 }
 
-fn should_deploy(group: ContractGroup, only: &Option<Vec<ContractGroup>>) -> bool {
-    match only {
-        Some(groups) => groups.contains(&group),
-        None => true,
-    }
+/// Common logic for any Ownable contract to tranfer ownership
+pub async fn transfer_ownership(
+    provider: impl Provider,
+    target: Contract,
+    addr: Address,
+    new_owner: Address,
+) -> Result< TransactionReceipt > {
+    let receipt = match target {
+        Contract::LightClient | Contract::LightClientProxy => {
+            tracing::info!(%addr, %new_owner, "Transfer LightClient ownership");
+            let lc = LightClient::new(addr, &provider);
+            lc.transferOwnership(new_owner).send().await?.get_receipt().await?
+        },
+         Contract::FeeContract | Contract::FeeContractProxy=> {
+            tracing::info!(%addr, %new_owner, "Transfer FeeContract ownership");
+            let fee = FeeContract::new(addr, &provider);
+            fee.transferOwnership(new_owner).send().await?.get_receipt().await?
+        },
+        Contract::PermissonedStakeTable => {
+            tracing::info!(%addr, %new_owner, "Transfer PermissionedStakeTable ownership");
+            let st = PermissionedStakeTable::new(addr, &provider);
+            st.transferOwnership(new_owner).send().await?.get_receipt().await?
+        },
+        _ => { return Err(anyhow!("Not Ownable, can't transfer ownership!")) }
+    };
+    Ok(receipt)
 }
 
 pub async fn is_proxy_contract(
