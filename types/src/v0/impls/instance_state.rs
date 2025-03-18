@@ -1,12 +1,14 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_lock::RwLock;
-use hotshot_types::{traits::states::InstanceState, HotShotConfig};
+use hotshot_types::{
+    epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState, HotShotConfig,
+};
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
-use super::{state::ValidatedState, EpochCommittees};
+use super::{state::ValidatedState, EpochCommittees, SeqTypes};
 use crate::v0::{
     traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
     Timestamp, Upgrade, UpgradeMode,
@@ -25,7 +27,8 @@ pub struct NodeState {
     pub genesis_header: GenesisHeader,
     pub genesis_state: ValidatedState,
     pub l1_genesis: Option<L1BlockInfo>,
-    pub membership: Arc<RwLock<EpochCommittees>>,
+    #[debug(skip)]
+    pub coordinator: EpochMembershipCoordinator<SeqTypes>,
     pub epoch_height: Option<u64>,
 
     /// Map containing all planned and executed upgrades.
@@ -53,7 +56,7 @@ impl NodeState {
         l1_client: L1Client,
         catchup: impl StateCatchup + 'static,
         current_version: Version,
-        membership: Arc<RwLock<EpochCommittees>>,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
     ) -> Self {
         Self {
             node_id,
@@ -69,7 +72,7 @@ impl NodeState {
             upgrades: Default::default(),
             current_version,
             epoch_height: None,
-            membership,
+            coordinator,
         }
     }
 
@@ -89,13 +92,15 @@ impl NodeState {
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             Arc::new(mock::MockStateCatchup::default()),
         )));
+
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
         Self::new(
             0,
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 1>::version(),
-            membership,
+            coordinator,
         )
     }
 
@@ -115,13 +120,15 @@ impl NodeState {
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             Arc::new(mock::MockStateCatchup::default()),
         )));
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+
         Self::new(
             0,
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 2>::version(),
-            membership,
+            coordinator,
         )
     }
 
@@ -140,13 +147,15 @@ impl NodeState {
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             Arc::new(mock::MockStateCatchup::default()),
         )));
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+
         Self::new(
             0,
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 99>::version(),
-            membership,
+            coordinator,
         )
     }
 
@@ -201,13 +210,15 @@ impl Default for NodeState {
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             Arc::new(mock::MockStateCatchup::default()),
         )));
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+
         Self::new(
             1u64,
             chain_config,
             l1,
             Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 1>::version(),
-            membership,
+            coordinator,
         )
     }
 }

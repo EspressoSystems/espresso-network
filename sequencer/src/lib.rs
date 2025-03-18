@@ -54,6 +54,7 @@ use hotshot::{
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
+    epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
@@ -482,7 +483,9 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         peers.clone(),
     );
 
-    let membership = Arc::new(RwLock::new(membership));
+    let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, network_config.config.epoch_height);
 
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
@@ -495,7 +498,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         current_version: V::Base::VERSION,
         epoch_height: None,
         peers,
-        membership: membership.clone(),
+        coordinator: coordinator.clone(),
     };
 
     // Initialize the Libp2p network
@@ -503,7 +506,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             DhtNoPersistence,
-            membership.clone(),
+            coordinator.membership().clone(),
             gossip_config,
             request_response_config,
             libp2p_bind_address,
@@ -542,7 +545,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
     let mut ctx = SequencerContext::init(
         network_config,
         validator_config,
-        membership,
+        coordinator,
         instance_state,
         persistence,
         network,
@@ -990,15 +993,17 @@ pub mod testing {
                 chain_config.stake_table_contract.map(|a| a.to_alloy()),
                 peers.clone(),
             );
-
             let membership = Arc::new(RwLock::new(membership));
+
+            let coordinator = EpochMembershipCoordinator::new(membership, 100);
+
             let node_state = NodeState::new(
                 i as u64,
                 chain_config,
                 l1_client,
                 peers,
                 V::Base::VERSION,
-                membership.clone(),
+                coordinator.clone(),
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
@@ -1021,7 +1026,7 @@ pub mod testing {
                     ..Default::default()
                 },
                 validator_config,
-                membership,
+                coordinator,
                 node_state,
                 persistence,
                 network,

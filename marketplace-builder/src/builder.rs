@@ -28,6 +28,7 @@ use hotshot_events_service::{
 };
 use hotshot_types::{
     data::{fake_commitment, Leaf, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::{
         block_contents::{Transaction as _, GENESIS_VID_NUM_STORAGE_NODES},
         metrics::NoMetrics,
@@ -84,13 +85,16 @@ pub fn build_instance_state<V: Versions>(
         l1_client.clone(),
         peers.clone(),
         V::Base::version(),
-        Arc::new(RwLock::new(EpochCommittees::new_stake(
-            vec![],
-            vec![],
-            l1_client,
-            chain_config.stake_table_contract.map(|a| a.to_alloy()),
-            peers,
-        ))),
+        EpochMembershipCoordinator::new(
+            Arc::new(RwLock::new(EpochCommittees::new_stake(
+                vec![],
+                vec![],
+                l1_client,
+                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                peers,
+            ))),
+            10,
+        ),
     )
 }
 

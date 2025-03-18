@@ -399,10 +399,14 @@ pub async fn catchup_missing_accounts(
     let height = parent_leaf.height();
     let epoch_height = instance_state.epoch_height.unwrap();
     let epoch = EpochNumber::new(height % epoch_height);
-    let membership = instance_state.membership.read().await;
+    let coordinator = instance_state.coordinator.clone();
+
+    let epoch_membership = coordinator.membership_for_epoch(Some(epoch)).await?;
+    let membership = epoch_membership.coordinator.membership().read().await;
+
     let leader: BLSPubKey = membership
         .leader(ViewNumber::new(height), Some(epoch))
-        .unwrap();
+        .context(format!("leader for epoch {epoch:?} not found"))?;
 
     let validator = membership.get_validator_config(&epoch, leader).unwrap();
     let mut reward_accounts = vec![validator.account.to_ethers().into()];

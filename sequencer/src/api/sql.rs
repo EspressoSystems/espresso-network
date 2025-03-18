@@ -27,6 +27,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
+    epoch_membership::EpochMembership,
     message::Proposal,
     traits::node_implementation::ConsensusTime,
     utils::epoch_from_block_number,
@@ -630,8 +631,12 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
     let from_epoch = epoch_from_block_number(parent.height(), epoch_height);
     let to_epoch = epoch_from_block_number(last_leaf.height(), epoch_height);
 
+    let coordinator = instance.coordinator.clone();
     for epoch in from_epoch..=to_epoch {
-        let membership = instance.membership.read().await;
+        let epoch_membership = coordinator
+            .membership_for_epoch(Some(EpochNumber::new(epoch)))
+            .await?;
+        let membership = epoch_membership.coordinator.membership().read().await;
         let validators = membership.validators(&EpochNumber::new(epoch))?;
 
         for (validator, config) in validators {

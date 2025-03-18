@@ -106,7 +106,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     pub async fn init(
         network_config: NetworkConfig<PubKey>,
         validator_config: ValidatorConfig<<SeqTypes as NodeType>::SignatureKey>,
-        membership: Arc<RwLock<EpochCommittees>>,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
         persistence: P,
         network: Arc<N>,
@@ -149,7 +149,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         )));
 
         let persistence = Arc::new(persistence);
-        let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height);
         let membership = coordinator.membership().clone();
 
         let handle = SystemContext::init(
