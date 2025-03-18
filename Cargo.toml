@@ -50,12 +50,12 @@ members = [
 exclude = ["sequencer-sqlite"]
 
 [workspace.dependencies]
-contract-bindings-alloy = { path = "./contract-bindings-alloy" }
 ethers-conv = { path = "./ethers-conv" }
 alloy = { version = "0.12.5", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
+    "node-bindings",
     "provider-ws",
     "providers",
     "reqwest",
