@@ -1177,7 +1177,10 @@ pub mod tests {
         SinkExt, StreamExt,
     };
     use hotshot_example_types::node_types::TestVersions;
-    use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
+    use hotshot_query_service::{
+        availability::{BlockQueryData, Leaf1QueryData},
+        testing::mocks::MockVersions,
+    };
     use hotshot_types::{
         data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
     };
@@ -1612,6 +1615,7 @@ pub mod tests {
         // send a new leaf
         let validated_state = ValidatedState::default();
         let instance_state = NodeState::mock();
+
         let leaf =
             Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
         let block_query_data =
@@ -1620,7 +1624,12 @@ pub mod tests {
         let arc_expected_block = Arc::new(expected_block);
 
         assert_eq!(
-            leaf_sender.send((leaf, block_query_data.clone())).await,
+            leaf_sender
+                .send((
+                    Leaf1QueryData::new(leaf.clone().to_leaf_unsafe(), leaf.justify_qc().to_qc()),
+                    block_query_data.clone()
+                ))
+                .await,
             Ok(())
         );
 

@@ -9,13 +9,12 @@ use circular_buffer::CircularBuffer;
 use espresso_types::{Header, Payload, SeqTypes};
 use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
 use hotshot_query_service::{
-    availability::{BlockQueryData, QueryableHeader},
+    availability::{BlockQueryData, Leaf1QueryData, QueryableHeader},
     explorer::{BlockDetail, ExplorerHeader, Timestamp},
     Resolvable,
 };
 use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
-    data::Leaf2,
     light_client::{CircuitField, StateVerKey},
     signature_key::BLSPubKey,
     traits::{
@@ -217,7 +216,7 @@ pub fn create_block_detail_from_block(block: &BlockQueryData<SeqTypes>) -> Block
 /// computed into a [BlockDetail] and sent to the [Sink] so that it can be
 /// processed for real-time considerations.
 async fn process_incoming_leaf_and_block<BDSink, BVSink>(
-    leaf: Leaf2<SeqTypes>,
+    leaf: Leaf1QueryData<SeqTypes>,
     block: BlockQueryData<SeqTypes>,
     data_state: Arc<RwLock<DataState>>,
     mut block_sender: BDSink,
@@ -232,7 +231,7 @@ where
     let block_detail = create_block_detail_from_block(&block);
     let block_detail_copy = create_block_detail_from_block(&block);
 
-    let certificate = leaf.justify_qc();
+    let certificate = leaf.leaf().justify_qc();
     let signatures = &certificate.signatures;
 
     // Let's take a look at the quorum certificate signatures.
@@ -569,9 +568,12 @@ mod tests {
     use futures::{channel::mpsc, SinkExt, StreamExt};
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::{
-        availability::BlockQueryData, testing::mocks::MockVersions, Leaf2,
+        availability::{BlockQueryData, Leaf1QueryData},
+        testing::mocks::MockVersions,
     };
-    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+    use hotshot_types::{
+        data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
+    };
     use tokio::time::timeout;
     use url::Url;
 
@@ -639,7 +641,13 @@ mod tests {
         // We should be able to send a leaf without issue
         assert_eq!(
             leaf_sender
-                .send((sample_leaf, sample_block_query_data))
+                .send((
+                    Leaf1QueryData::new(
+                        sample_leaf.clone().to_leaf_unsafe(),
+                        sample_leaf.justify_qc().to_qc()
+                    ),
+                    sample_block_query_data
+                ))
                 .await,
             Ok(()),
         );

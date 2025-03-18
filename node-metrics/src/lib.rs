@@ -101,16 +101,10 @@ pub mod service;
 
 use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 use clap::Parser;
-use espresso_types::{PubKey, SeqTypes};
 use futures::{
     channel::mpsc::{self, Sender},
     StreamExt,
 };
-use hotshot::traits::implementations::{
-    CdnMetricsValue, CdnTopic, PushCdnNetwork, WrappedSignatureKey,
-};
-use hotshot_query_service::metrics::PrometheusMetrics;
-use hotshot_types::traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey};
 use service::data_state::MAX_VOTERS_HISTORY;
 use tide_disco::App;
 use tokio::spawn;
@@ -118,7 +112,6 @@ use url::Url;
 
 use crate::{
     api::node_validator::v0::{
-        cdn::{BroadcastRollCallTask, CdnReceiveMessagesTask},
         create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
         BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender, STATIC_VER_0_1,
     },
@@ -179,13 +172,6 @@ pub struct Options {
         default_value = "9000"
     )]
     port: u16,
-
-    /// cdn_marshal_endpoint is the endpoint for the CDN marshal service.
-    ///
-    /// This endpoint is optional, and if it is not provided, then the CDN
-    /// service will not be utilized.
-    #[clap(long, env = "ESPRESSO_NODE_VALIDATOR_CDN_MARSHAL_ENDPOINT")]
-    cdn_marshal_endpoint: Option<String>,
 }
 
 impl Options {
@@ -203,10 +189,6 @@ impl Options {
 
     fn port(&self) -> u16 {
         self.port
-    }
-
-    fn cdn_marshal_endpoint(&self) -> &Option<String> {
-        &self.cdn_marshal_endpoint
     }
 }
 
@@ -274,7 +256,7 @@ pub async fn run_standalone_service(options: Options) {
     let _process_consume_leaves =
         BridgeLeafAndBlockStreamToSenderTask::new(zipped_stream, leaf_and_block_pair_sender);
 
-    let node_validator_task_state = match create_node_validator_processing(
+    let _node_validator_task_state = match create_node_validator_processing(
         NodeValidatorConfig {
             stake_table_url_base: options.stake_table_source_base_url().clone(),
             initial_node_public_base_urls: options.initial_node_public_base_urls().to_vec(),
@@ -289,36 +271,6 @@ pub async fn run_standalone_service(options: Options) {
         Err(err) => {
             panic!("error defining node validator api: {:?}", err);
         },
-    };
-
-    let _cdn_tasks = if let Some(cdn_broker_url_string) = options.cdn_marshal_endpoint() {
-        let (public_key, private_key) = PubKey::generated_from_seed_indexed([1; 32], 0);
-        let cdn_network_result = PushCdnNetwork::<<SeqTypes as NodeType>::SignatureKey>::new(
-            cdn_broker_url_string.to_string(),
-            vec![CdnTopic::Global],
-            hotshot::traits::implementations::KeyPair {
-                public_key: WrappedSignatureKey(public_key),
-                private_key: private_key.clone(),
-            },
-            CdnMetricsValue::new(&PrometheusMetrics::default()),
-        );
-        let cdn_network = match cdn_network_result {
-            Ok(cdn_network) => cdn_network,
-            Err(err) => {
-                panic!("error creating cdn network: {:?}", err);
-            },
-        };
-
-        let url_sender = node_validator_task_state.url_sender.clone();
-
-        let broadcast_cdn_network = cdn_network.clone();
-        let cdn_receive_message_task = CdnReceiveMessagesTask::new(cdn_network, url_sender);
-        let broadcast_roll_call_task =
-            BroadcastRollCallTask::new(broadcast_cdn_network, public_key);
-
-        Some((broadcast_roll_call_task, cdn_receive_message_task))
-    } else {
-        None
     };
 
     let port = options.port();
