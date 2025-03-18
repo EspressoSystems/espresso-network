@@ -7,11 +7,11 @@ use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0_3::StakeTables,
     Leaf2, NetworkConfig,
 };
 use hotshot::InitializerEpochInfo;
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
@@ -21,7 +21,6 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
-    utils::View,
 };
 
 use crate::{NodeType, SeqTypes, ViewNumber};
@@ -92,12 +91,6 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>> {
-        Ok(None)
-    }
-
     async fn load_da_proposal(
         &self,
         _view: ViewNumber,
@@ -157,13 +150,6 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn update_undecided_state2(
-        &self,
-        _leaves: CommitmentMap<Leaf2>,
-        _state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
     async fn append_quorum_proposal2(
         &self,
         _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
@@ -214,9 +200,6 @@ impl SequencerPersistence for NoStorage {
     async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn migrate_undecided_state(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
         Ok(())
     }
@@ -242,5 +225,13 @@ impl SequencerPersistence for NoStorage {
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         Ok(Vec::new())
+    }
+
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+        Ok(None)
+    }
+
+    async fn store_stake(&self, _epoch: EpochNumber, _stake: StakeTables) -> anyhow::Result<()> {
+        Ok(())
     }
 }

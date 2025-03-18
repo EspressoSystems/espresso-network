@@ -96,6 +96,7 @@ circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
+diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git", tag = "v0.2.0" }
 either = "1"
 hex = "0.4"
 sha2 = "0.10"

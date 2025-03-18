@@ -1,4 +1,4 @@
-use std::str::FromStr as _;
+use std::{fmt::Display, str::FromStr as _};
 
 use derive_more::From;
 use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
@@ -7,18 +7,18 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 
 pub fn parse_bls_priv_key(s: &str) -> Result<BLSPrivKey, Tb64Error> {
-    Ok(TaggedBase64::parse(s)?.try_into()?)
+    TaggedBase64::parse(s)?.try_into()
 }
 
 pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
-    Ok(TaggedBase64::parse(s)?.try_into()?)
+    TaggedBase64::parse(s)?.try_into()
 }
 
 #[derive(Debug, Copy, Clone)]
 pub struct Commission(u16);
 
 impl Commission {
-    pub fn to_evm(&self) -> u16 {
+    pub fn to_evm(self) -> u16 {
         self.0
     }
 }
@@ -28,6 +28,25 @@ impl TryFrom<&str> for Commission {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         parse_commission(s)
+    }
+}
+
+impl TryFrom<u16> for Commission {
+    type Error = ParseCommissionError;
+
+    fn try_from(s: u16) -> Result<Self, Self::Error> {
+        if s > 10000 {
+            return Err("Commission must be between 0 (0.00%) and 100 (100.00%)"
+                .to_string()
+                .into());
+        }
+        Ok(Commission(s))
+    }
+}
+
+impl Display for Commission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:.2} %", Decimal::from(self.0) / Decimal::new(100, 0))
     }
 }
 
@@ -66,6 +85,21 @@ pub fn parse_commission(s: &str) -> Result<Commission, ParseCommissionError> {
 #[cfg(test)]
 mod test {
     use super::*;
+    #[test]
+    fn test_commission_display() {
+        let cases = [
+            (0, "0.00 %"),
+            (1, "0.01 %"),
+            (100, "1.00 %"),
+            (200, "2.00 %"),
+            (1234, "12.34 %"),
+            (10000, "100.00 %"),
+        ];
+        for (input, expected) in cases {
+            let commission = Commission(input);
+            assert_eq!(commission.to_string(), expected);
+        }
+    }
 
     #[test]
     fn test_parse_commission() {

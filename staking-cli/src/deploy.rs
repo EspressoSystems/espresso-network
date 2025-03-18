@@ -15,7 +15,6 @@ use alloy::{
     transports::BoxTransport,
 };
 use anyhow::Result;
-/// Utility for testing the CLI the code is the same as in
 use contract_bindings_alloy::{
     erc1967proxy::ERC1967Proxy,
     esptoken::EspToken::{self, EspTokenInstance},
@@ -23,7 +22,7 @@ use contract_bindings_alloy::{
 };
 use url::Url;
 
-use crate::{parse::Commission, registration::register_validator, BLSKeyPair, SchnorrKeyPair};
+use crate::{parse::Commission, registration::register_validator, BLSKeyPair};
 
 type TestProvider = FillProvider<
     JoinFill<
@@ -38,6 +37,8 @@ type TestProvider = FillProvider<
     Ethereum,
 >;
 
+type SchnorrKeyPair = jf_signature::schnorr::KeyPair<ark_ed_on_bn254::EdwardsConfig>;
+
 #[derive(Debug, Clone)]
 pub struct TestSystem {
     pub provider: TestProvider,
@@ -47,7 +48,7 @@ pub struct TestSystem {
     pub exit_escrow_period: Duration,
     pub rpc_url: Url,
     pub bls_key_pair: BLSKeyPair,
-    pub schnorr_key_pair: SchnorrKeyPair<ark_ed_on_bn254::EdwardsConfig>,
+    pub schnorr_key_pair: SchnorrKeyPair,
     pub commission: Commission,
 }
 
@@ -70,7 +71,7 @@ impl TestSystem {
             .clone();
 
         let proxy = ERC1967Proxy::deploy(provider.clone(), *token.address(), data).await?;
-        let token = EspToken::new(proxy.address().clone(), provider.clone());
+        let token = EspToken::new(*proxy.address(), provider.clone());
 
         // `StakeTable.sol`
         let stake_table = StakeTable::deploy(provider.clone()).await?;

@@ -46,7 +46,7 @@ for ARCH in "amd64" "arm64"; do
       ;;
   esac
   mkdir -p ${WORKDIR}/target/$ARCH/release
-    for binary in "cdn-broker" "cdn-marshal" "cdn-whitelist" "deploy" "dev-rollup" "espresso-bridge" "espresso-dev-node" "keygen" "marketplace-builder" "marketplace-solver" "nasty-client" "node-metrics" "orchestrator" "permissionless-builder" "pub-key" "reset-storage" "sequencer" "sequencer-sqlite" "state-prover" "state-relay-server" "submit-transactions" "utils"; do
+    for binary in "cdn-broker" "cdn-marshal" "cdn-whitelist" "deploy" "dev-rollup" "espresso-bridge" "espresso-dev-node" "keygen" "marketplace-builder" "marketplace-solver" "nasty-client" "update-permissioned-stake-table" "node-metrics" "orchestrator" "permissionless-builder" "pub-key" "reset-storage" "sequencer" "sequencer-sqlite" "state-prover" "state-relay-server" "submit-transactions" "utils"; do
     cp -v "${CARGO_TARGET_DIR}/${TARGET}/release/$binary" ${WORKDIR}/target/$ARCH/release
   done
 done
@@ -70,6 +70,7 @@ docker build -t ghcr.io/espressosystems/espresso-sequencer/submit-transactions:m
 docker build -t ghcr.io/espressosystems/espresso-sequencer/deploy:main -f docker/deploy.Dockerfile ${WORKDIR}
 docker build -t ghcr.io/espressosystems/espresso-sequencer/builder:main -f docker/permissionless-builder.Dockerfile ${WORKDIR}
 docker build -t ghcr.io/espressosystems/espresso-sequencer/nasty-client:main -f docker/nasty-client.Dockerfile ${WORKDIR}
+docker build -t ghcr.io/espressosystems/espresso-sequencer/update-permissioned-stake-table:main -f docker/update-permissioned-stake-table.Dockerfile ${WORKDIR}
 docker build -t ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:main -f docker/espresso-dev-node.Dockerfile ${WORKDIR}
 docker build -t ghcr.io/espressosystems/espresso-sequencer/bridge:main -f docker/espresso-bridge.Dockerfile ${WORKDIR}
 docker build -t ghcr.io/espressosystems/espresso-sequencer/marketplace-solver:main -f docker/marketplace-solver.Dockerfile ${WORKDIR}

@@ -16,7 +16,7 @@ ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 contract-bindings-alloy = { workspace = true }
 contract-bindings-ethers = { path = "../../../contract-bindings-ethers" }
-diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git" }
+diff-test-bn254 = { workspace = true }
 ethers = { version = "2.0.4" }
 ethers-conv = { workspace = true }
 hotshot-types = { workspace = true }

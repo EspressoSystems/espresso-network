@@ -1,27 +1,23 @@
 use alloy::{
-    primitives::{Address, Log, U256},
+    primitives::{Address, U256},
     providers::Provider,
     rpc::types::TransactionReceipt,
-    sol_types::{SolEvent, SolInterface},
     transports::Transport,
 };
 use anyhow::Result;
-use contract_bindings_alloy::staketable::StakeTable::{StakeTableErrors, StakeTableInstance};
+use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
 
 pub async fn delegate<P: Provider<T>, T: Transport + Clone>(
     stake_table: StakeTableInstance<T, P>,
     validator_address: Address,
     amount: U256,
 ) -> Result<TransactionReceipt> {
+    // TODO: needs alloy 0.12: use err.as_decoded_error::<StakeTableErrors>().unwrap();
+    // to provide better error messages in case of failure
     Ok(stake_table
         .delegate(validator_address, amount)
         .send()
-        .await
-        .map_err(|err| {
-            // let dec = err.as_decoded_error::<StakeTableErrors>().unwrap();
-            // TODO: needs alloy 0.12
-            err
-        })?
+        .await?
         .get_receipt()
         .await?)
 }

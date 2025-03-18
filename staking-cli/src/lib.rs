@@ -12,13 +12,12 @@ use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
 use delegation::{delegate, undelegate};
+use demo::stake_for_demo;
 pub(crate) use hotshot_types::{
     light_client::{StateSignKey, StateVerKey},
-    signature_key::{BLSPrivKey, BLSPubKey},
+    signature_key::BLSPrivKey,
 };
-pub(crate) use jf_signature::{
-    bls_over_bn254::KeyPair as BLSKeyPair, schnorr::KeyPair as SchnorrKeyPair,
-};
+pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use parse::Commission;
 use registration::{deregister_validator, register_validator};
 use serde::{Deserialize, Serialize};
@@ -27,12 +26,13 @@ use url::Url;
 
 mod claim;
 mod delegation;
+mod demo;
+mod l1;
 mod parse;
 mod registration;
 
 #[cfg(any(test, feature = "testing"))]
-mod deploy;
-mod l1;
+pub mod deploy;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
@@ -178,6 +178,8 @@ enum Commands {
         #[clap(long)]
         validator_address: Address,
     },
+    /// Register the validators and delegates for the local demo.
+    StakeForDemo,
 }
 
 fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
@@ -276,6 +278,8 @@ pub async fn main() -> Result<()> {
     let stake_table = StakeTableInstance::new(config.stake_table_address, provider.clone());
 
     let result = match config.commands {
+        // TODO: The info command is not implemented yet. It's not very useful for local testing or
+        // the demo and requires code that is not yet merged into main, so it's left for later.
         Commands::Info => todo!(),
         Commands::RegisterValidator {
             consensus_private_key,
@@ -306,212 +310,12 @@ pub async fn main() -> Result<()> {
         Commands::ClaimValidatorExit { validator_address } => {
             claim_validator_exit(stake_table, validator_address).await
         },
+        Commands::StakeForDemo => {
+            stake_for_demo(&config).await.unwrap();
+            return Ok(());
+        },
         _ => unreachable!(),
     };
     tracing::info!("Result: {:?}", result);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::process::{Command, Output};
-
-    use anyhow::Result;
-
-    use super::*;
-    use crate::deploy::TestSystem;
-
-    trait AssertSuccess {
-        fn assert_success(&self) -> &Self;
-    }
-
-    impl AssertSuccess for Output {
-        fn assert_success(&self) -> &Self {
-            if !self.status.success() {
-                let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
-                let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
-                panic!("Command failed:\nstderr: {}\nstdout: {}", stderr, stdout);
-            }
-            self
-        }
-    }
-
-    fn cmd() -> Command {
-        escargot::CargoBuild::new()
-            .bin("staking-cli")
-            .current_release()
-            .current_target()
-            .run()
-            .unwrap()
-            .command()
-    }
-
-    #[test]
-    fn test_version() -> Result<()> {
-        cmd().arg("version").output()?.assert_success();
-        Ok(())
-    }
-
-    #[test]
-    fn test_created_and_remove_config_file() -> anyhow::Result<()> {
-        let tmpdir = tempfile::tempdir()?;
-        let config_path = tmpdir.path().join("config.toml");
-
-        assert!(!config_path.exists());
-
-        cmd()
-            .arg("-c")
-            .arg(&config_path)
-            .arg("init")
-            .output()?
-            .assert_success();
-
-        assert!(config_path.exists());
-
-        cmd()
-            .arg("-c")
-            .arg(&config_path)
-            .arg("purge")
-            .arg("--force")
-            .output()?
-            .assert_success();
-
-        assert!(!config_path.exists());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cli_register_validator() -> Result<()> {
-        let system = TestSystem::deploy().await?;
-        cmd()
-            .arg("--mnemonic")
-            .arg(DEV_MNEMONIC)
-            .arg("--rpc-url")
-            .arg(system.rpc_url.to_string())
-            .arg("register-validator")
-            .arg("--consensus-private-key")
-            .arg(
-                system
-                    .bls_key_pair
-                    .sign_key_ref()
-                    .to_tagged_base64()?
-                    .to_string(),
-            )
-            .arg("--state-private-key")
-            .arg(
-                system
-                    .schnorr_key_pair
-                    .sign_key()
-                    .to_tagged_base64()?
-                    .to_string(),
-            )
-            .arg("--commission")
-            .arg("12.34")
-            .output()?
-            .assert_success();
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cli_delegate() -> Result<()> {
-        let system = TestSystem::deploy().await?;
-        system.register_validator().await?;
-
-        cmd()
-            .arg("--mnemonic")
-            .arg(DEV_MNEMONIC)
-            .arg("--rpc-url")
-            .arg(system.rpc_url.to_string())
-            .arg("delegate")
-            .arg("--validator-address")
-            .arg(system.deployer_address.to_string())
-            .arg("--amount")
-            .arg("123")
-            .output()?
-            .assert_success();
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cli_deregister_validator() -> Result<()> {
-        let system = TestSystem::deploy().await?;
-        system.register_validator().await?;
-
-        cmd()
-            .arg("--mnemonic")
-            .arg(DEV_MNEMONIC)
-            .arg("--rpc-url")
-            .arg(system.rpc_url.to_string())
-            .arg("deregister-validator")
-            .output()?
-            .assert_success();
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cli_undelegate() -> Result<()> {
-        let system = TestSystem::deploy().await?;
-        system.register_validator().await?;
-        let amount = U256::from(123);
-        system.delegate(amount).await?;
-
-        cmd()
-            .arg("--mnemonic")
-            .arg(DEV_MNEMONIC)
-            .arg("--rpc-url")
-            .arg(system.rpc_url.to_string())
-            .arg("undelegate")
-            .arg("--validator-address")
-            .arg(system.deployer_address.to_string())
-            .arg("--amount")
-            .arg(amount.to_string())
-            .output()?
-            .assert_success();
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cli_claim_withdrawal() -> Result<()> {
-        let system = TestSystem::deploy().await?;
-        let amount = U256::from(123);
-        system.register_validator().await?;
-        system.delegate(amount).await?;
-        system.undelegate(amount).await?;
-        system.warp_to_unlock_time().await?;
-
-        cmd()
-            .arg("--mnemonic")
-            .arg(DEV_MNEMONIC)
-            .arg("--rpc-url")
-            .arg(system.rpc_url.to_string())
-            .arg("claim-withdrawal")
-            .arg("--validator-address")
-            .arg(system.deployer_address.to_string())
-            .output()?
-            .assert_success();
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cli_claim_validator_exit() -> Result<()> {
-        let system = TestSystem::deploy().await?;
-        let amount = U256::from(123);
-        system.register_validator().await?;
-        system.delegate(amount).await?;
-        system.deregister_validator().await?;
-        system.warp_to_unlock_time().await?;
-
-        cmd()
-            .arg("--mnemonic")
-            .arg(DEV_MNEMONIC)
-            .arg("--rpc-url")
-            .arg(system.rpc_url.to_string())
-            .arg("claim-validator-exit")
-            .arg("--validator-address")
-            .arg(system.deployer_address.to_string())
-            .output()?
-            .assert_success();
-        Ok(())
-    }
 }

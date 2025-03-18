@@ -8,23 +8,82 @@ import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
-import { AbstractStakeTable } from "./interfaces/AbstractStakeTable.sol";
 import { LightClient } from "../src/LightClient.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { InitializedAt } from "./InitializedAt.sol";
 
 using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 
-/// @title Implementation of the Stake Table interface
-contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
+/// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
+///
+/// @dev All functions are marked as virtual so that future upgrades can override them.
+contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
+    // === Events ===
+
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
     event Upgrade(address implementation);
+
+    /// @notice A registration of a new validator.
+    ///
+    /// @notice Signals to the confirmation layer that a new validator is ready to receive
+    /// delegations. The confirmation layer uses this event to keep track of the validator's keys
+    /// for the stake table.
+    ///
+    /// @notice The verification key of the BLS keypair used for consensus signing is a
+    /// `BN254.G2Point`.
+    ///
+    /// @notice The verification key of the state signing schnorr keypair is an
+    /// `EdOnBN254.EdOnBN254Point`.
+    event ValidatorRegistered(
+        address indexed account,
+        BN254.G2Point blsVk,
+        EdOnBN254.EdOnBN254Point schnorrVk,
+        uint16 commission
+    );
+
+    /// @notice A validator initiated exit from stake table
+    ///
+    /// @notice All funds delegated to this validator are marked for withdrawal. Users can no longer
+    /// delegate and undelegate from this validator. After `exitEscrowPeriod` elapsed, the funds can
+    /// be claimed via `claimValidatorExit`.
+    ///
+    /// @notice The GCL removes this validator and all its delegations from the active validator
+    /// set.
+    event ValidatorExit(address indexed validator);
+
+    /// @notice A Delegator delegated funds to a validator.
+    ///
+    /// @notice The tokens are transferred to the stake table contract. The GCL adjusts the weight
+    /// for this validator and the delegators delegation associated with it.
+    event Delegated(address indexed delegator, address indexed validator, uint256 amount);
+
+    /// @notice A delegator undelegation funds from a validator.
+    ///
+    /// @notice The tokens are marked to be unlocked for withdrawal. The confirmation layer needs to
+    /// update the stake table and adjust the weight for this validator and the delegators
+    /// delegation associated with it.
+    event Undelegated(address indexed delegator, address indexed validator, uint256 amount);
+
+    /// @notice A validator updates their signing keys.
+    ///
+    /// @notice The confirmation layer needs to update the stake table with the new keys.
+    event ConsensusKeysUpdated(
+        address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
+    );
+
+    /// @notice A delegator claims unlocked funds.
+    ///
+    /// @notice This event is not relevant for the GCL. The events that remove stake from the stake
+    /// table are `Undelegated` and `ValidatorExit`.
+    event Withdrawal(address indexed account, uint256 amount);
+
+    // === Errors ===
 
     /// Error raised when a user tries to register a validator with the same address
     error ValidatorAlreadyRegistered();
 
-    /// Error raised when a user tries to interact with a validator that isn't registered
-    error UnknownValidator();
+    //// Error raise when a validator is not active.
+    error ValidatorInactive();
 
     /// Error raised when a validator has already exited.
     error ValidatorAlreadyExited();
@@ -54,51 +113,69 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
     /// The commission is invalid
     error InvalidCommission();
 
-    /// Error raised when the light client address is invalid
-    error InvalidAddress();
+    /// Contract dependencies initialized with zero address.
+    error ZeroAddress();
 
+    // === Structs ===
+
+    /// @notice Represents an Espresso validator and tracks funds currently delegated to them.
+    ///
+    /// @notice The `delegatedAmount` excludes funds that are currently marked for withdrawal via
+    /// undelegation or validator exit.
     struct Validator {
-        bool isRegistered;
-        ValidatorStatus status;
         uint256 delegatedAmount;
+        ValidatorStatus status;
     }
 
+    /// @notice The status of a validator.
+    ///
+    /// By default a validator is in the `Unknown` state. This means it has never registered. Upon
+    /// registration the status will become `Active` and if the validator deregisters its status
+    /// becomes `Exited`.
+    enum ValidatorStatus {
+        Unknown,
+        Active,
+        Exited
+    }
+
+    /// @notice Tracks an undelegation from a validator.
     struct Undelegation {
         uint256 amount;
         uint256 unlocksAt;
     }
 
-    enum ValidatorStatus {
-        Active,
-        Exited
-    }
+    // === Storage ===
 
-    /// Reference to the light client contract.
+    /// @notice Reference to the light client contract.
+    ///
+    /// @dev Currently unused but will be used for slashing therefore already included in the
+    /// contract.
     LightClient public lightClient;
 
-    /// Currently active validators
-    mapping(address validator => Validator) public validators;
+    /// The staking token contract.
+    ERC20 public token;
+
+    /// @notice All validators the contract knows about.
+    mapping(address account => Validator validator) public validators;
 
     /// BLS keys that have been seen by the contract
     ///
     /// @dev to simplify the reasoning about what keys and prevent some errors due to
-    /// misconfiguration of validators we mark keys as used and only allow them to be used once.
-    mapping(bytes32 blsKeyHash => bool) public blsKeys;
+    /// misconfigurations of validators the contract currently marks keys as used and only allow
+    /// them to be used once. This for example prevents callers from accidentally registering the
+    /// same BLS key twice.
+    mapping(bytes32 blsKeyHash => bool used) public blsKeys;
 
-    /// Validators that have exited
+    /// Validators that have exited and the time at which delegators can claim their funds.
     mapping(address validator => uint256 unlocksAt) public validatorExits;
 
-    /// Currently active delegations
+    /// Currently active delegation amounts.
     mapping(address validator => mapping(address delegator => uint256 amount)) delegations;
 
-    /// Currently exiting delegations
+    /// Delegations held in escrow that are to be unlocked at a later time.
     //
-    // @dev these are stored indexed by validator so we can keep track of them
-    // for slashing later
+    // @dev these are stored indexed by validator so we can keep track of them for slashing later
     mapping(address validator => mapping(address delegator => Undelegation)) undelegations;
-
-    /// Address of the native token contract.
-    address public tokenAddress;
 
     /// The time the contract will hold funds after undelegations are requested.
     ///
@@ -131,9 +208,13 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
         address _lightClientAddress,
         uint256 _exitEscrowPeriod
     ) internal {
-        // TODO ensure address not zero
-        tokenAddress = _tokenAddress;
-        // TODO ensure address not zero
+        if (_tokenAddress == address(0)) {
+            revert ZeroAddress();
+        }
+        if (_lightClientAddress == address(0)) {
+            revert ZeroAddress();
+        }
+        token = ERC20(_tokenAddress);
         lightClient = LightClient(_lightClientAddress);
         exitEscrowPeriod = _exitEscrowPeriod;
     }
@@ -163,14 +244,14 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
         return keccak256(abi.encode(blsVK.x0, blsVK.x1, blsVK.y0, blsVK.y1));
     }
 
-    function ensureValidatorRegistered(address validator) internal view {
-        if (!validators[validator].isRegistered) {
-            revert UnknownValidator();
+    function ensureValidatorActive(address validator) internal view {
+        if (!(validators[validator].status == ValidatorStatus.Active)) {
+            revert ValidatorInactive();
         }
     }
 
     function ensureValidatorNotRegistered(address validator) internal view {
-        if (validators[validator].isRegistered) {
+        if (validators[validator].status != ValidatorStatus.Unknown) {
             revert ValidatorAlreadyRegistered();
         }
     }
@@ -203,48 +284,61 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
     /// @param schnorrVK The Schnorr verification key (as the auxiliary info)
     /// @param blsSig The BLS signature that authenticates the ethereum account this function is
     ///        called from
+    /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
     ///
-    /// @dev The function will revert if
-    ///      - if the validator is already registered
-    ///      - any of the keys are zero
-    ///      - if the bls signature verification fails (this prevents rogue public-key attacks)
+    /// @notice The function will revert if
     ///
-    /// @dev No validity check on `schnorrVK`, as it's assumed to be sender's responsibility,
+    ///      1) the validator is already registered
+    ///      2) the schnorr key is zero
+    ///      3) if the bls signature verification fails (this prevents rogue public-key attacks).
+    ///      4) the commission is > 100%
+    ///
+    /// @notice No validity check on `schnorrVK` due to gas cost of Rescue hash, UIs should perform
+    /// checks where possible and alert users.
     function registerValidator(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
         uint16 commission
-    ) external virtual override {
+    ) external virtual {
         ensureValidatorNotRegistered(msg.sender);
         ensureNonZeroSchnorrKey(schnorrVK);
         ensureNewKey(blsVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
+        //
+        // TODO: we will move this check to the GCL to save gas.
         bytes memory message = abi.encode(msg.sender);
         BLSSig.verifyBlsSig(message, blsSig, blsVK);
 
-        // commission is in percent with 2 decimals: from 0 for 0.00% to 10_000 for 100%
         if (commission > 10000) {
             revert InvalidCommission();
         }
 
         blsKeys[_hashBlsKey(blsVK)] = true;
-        validators[msg.sender] =
-            Validator({ isRegistered: true, status: ValidatorStatus.Active, delegatedAmount: 0 });
+        validators[msg.sender] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
         emit ValidatorRegistered(msg.sender, blsVK, schnorrVK, commission);
+    }
+
+    /// @notice Deregister a validator
+    function deregisterValidator() external virtual {
+        ensureValidatorActive(msg.sender);
+
+        validators[msg.sender].status = ValidatorStatus.Exited;
+        validatorExits[msg.sender] = block.timestamp + exitEscrowPeriod;
+
+        emit ValidatorExit(msg.sender);
     }
 
     /// @notice Delegate to a validator
     /// @param validator The validator to delegate to
     /// @param amount The amount to delegate
-    function delegate(address validator, uint256 amount) external virtual override {
-        ensureValidatorRegistered(validator);
-        ensureValidatorNotExited(validator);
+    function delegate(address validator, uint256 amount) external virtual {
+        ensureValidatorActive(validator);
 
-        uint256 allowance = ERC20(tokenAddress).allowance(msg.sender, address(this));
+        uint256 allowance = token.allowance(msg.sender, address(this));
         if (allowance < amount) {
             revert InsufficientAllowance(allowance, amount);
         }
@@ -252,14 +346,16 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
         validators[validator].delegatedAmount += amount;
         delegations[validator][msg.sender] += amount;
 
-        SafeTransferLib.safeTransferFrom(ERC20(tokenAddress), msg.sender, address(this), amount);
+        SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
 
         emit Delegated(msg.sender, validator, amount);
     }
 
-    function undelegate(address validator, uint256 amount) external virtual override {
-        ensureValidatorRegistered(validator);
-        ensureValidatorNotExited(validator);
+    /// @notice Undelegate from a validator
+    /// @param validator The validator to undelegate from
+    /// @param amount The amount to undelegate
+    function undelegate(address validator, uint256 amount) external virtual {
+        ensureValidatorActive(validator);
 
         if (validators[msg.sender].status == ValidatorStatus.Exited) {
             revert ValidatorAlreadyExited();
@@ -277,18 +373,9 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
         emit Undelegated(msg.sender, validator, amount);
     }
 
-    function deregisterValidator() external virtual override {
-        ensureValidatorRegistered(msg.sender);
-        ensureValidatorNotExited(msg.sender);
-
-        validators[msg.sender].status = ValidatorStatus.Exited;
-        validatorExits[msg.sender] = block.timestamp + exitEscrowPeriod;
-
-        emit ValidatorExit(msg.sender);
-    }
-
-    /// @notice Withdraw undelegated funds
-    function claimWithdrawal(address validator) external virtual override {
+    /// @notice Withdraw previously delegated funds after an undelegation.
+    /// @param validator The validator to withdraw from
+    function claimWithdrawal(address validator) external virtual {
         // If entries are missing at any of the levels of the mapping this will return zero
         uint256 amount = undelegations[validator][msg.sender].amount;
         if (amount == 0) {
@@ -302,14 +389,15 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
         // Mark funds as spent
         delete undelegations[validator][msg.sender];
 
-        SafeTransferLib.safeTransfer(ERC20(tokenAddress), msg.sender, amount);
+        SafeTransferLib.safeTransfer(token, msg.sender, amount);
 
         emit Withdrawal(msg.sender, amount);
     }
 
-    /// @notice Withdraw funds after a validator has exited
-    function claimValidatorExit(address validator) external virtual override {
-        uint256 unlocksAt = validatorExits[msg.sender];
+    /// @notice Withdraw previously delegated funds after a validator has exited
+    /// @param validator The validator to withdraw from
+    function claimValidatorExit(address validator) external virtual {
+        uint256 unlocksAt = validatorExits[validator];
         if (unlocksAt == 0) {
             revert ValidatorNotExited();
         }
@@ -326,7 +414,7 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
         // Mark funds as spent
         delegations[validator][msg.sender] = 0;
 
-        SafeTransferLib.safeTransfer(ERC20(tokenAddress), msg.sender, amount);
+        SafeTransferLib.safeTransfer(token, msg.sender, amount);
 
         emit Withdrawal(msg.sender, amount);
     }
@@ -352,9 +440,8 @@ contract StakeTable is AbstractStakeTable, Initializable, InitializedAt, Ownable
         BN254.G2Point memory newBlsVK,
         EdOnBN254.EdOnBN254Point memory newSchnorrVK,
         BN254.G1Point memory newBlsSig
-    ) external virtual override {
-        ensureValidatorRegistered(msg.sender);
-        ensureValidatorNotExited(msg.sender);
+    ) external virtual {
+        ensureValidatorActive(msg.sender);
         ensureNonZeroSchnorrKey(newSchnorrVK);
         ensureNewKey(newBlsVK);
 
