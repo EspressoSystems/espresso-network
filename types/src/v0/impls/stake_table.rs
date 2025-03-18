@@ -83,6 +83,7 @@ pub fn from_l1_events(
                 schnorrVk,
                 commission,
             }) => {
+                // TODO(abdul): BLS and Schnorr signature keys verification
                 let stake_table_key = bls_alloy_to_jf2(blsVk.clone());
                 let state_ver_key = edward_bn254point_to_state_ver(schnorrVk.clone());
                 if bls_keys.contains(&stake_table_key) {
