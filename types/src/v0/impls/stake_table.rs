@@ -762,10 +762,10 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     fn set_first_epoch(&mut self, epoch: Epoch, initial_drb_result: DrbResult) {
-        // self.state.insert(epoch, self.non_epoch_committee.clone());
-        // self.state
-        //     .insert(epoch + 1, self.non_epoch_committee.clone());
-        // self.initial_drb_result = Some((epoch + 2, initial_drb_result));
+        let epoch_committee = self.state.get(&Epoch::genesis()).unwrap().clone();
+        self.state.insert(epoch, epoch_committee.clone());
+        self.state.insert(epoch + 1, epoch_committee);
+        self.initial_drb_result = Some((epoch + 2, initial_drb_result));
     }
 }
 
