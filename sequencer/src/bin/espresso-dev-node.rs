@@ -292,7 +292,8 @@ async fn main() -> anyhow::Result<()> {
             async { Ok(lc_genesis.clone()) }.boxed(),
             None,
             contracts.clone(),
-            None, // initial stake table
+            None,                           // initial stake table
+            Some(Duration::from_secs(300)), // exit escrow period
         )
         .await?;
 

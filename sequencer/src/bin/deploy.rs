@@ -138,6 +138,15 @@ struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH")]
     initial_stake_table_path: Option<PathBuf>,
 
+    /// Exit escrow period for the stake table contract.
+    ///
+    /// This is the period for which stake table contract will retain funds after withdrawals have
+    /// been requested. It should be set to a value that is at least 3 hotshot epochs plus ample
+    /// time to allow for submission of slashing evidence. Initially it will probably be around one
+    /// week.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD", value_parser = parse_duration)]
+    exit_escrow_period: Option<Duration>,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -172,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
         opt.permissioned_prover,
         contracts,
         initial_stake_table,
+        opt.exit_escrow_period,
     )
     .await?;
 
