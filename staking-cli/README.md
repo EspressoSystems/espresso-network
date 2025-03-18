@@ -12,7 +12,7 @@ To load the stake table for the demo, run the demo first
 
 and once that is started up
 
-    cargo run --bin staking-cli -p staking-cli -- stake-for-demo
+    RUST_LOG=info cargo run --bin staking-cli -p staking-cli -- stake-for-demo
 
 it should show that validators are being registered
 
