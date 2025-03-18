@@ -63,110 +63,61 @@ pub fn from_l1_events(
     delegated: Vec<(Delegated, Log)>,
     undelegated: Vec<(Undelegated, Log)>,
     keys_update: Vec<(ConsensusKeysUpdated, Log)>,
-) -> IndexMap<Address, Validator<BLSPubKey>> {
-    // TODO: return RESULT
-    // TODO: Handle consensus keys update event
-    let mut st_map = BTreeMap::new();
-    let mut bls_keys = HashSet::new();
-    let mut schnor_keys = HashSet::new();
-    for (reg, log) in registered {
-        let bls = bls_alloy_to_jf2(reg.blsVk.clone());
-        let state_ver_key = edward_bn254point_to_state_ver(reg.schnorrVk.clone());
-        if bls_keys.contains(&bls) {
-            tracing::error!("bls key {bls:?} already used");
-            continue;
-        }
-
-        if schnor_keys.contains(&state_ver_key) {
-            tracing::error!("schnor verifying key {bls:?} already used");
-            continue;
-        }
-        st_map.insert(
-            (
-                log.block_number.unwrap(),
-                log.transaction_index.unwrap(),
-                log.log_index.unwrap(),
-            ),
-            StakeTableChange::Add(reg),
-        );
-
-        bls_keys.insert(bls);
-        schnor_keys.insert(state_ver_key);
-    }
-
-    for (dereg, log) in deregistered {
-        st_map.insert(
-            (
-                log.block_number.unwrap(),
-                log.transaction_index.unwrap(),
-                log.log_index.unwrap(),
-            ),
-            StakeTableChange::Remove(dereg),
-        );
-    }
-
-    let mut delegator_map = BTreeMap::new();
-    for (del, log) in delegated {
-        delegator_map.insert(
-            (
-                log.block_number.unwrap(),
-                log.transaction_index.unwrap(),
-                log.log_index.unwrap(),
-            ),
-            DelegationChange::Add(del),
-        );
-    }
-
-    for (undelg, log) in undelegated {
-        delegator_map.insert(
-            (
-                log.block_number.unwrap(),
-                log.transaction_index.unwrap(),
-                log.log_index.unwrap(),
-            ),
-            DelegationChange::Remove(undelg),
-        );
-    }
+) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    let events = StakeTableEvent::sort_events(
+        registered,
+        deregistered,
+        delegated,
+        undelegated,
+        keys_update,
+    )?;
 
     let mut validators = IndexMap::new();
-    for staker in st_map.values() {
-        match staker {
-            StakeTableChange::Add(staker) => {
-                let ValidatorRegistered {
-                    account,
-                    blsVk,
-                    schnorrVk,
-                    commission,
-                } = staker.clone();
-                let staker = bls_alloy_to_jf2(blsVk);
-                let state_ver_key = edward_bn254point_to_state_ver(schnorrVk);
+    let mut bls_keys = HashSet::new();
+    let mut schnor_keys = HashSet::new();
+    for event in events.values() {
+        match event {
+            StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk,
+                schnorrVk,
+                commission,
+            }) => {
+                let stake_table_key = bls_alloy_to_jf2(blsVk.clone());
+                let state_ver_key = edward_bn254point_to_state_ver(schnorrVk.clone());
+                if bls_keys.contains(&stake_table_key) {
+                    tracing::warn!("bls key {stake_table_key:?} already used");
+                    continue;
+                }
+
+                if schnor_keys.contains(&state_ver_key) {
+                    tracing::warn!("schnor verifying key {state_ver_key:?} already used");
+                    continue;
+                }
+
+                bls_keys.insert(stake_table_key);
+                schnor_keys.insert(state_ver_key.clone());
 
                 validators.insert(
-                    account,
+                    *account,
                     Validator {
-                        account,
-                        stake_table_key: staker,
+                        account: *account,
+                        stake_table_key,
                         state_ver_key,
                         stake: U256::from(0_u64),
-                        commission,
+                        commission: *commission,
                         delegators: HashMap::default(),
                     },
                 );
             },
-            StakeTableChange::Remove(exit) => {
+            StakeTableEvent::Deregister(exit) => {
                 validators.shift_remove(&exit.validator);
             },
-        }
-    }
-
-    for delegator in delegator_map.values() {
-        match delegator {
-            DelegationChange::Add(delegator) => {
+            StakeTableEvent::Delegate(delegator) => {
                 let account = delegator.delegator;
                 let validator = delegator.validator;
                 let amount = delegator.amount;
 
-                // TODO: return error if the validator is not in the stake table
                 if let Some(validator_entry) = validators.get_mut(&validator) {
                     // Increase stake
                     validator_entry.stake += amount;
@@ -174,25 +125,19 @@ pub fn from_l1_events(
                     validator_entry.delegators.insert(account, amount);
                 }
             },
-            DelegationChange::Remove(undelegated) => {
-                // decrease stake
-
-                // TODO: return error if the validator is not in the stake table
+            StakeTableEvent::Undelegate(undelegated) => {
                 if let Some(validator_entry) = validators.get_mut(&undelegated.validator) {
-                    // TODO: return error if the delegator is not in the set
-                    // error if stake < undelegated.amount
                     validator_entry.stake = validator_entry
                         .stake
                         .checked_sub(undelegated.amount)
-                        .unwrap();
+                        .context("stake is less than undelegated amount")?;
 
-                    // decrease delegator stake
+                    let delegator = undelegated.delegator;
 
                     let delegator_stake = validator_entry
                         .delegators
-                        .get_mut(&undelegated.delegator)
-                        .unwrap();
-
+                        .get_mut(&delegator)
+                        .context(format!("delegator {delegator:?} not found"))?;
                     *delegator_stake = delegator_stake.checked_sub(undelegated.amount).unwrap();
 
                     if delegator_stake.is_zero() {
@@ -201,43 +146,87 @@ pub fn from_l1_events(
                     }
                 }
             },
+            StakeTableEvent::KeyUpdate(update) => {
+                let validator = validators.get_mut(&update.account);
+                if let Some(validator) = validator {
+                    let bls = bls_alloy_to_jf2(update.blsVK.clone());
+                    let state_ver_key = edward_bn254point_to_state_ver(update.schnorrVK.clone());
+
+                    validator.stake_table_key = bls;
+                    validator.state_ver_key = state_ver_key;
+                }
+            },
         }
     }
 
-    // sort events
-    let mut keys_update_map = BTreeMap::new();
+    Ok(validators)
+}
 
-    for (update, log) in keys_update {
-        keys_update_map.insert(
-            (
-                log.block_number.unwrap(),
-                log.transaction_index.unwrap(),
-                log.log_index.unwrap(),
-            ),
-            update,
-        );
-    }
+pub enum StakeTableEvent {
+    Register(ValidatorRegistered),
+    Deregister(ValidatorExit),
+    Delegate(Delegated),
+    Undelegate(Undelegated),
+    KeyUpdate(ConsensusKeysUpdated),
+}
 
-    // get updated keys for each account address
-    let mut keys = HashMap::new();
-
-    for update in keys_update_map.values() {
-        keys.insert(update.account, update);
-    }
-
-    // update validators keys
-    for (key, update) in keys {
-        let validator = validators.get_mut(&key);
-        if let Some(validator) = validator {
-            let bls = bls_alloy_to_jf2(update.blsVK.clone());
-            let state_ver_key = edward_bn254point_to_state_ver(update.schnorrVK.clone());
-
-            validator.stake_table_key = bls;
-            validator.state_ver_key = state_ver_key;
+impl StakeTableEvent {
+    pub fn sort_events(
+        registrations: Vec<(ValidatorRegistered, Log)>,
+        deregistrations: Vec<(ValidatorExit, Log)>,
+        delegations: Vec<(Delegated, Log)>,
+        undelegated_events: Vec<(Undelegated, Log)>,
+        keys_update: Vec<(ConsensusKeysUpdated, Log)>,
+    ) -> anyhow::Result<BTreeMap<(u64, u64), StakeTableEvent>> {
+        let mut map = BTreeMap::new();
+        for (registration, log) in registrations {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                StakeTableEvent::Register(registration),
+            );
         }
-    }
+        for (dereg, log) in deregistrations {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                StakeTableEvent::Deregister(dereg),
+            );
+        }
+        for (delegation, log) in delegations {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                StakeTableEvent::Delegate(delegation),
+            );
+        }
+        for (undelegated, log) in undelegated_events {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                StakeTableEvent::Undelegate(undelegated),
+            );
+        }
 
-    validators
+        for (update, log) in keys_update {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                StakeTableEvent::KeyUpdate(update),
+            );
+        }
+        Ok(map)
+    }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]

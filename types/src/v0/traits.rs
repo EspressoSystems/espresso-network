@@ -693,8 +693,8 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         &self,
     ) -> anyhow::Result<Option<UpgradeCertificate<SeqTypes>>>;
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>>;
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>>;
-    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()>;
+    // async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>>;
+    // async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()>;
 
     /// Load the latest known consensus state.
     ///

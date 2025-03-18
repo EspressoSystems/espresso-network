@@ -7,7 +7,6 @@ use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::StakeTables,
     Leaf2, NetworkConfig,
 };
 use hotshot::InitializerEpochInfo;
@@ -227,11 +226,11 @@ impl SequencerPersistence for NoStorage {
         Ok(Vec::new())
     }
 
-    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
-        Ok(None)
-    }
+    // async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+    //     Ok(None)
+    // }
 
-    async fn store_stake(&self, _epoch: EpochNumber, _stake: StakeTables) -> anyhow::Result<()> {
-        Ok(())
-    }
+    // async fn store_stake(&self, _epoch: EpochNumber, _stake: StakeTables) -> anyhow::Result<()> {
+    //     Ok(())
+    // }
 }

@@ -13,7 +13,6 @@ use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::StakeTables,
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
 use hotshot::InitializerEpochInfo;
@@ -832,42 +831,42 @@ impl SequencerPersistence for Persistence {
         ))
     }
 
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
-        let inner = self.inner.read().await;
-        let path = &inner.stake_table_dir_path();
-        if !path.is_file() {
-            return Ok(None);
-        }
+    // async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+    //     let inner = self.inner.read().await;
+    //     let path = &inner.stake_table_dir_path();
+    //     if !path.is_file() {
+    //         return Ok(None);
+    //     }
 
-        let file_path = path.join(epoch.to_string()).with_extension("txt");
-        let bytes = fs::read(&file_path).context("read")?;
-        Ok(Some(
-            bincode::deserialize(&bytes).context("deserialize combined stake table")?,
-        ))
-    }
+    //     let file_path = path.join(epoch.to_string()).with_extension("txt");
+    //     let bytes = fs::read(&file_path).context("read")?;
+    //     Ok(Some(
+    //         bincode::deserialize(&bytes).context("deserialize combined stake table")?,
+    //     ))
+    // }
 
-    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let dir_path = &inner.stake_table_dir_path();
+    // async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
+    //     let mut inner = self.inner.write().await;
+    //     let dir_path = &inner.stake_table_dir_path();
 
-        fs::create_dir_all(dir_path.clone()).context("failed to create proposals dir")?;
+    //     fs::create_dir_all(dir_path.clone()).context("failed to create proposals dir")?;
 
-        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+    //     let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
 
-        inner.replace(
-            &file_path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes =
-                    bincode::serialize(&stake).context("serializing combined stake table")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
+    //     inner.replace(
+    //         &file_path,
+    //         |_| {
+    //             // Always overwrite the previous file.
+    //             Ok(true)
+    //         },
+    //         |mut file| {
+    //             let bytes =
+    //                 bincode::serialize(&stake).context("serializing combined stake table")?;
+    //             file.write_all(&bytes)?;
+    //             Ok(())
+    //         },
+    //     )
+    // }
 
     async fn store_upgrade_certificate(
         &self,

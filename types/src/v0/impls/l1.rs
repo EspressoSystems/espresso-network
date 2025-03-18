@@ -49,7 +49,7 @@ use super::{
     from_l1_events,
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
     v0_3::Validator,
-    L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
+    L1BlockInfo, L1BlockInfoWithParent, L1ClientMetrics, L1State, L1UpdateTask,
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 
@@ -922,13 +922,13 @@ impl L1Client {
             .query()
             .await?;
 
-        Ok(from_l1_events(
+        from_l1_events(
             registered,
             deregistered,
             delegated,
             undelegated,
             keys_update,
-        ))
+        )
     }
 
     /// Check if the given address is a proxy contract.
