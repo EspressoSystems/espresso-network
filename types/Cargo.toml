@@ -20,11 +20,7 @@ bytesize = { workspace = true }
 clap = { workspace = true }
 cld = { workspace = true }
 committable = { workspace = true }
-contract-bindings-alloy = { workspace = true }
-contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 derive_more = { workspace = true }
-ethers = { workspace = true }
-ethers-conv = { workspace = true }
 fluent-asserter = "0.1.9"
 futures = { workspace = true }
 hotshot = { workspace = true }
