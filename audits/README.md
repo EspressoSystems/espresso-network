@@ -14,6 +14,6 @@ Internal audits
 | Fee Contract - August 2, 2024                                        | [Report](./internal-reviews/EspressoFeeContract-2024internal.pdf) |
 | Functions new_legacy and validate_and_apply_header - October 4, 2024 | [Report](./internal-reviews/EspressoSequencer-2024internal.pdf)   |
 | HotShot - July 29, 2024   | [Report](./internal-reviews/EspressoHotshot-2024internal.pdf) |
-| Hotstuff-2 March 6, 2025 | [Link](./internal-reviews/HotShot/EspressoHotstuff2-2025internal.pdf) |
+| Hotstuff-2 March 6, 2025 | [Report](./internal-reviews/EspressoHotstuff2-2025internal.pdf) |
 
 A compilation of all audit report can also be viewed [here](https://github.com/EspressoSystems/Espresso-audits).
