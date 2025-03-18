@@ -911,7 +911,7 @@ pub async fn wait_for_next_epoch_qc<TYPES: NodeType>(
         return None;
     };
     let receiver = receiver.clone();
-    let Ok(Some(event)) = tokio::time::timeout(time_left, async move {
+    let event = tokio::time::timeout(time_left, async move {
         let this_epoch_high_qc = high_qc.clone();
         EventDependency::new(
             receiver,
@@ -928,15 +928,7 @@ pub async fn wait_for_next_epoch_qc<TYPES: NodeType>(
         .await
     })
     .await
-    else {
-        // Check again, there is a chance we missed it
-        if let Some(next_epoch_qc) = consensus.read().await.next_epoch_high_qc() {
-            if next_epoch_qc.data.leaf_commit == high_qc.data.leaf_commit {
-                return Some(next_epoch_qc.clone());
-            }
-        };
-        return None;
-    };
+    .ok()??;
     let HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) = event.as_ref() else {
         // this shouldn't happen
         return None;

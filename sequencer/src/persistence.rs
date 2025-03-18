@@ -200,6 +200,35 @@ mod persistence_tests {
                 }
             ]
         );
+
+        // Make a header
+        let instance_state = NodeState::mock();
+        let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
+        let leaf: Leaf2 = Leaf::genesis::<MockVersions>(&validated_state, &instance_state)
+            .await
+            .into();
+        let header = leaf.block_header().clone();
+
+        // Test storing the header
+        storage
+            .add_epoch_root(EpochNumber::new(1), header.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_start_epoch_info().await.unwrap(),
+            vec![
+                InitializerEpochInfo::<SeqTypes> {
+                    epoch: EpochNumber::new(1),
+                    drb_result: [1; 32],
+                    block_header: Some(header.clone()),
+                },
+                InitializerEpochInfo::<SeqTypes> {
+                    epoch: EpochNumber::new(2),
+                    drb_result: [3; 32],
+                    block_header: None,
+                }
+            ]
+        );
     }
 
     fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
