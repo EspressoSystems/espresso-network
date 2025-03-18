@@ -200,7 +200,7 @@ impl EpochCommittees {
             .stake_table
             .0
             .into_iter()
-            .filter(|peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
             .collect();
 
         let committee = Committee {
@@ -227,21 +227,21 @@ impl EpochCommittees {
         // For each eligible leader, get the stake table entry
         let eligible_leaders: Vec<_> = committee_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let da_members: Vec<_> = da_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
@@ -393,14 +393,14 @@ impl Membership<SeqTypes> for EpochCommittees {
     fn has_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> bool {
         self.state(&epoch)
             .and_then(|h| h.indexed_stake_table.get(pub_key))
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+            .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
 
     /// Check if a node has stake in the committee
     fn has_da_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> bool {
         self.state(&epoch)
             .and_then(|h| h.indexed_da_members.get(pub_key))
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+            .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
 
     /// Index the vector of public keys with the current view number

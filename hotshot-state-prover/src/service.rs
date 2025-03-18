@@ -388,7 +388,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         .collect::<Vec<_>>();
     let mut signer_bit_vec = vec![false; entries.len()];
     let mut signatures = vec![Default::default(); entries.len()];
-    let mut accumulated_weight = U256::zero();
+    let mut accumulated_weight = U256::ZERO;
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = bundle.signatures.get(key) {
             // Check if the signature is valid

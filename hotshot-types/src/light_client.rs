@@ -8,11 +8,11 @@
 
 use std::collections::HashMap;
 
+use alloy::primitives::U256;
 use ark_ed_on_bn254::EdwardsConfig as Config;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_signature::schnorr;
-use primitive_types::U256;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
