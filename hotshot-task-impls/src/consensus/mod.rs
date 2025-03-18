@@ -157,6 +157,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 }
             },
             HotShotEvent::ExtendedQcRecv(eqc, next_epoch_high_qc, _) => {
+                if self.cur_view > eqc.view_number() {
+                    tracing::info!("Received an old extended QC, ignore it");
+                    return Ok(());
+                }
                 if !self
                     .consensus
                     .read()
