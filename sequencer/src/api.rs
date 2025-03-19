@@ -488,7 +488,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .read()
             .await
             .undecided_leaves();
-        leaves.sort_by_key(|l| l.height());
+        leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves
             .iter()
             .find_position(|l| l.height() == height)
@@ -510,7 +510,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
         // Make sure we got one more leaf to confirm the decide
         for leaf in leaves
             .iter()
-            .skip_while(|l| l.height() <= last_leaf.height())
+            .skip_while(|l| l.view_number() <= last_leaf.view_number())
         {
             if leaf.justify_qc().view_number() == last_leaf.view_number() {
                 chain.push(leaf.clone());
