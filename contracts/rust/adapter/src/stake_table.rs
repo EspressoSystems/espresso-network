@@ -372,6 +372,16 @@ pub fn bls_jf_to_alloy(bls_vk: BLSPubKey) -> G2PointAlloy {
     }
 }
 
+pub fn bls_jf_to_alloy2(bls_vk: BLSPubKey) -> contract_bindings_alloy::staketable::BN254::G2Point {
+    let ParsedG2Point { x0, x1, y0, y1 } = bls_vk.to_affine().into();
+    contract_bindings_alloy::staketable::BN254::G2Point {
+        x0: x0.to_alloy(),
+        x1: x1.to_alloy(),
+        y0: y0.to_alloy(),
+        y1: y1.to_alloy(),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
