@@ -145,28 +145,32 @@ jobs:
 
   build-dockers:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - bridge
+          - builder
+          - cdn-broker
+          - cdn-marshal
+          - cdn-whitelist
+          - deploy
+          - dev-rollup
+          - espresso-dev-node
+          - marketplace-builder
+          - marketplace-solver
+          - nasty-client
+          - node-validator
+          - orchestrator
+          - prover-service
+          - sequencer
+          - staking-cli
+          - state-relay-server
+          - submit-transactions
+          - update-permissioned-stake-table
+
     needs: [build, build-arm]
     # if build_arm is skipped, run this job anyway
     if: ${{ !(failure() || cancelled()) }}
-    outputs:
-      sequencer-tag: ${{ steps.sequencer.outputs.tags }}
-      cdn-broker-tag: ${{ steps.cdn-broker.outputs.tags }}
-      cdn-marshal-tag: ${{ steps.cdn-marshal.outputs.tags }}
-      cdn-whitelist-tag: ${{ steps.cdn-whitelist.outputs.tags }}
-      state-relay-server-tag: ${{ steps.state-relay-server.outputs.tags }}
-      prover-service-tag: ${{ steps.prover-service.outputs.tags }}
-      orchestrator-tag: ${{ steps.orchestrator.outputs.tags }}
-      submit-transactions-tag: ${{ steps.submit-transactions.outputs.tags }}
-      deploy-tag: ${{ steps.deploy.outputs.tags }}
-      builder-tag: ${{ steps.builder.outputs.tags }}
-      nasty-client-tag: ${{ steps.nasty-client.outputs.tags }}
-      update-permissioned-stake-table-tag: ${{ steps.update-permissioned-stake-table.outputs.tags }}
-      espresso-dev-node-tag: ${{ steps.espresso-dev-node.outputs.tags }}
-      bridge-tag: ${{ steps.bridge.outputs.tags }}
-      marketplace-solver-tag: ${{ steps.marketplace-solver.outputs.tags }}
-      marketplace-builder-tag: ${{ steps.marketplace-builder.outputs.tags }}
-      node-validator-tag: ${{ steps.node-validator.outputs.tags }}
-      dev-rollup-tag: ${{ steps.dev-rollup.outputs.tags }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -201,157 +205,22 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build sequencer docker image
-        uses: ./.github/actions/docker-image
+      - name: Generate ${{ matrix.service }} docker metadata
+        uses: docker/metadata-action@v5
+        id: metadata
         with:
-          file: ./docker/sequencer.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/sequencer
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
+          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
 
-      - name: Build cdn-broker docker image
-        uses: ./.github/actions/docker-image
+      - name: Build and push ${{ matrix.service }} docker image
+        uses: docker/build-push-action@v5
         with:
-          file: ./docker/cdn-broker.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-broker
+          context: .
+          file: ./docker/${{ matrix.service }}.Dockerfile
+          tags: ${{ steps.metadata.outputs.tags }}
           platforms: ${{ env.DOCKER_PLATFORMS }}
           push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build cdn-marshal docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/cdn-marshal.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-marshal
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build cdn-whitelist docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/cdn-whitelist.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build state-relay-server docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/state-relay-server.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/state-relay-server
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build prover-service docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/prover-service.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/prover-service
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build orchestrator docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/orchestrator.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/orchestrator
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build submit-transactions docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/submit-transactions.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/submit-transactions
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build deploy docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/deploy.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/deploy
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build builder docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/builder.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/builder
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build nasty-client docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/nasty-client.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/nasty-client
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build update-permissioned-stake-table docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/update-permissioned-stake-table.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/update-permissioned-stake-table
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build espresso-dev-node docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/espresso-dev-node.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build bridge docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/bridge.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/bridge
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build marketplace-solver docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/marketplace-solver.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/marketplace-solver
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build marketplace-builder docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/marketplace-builder.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build node-validator docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/node-validator.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/node-validator
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build dev-rollup docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/dev-rollup.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/dev-rollup
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-
-      - name: Build staking-cli docker image
-        uses: ./.github/actions/docker-image
-        with:
-          file: ./docker/staking-cli.Dockerfile
-          images: ghcr.io/espressosystems/espresso-sequencer/staking-cli
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels  }}
 
   test-demo:
     if: ${{ github.event_name != 'pull_request' }}
