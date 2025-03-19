@@ -33,7 +33,7 @@ use super::{
     impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
-    EpochCommittees, EpochVersion, Leaf, SequencerVersions,
+    EpochCommittees, EpochVersion, SequencerVersions,
 };
 use crate::{
     v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,

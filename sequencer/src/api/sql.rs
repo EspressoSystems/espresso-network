@@ -2,7 +2,6 @@ use std::collections::{HashSet, VecDeque};
 
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
-use bincode::config;
 use committable::{Commitment, Committable};
 use espresso_types::{
     get_l1_deposits,
@@ -27,7 +26,6 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
-    epoch_membership::EpochMembership,
     message::Proposal,
     traits::node_implementation::ConsensusTime,
     utils::epoch_from_block_number,
@@ -622,8 +620,8 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
     // so in order to get all the reward accounts that need to be loaded, we can call membership for every epoch
     let leaves: Vec<_> = leaves.into_iter().collect();
 
-    if leaves.len() == 0 {
-        bail!("no leaves");
+    if leaves.is_empty() {
+        bail!(format!("no leaves found for parent={parent:?}"));
     }
 
     let last_leaf = leaves.last().unwrap();

@@ -828,7 +828,7 @@ pub mod testing {
                 start_voting_time: 0,
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
-                epoch_height: 0,
+                epoch_height: 300,
                 epoch_start_block: 0,
             };
 

@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use crate::PubKey;
-use alloy::primitives::{map::HashSet, Address, U256};
+use alloy::primitives::{Address, U256};
 use derive_more::derive::{From, Into};
 use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::stake_table::NodeInfoJf;
 use hotshot_types::{light_client::StateVerKey, network::PeerConfigKeys, PeerConfig};
 use serde::{Deserialize, Serialize};
+
+use crate::PubKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct PermissionedStakeTableEntry(NodeInfoJf);

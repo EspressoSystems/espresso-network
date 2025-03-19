@@ -188,6 +188,8 @@ impl Inner {
         self.path.join("upgrade_certificate")
     }
 
+    #[allow(dead_code)]
+    // TODO(abdul): fix stake table persistence for new stake table types
     fn stake_table_dir_path(&self) -> PathBuf {
         self.path.join("stake_table")
     }

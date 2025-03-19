@@ -352,6 +352,7 @@ pub fn bls_sol_to_jf(bls_vk: permissioned_stake_table::G2Point) -> BLSPubKey {
     bls_conv_helper(g2)
 }
 
+//TODO(abdul): rename it to bls_alloy_to_jf after permissioned stake table contract is removed
 pub fn bls_alloy_to_jf2(bls_vk: contract_bindings_alloy::staketable::BN254::G2Point) -> BLSPubKey {
     let g2 = diff_test_bn254::ParsedG2Point {
         x0: bls_vk.x0.to_ethers(),
@@ -371,6 +372,8 @@ pub fn bls_jf_to_alloy(bls_vk: BLSPubKey) -> G2PointAlloy {
         y1: y1.to_alloy(),
     }
 }
+
+//TODO(abdul): rename it to bls_jf_to_alloy after permissioned stake table contract is removed
 
 pub fn bls_jf_to_alloy2(bls_vk: BLSPubKey) -> contract_bindings_alloy::staketable::BN254::G2Point {
     let ParsedG2Point { x0, x1, y0, y1 } = bls_vk.to_affine().into();

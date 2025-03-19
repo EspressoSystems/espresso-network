@@ -2,14 +2,14 @@ use std::ops::Add;
 
 use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
-use ethers::types::{Address, Reward, U256};
+use ethers::types::Address;
 use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
-    data::{BlockError, EpochNumber, ViewNumber},
+    data::{BlockError, ViewNumber},
     traits::{
-        block_contents::BlockHeader, election::Membership, node_implementation::ConsensusTime,
+        block_contents::BlockHeader, node_implementation::ConsensusTime,
         signature_key::BuilderSignatureKey, states::StateDelta, ValidatedState as HotShotState,
     },
 };
@@ -30,9 +30,9 @@ use super::{
     auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
-    reward::{self, apply_rewards, catchup_missing_accounts},
+    reward::{apply_rewards, catchup_missing_accounts},
     v0_1::{
-        block_reward, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
+        RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
     },
     v0_3::Validator,

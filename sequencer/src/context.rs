@@ -9,7 +9,7 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
-    EpochCommittees, NodeState, PubKey, Transaction, ValidatedState,
+    NodeState, PubKey, Transaction, ValidatedState,
 };
 use futures::{
     future::{join_all, Future},

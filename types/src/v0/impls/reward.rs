@@ -5,46 +5,36 @@ use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use contract_bindings_alloy::feecontract::FeeContract::Deposit;
-use contract_bindings_ethers::fee_contract::DepositFilter;
 use ethers::{
     prelude::{Address, U256},
     utils::{parse_units, ParseUnits},
 };
 use ethers_conv::ToEthers;
 use hotshot::types::BLSPubKey;
-use hotshot_query_service::explorer::MonetaryValue;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    traits::{
-        block_contents::BuilderFee, election::Membership, node_implementation::ConsensusTime,
-    },
+    traits::{election::Membership, node_implementation::ConsensusTime},
 };
-use itertools::Itertools;
 use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
-    MerkleCommitment, MerkleTreeError, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme,
-    ToTraversalPath, UniversalMerkleTreeScheme,
+    MerkleCommitment, MerkleTreeScheme, PersistentUniversalMerkleTreeScheme, ToTraversalPath,
+    UniversalMerkleTreeScheme,
 };
 use num_traits::CheckedSub;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
-use thiserror::Error;
 
 use super::{
     v0_1::{
         block_reward, RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount,
-        RewardInfo, RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree, COMMISSION_BASIS_POINTS,
+        RewardInfo, RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
+        COMMISSION_BASIS_POINTS,
     },
     v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
 };
-use crate::{
-    eth_signature_key::EthKeyPair, v0_99::IterableFeeInfo, AccountQueryData, FeeAccount,
-    FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree,
-    SeqTypes,
-};
+use crate::{eth_signature_key::EthKeyPair, FeeAccount};
 
 impl Committable for RewardInfo {
     fn commit(&self) -> Commitment<Self> {

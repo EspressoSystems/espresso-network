@@ -15,9 +15,7 @@ use contract_bindings_alloy::staketable::StakeTable::{
 };
 use ethers_conv::ToEthers;
 use hotshot::types::{BLSPubKey, SignatureKey as _};
-use hotshot_contract_adapter::stake_table::{
-    bls_alloy_to_jf2, edward_bn254point_to_state_ver, ParsedEdOnBN254Point,
-};
+use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
 use hotshot_types::{
     data::EpochNumber,
     drb::{
@@ -733,7 +731,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 mod tests {
     use contract_bindings_alloy::staketable::{EdOnBN254::EdOnBN254Point, BN254::G2Point};
     use ethers_conv::ToAlloy as _;
-    use hotshot_contract_adapter::stake_table::bls_jf_to_alloy2;
+    use hotshot_contract_adapter::stake_table::{bls_jf_to_alloy2, ParsedEdOnBN254Point};
     use hotshot_types::light_client::StateKeyPair;
     use rand::{Rng as _, RngCore as _};
     use sequencer_utils::test_utils::setup_test;
@@ -866,7 +864,7 @@ mod tests {
         }
         .into();
 
-        let cases = vec![
+        let cases = [
             vec![exit],
             vec![undelegate.clone()],
             vec![delegate.clone()],
@@ -874,6 +872,7 @@ mod tests {
             vec![register.clone(), register.clone()],
             vec![register, delegate, undelegate.clone(), undelegate],
         ];
+
         for events in cases.iter() {
             let res = from_l1_events(events.iter().cloned());
             assert!(
