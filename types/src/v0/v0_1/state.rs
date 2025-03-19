@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use committable::Commitment;
-use derive_more::{Add, Display, From, Into, Mul, Sub};
+use derive_more::{derive::AddAssign, Add, Display, From, Into, Mul, Sub};
 use ethers::{abi::Address, types::U256};
 use jf_merkle_tree::{
     prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
@@ -84,6 +84,7 @@ pub struct RewardAccount(pub Address);
     Mul,
     From,
     Into,
+    AddAssign,
 )]
 #[display("{_0}")]
 pub struct RewardAmount(pub U256);

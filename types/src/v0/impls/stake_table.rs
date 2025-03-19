@@ -728,7 +728,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use contract_bindings_alloy::staketable::{EdOnBN254::EdOnBN254Point, BN254::G2Point};
     use ethers_conv::ToAlloy as _;
     use hotshot_contract_adapter::stake_table::{bls_jf_to_alloy2, ParsedEdOnBN254Point};
@@ -740,15 +740,15 @@ mod tests {
 
     // TODO: current tests are just sanity checks, we need more.
 
-    struct TestValidator {
-        account: Address,
-        bls_vk: G2Point,
-        schnorr_vk: EdOnBN254Point,
-        commission: u16,
+    pub struct TestValidator {
+        pub account: Address,
+        pub bls_vk: G2Point,
+        pub schnorr_vk: EdOnBN254Point,
+        pub commission: u16,
     }
 
     impl TestValidator {
-        fn random() -> Self {
+        pub fn random() -> Self {
             let rng = &mut rand::thread_rng();
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);

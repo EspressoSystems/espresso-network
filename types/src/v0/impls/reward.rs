@@ -326,7 +326,7 @@ pub fn apply_rewards(
                 Some(updated) => Some(updated.into()),
                 None => {
                     err = Some(format!("overflowed reward balance for account {}", account));
-                    return balance;
+                    balance
                 },
             }
         })?;
@@ -338,28 +338,52 @@ pub fn apply_rewards(
         Ok::<(), anyhow::Error>(())
     };
 
-    // Distribute leader reward
-    let leader_reward = RewardAmount::from(
-        (U256::from(validator.commission) * block_reward().0) / U256::from(COMMISSION_BASIS_POINTS),
-    );
-    update_balance(&RewardAccount(validator.account.to_ethers()), leader_reward)?;
+    let computed_rewards = compute_rewards(validator)?;
+    for (address, reward) in computed_rewards {
+        update_balance(&RewardAccount(address.to_ethers()), reward)?;
+    }
+    Ok(reward_state)
+}
 
-    let delegators_reward = block_reward()
-        .checked_sub(&leader_reward)
+pub fn compute_rewards(
+    validator: Validator<BLSPubKey>,
+) -> anyhow::Result<Vec<(alloy::primitives::Address, RewardAmount)>> {
+    let mut rewards = Vec::new();
+
+    let total_reward = block_reward().0;
+    let delegators_ratio_basis_points = U256::from(COMMISSION_BASIS_POINTS)
+        .checked_sub(U256::from(validator.commission))
         .context("overflow")?;
+    let delegators_reward = delegators_ratio_basis_points
+        .checked_mul(total_reward)
+        .context("overflow")?;
+
     // Distribute delegator rewards
     let total_stake = validator.stake.to_ethers();
+    let mut delegators_rewards_distributed = U256::from(0);
     for (delegator_address, delegator_stake) in &validator.delegators {
         let delegator_reward = RewardAmount::from(
-            delegator_stake.to_ethers() * U256::from(delegators_reward) / total_stake,
+            (delegator_stake
+                .to_ethers()
+                .checked_mul(U256::from(delegators_reward))
+                .context("overflow")?
+                .checked_div(total_stake)
+                .context("overflow")?)
+            .checked_div(COMMISSION_BASIS_POINTS.into())
+            .context("overflow")?,
         );
-        update_balance(
-            &RewardAccount(delegator_address.to_ethers()),
-            delegator_reward,
-        )?;
+
+        delegators_rewards_distributed += delegator_reward.0;
+
+        rewards.push((delegator_address.clone(), delegator_reward));
     }
 
-    Ok(reward_state)
+    let leader_reward = total_reward
+        .checked_sub(delegators_rewards_distributed)
+        .context("overflow")?;
+    rewards.push((validator.account, leader_reward.into()));
+
+    Ok(rewards)
 }
 
 pub async fn catchup_missing_accounts(
@@ -418,4 +442,62 @@ pub async fn catchup_missing_accounts(
         }
     }
     Ok(validator)
+}
+
+#[cfg(test)]
+pub mod tests {
+
+    use std::collections::HashMap;
+
+    use ethers_conv::ToAlloy;
+    use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
+    use rand::{Rng, RngCore};
+
+    use crate::v0::impls::tests::TestValidator;
+
+    use super::*;
+
+    // TODO: current tests are just sanity checks, we need more.
+
+    #[test]
+    fn test_reward_calculation_sanity_check() {
+        // This test verifies that the total rewards distributed match the block reward.
+        // Due to rounding effects in distribution, the validator may receive a slightly higher amount
+        // because the remainder after delegator distribution is sent to the validator.
+
+        let val = TestValidator::random();
+        let rng = &mut rand::thread_rng();
+        let mut seed = [1u8; 32];
+        rng.fill_bytes(&mut seed);
+        let mut validator_stake = alloy::primitives::U256::from(0);
+        let mut delegators = HashMap::new();
+        for _i in 0..=100 {
+            let stake: u64 = rng.gen_range(0..10000);
+            delegators.insert(
+                Address::random().to_alloy(),
+                alloy::primitives::U256::from(stake),
+            );
+            validator_stake += alloy::primitives::U256::from(stake);
+        }
+
+        let stake_table_key = bls_alloy_to_jf2(val.bls_vk.clone());
+        let state_ver_key = edward_bn254point_to_state_ver(val.schnorr_vk.clone());
+
+        let validator = Validator {
+            account: val.account,
+            stake_table_key,
+            state_ver_key,
+            stake: validator_stake,
+            commission: val.commission,
+            delegators,
+        };
+
+        let rewards = compute_rewards(validator).unwrap();
+        let mut total_calculated_rewards: RewardAmount = U256::zero().into();
+        for (_, amount) in rewards.clone() {
+            total_calculated_rewards += amount;
+        }
+
+        assert_eq!(total_calculated_rewards, block_reward());
+    }
 }
