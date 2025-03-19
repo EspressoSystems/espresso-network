@@ -360,6 +360,10 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
     }
 
+    let epoch_height = genesis.epoch_height.unwrap_or_default();
+    tracing::info!("setting epoch height={epoch_height:?}");
+    network_config.config.epoch_height = epoch_height;
+
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
     if let Some(bootstrap_nodes) = network_params.libp2p_bootstrap_nodes {
@@ -478,7 +482,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         node_id: node_index,
         upgrades: genesis.upgrades,
         current_version: V::Base::VERSION,
-        epoch_height: None,
+        epoch_height: network_config.config.epoch_height,
     };
 
     // Create the HotShot membership
@@ -737,6 +741,11 @@ pub mod testing {
             self
         }
 
+        pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
+            self.config.epoch_height = epoch_height;
+            self
+        }
+
         pub fn upgrades<V: Versions>(mut self, upgrades: BTreeMap<Version, Upgrade>) -> Self {
             let upgrade = upgrades.get(&<V as Versions>::Upgrade::VERSION).unwrap();
             upgrade.set_hotshot_config_parameters(&mut self.config);
@@ -815,7 +824,7 @@ pub mod testing {
                 start_voting_time: 0,
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
-                epoch_height: 0,
+                epoch_height: 150,
                 epoch_start_block: 0,
             };
 
@@ -976,7 +985,6 @@ pub mod testing {
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
-            .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades);
 
             // Create the HotShot membership

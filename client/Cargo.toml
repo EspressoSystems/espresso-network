@@ -10,7 +10,9 @@ anyhow = { workspace = true }
 espresso-types = { path = "../types" }
 ethers = { workspace = true }
 futures = { workspace = true }
+hotshot-types = { workspace = true }
 jf-merkle-tree = { workspace = true }
+serde_json = { workspace = true }
 surf-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

@@ -79,10 +79,9 @@ mod persistence_tests {
         vote::HasViewNumber,
     };
     use sequencer_utils::test_utils::setup_test;
-    use testing::TestablePersistence;
     use vbs::version::{StaticVersionType, Version};
 
-    use super::*;
+    use super::{testing::TestablePersistence, *};
 
     #[derive(Clone, Debug, Default)]
     struct EventCollector {

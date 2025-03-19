@@ -9,7 +9,7 @@ doc *args:
 demo *args:
     docker compose up {{args}}
 
-demo-native *args: build
+demo-native *args: (build "test" "--features fee")
     scripts/demo-native {{args}}
 
 fmt:
@@ -24,16 +24,22 @@ lint:
     cargo clippy --workspace --features testing --all-targets -- -D warnings
     cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml -- -D warnings
 
-build profile="test":
+build profile="test" features="":
     #!/usr/bin/env bash
     set -euxo pipefail
     # Use the same target dir for both `build` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
-    cargo build --profile {{profile}}
-    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml
+    cargo build --profile {{profile}} {{features}}
+    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
 
-demo-native-mp *args: build
+demo-native-mp *args: (build "test" "--features fee,marketplace")
     scripts/demo-native -f process-compose.yaml -f process-compose-mp.yml {{args}}
+
+demo-native-pos *args: (build "test" "--features fee,pos")
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-pos-base *args: build
+    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -74,11 +80,14 @@ test-all:
     cargo nextest run --locked --release --workspace --features embedded-db --verbose --profile all
     cargo nextest run --locked --release --workspace --verbose --profile all
 
-test-integration:
+test-integration: (build "test" "--features fee")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
-test-integration-mp:
+test-integration-mp: (build "test" "--features fee,marketplace")
     INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
+
+test-integration-pos: (build "test" "--features fee,pos")
+    INTEGRATION_TEST_SEQUENCER_VERSION=3 ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
 
 clippy:
     @echo 'features: "embedded-db"'

@@ -5,7 +5,7 @@ use std::{fs, path::Path, sync::Arc, time::Duration};
 /// The initial stake table is passed to the permissioned stake table contract
 /// on deployment.
 use contract_bindings_ethers::permissioned_stake_table::{
-    G2Point, NodeInfo, PermissionedStakeTable,
+    G2Point, NodeInfo, PermissionedStakeTable, PermissionedStakeTableErrors,
 };
 use derive_more::derive::From;
 use ethers::{
@@ -18,6 +18,8 @@ use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::stake_table::{bls_jf_to_sol, NodeInfoJf};
 use hotshot_types::network::PeerConfigKeys;
 use url::Url;
+
+use crate::contract_send;
 
 /// A stake table config stored in a file
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -59,8 +61,8 @@ impl From<PermissionedStakeTableConfig> for Vec<NodeInfo> {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, From, PartialEq)]
-struct StakerIdentity {
-    stake_table_key: BLSPubKey,
+pub struct StakerIdentity {
+    pub stake_table_key: BLSPubKey,
 }
 
 impl From<StakerIdentity> for BLSPubKey {
@@ -74,12 +76,22 @@ impl From<StakerIdentity> for BLSPubKey {
 #[serde(bound(deserialize = ""))]
 pub struct PermissionedStakeTableUpdate {
     #[serde(default)]
-    stakers_to_remove: Vec<StakerIdentity>,
+    pub stakers_to_remove: Vec<StakerIdentity>,
     #[serde(default)]
-    new_stakers: Vec<PeerConfigKeys<BLSPubKey>>,
+    pub new_stakers: Vec<PeerConfigKeys<BLSPubKey>>,
 }
 
 impl PermissionedStakeTableUpdate {
+    pub fn new(
+        new_stakers: Vec<PeerConfigKeys<BLSPubKey>>,
+        stakers_to_remove: Vec<StakerIdentity>,
+    ) -> Self {
+        Self {
+            stakers_to_remove,
+            new_stakers,
+        }
+    }
+
     pub fn from_toml_file(path: &Path) -> anyhow::Result<Self> {
         let config_file_as_string: String = fs::read_to_string(path)
             .unwrap_or_else(|_| panic!("Could not read config file located at {}", path.display()));
@@ -92,6 +104,16 @@ impl PermissionedStakeTableUpdate {
                 )
             }),
         )
+    }
+
+    pub fn to_toml_file(&self, path: &Path) -> anyhow::Result<()> {
+        let toml_string = toml::to_string_pretty(self)
+            .unwrap_or_else(|err| panic!("Failed to serialize config to TOML: {err}"));
+
+        fs::write(path, toml_string)
+            .unwrap_or_else(|_| panic!("Could not write config file to {}", path.display()));
+
+        Ok(())
     }
 
     fn stakers_to_remove(&self) -> Vec<G2Point> {
@@ -127,17 +149,22 @@ pub async fn update_stake_table(
         .index(account_index)?
         .build()?
         .with_chain_id(chain_id);
+
     let l1 = Arc::new(SignerMiddleware::new(provider.clone(), wallet));
 
     let contract = PermissionedStakeTable::new(contract_address, l1);
 
     tracing::info!("sending stake table update transaction");
 
-    let tx_receipt = contract
-        .update(update.stakers_to_remove(), update.new_stakers())
-        .send()
-        .await?
-        .await?;
+    if update.stakers_to_remove().is_empty() && update.new_stakers().is_empty() {
+        anyhow::bail!("No changes to update in the stake table");
+    }
+
+    let (tx_receipt, _) = contract_send::<_, _, PermissionedStakeTableErrors>(
+        &contract.update(update.stakers_to_remove(), update.new_stakers()),
+    )
+    .await?;
+
     tracing::info!("Transaction receipt: {:?}", tx_receipt);
     Ok(())
 }

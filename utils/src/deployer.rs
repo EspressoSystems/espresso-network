@@ -361,7 +361,7 @@ pub async fn deploy(
     genesis: BoxFuture<'_, anyhow::Result<(ParsedLightClientState, ParsedStakeTableState)>>,
     permissioned_prover: Option<Address>,
     mut contracts: Contracts,
-    initial_stake_table: Option<Vec<NodeInfo>>,
+    _initial_stake_table: Option<Vec<NodeInfo>>,
     exit_escrow_period: Option<Duration>,
 ) -> anyhow::Result<Contracts> {
     if should_deploy(ContractGroup::StakeTable, &only) && exit_escrow_period.is_none() {
@@ -508,11 +508,10 @@ pub async fn deploy(
 
     // `PermissionedStakeTable.sol`
     if should_deploy(ContractGroup::PermissionedStakeTable, &only) {
-        let initial_stake_table: Vec<_> = initial_stake_table.unwrap_or_default();
         let stake_table_address = contracts
             .deploy_tx(
                 Contract::PermissonedStakeTable,
-                PermissionedStakeTable::deploy(l1.clone(), initial_stake_table)?,
+                PermissionedStakeTable::deploy(l1.clone(), Vec::<NodeInfo>::new())?,
             )
             .await?;
         let stake_table = PermissionedStakeTable::new(stake_table_address, l1.clone());

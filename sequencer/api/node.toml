@@ -2,7 +2,20 @@
 PATH = ["stake-table/current"]
 DOC = "Get the stake table for the current epoch"
 
+[route.da_members_current]
+PATH = ["stake-table/da/current"]
+DOC = "Get the stake table da members for the current epoch"
+
 [route.stake_table]
 PATH = ["stake-table/:epoch_number"]
 ":epoch_number" = "Integer"
 DOC = "Get the stake table for the given epoch"
+
+[route.da_members]
+PATH = ["stake-table/da/:epoch_number"]
+":epoch_number" = "Integer"
+DOC = "Get the stake table da members for the given epoch"
+
+[route.current_epoch]
+PATH = ["current_epoch"]
+DOC = "Get the current epoch"

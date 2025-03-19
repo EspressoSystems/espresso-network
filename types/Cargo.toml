@@ -31,6 +31,7 @@ hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
+indexmap = "2.7"
 itertools = { workspace = true }
 jf-merkle-tree = { workspace = true }
 jf-utils = { workspace = true }                                      # TODO temporary: used only for test_rng()

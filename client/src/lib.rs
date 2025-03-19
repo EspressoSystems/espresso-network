@@ -1,9 +1,12 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use espresso_types::{FeeAccount, FeeAmount, FeeMerkleTree, Header};
+use espresso_types::{
+    config::PublicNetworkConfig, FeeAccount, FeeAmount, FeeMerkleTree, Header, PubKey,
+};
 use ethers::types::Address;
 use futures::{stream::BoxStream, StreamExt};
+use hotshot_types::stake_table::StakeTableEntry;
 use jf_merkle_tree::{
     prelude::{MerkleProof, Sha3Node},
     MerkleTreeScheme,
@@ -119,6 +122,38 @@ impl SequencerClient {
         // balance is defined to be 0.
         let balance = proof.elem().copied().unwrap_or(0.into());
         Ok(balance)
+    }
+
+    pub async fn current_epoch(&self) -> anyhow::Result<Option<u64>> {
+        self.0
+            .get::<Option<u64>>("node/current_epoch")
+            .send()
+            .await
+            .context("getting epoch value")
+    }
+
+    pub async fn stake_table(&self, epoch: u64) -> anyhow::Result<Vec<StakeTableEntry<PubKey>>> {
+        self.0
+            .get::<_>(&format!("node/stake-table/{epoch}"))
+            .send()
+            .await
+            .context("getting stake table")
+    }
+
+    pub async fn da_members(&self, epoch: u64) -> anyhow::Result<Vec<StakeTableEntry<PubKey>>> {
+        self.0
+            .get::<_>(&format!("node/stake-table/da/{epoch}"))
+            .send()
+            .await
+            .context("getting da stake table")
+    }
+
+    pub async fn config(&self) -> anyhow::Result<PublicNetworkConfig> {
+        self.0
+            .get::<PublicNetworkConfig>("config/hotshot")
+            .send()
+            .await
+            .context("getting hotshot config")
     }
 }
 

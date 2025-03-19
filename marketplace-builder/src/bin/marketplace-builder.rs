@@ -2,8 +2,7 @@ use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 
 use clap::Parser;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, parse_duration, FeeAmount, FeeVersion, MarketplaceVersion,
-    NamespaceId, SequencerVersions, V0_0,
+    eth_signature_key::EthKeyPair, parse_duration, FeeAmount, NamespaceId, SequencerVersions,
 };
 use futures::future::pending;
 use hotshot::helpers::initialize_logging;
@@ -127,13 +126,25 @@ async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        (FeeVersion::VERSION, MarketplaceVersion::VERSION) => {
-            run::<SequencerVersions<FeeVersion, MarketplaceVersion>>(genesis, opt).await
-        },
-        (FeeVersion::VERSION, _) => run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await,
-        (MarketplaceVersion::VERSION, _) => {
-            run::<SequencerVersions<MarketplaceVersion, V0_0>>(genesis, opt).await
-        },
+        (espresso_types::FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
+                genesis, opt
+            )
+            .await
+        }
+        (espresso_types::EpochVersion::VERSION, _) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::MarketplaceVersion>>(
+                genesis, opt
+                // Specifying V0_0 disables upgrades
+            )
+            .await
+        }
+        (espresso_types::FeeVersion::VERSION, espresso_types::MarketplaceVersion::VERSION) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::MarketplaceVersion>>(
+                genesis, opt
+            )
+            .await
+        }
         _ => panic!(
             "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."
         ),
