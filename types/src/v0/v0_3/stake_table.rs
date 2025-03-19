@@ -1,7 +1,7 @@
 use crate::PubKey;
 use derive_more::derive::{From, Into};
 use hotshot_contract_adapter::stake_table::NodeInfoJf;
-use hotshot_types::{network::PeerConfigKeys, PeerConfig};
+use hotshot_types::{data::EpochNumber, network::PeerConfigKeys, PeerConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
@@ -11,16 +11,19 @@ pub struct PermissionedStakeTableEntry(NodeInfoJf);
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CombinedStakeTable(Vec<PeerConfigKeys<PubKey>>);
 
-#[derive(Clone, Debug, From, Into, Serialize, Deserialize)]
+#[derive(Clone, Debug, From, Into, Serialize, Deserialize, PartialEq, Eq)]
 /// NewType to disambiguate DA Membership
 pub struct DAMembers(pub Vec<PeerConfig<PubKey>>);
 
-#[derive(Clone, Debug, From, Into, Serialize, Deserialize)]
+#[derive(Clone, Debug, From, Into, Serialize, Deserialize, PartialEq, Eq)]
 /// NewType to disambiguate StakeTable
 pub struct StakeTable(pub Vec<PeerConfig<PubKey>>);
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StakeTables {
     pub stake_table: StakeTable,
     pub da_members: DAMembers,
 }
+
+/// Type for holding result sets matching epochs to stake tables.
+pub type IndexedStake = (EpochNumber, StakeTables);
