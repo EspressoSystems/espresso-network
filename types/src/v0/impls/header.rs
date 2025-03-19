@@ -3,15 +3,14 @@ use std::fmt;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use ethers_conv::{ToAlloy, ToEthers};
+use ethers_conv::ToAlloy;
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment, ViewNumber},
+    data::VidCommitment,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
-        election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
         BlockPayload, ValidatedState as _,
     },
@@ -36,8 +35,7 @@ use crate::{
         impls::reward::{apply_rewards, catchup_missing_accounts},
         MarketplaceVersion,
     },
-    v0_1::{self, RewardAccount},
-    v0_2, v0_3,
+    v0_1, v0_2, v0_3,
     v0_99::{self, ChainConfig, IterableFeeInfo, SolverAuctionResults},
     BlockMerkleCommitment, BuilderSignature, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
     FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes,

@@ -1023,7 +1023,6 @@ mod test {
         utils::{parse_ether, Anvil, AnvilInstance},
     };
     use ethers_conv::ToAlloy;
-    use hotshot_contract_adapter::stake_table::NodeInfoJf;
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
     use time::OffsetDateTime;
