@@ -4,6 +4,6 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-// mod tests_6 {
-//     automod::dir!("tests/tests_6");
-// }
+mod tests_6 {
+    automod::dir!("tests/tests_6");
+}

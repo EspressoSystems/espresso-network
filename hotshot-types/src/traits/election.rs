@@ -81,7 +81,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     ) -> Result<TYPES::SignatureKey> {
         use hotshot_utils::anytrace::*;
 
-        self.lookup_leader(view, epoch).wrap().context(error!(
+        self.lookup_leader(view, epoch).wrap().context(info!(
             "Failed to get leader for view {view} in epoch {epoch}"
         ))
     }

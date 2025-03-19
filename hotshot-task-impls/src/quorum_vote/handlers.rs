@@ -64,7 +64,6 @@ async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         }
     }
 
-    membership.stake_table().await;
     membership.add_drb_result(drb_result).await;
 }
 
