@@ -742,6 +742,39 @@ mod tests {
 
     // TODO: current tests are just sanity checks, we need more.
 
+    struct TestValidator {
+        account: Address,
+        bls_vk: G2Point,
+        schnorr_vk: EdOnBN254Point,
+        commission: u16,
+    }
+
+    impl TestValidator {
+        fn random() -> Self {
+            let rng = &mut rand::thread_rng();
+            let mut seed = [0u8; 32];
+            rng.fill_bytes(&mut seed);
+
+            let (bls_vk, _) = BLSPubKey::generated_from_seed_indexed(seed, 0);
+            let schnorr_vk: ParsedEdOnBN254Point =
+                StateKeyPair::generate_from_seed_indexed(seed, 0)
+                    .ver_key()
+                    .to_affine()
+                    .into();
+
+            Self {
+                account: Address::random(),
+                bls_vk: bls_jf_to_alloy2(bls_vk),
+                schnorr_vk: EdOnBN254Point {
+                    x: schnorr_vk.x.to_alloy(),
+                    y: schnorr_vk.y.to_alloy(),
+                },
+                commission: rng.gen_range(0..10000),
+            }
+        }
+    }
+
+
     #[test]
     fn test_from_l1_events() -> anyhow::Result<()> {
         setup_test();
