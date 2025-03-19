@@ -216,7 +216,6 @@ jobs:
         with:
           context: .
           file: ./docker/${{ matrix.service }}.Dockerfile
-          tags: ${{ steps.metadata.outputs.tags }}
           platforms: ${{ env.DOCKER_PLATFORMS }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.metadata.outputs.tags }}
