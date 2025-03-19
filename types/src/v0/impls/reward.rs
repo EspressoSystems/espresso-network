@@ -319,16 +319,22 @@ pub fn apply_rewards(
     validator: Validator<BLSPubKey>,
 ) -> anyhow::Result<RewardMerkleTree> {
     let mut update_balance = |account: &RewardAccount, amount: RewardAmount| {
+        let mut err = None;
         reward_state = reward_state.persistent_update_with(account, |balance| {
             let balance = balance.copied();
             match balance.unwrap_or_default().0.checked_add(amount.0) {
                 Some(updated) => Some(updated.into()),
                 None => {
-                    tracing::warn!("overflowed reward balance for account {}", account);
-                    balance
+                    err = Some(format!("overflowed reward balance for account {}", account));
+                    return balance;
                 },
             }
         })?;
+
+        if let Some(error) = err {
+            tracing::warn!(error);
+            bail!(error)
+        }
         Ok::<(), anyhow::Error>(())
     };
 
