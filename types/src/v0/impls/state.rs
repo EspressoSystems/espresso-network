@@ -1,6 +1,6 @@
 use std::ops::Add;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
 use ethers::types::{Address, Reward, U256};
 use ethers_conv::{ToAlloy, ToEthers};
@@ -888,7 +888,7 @@ impl ValidatedState {
 
             validated_state
                 .distribute_rewards(&mut delta, validator)
-                .unwrap();
+                .context("failed to distribute rewards")?
         }
 
         Ok((validated_state, delta))

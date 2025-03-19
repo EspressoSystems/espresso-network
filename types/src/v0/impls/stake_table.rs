@@ -774,7 +774,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_from_l1_events() -> anyhow::Result<()> {
         setup_test();
