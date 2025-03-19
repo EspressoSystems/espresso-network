@@ -195,20 +195,13 @@ jobs:
           context: .
           file: ./docker/${{ matrix.service }}.Dockerfile
           platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels  }}
-
-      - name: Export ${{ matrix.service }} docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./docker/${{ matrix.service }}.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: false
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels  }}
-          outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
+          # push only if not a pull request
+          # always export to file for testing in test-demo
+          outputs: |
+            ${{ github.event_name != 'pull_request' && 'type=registry' || '' }}
+            type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
