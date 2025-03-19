@@ -212,7 +212,7 @@ jobs:
           images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
 
       - name: Build and push ${{ matrix.service }} docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./docker/${{ matrix.service }}.Dockerfile
