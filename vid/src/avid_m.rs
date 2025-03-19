@@ -222,6 +222,12 @@ impl AvidMScheme {
         Ok((mt, raw_shares))
     }
 
+    /// Short hand for `pad_to_field` and `raw_encode`.
+    fn pad_and_encode(param: &AvidMParam, payload: &[u8]) -> VidResult<(MerkleTree, Vec<Vec<F>>)> {
+        let payload = Self::pad_to_fields(param, payload);
+        Self::raw_encode(param, &payload)
+    }
+
     pub(crate) fn verify_internal(
         param: &AvidMParam,
         commit: &AvidMCommit,
@@ -321,8 +327,7 @@ impl VidScheme for AvidMScheme {
     type Commit = AvidMCommit;
 
     fn commit(param: &Self::Param, payload: &[u8]) -> VidResult<Self::Commit> {
-        let payload = Self::pad_to_fields(param, payload);
-        let (mt, _) = Self::raw_encode(param, &payload)?;
+        let (mt, _) = Self::pad_and_encode(param, payload)?;
         Ok(AvidMCommit {
             commit: mt.commitment(),
         })
@@ -346,8 +351,7 @@ impl VidScheme for AvidMScheme {
 
         let disperse_timer = start_timer!(|| format!("Disperse {} bytes", payload_byte_len));
 
-        let payload = Self::pad_to_fields(param, payload);
-        let (mt, raw_shares) = Self::raw_encode(param, &payload)?;
+        let (mt, raw_shares) = Self::pad_and_encode(param, payload)?;
 
         let distribute_timer = start_timer!(|| "Distribute codewords to the storage nodes");
         // Distribute the raw shares to each storage node according to the weight
@@ -426,6 +430,8 @@ impl VidScheme for AvidMScheme {
         shares: &[Self::Share],
     ) -> VidResult<Vec<u8>> {
         let mut bytes: Vec<u8> = field_to_bytes(Self::recover_fields(param, shares)?).collect();
+        // Remove the triming zeros and the last 1 to get the actual payload bytes.
+        // See `pad_to_fields`.
         if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0) {
             if bytes[pad_index] == 1u8 {
                 bytes.truncate(pad_index);
@@ -441,9 +447,23 @@ impl VidScheme for AvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
+    use super::F;
+    use crate::{avid_m::AvidMScheme, utils::bytes_to_field, VidScheme};
     use rand::{seq::SliceRandom, RngCore};
 
-    use crate::{avid_m::AvidMScheme, VidScheme};
+    #[test]
+    fn test_padding() {
+        let elem_bytes_len = bytes_to_field::elem_byte_capacity::<F>();
+        let param = AvidMScheme::setup(2usize, 5usize).unwrap();
+        let bytes = vec![2u8; 1];
+        let padded = AvidMScheme::pad_to_fields(&param, &bytes);
+        assert_eq!(padded.len(), 2usize);
+        assert_eq!(padded, [F::from(2u32 + u8::MAX as u32 + 1), F::from(0)]);
+
+        let bytes = vec![2u8; elem_bytes_len * 2];
+        let padded = AvidMScheme::pad_to_fields(&param, &bytes);
+        assert_eq!(padded.len(), 4usize);
+    }
 
     #[test]
     fn round_trip() {
