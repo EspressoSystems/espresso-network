@@ -191,6 +191,7 @@ jobs:
 
       - name: Build and push ${{ matrix.service }} docker image
         uses: docker/build-push-action@v6
+        id: docker-{{ matrix.service }}
         with:
           context: .
           file: ./docker/${{ matrix.service }}.Dockerfile
@@ -199,8 +200,24 @@ jobs:
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels  }}
 
+      - name: Export ${{ matrix.service }} docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/${{ matrix.service }}.Dockerfile
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          push: false
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels  }}
+          outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.service }}-image
+          path: ${{ runner.temp }}/{{ matrix.service }}.tar
+
   test-demo:
-    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     needs: [build-dockers]
     steps:
@@ -212,13 +229,14 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # TODO: MA: not sure this works, but if not, why not?
-      - name: Pull docker images
-        run: |
-          just pull
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}
 
-      - name: Test docker demo
+      - name: Load docker images
         run: |
-          just demo &
-          set -o pipefail
-          timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+          # load all *.tar files in the temp directory
+          for file in ${{ runner.temp }}/*.tar; do
+            docker load --input $file
+          done
