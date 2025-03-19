@@ -19,8 +19,9 @@ use anyhow::Context;
 use catchup::StatePeers;
 use context::SequencerContext;
 use espresso_types::{
-    traits::EventConsumer, BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey,
-    SeqTypes, SolverAuctionResultsProvider, ValidatedState,
+    traits::{EventConsumer, MembershipPersistence},
+    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes,
+    SolverAuctionResultsProvider, ValidatedState,
 };
 use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
@@ -189,7 +190,7 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<P: SequencerPersistence, V: Versions>(
+pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versions>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
@@ -487,6 +488,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         network_config.config.known_da_nodes.clone(),
         &instance_state,
         network_config.config.epoch_height,
+        persistence.clone(),
     );
 
     // Initialize the Libp2p network
@@ -985,6 +987,7 @@ pub mod testing {
                 config.known_da_nodes.clone(),
                 &node_state,
                 100,
+                persistence,
             );
 
             tracing::info!(
