@@ -184,31 +184,9 @@ pub async fn create_node_validator_processing(
 
 #[cfg(test)]
 mod test {
-    use futures::{
-        channel::mpsc::{self, Sender},
-        StreamExt,
-    };
-    use tide_disco::App;
-    use tokio::spawn;
+    use url::Url;
 
-    use crate::{
-        api::node_validator::v0::{
-            BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender,
-            SurfDiscoAvailabilityAPIStream, STATIC_VER_0_1,
-        },
-        service::{
-            client_message::InternalClientMessage, data_state::MAX_VOTERS_HISTORY,
-            server_message::ServerMessage,
-        },
-    };
-
-    struct TestState(Sender<InternalClientMessage<Sender<ServerMessage>>>);
-
-    impl StateClientMessageSender<Sender<ServerMessage>> for TestState {
-        fn sender(&self) -> Sender<InternalClientMessage<Sender<ServerMessage>>> {
-            self.0.clone()
-        }
-    }
+    use crate::run_standalone_service;
 
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
@@ -216,104 +194,29 @@ mod test {
         use hotshot::helpers::initialize_logging;
         initialize_logging();
 
-        let (internal_client_message_sender, internal_client_message_receiver) = mpsc::channel(32);
-        let state = TestState(internal_client_message_sender);
+        let base_url: Url = "https://query.main.net.espresso.network/v0/"
+            .parse()
+            .unwrap();
 
-        let mut app: App<_, crate::api::node_validator::v0::Error> = App::with_state(state);
-        let node_validator_api_result = super::super::define_api::<TestState>();
-        let node_validator_api = match node_validator_api_result {
-            Ok(node_validator_api) => node_validator_api,
-            Err(err) => {
-                panic!("error defining node validator api: {:?}", err);
-            },
-        };
-
-        match app.register_module("node-validator", node_validator_api) {
-            Ok(_) => {},
-            Err(err) => {
-                panic!("error registering node validator api: {:?}", err);
-            },
-        }
-
-        let client = surf_disco::Client::builder(
-            "https://query.main.net.espresso.network/v0/"
-                .parse()
-                .unwrap(),
-        )
-        .content_type(surf_disco::ContentType::Json)
-        .build();
-
-        // Let's get the current starting block height.
-        let block_height = {
-            let block_height_result = client.get("status/block-height").send().await;
-            let block_height: u64 = match block_height_result {
-                Ok(block_height) => block_height,
-                Err(err) => {
-                    tracing::warn!("retrieve block height request failed: {}", err);
-                    panic!("error retrieving block height request failed: {}", err);
-                },
-            };
-
-            // We want to make sure that we have at least MAX_VOTERS_HISTORY blocks of
-            // history that we are pulling
-            block_height.saturating_sub(MAX_VOTERS_HISTORY as u64 + 1)
-        };
-
-        tracing::info!("retrieved initial block height, starting at {block_height}");
-
-        let leaf_stream =
-            SurfDiscoAvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
-        let block_stream = SurfDiscoAvailabilityAPIStream::new_block_stream(client, block_height);
-
-        let zipped_stream = leaf_stream.zip(block_stream);
-
-        let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
-
-        let process_consume_leaves =
-            BridgeLeafAndBlockStreamToSenderTask::new(zipped_stream, leaf_and_block_pair_sender);
-
-        let node_validator_task_state = match super::create_node_validator_processing(
-            super::NodeValidatorConfig {
-                stake_table_url_base: "https://query.main.net.espresso.network/v0"
+        run_standalone_service(crate::Options {
+            stake_table_source_base_url: base_url.clone(),
+            leaf_stream_base_url: base_url,
+            initial_node_public_base_urls: vec![
+                "https://query-1.main.net.espresso.network/"
                     .parse()
                     .unwrap(),
-                initial_node_public_base_urls: vec![
-                    "https://query-1.main.net.espresso.network/"
-                        .parse()
-                        .unwrap(),
-                    "https://query-2.main.net.espresso.network/"
-                        .parse()
-                        .unwrap(),
-                    "https://query-3.main.net.espresso.network/"
-                        .parse()
-                        .unwrap(),
-                    "https://query-4.main.net.espresso.network/"
-                        .parse()
-                        .unwrap(),
-                ],
-            },
-            internal_client_message_receiver,
-            leaf_and_block_pair_receiver,
-        )
-        .await
-        {
-            Ok(node_validator_task_state) => node_validator_task_state,
-
-            Err(err) => {
-                panic!("error defining node validator api: {:?}", err);
-            },
-        };
-
-        // We would like to wait until being signaled
-        let app_serve_handle = spawn(async move {
-            let app_serve_result = app.serve("0.0.0.0:9000", STATIC_VER_0_1).await;
-            tracing::info!("app serve result: {:?}", app_serve_result);
-        });
-        tracing::info!("now listening on port 9000");
-
-        let _ = app_serve_handle.await;
-
-        drop(node_validator_task_state);
-        drop(process_consume_leaves);
+                "https://query-2.main.net.espresso.network/"
+                    .parse()
+                    .unwrap(),
+                "https://query-3.main.net.espresso.network/"
+                    .parse()
+                    .unwrap(),
+                "https://query-4.main.net.espresso.network/"
+                    .parse()
+                    .unwrap(),
+            ],
+            port: 9000,
+        })
+        .await;
     }
 }
