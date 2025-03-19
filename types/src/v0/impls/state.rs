@@ -655,11 +655,13 @@ impl<'a> ValidatedTransition<'a> {
     /// against that stored in [`ValidatedState`].
     fn validate_reward_merkle_tree(&self) -> Result<(), ProposalValidationError> {
         let reward_merkle_tree_root = self.state.reward_merkle_tree.commitment();
-        if self.proposal.header.reward_merkle_tree_root().unwrap() != reward_merkle_tree_root {
-            return Err(ProposalValidationError::InvalidRewardRoot {
-                expected_root: reward_merkle_tree_root,
-                proposal_root: self.proposal.header.reward_merkle_tree_root().unwrap(),
-            });
+        if let Some(root) = self.proposal.header.reward_merkle_tree_root() {
+            if root != reward_merkle_tree_root {
+                return Err(ProposalValidationError::InvalidRewardRoot {
+                    expected_root: reward_merkle_tree_root,
+                    proposal_root: root,
+                });
+            }
         }
 
         Ok(())
