@@ -359,7 +359,7 @@ where
         }
         .boxed()
     })?
-    .get("reward-account", |req, state| {
+    .get("reward_account", |req, state| {
         async move {
             let height = req
                 .integer_param("height")
@@ -389,7 +389,7 @@ where
         }
         .boxed()
     })?
-    .at("reward-accounts", |req, state| {
+    .at("reward_accounts", |req, state| {
         async move {
             let height = req
                 .integer_param("height")

@@ -82,6 +82,15 @@ For catching up the stake table, where `:height` is the block height of the epoc
 Returns a list of leaves which includes `:height` as the last leaf and should prove the block with `:height` was decided.  
 """
 
+[route.reward_account]
+PATH = ["/:height/:view/reward-account/:address"]
+":height" = "Integer"
+":view" = "Integer"
+":address" = "Literal"
+DOC = """
+Get the reward account balance for `address`.
+"""
+
 [route.reward_accounts]
 PATH = ["/:height/:view/reward-accounts"]
 ":height" = "Integer"
