@@ -41,4 +41,4 @@ CREATE TABLE epoch_migration (
     completed bool DEFAULT FALSE
 );
 
-INSERT INTO epoch_migration (table_name) VALUES ('anchor_leaf'), ('da_proposal'), ('vid_share'), ('undecided_state'), ('quorum_proposals'), ('quorum_certificate');
+INSERT INTO epoch_migration (table_name) VALUES ('anchor_leaf'), ('da_proposal'), ('vid_share'), ('quorum_proposals'), ('quorum_certificate');
