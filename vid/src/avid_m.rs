@@ -417,6 +417,7 @@ impl VidScheme for AvidMScheme {
     /// # Requirements
     /// - Total weight of all shares must be at least `recovery_threshold`.
     /// - Each share's `payload` must have equal length.
+    /// - All shares must be verified under the given commitment.
     ///
     /// Shares beyond `recovery_threshold` are ignored.
     fn recover(
