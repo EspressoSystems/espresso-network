@@ -1304,6 +1304,8 @@ impl SequencerPersistence for Persistence {
             }
         }
 
+        result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
+
         Ok(result)
     }
 }
