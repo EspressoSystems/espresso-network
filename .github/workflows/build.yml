@@ -206,7 +206,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.service }}-image
+          name: ${{ matrix.service }}-docker-image
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
 
   test-demo:
@@ -227,6 +227,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/docker-images
+          pattern: "*-docker-image"
+
 
       - name: Load docker images
         run: |
@@ -235,3 +237,9 @@ jobs:
           for file in ${{ runner.temp }}/docker-images/**.tar; do
             docker load --input $file
           done
+
+      - name: Test docker demo
+        run: |
+          just demo &
+          set -o pipefail
+          timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
