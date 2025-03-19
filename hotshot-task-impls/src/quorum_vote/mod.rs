@@ -26,7 +26,6 @@ use hotshot_types::{
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
-        election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
         storage::Storage,
@@ -249,6 +248,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             return;
         };
 
+        let mut maybe_next_epoch_vid_share = None;
         // If this is the last block in the epoch, we might need two VID shares.
         if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
             && is_last_block_in_epoch(leaf.block_header().block_number(), self.epoch_height)
@@ -284,9 +284,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 let other_target_epoch = if vid_share.data.target_epoch() == current_epoch {
                     next_epoch
                 } else {
+                    maybe_next_epoch_vid_share = Some(vid_share.clone());
                     current_epoch
                 };
-                if let Err(e) = wait_for_second_vid_share(
+                match wait_for_second_vid_share(
                     other_target_epoch,
                     &vid_share,
                     &da_cert,
@@ -297,11 +298,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 )
                 .await
                 {
-                    tracing::warn!(
-                        "This is the last block in epoch, we are in both epochs \
-                    but we received only one VID share. Do not vote! Error: {e:?}"
-                    );
-                    return;
+                    Ok(other_vid_share) => {
+                        if maybe_next_epoch_vid_share.is_none() {
+                            maybe_next_epoch_vid_share = Some(other_vid_share);
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "This is the last block in epoch, we are in both epochs \
+                             but we received only one VID share. Do not vote! Error: {e:?}"
+                        );
+                        return;
+                    },
                 }
             }
         }
@@ -318,7 +326,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.view_number,
             Arc::clone(&self.instance_state),
             &leaf,
-            &vid_share,
+            maybe_next_epoch_vid_share.as_ref().unwrap_or(&vid_share),
             parent_view_number,
             self.epoch_height,
         )
@@ -365,7 +373,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.view_number,
             Arc::clone(&self.storage),
             leaf,
-            vid_share,
+            maybe_next_epoch_vid_share.unwrap_or(vid_share),
             false,
             self.epoch_height,
         )
@@ -790,12 +798,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
         let current_epoch = proposal.data.epoch();
         let next_epoch = proposal.data.epoch().map(|e| e + 1);
 
-        let membership_reader = self.membership.membership().read().await;
-        let committee_member_in_current_epoch =
-            membership_reader.has_stake(&self.public_key, current_epoch);
-        let committee_member_in_next_epoch =
-            membership_reader.has_stake(&self.public_key, next_epoch);
-        drop(membership_reader);
+        let committee_member_in_current_epoch = self
+            .membership
+            .membership_for_epoch(current_epoch)
+            .await?
+            .has_stake(&self.public_key)
+            .await;
+        let committee_member_in_next_epoch = self
+            .membership
+            .membership_for_epoch(next_epoch)
+            .await?
+            .has_stake(&self.public_key)
+            .await;
 
         let mut consensus_writer = self.consensus.write().await;
 
@@ -810,6 +824,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             "Proposed leaf is the same as its parent but we don't have our VID for it"
         ))?;
 
+        let mut target_epoch = current_epoch;
         if committee_member_in_current_epoch {
             ensure!(
                 epoch_map.contains_key(&current_epoch),
@@ -823,21 +838,25 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             ensure!(
                 epoch_map.contains_key(&next_epoch),
                 warn!("We belong to the next epoch but we don't have the corresponding VID share.")
-            )
+            );
+            target_epoch = next_epoch;
         }
 
+        let mut maybe_target_vid_share = None;
         for (_, vid) in epoch_map.iter() {
             let mut updated_vid = vid.clone();
             updated_vid
                 .data
                 .set_view_number(proposal.data.view_number());
-            consensus_writer.update_vid_shares(updated_vid.data.view_number(), updated_vid.clone());
+            if updated_vid.data.target_epoch() == target_epoch {
+                maybe_target_vid_share = Some(updated_vid.clone());
+            }
+            consensus_writer.update_vid_shares(updated_vid.data.view_number(), updated_vid);
         }
 
-        let Some((_, vid_share)) = epoch_map.first_key_value() else {
-            bail!(warn!("We don't have our VID share but we just check that we have. This shouldn't happen."));
+        let Some(vid_share) = maybe_target_vid_share else {
+            bail!(warn!("We don't have our VID share but we just checked that we have. This shouldn't happen."));
         };
-        let vid_share = vid_share.clone();
 
         drop(consensus_writer);
 
