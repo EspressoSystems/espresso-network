@@ -1683,7 +1683,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
-        BackoffParams, EpochVersion, FeeAccount, FeeAmount, Header, MarketplaceVersion,
+        BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState,
     };
@@ -2354,35 +2354,35 @@ mod test {
         handle.abort();
     }
 
-    // #[tokio::test(flavor = "multi_thread")]
-    // async fn test_pos_upgrade_view_based() {
-    //     setup_test();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pos_upgrade_view_based() {
+        setup_test();
 
-    //     let mut upgrades = std::collections::BTreeMap::new();
-    //     type MySequencerVersions = SequencerVersions<FeeVersion, EpochVersion>;
+        let mut upgrades = std::collections::BTreeMap::new();
+        type MySequencerVersions = SequencerVersions<FeeVersion, EpochVersion>;
 
-    //     let mode = UpgradeMode::View(ViewBasedUpgrade {
-    //         start_voting_view: None,
-    //         stop_voting_view: None,
-    //         start_proposing_view: 1,
-    //         stop_proposing_view: 10,
-    //     });
+        let mode = UpgradeMode::View(ViewBasedUpgrade {
+            start_voting_view: None,
+            stop_voting_view: None,
+            start_proposing_view: 1,
+            stop_proposing_view: 10,
+        });
 
-    //     let upgrade_type = UpgradeType::Epoch {
-    //         chain_config: ChainConfig {
-    //             max_block_size: 500.into(),
-    //             base_fee: 2.into(),
-    //             stake_table_contract: Some(Default::default()),
-    //             ..Default::default()
-    //         },
-    //     };
+        let upgrade_type = UpgradeType::Epoch {
+            chain_config: ChainConfig {
+                max_block_size: 500.into(),
+                base_fee: 2.into(),
+                stake_table_contract: Some(Default::default()),
+                ..Default::default()
+            },
+        };
 
-    //     upgrades.insert(
-    //         <MySequencerVersions as Versions>::Upgrade::VERSION,
-    //         Upgrade { mode, upgrade_type },
-    //     );
-    //     test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
-    // }
+        upgrades.insert(
+            <MySequencerVersions as Versions>::Upgrade::VERSION,
+            Upgrade { mode, upgrade_type },
+        );
+        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_marketplace_upgrade_view_based() {
