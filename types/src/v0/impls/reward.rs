@@ -35,7 +35,7 @@ use thiserror::Error;
 use super::{
     v0_1::{
         block_reward, RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount,
-        RewardInfo, RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
+        RewardInfo, RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree, COMMISSION_BASIS_POINTS,
     },
     v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
@@ -344,15 +344,19 @@ pub fn apply_rewards(
 
     // Distribute leader reward
     let leader_reward = RewardAmount::from(
-        (U256::from(validator.commission) * block_reward().0) / U256::from(10_000),
+        (U256::from(validator.commission) * block_reward().0) / U256::from(COMMISSION_BASIS_POINTS),
     );
     update_balance(&RewardAccount(validator.account.to_ethers()), leader_reward)?;
 
+    let delegators_reward = block_reward()
+        .checked_sub(&leader_reward)
+        .context("overflow")?;
     // Distribute delegator rewards
     let total_stake = validator.stake.to_ethers();
     for (delegator_address, delegator_stake) in &validator.delegators {
-        let delegator_reward =
-            RewardAmount::from(delegator_stake.to_ethers() * U256::from(100) / total_stake);
+        let delegator_reward = RewardAmount::from(
+            delegator_stake.to_ethers() * U256::from(delegators_reward) / total_stake,
+        );
         update_balance(
             &RewardAccount(delegator_address.to_ethers()),
             delegator_reward,
