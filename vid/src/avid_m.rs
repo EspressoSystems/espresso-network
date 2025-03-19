@@ -11,7 +11,7 @@
 //! vectors. And for dispersal, each storage node gets some vectors and their
 //! Merkle proofs according to its weight.
 
-use std::ops::Range;
+use std::{collections::HashMap, iter, ops::Range};
 
 use ark_ff::PrimeField;
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
@@ -152,6 +152,31 @@ impl AvidMScheme {
 
 impl AvidMScheme {
     /// Helper function.
+    /// Transform the payload bytes into a list of fields elements.
+    /// This function also pads the bytes with a 1 in the end, following by many 0's
+    /// until the length of the output is a multiple of `param.recovery_threshold`.
+    fn pad_to_fields(param: &AvidMParam, payload: &[u8]) -> Vec<F> {
+        // The number of bytes that can be encoded into a single F element.
+        let elem_bytes_len = bytes_to_field::elem_byte_capacity::<F>();
+
+        // A "chunk" is a byte slice whose size holds exactly `recovery_threshold`
+        // F elements.
+        let num_bytes_per_chunk = param.recovery_threshold * elem_bytes_len;
+
+        let remainder = (payload.len() + 1) % num_bytes_per_chunk;
+        let pad_num_zeros = (num_bytes_per_chunk - remainder) % num_bytes_per_chunk;
+
+        // Pad the payload with a 1 and many 0's.
+        bytes_to_field::<_, F>(
+            payload
+                .iter()
+                .chain(iter::once(&1u8))
+                .chain(iter::repeat(&0u8).take(pad_num_zeros)),
+        )
+        .collect()
+    }
+
+    /// Helper function.
     /// Let `k = recovery_threshold` and `n = total_weights`. This function
     /// partition the `payload` into many chunks, each containing `k` field
     /// elements. Then each chunk is encoded into `n` field element with Reed
@@ -160,38 +185,23 @@ impl AvidMScheme {
     /// then Merklized for commitment and membership proof generation.
     #[allow(clippy::type_complexity)]
     #[inline]
-    fn raw_encode(
-        recovery_threshold: usize,
-        total_weights: usize,
-        payload: &[u8],
-    ) -> VidResult<(MerkleTree, Vec<Vec<F>>)> {
-        // The number of bytes that can be encoded into a single F element.
-        let elem_bytes_len = bytes_to_field::elem_byte_capacity::<F>();
+    fn raw_encode(param: &AvidMParam, payload: &[F]) -> VidResult<(MerkleTree, Vec<Vec<F>>)> {
+        let domain = radix2_domain::<F>(param.total_weights)?; // See docs at `domains`.
 
-        // A "chunk" is a byte slice whose size holds exactly `recovery_threshold`
-        // F elements.
-        let num_bytes_per_chunk = recovery_threshold * elem_bytes_len;
-
-        let domain = radix2_domain::<F>(total_weights)?; // See docs at `domains`.
-
-        // For each chunk of payload bytes:
-        // 1. Convert those bytes to `recovery_threshold` field elements.
-        // 2. Evaluate that polynomial at `total_weights` points.
         let encoding_timer = start_timer!(|| "Encoding payload");
 
         // RS-encode each chunk
         let codewords: Vec<_> = payload
-            .par_chunks(num_bytes_per_chunk)
+            .par_chunks(param.recovery_threshold)
             .map(|chunk| {
-                let mut fft_vec: Vec<F> = bytes_to_field::<_, F>(chunk).collect(); // step 1
-                domain.fft_in_place(&mut fft_vec); // step 2
-                fft_vec.truncate(total_weights); // truncate the useless evaluations
+                let mut fft_vec = domain.fft(chunk); // RS-encode the chunk
+                fft_vec.truncate(param.total_weights); // truncate the useless evaluations
                 fft_vec
             })
             .collect();
         // Generate `total_weights` raw shares. Each share collects one field element
         // from each encode chunk.
-        let raw_shares: Vec<_> = (0..total_weights)
+        let raw_shares: Vec<_> = (0..param.total_weights)
             .into_par_iter()
             .map(|i| codewords.iter().map(|v| v[i]).collect::<Vec<F>>())
             .collect();
@@ -212,12 +222,18 @@ impl AvidMScheme {
         Ok((mt, raw_shares))
     }
 
+    /// Short hand for `pad_to_field` and `raw_encode`.
+    fn pad_and_encode(param: &AvidMParam, payload: &[u8]) -> VidResult<(MerkleTree, Vec<Vec<F>>)> {
+        let payload = Self::pad_to_fields(param, payload);
+        Self::raw_encode(param, &payload)
+    }
+
     pub(crate) fn verify_internal(
         param: &AvidMParam,
         commit: &AvidMCommit,
         share: &RawAvidMShare,
     ) -> VidResult<crate::VerificationResult> {
-        if share.range.end > param.total_weights {
+        if share.range.end > param.total_weights || share.range.len() != share.payload.len() {
             return Err(VidError::Argument("Invalid share".to_string()));
         }
         for (i, index) in share.range.clone().enumerate() {
@@ -236,6 +252,71 @@ impl AvidMScheme {
         }
         Ok(Ok(()))
     }
+
+    pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
+        let recovery_threshold: usize = param.recovery_threshold;
+
+        // Each share's payload contains some evaluations from `num_polys`
+        // polynomials.
+        let num_polys = shares
+            .iter()
+            .find(|s| !s.content.payload.is_empty())
+            .ok_or(VidError::Argument("All shares are empty".to_string()))?
+            .content
+            .payload[0]
+            .len();
+
+        let mut raw_shares = HashMap::new();
+        for share in shares {
+            if share.content.range.len() != share.content.payload.len()
+                || share.content.range.end > param.total_weights
+            {
+                return Err(VidError::Argument("Invalid shares".to_string()));
+            }
+            for (i, p) in share.content.range.clone().zip(&share.content.payload) {
+                if p.len() != num_polys {
+                    return Err(VidError::Argument("Invalid shares".to_string()));
+                }
+                if raw_shares.contains_key(&i) {
+                    return Err(VidError::Argument("Overlapping shares".to_string()));
+                }
+                raw_shares.insert(i, p);
+                if raw_shares.len() >= recovery_threshold {
+                    break;
+                }
+            }
+            if raw_shares.len() >= recovery_threshold {
+                break;
+            }
+        }
+
+        if raw_shares.len() < recovery_threshold {
+            return Err(VidError::Argument("Insufficient shares.".to_string()));
+        }
+
+        let domain = radix2_domain::<F>(param.total_weights)?;
+
+        // Lagrange interpolation
+        // step 1: find all evaluation points and their raw shares
+        let (x, raw_shares): (Vec<_>, Vec<_>) = raw_shares
+            .into_iter()
+            .map(|(i, p)| (domain.element(i), p))
+            .unzip();
+        // step 2: interpolate each polynomial
+        Ok((0..num_polys)
+            .into_par_iter()
+            .map(|poly_index| {
+                jf_utils::reed_solomon_code::reed_solomon_erasure_decode(
+                    x.iter().zip(raw_shares.iter().map(|p| p[poly_index])),
+                    recovery_threshold,
+                )
+                .map_err(|err| VidError::Internal(err.into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
 }
 
 impl VidScheme for AvidMScheme {
@@ -246,7 +327,7 @@ impl VidScheme for AvidMScheme {
     type Commit = AvidMCommit;
 
     fn commit(param: &Self::Param, payload: &[u8]) -> VidResult<Self::Commit> {
-        let (mt, _) = Self::raw_encode(param.recovery_threshold, param.total_weights, payload)?;
+        let (mt, _) = Self::pad_and_encode(param, payload)?;
         Ok(AvidMCommit {
             commit: mt.commitment(),
         })
@@ -270,7 +351,7 @@ impl VidScheme for AvidMScheme {
 
         let disperse_timer = start_timer!(|| format!("Disperse {} bytes", payload_byte_len));
 
-        let (mt, raw_shares) = Self::raw_encode(param.recovery_threshold, total_weights, payload)?;
+        let (mt, raw_shares) = Self::pad_and_encode(param, payload)?;
 
         let distribute_timer = start_timer!(|| "Distribute codewords to the storage nodes");
         // Distribute the raw shares to each storage node according to the weight
@@ -338,8 +419,9 @@ impl VidScheme for AvidMScheme {
     /// Recover payload data from shares.
     ///
     /// # Requirements
-    /// - `shares.len()` must be at least `recovery_threshold`.
+    /// - Total weight of all shares must be at least `recovery_threshold`.
     /// - Each share's `payload` must have equal length.
+    /// - All shares must be verified under the given commitment.
     ///
     /// Shares beyond `recovery_threshold` are ignored.
     fn recover(
@@ -347,56 +429,18 @@ impl VidScheme for AvidMScheme {
         _commit: &Self::Commit,
         shares: &[Self::Share],
     ) -> VidResult<Vec<u8>> {
-        let payload_byte_len = shares[0].payload_byte_len;
-
-        let recovery_threshold: usize = param.recovery_threshold;
-
-        // Each share's payload contains some evaluations from `num_polys`
-        // polynomials.
-        let num_polys = shares[0].content.payload[0].len();
-        let total_weights = param.total_weights;
-        let collected_weights: usize = shares.iter().map(|s| s.content.range.len()).sum();
-
-        // check args
-        if !shares.iter().all(|s| {
-            s.content.payload.iter().all(|p| p.len() == num_polys)
-                && s.content.range.end <= total_weights
-        }) {
-            return Err(VidError::Argument("Malformed shares".to_string()));
+        let mut bytes: Vec<u8> = field_to_bytes(Self::recover_fields(param, shares)?).collect();
+        // Remove the trimming zeros and the last 1 to get the actual payload bytes.
+        // See `pad_to_fields`.
+        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0) {
+            if bytes[pad_index] == 1u8 {
+                bytes.truncate(pad_index);
+                return Ok(bytes);
+            }
         }
-        if collected_weights < recovery_threshold {
-            return Err(VidError::Argument("Insufficient shares.".to_string()));
-        }
-
-        let domain = radix2_domain::<F>(total_weights)?;
-
-        // Lagrange interpolation
-        // step 1: find all evaluation points
-        let x: Vec<F> = shares
-            .iter()
-            .flat_map(|s| s.content.range.clone().map(|i| domain.element(i)))
-            .collect();
-        // step 2: interpolate each polynomial
-        let recovered = (0..num_polys)
-            .into_par_iter()
-            .map(|poly_index| {
-                let y = shares
-                    .iter()
-                    .flat_map(|s| {
-                        (0..s.content.range.len()).map(|k| s.content.payload[k][poly_index])
-                    })
-                    .collect::<Vec<F>>();
-                jf_utils::reed_solomon_code::reed_solomon_erasure_decode(
-                    x.iter().zip(y),
-                    recovery_threshold,
-                )
-                .map_err(|err| VidError::Internal(err.into()))
-            })
-            .collect::<Result<Vec<Vec<F>>, _>>()?;
-
-        Ok(field_to_bytes(recovered.into_iter().flatten())
-            .take(payload_byte_len)
-            .collect())
+        Err(VidError::Argument(
+            "Malformed payload, cannot find the padding position".to_string(),
+        ))
     }
 }
 
@@ -405,7 +449,22 @@ impl VidScheme for AvidMScheme {
 pub mod tests {
     use rand::{seq::SliceRandom, RngCore};
 
-    use crate::{avid_m::AvidMScheme, VidScheme};
+    use super::F;
+    use crate::{avid_m::AvidMScheme, utils::bytes_to_field, VidScheme};
+
+    #[test]
+    fn test_padding() {
+        let elem_bytes_len = bytes_to_field::elem_byte_capacity::<F>();
+        let param = AvidMScheme::setup(2usize, 5usize).unwrap();
+        let bytes = vec![2u8; 1];
+        let padded = AvidMScheme::pad_to_fields(&param, &bytes);
+        assert_eq!(padded.len(), 2usize);
+        assert_eq!(padded, [F::from(2u32 + u8::MAX as u32 + 1), F::from(0)]);
+
+        let bytes = vec![2u8; elem_bytes_len * 2];
+        let padded = AvidMScheme::pad_to_fields(&param, &bytes);
+        assert_eq!(padded.len(), 4usize);
+    }
 
     #[test]
     fn round_trip() {
@@ -444,7 +503,9 @@ pub mod tests {
 
                 // verify shares
                 shares.iter().for_each(|share| {
-                    assert!(AvidMScheme::verify_share(&params, &commit, share).is_ok())
+                    assert!(
+                        AvidMScheme::verify_share(&params, &commit, share).is_ok_and(|r| r.is_ok())
+                    )
                 });
 
                 // test payload recovery on a random subset of shares

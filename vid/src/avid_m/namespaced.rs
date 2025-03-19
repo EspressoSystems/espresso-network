@@ -223,7 +223,7 @@ pub mod tests {
 
         // verify shares
         shares.iter().for_each(|share| {
-            assert!(NsAvidMScheme::verify_share(&params, &commit, share).is_ok())
+            assert!(NsAvidMScheme::verify_share(&params, &commit, share).is_ok_and(|r| r.is_ok()))
         });
 
         // test payload recovery on a random subset of shares

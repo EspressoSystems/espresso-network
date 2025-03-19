@@ -6,8 +6,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
+    traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::StakeTables,
+    v0_3::{IndexedStake, StakeTables},
     Leaf2, NetworkConfig,
 };
 use hotshot::InitializerEpochInfo;
@@ -230,14 +231,6 @@ impl SequencerPersistence for NoStorage {
         Ok(Vec::new())
     }
 
-    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
-        Ok(None)
-    }
-
-    async fn store_stake(&self, _epoch: EpochNumber, _stake: StakeTables) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn add_state_cert(
         &self,
         _state_cert: LightClientStateUpdateCertificate<SeqTypes>,
@@ -247,5 +240,20 @@ impl SequencerPersistence for NoStorage {
 
     async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>> {
         Ok(LightClientStateUpdateCertificate::<SeqTypes>::genesis())
+    }
+}
+
+#[async_trait]
+impl MembershipPersistence for NoStorage {
+    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+        Ok(None)
+    }
+
+    async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
+    }
+
+    async fn store_stake(&self, _epoch: EpochNumber, _stake: StakeTables) -> anyhow::Result<()> {
+        Ok(())
     }
 }

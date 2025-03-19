@@ -60,6 +60,8 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
         PeerConfig,
     };
 
+    use crate::persistence::no_storage::NoStorage;
+
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
     let committee = vec![PeerConfig::default()]; /* one committee member, necessary to generate a VID share */
@@ -69,6 +71,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             committee,
             &NodeState::default(),
             10,
+            NoStorage,
         ))),
         10,
     );
