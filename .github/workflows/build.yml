@@ -60,30 +60,31 @@ jobs:
         with:
           name: x86_64-unknown-linux-gnu-services
           path: |
-            target/release/orchestrator
             target/release/cdn-broker
             target/release/cdn-marshal
             target/release/cdn-whitelist
-            target/release/state-relay-server
-            target/release/state-prover
-            target/release/sequencer
             target/release/cli
-            target/release/submit-transactions
-            target/release/reset-storage
-            target/release/utils
             target/release/deploy
-            target/release/keygen
-            target/release/permissionless-builder
-            target/release/nasty-client
-            target/release/espresso-dev-node
-            target/release/pub-key
-            target/release/update-permissioned-stake-table
-            target/release/espresso-bridge
-            target/release/marketplace-solver
-            target/release/marketplace-builder
-            target/release/node-metrics
             target/release/dev-rollup
+            target/release/espresso-bridge
+            target/release/espresso-dev-node
+            target/release/keygen
+            target/release/marketplace-builder
+            target/release/marketplace-solver
+            target/release/nasty-client
+            target/release/node-metrics
+            target/release/orchestrator
+            target/release/permissionless-builder
+            target/release/pub-key
+            target/release/reset-storage
+            target/release/sequencer
             target/release/sequencer-sqlite
+            target/release/staking-cli
+            target/release/state-prover
+            target/release/state-relay-server
+            target/release/submit-transactions
+            target/release/update-permissioned-stake-table
+            target/release/utils
 
   build-arm:
     if: github.event_name != 'pull_request'
@@ -118,30 +119,31 @@ jobs:
         with:
           name: aarch64-unknown-linux-gnu-services
           path: |
-            target/release/orchestrator
             target/release/cdn-broker
             target/release/cdn-marshal
             target/release/cdn-whitelist
-            target/release/state-relay-server
-            target/release/state-prover
-            target/release/sequencer
             target/release/cli
-            target/release/submit-transactions
-            target/release/reset-storage
-            target/release/utils
             target/release/deploy
-            target/release/keygen
-            target/release/permissionless-builder
-            target/release/nasty-client
-            target/release/update-permissioned-stake-table
-            target/release/espresso-dev-node
-            target/release/pub-key
-            target/release/espresso-bridge
-            target/release/marketplace-solver
-            target/release/marketplace-builder
-            target/release/node-metrics
             target/release/dev-rollup
+            target/release/espresso-bridge
+            target/release/espresso-dev-node
+            target/release/keygen
+            target/release/marketplace-builder
+            target/release/marketplace-solver
+            target/release/nasty-client
+            target/release/node-metrics
+            target/release/orchestrator
+            target/release/permissionless-builder
+            target/release/pub-key
+            target/release/reset-storage
+            target/release/sequencer
             target/release/sequencer-sqlite
+            target/release/staking-cli
+            target/release/state-prover
+            target/release/state-relay-server
+            target/release/submit-transactions
+            target/release/update-permissioned-stake-table
+            target/release/utils
 
   build-dockers:
     runs-on: ubuntu-latest
