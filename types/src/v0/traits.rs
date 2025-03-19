@@ -55,7 +55,7 @@ pub trait StateCatchup: Send + Sync {
         let stake_table_clone = stake_table.clone();
         async move {
                     let mut chain = provider.try_fetch_leaves(retry, height).await?;
-                    chain.sort_by_key(|l| l.height());
+                    chain.sort_by_key(|l| l.view_number());
                     let leaf_chain = chain.into_iter().rev().collect();
                     verify_epoch_root_chain(
                         leaf_chain,
