@@ -1886,7 +1886,6 @@ mod test {
             .unwrap_err();
     }
 
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_catchup() {
         setup_test();
@@ -1987,6 +1986,7 @@ mod test {
         }
     }
 
+    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_catchup_epochs() {
         setup_test();
