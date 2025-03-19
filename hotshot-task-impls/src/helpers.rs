@@ -275,7 +275,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
-    membership: &Arc<RwLock<TYPES::Membership>>,
+    membership: &EpochMembershipCoordinator<TYPES>,
     storage: &Arc<RwLock<I::Storage>>,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let mut res = LeafChainTraversalOutcome::default();
@@ -284,12 +284,17 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     res.new_locked_view_number = Some(proposed_leaf.justify_qc().view_number());
 
     // If we don't have the proposals parent return early
-    let Some(parent_info) = consensus_reader.parent_leaf_info(&proposed_leaf, public_key) else {
+    let Some(parent_info) = consensus_reader
+        .parent_leaf_info(&proposed_leaf, public_key, membership)
+        .await
+    else {
         return res;
     };
     // Get the parents parent and check if it's consecutive in view to the parent, if so we can decided
     // the grandparents view.  If not we're done.
-    let Some(grand_parent_info) = consensus_reader.parent_leaf_info(&parent_info.leaf, public_key)
+    let Some(grand_parent_info) = consensus_reader
+        .parent_leaf_info(&parent_info.leaf, public_key, membership)
+        .await
     else {
         return res;
     };
@@ -338,7 +343,9 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
             }
         }
 
-        current_leaf_info = consensus_reader.parent_leaf_info(&info.leaf, public_key);
+        current_leaf_info = consensus_reader
+            .parent_leaf_info(&info.leaf, public_key, membership)
+            .await;
         res.leaf_views.push(info.clone());
     }
 
@@ -354,7 +361,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
             decide_epoch_root::<TYPES, I>(
                 &decided_leaf_info.leaf,
                 epoch_height,
-                membership,
+                membership.membership(),
                 storage,
             )
             .await;
@@ -485,11 +492,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
                     .vid_shares()
                     .get(&leaf.view_number())
                     .and_then(|key_map| key_map.get(public_key))
-                    .and_then(|epoch_map| {
-                        epoch_map
-                            .get(&leaf.epoch(epoch_height))
-                            .or_else(|| epoch_map.get(&leaf.epoch(epoch_height).map(|e| e + 1)))
-                    })
+                    .and_then(|epoch_map| epoch_map.get(&leaf.epoch(epoch_height)))
                     .map(|prop| prop.data.clone());
 
                 // Add our data into a new `LeafInfo`

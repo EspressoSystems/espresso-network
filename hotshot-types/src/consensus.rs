@@ -532,13 +532,15 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     /// Get the parent Leaf Info from a given leaf and our public key.
     /// Returns None if we don't have the data in out state
-    pub fn parent_leaf_info(
+    pub async fn parent_leaf_info(
         &self,
         leaf: &Leaf2<TYPES>,
         public_key: &TYPES::SignatureKey,
+        membership: &EpochMembershipCoordinator<TYPES>,
     ) -> Option<LeafInfo<TYPES>> {
         let parent_view_number = leaf.justify_qc().view_number();
         let parent_epoch = leaf.justify_qc().epoch();
+        let next_epoch = parent_epoch.map(|e| e + 1);
         let parent_leaf = self
             .saved_leaves
             .get(&leaf.justify_qc().data().leaf_commit)?;
@@ -546,16 +548,25 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let (Some(state), delta) = parent_state_and_delta else {
             return None;
         };
+
+        let is_last_block = is_last_block_in_epoch(parent_leaf.height(), self.epoch_height);
+        let target_epoch = if is_last_block
+            && membership
+                .membership_for_epoch(next_epoch)
+                .await
+                .ok()?
+                .has_stake(public_key)
+                .await
+        {
+            next_epoch
+        } else {
+            parent_epoch
+        };
         let parent_vid = self
             .vid_shares()
             .get(&parent_view_number)
             .and_then(|key_map| key_map.get(public_key).cloned())
-            .and_then(|epoch_map| {
-                epoch_map
-                    .get(&parent_epoch)
-                    .or_else(|| epoch_map.get(&parent_epoch.map(|e| e + 1)))
-                    .cloned()
-            })
+            .and_then(|epoch_map| epoch_map.get(&target_epoch).cloned())
             .map(|prop| prop.data);
 
         Some(LeafInfo {
