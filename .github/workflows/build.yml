@@ -210,6 +210,8 @@ jobs:
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
 
   test-demo:
+    # if build_arm is skipped, run this job anyway
+    if: ${{ !(failure() || cancelled()) }}
     runs-on: ubuntu-latest
     needs: [build-dockers]
     steps:
