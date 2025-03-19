@@ -430,7 +430,7 @@ impl VidScheme for AvidMScheme {
         shares: &[Self::Share],
     ) -> VidResult<Vec<u8>> {
         let mut bytes: Vec<u8> = field_to_bytes(Self::recover_fields(param, shares)?).collect();
-        // Remove the triming zeros and the last 1 to get the actual payload bytes.
+        // Remove the trimming zeros and the last 1 to get the actual payload bytes.
         // See `pad_to_fields`.
         if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0) {
             if bytes[pad_index] == 1u8 {
@@ -447,9 +447,10 @@ impl VidScheme for AvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
+    use rand::{seq::SliceRandom, RngCore};
+
     use super::F;
     use crate::{avid_m::AvidMScheme, utils::bytes_to_field, VidScheme};
-    use rand::{seq::SliceRandom, RngCore};
 
     #[test]
     fn test_padding() {
