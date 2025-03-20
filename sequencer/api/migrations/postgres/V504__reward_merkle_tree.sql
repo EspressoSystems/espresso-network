@@ -1,8 +1,8 @@
 CREATE TABLE reward_merkle_tree (
-  path INTEGER[] NOT NULL, 
+  path JSONB NOT NULL, 
   created BIGINT NOT NULL, 
   hash_id INT NOT NULL REFERENCES hash (id), 
-  children INT[], 
+  children JSONB, 
   children_bitvec BIT(256), 
   index JSONB, 
   entry JSONB
