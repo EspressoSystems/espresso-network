@@ -887,11 +887,10 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloy::primitives::Address;
-
     use sequencer_utils::test_utils::setup_test;
 
+    use super::*;
     use crate::v0::impls::testing::*;
 
     #[test]
