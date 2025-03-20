@@ -52,6 +52,7 @@ async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     storage: &Arc<RwLock<I::Storage>>,
     drb_result: DrbResult,
 ) {
+    tracing::debug!("Calling add_drb_result for epoch {:?}", membership.epoch());
     // membership.epoch should always be Some
     if let Some(epoch) = membership.epoch() {
         if let Err(e) = storage
