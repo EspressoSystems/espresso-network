@@ -155,10 +155,10 @@ impl NodeState {
         let chain_config = (version > self.current_version).then(|| {
             self.upgrades
                 .get(&version)
-                .and_then(|upgrade| match upgrade.upgrade_type {
-                    UpgradeType::Fee { chain_config } => Some(chain_config),
-                    UpgradeType::Epoch { chain_config } => Some(chain_config),
-                    UpgradeType::Marketplace { chain_config } => Some(chain_config),
+                .map(|upgrade| match upgrade.upgrade_type {
+                    UpgradeType::Fee { chain_config } => chain_config,
+                    UpgradeType::Epoch { chain_config } => chain_config,
+                    UpgradeType::Marketplace { chain_config } => chain_config,
                 })
         });
         chain_config?
