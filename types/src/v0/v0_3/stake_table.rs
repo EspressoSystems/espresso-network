@@ -2,12 +2,15 @@ use std::collections::HashMap;
 
 use alloy::primitives::{Address, U256};
 use derive_more::derive::{From, Into};
-use hotshot::types::SignatureKey;
+use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_contract_adapter::stake_table::NodeInfoJf;
-use hotshot_types::{data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig};
+use hotshot_types::{
+    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
+};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{v0::impls::EpochCommittee, PubKey};
+use crate::PubKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct PermissionedStakeTableEntry(NodeInfoJf);
@@ -48,4 +51,7 @@ pub struct Delegator {
 }
 
 /// Type for holding result sets matching epochs to stake tables.
-pub type IndexedStake = (EpochNumber, EpochCommittee);
+pub type IndexedStake = (
+    EpochNumber,
+    IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+);

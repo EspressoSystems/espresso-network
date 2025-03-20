@@ -43,7 +43,10 @@ use marketplace_builder_core::{
 };
 use marketplace_builder_shared::block::ParentBlockReferences;
 use marketplace_solver::SolverError;
-use sequencer::{catchup::StatePeers, L1Params, NetworkParams, SequencerApiVersion};
+use sequencer::{
+    catchup::StatePeers, persistence::no_storage::NoStorage, L1Params, NetworkParams,
+    SequencerApiVersion,
+};
 use surf::http::headers::ACCEPT;
 use surf_disco::Client;
 use tide_disco::{app, method::ReadState, App, Url};
@@ -92,6 +95,7 @@ pub fn build_instance_state<V: Versions>(
                 l1_client,
                 chain_config.stake_table_contract.map(|a| a.to_alloy()),
                 peers,
+                NoStorage,
             ))),
             10,
         ),

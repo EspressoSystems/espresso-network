@@ -25,7 +25,9 @@ use hotshot_types::{
     },
 };
 use marketplace_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
-use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
+use sequencer::{
+    catchup::StatePeers, persistence::no_storage::NoStorage, L1Params, SequencerApiVersion,
+};
 use tide_disco::Url;
 use tokio::spawn;
 use vbs::version::StaticVersionType;
@@ -62,6 +64,7 @@ pub fn build_instance_state<V: Versions>(
             l1_client.clone(),
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             peers.clone(),
+            NoStorage,
         ))),
         100,
     );

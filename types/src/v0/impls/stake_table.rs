@@ -34,7 +34,9 @@ use indexmap::IndexMap;
 use thiserror::Error;
 
 use super::{
-    traits::{MembershipPersistence, StateCatchup}, v0_3::Validator, Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes
+    traits::{MembershipPersistence, StateCatchup},
+    v0_3::{DAMembers, Validator},
+    Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
@@ -237,10 +239,10 @@ impl StakeTableEvent {
         Ok(map)
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn mock() -> Self {
-        StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
-    }
+    // #[cfg(any(test, feature = "testing"))]
+    // pub fn mock() -> Self {
+    //     StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
+    // }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -295,7 +297,7 @@ struct NonEpochCommittee {
 }
 
 /// Holds Stake table and da stake
-#[derive(Serde::Serialize, Serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct EpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
@@ -386,8 +388,9 @@ impl EpochCommittees {
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<PubKey>>,
         da_members: Vec<PeerConfig<PubKey>>,
-        instance_state: &NodeState,
-        epoch_size: u64,
+        l1_client: L1Client,
+        contract_address: Option<Address>,
+        peers: Arc<dyn StateCatchup>,
         persistence: impl MembershipPersistence,
     ) -> Self {
         // For each eligible leader, get the stake table entry
@@ -494,12 +497,13 @@ impl EpochCommittees {
     }
 
     /// Get the stake table by epoch. Try to load from DB and fall back to fetching from l1.
-    async fn get_stake_table(
+    async fn get_stake_table_by_epoch(
         &self,
         epoch: Epoch,
         contract_address: Address,
         l1_block: u64,
-    ) -> Result<StakeTables, GetStakeTablesError> {
+    ) -> Result<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>, GetStakeTablesError>
+    {
         if let Some(stake_tables) = self
             .persistence
             .load_stake(epoch)
@@ -509,7 +513,7 @@ impl EpochCommittees {
             Ok(stake_tables)
         } else {
             self.l1_client
-                .get_stake_table(contract_address.to_alloy(), l1_block)
+                .get_stake_table(contract_address, l1_block)
                 .await
                 .map_err(GetStakeTablesError::L1ClientFetchError)
         }
@@ -709,7 +713,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         let stake_tables = self
-            .get_stake_table(epoch, address, block_header.height())
+            .get_stake_table_by_epoch(epoch, address, block_header.height())
             .await
             .inspect_err(|e| {
                 tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
@@ -725,7 +729,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         Some(Box::new(move |committee: &mut Self| {
-            let _ = committee.update_stake_table(epoch, stake_tables);
+            committee.update_stake_table(epoch, stake_tables);
         }))
     }
 
@@ -785,7 +789,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 }
 
 #[cfg(any(test, feature = "testing"))]
-impl StakeTable {
+impl super::v0_3::StakeTable {
     /// Generate a `StakeTable` with `n` members.
     pub fn mock(n: u64) -> Self {
         [..n]
@@ -808,14 +812,13 @@ impl DAMembers {
     }
 }
 
-#[cfg(test)]
-pub mod tests {
+#[cfg(any(test, feature = "testing"))]
+pub mod testing {
     use contract_bindings_alloy::staketable::{EdOnBN254::EdOnBN254Point, BN254::G2Point};
     use ethers_conv::ToAlloy as _;
     use hotshot_contract_adapter::stake_table::{bls_jf_to_alloy2, ParsedEdOnBN254Point};
     use hotshot_types::light_client::StateKeyPair;
     use rand::{Rng as _, RngCore as _};
-    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
 
@@ -852,6 +855,44 @@ pub mod tests {
             }
         }
     }
+
+    impl Validator<BLSPubKey> {
+        pub fn mock() -> Validator<BLSPubKey> {
+            let val = TestValidator::random();
+            let rng = &mut rand::thread_rng();
+            let mut seed = [1u8; 32];
+            rng.fill_bytes(&mut seed);
+            let mut validator_stake = alloy::primitives::U256::from(0);
+            let mut delegators = HashMap::new();
+            for _i in 0..=100 {
+                let stake: u64 = rng.gen_range(0..10000);
+                delegators.insert(Address::random(), alloy::primitives::U256::from(stake));
+                validator_stake += alloy::primitives::U256::from(stake);
+            }
+
+            let stake_table_key = bls_alloy_to_jf2(val.bls_vk.clone());
+            let state_ver_key = edward_bn254point_to_state_ver(val.schnorr_vk.clone());
+
+            Validator {
+                account: val.account,
+                stake_table_key,
+                state_ver_key,
+                stake: validator_stake,
+                commission: val.commission,
+                delegators,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::Address;
+
+    use sequencer_utils::test_utils::setup_test;
+
+    use crate::v0::impls::testing::*;
 
     #[test]
     fn test_from_l1_events() -> anyhow::Result<()> {

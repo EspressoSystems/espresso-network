@@ -69,6 +69,8 @@ dotenvy = { workspace = true }
 espresso-types = { path = "../types" }
 ethers = { workspace = true }
 ethers-conv = { workspace = true }
+indexmap.workspace = true
+alloy.workspace = true
 futures = { workspace = true }
 
 hotshot = { workspace = true }

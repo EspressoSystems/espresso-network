@@ -365,7 +365,7 @@ pub fn compute_rewards(
         let delegator_reward = RewardAmount::from(
             (delegator_stake
                 .to_ethers()
-                .checked_mul(U256::from(delegators_reward))
+                .checked_mul(delegators_reward)
                 .context("overflow")?
                 .checked_div(total_stake)
                 .context("overflow")?)
@@ -375,7 +375,7 @@ pub fn compute_rewards(
 
         delegators_rewards_distributed += delegator_reward.0;
 
-        rewards.push((delegator_address.clone(), delegator_reward));
+        rewards.push((*delegator_address, delegator_reward));
     }
 
     let leader_reward = total_reward
@@ -447,14 +447,6 @@ pub async fn catchup_missing_accounts(
 #[cfg(test)]
 pub mod tests {
 
-    use std::collections::HashMap;
-
-    use ethers_conv::ToAlloy;
-    use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
-    use rand::{Rng, RngCore};
-
-    use crate::v0::impls::tests::TestValidator;
-
     use super::*;
 
     // TODO: current tests are just sanity checks, we need more.
@@ -465,33 +457,7 @@ pub mod tests {
         // Due to rounding effects in distribution, the validator may receive a slightly higher amount
         // because the remainder after delegator distribution is sent to the validator.
 
-        let val = TestValidator::random();
-        let rng = &mut rand::thread_rng();
-        let mut seed = [1u8; 32];
-        rng.fill_bytes(&mut seed);
-        let mut validator_stake = alloy::primitives::U256::from(0);
-        let mut delegators = HashMap::new();
-        for _i in 0..=100 {
-            let stake: u64 = rng.gen_range(0..10000);
-            delegators.insert(
-                Address::random().to_alloy(),
-                alloy::primitives::U256::from(stake),
-            );
-            validator_stake += alloy::primitives::U256::from(stake);
-        }
-
-        let stake_table_key = bls_alloy_to_jf2(val.bls_vk.clone());
-        let state_ver_key = edward_bn254point_to_state_ver(val.schnorr_vk.clone());
-
-        let validator = Validator {
-            account: val.account,
-            stake_table_key,
-            state_ver_key,
-            stake: validator_stake,
-            commission: val.commission,
-            delegators,
-        };
-
+        let validator = Validator::mock();
         let rewards = compute_rewards(validator).unwrap();
         let mut total_calculated_rewards: RewardAmount = U256::zero().into();
         for (_, amount) in rewards.clone() {

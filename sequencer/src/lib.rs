@@ -482,6 +482,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
             .stake_table_contract
             .map(|a| a.to_alloy()),
         peers.clone(),
+        persistence.clone(),
     );
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
@@ -993,6 +994,7 @@ pub mod testing {
                 l1_client.clone(),
                 chain_config.stake_table_contract.map(|a| a.to_alloy()),
                 peers.clone(),
+                persistence.clone(),
             );
             let membership = Arc::new(RwLock::new(membership));
 

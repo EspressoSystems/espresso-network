@@ -6,7 +6,10 @@ use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
-use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
+use hotshot::{
+    types::{BLSPubKey, EventType},
+    HotShotInitializer, InitializerEpochInfo,
+};
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
@@ -26,13 +29,15 @@ use hotshot_types::{
     },
     utils::{genesis_epoch_from_version, verify_epoch_root_chain},
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
-    impls::{EpochCommittee, NodeState},
+    impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
+    v0_3::{IndexedStake, Validator},
     EpochCommittees, EpochVersion, SequencerVersions,
 };
 use crate::{
@@ -653,13 +658,20 @@ pub trait PersistenceOptions: Clone + Send + Sync + 'static {
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<EpochCommittee>>;
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>>;
 
     /// Load stake tables for storage for latest `n` known epochs
-    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<EpochCommittee>>>;
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(&self, epoch: EpochNumber, stake: EpochCommittee) -> anyhow::Result<()>;
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]

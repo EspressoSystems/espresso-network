@@ -1,14 +1,23 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_lock::RwLock;
+use async_trait::async_trait;
+use hotshot::types::BLSPubKey;
 use hotshot_types::{
-    epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState, HotShotConfig,
+    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
+    HotShotConfig,
 };
+use indexmap::IndexMap;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
-use super::{state::ValidatedState, EpochCommittees, SeqTypes};
+use super::{
+    state::ValidatedState,
+    traits::MembershipPersistence,
+    v0_3::{IndexedStake, Validator},
+    EpochCommittees, SeqTypes,
+};
 use crate::v0::{
     traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
     Timestamp, Upgrade, UpgradeMode,
@@ -47,6 +56,31 @@ pub struct NodeState {
     /// to use in functions such as genesis.
     /// (example: genesis returns V2 Header if version is 0.2)
     pub current_version: Version,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NoStorage;
+
+#[async_trait]
+impl MembershipPersistence for NoStorage {
+    async fn load_stake(
+        &self,
+        _epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+        Ok(None)
+    }
+
+    async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
+    }
+
+    async fn store_stake(
+        &self,
+        _epoch: EpochNumber,
+        _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 impl NodeState {
@@ -91,6 +125,7 @@ impl NodeState {
             l1.clone(),
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
         )));
 
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
@@ -119,6 +154,7 @@ impl NodeState {
             l1.clone(),
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
         )));
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
 
@@ -146,6 +182,7 @@ impl NodeState {
             l1.clone(),
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
         )));
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
 
@@ -209,6 +246,7 @@ impl Default for NodeState {
             l1.clone(),
             chain_config.stake_table_contract.map(|a| a.to_alloy()),
             Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
         )));
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
 
