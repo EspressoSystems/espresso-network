@@ -108,6 +108,10 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                     .get_mut(&validator)
                     .with_context(|| format!("validator {validator:#x} not found"))?;
 
+                if amount.is_zero() {
+                    tracing::warn!("delegator {delegator:?} has 0 stake");
+                    continue;
+                }
                 // Increase stake
                 validator_entry.stake += amount;
                 // Add delegator to the set
@@ -157,7 +161,25 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
         }
     }
 
+    validate_validaors(validators.clone())?;
+
     Ok(validators)
+}
+
+fn validate_validaors(validators: IndexMap<Address, Validator<BLSPubKey>>) -> anyhow::Result<()> {
+    for (address, validator) in validators {
+        // Ensure validator has at least one delegator
+        if validator.delegators.is_empty() {
+            bail!("Validator {address:?} must have at least one delegator",);
+        }
+
+        // Ensure total stake is not zero
+        if validator.stake.is_zero() {
+            bail!("Validator {address:?} must have a non-zero total stake",);
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, derive_more::From)]

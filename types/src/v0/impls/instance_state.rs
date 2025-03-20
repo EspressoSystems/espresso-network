@@ -15,6 +15,7 @@ use vbs::version::Version;
 use super::{
     state::ValidatedState,
     traits::MembershipPersistence,
+    v0_1::NoStorage,
     v0_3::{IndexedStake, Validator},
     EpochCommittees, SeqTypes,
 };
@@ -57,9 +58,6 @@ pub struct NodeState {
     /// (example: genesis returns V2 Header if version is 0.2)
     pub current_version: Version,
 }
-
-#[derive(Clone, Copy, Debug)]
-pub struct NoStorage;
 
 #[async_trait]
 impl MembershipPersistence for NoStorage {

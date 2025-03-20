@@ -4,8 +4,8 @@ use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::RwLock;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_99::ChainConfig, EpochCommittees, FeeAmount, NodeState,
-    Payload, SeqTypes, ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_99::ChainConfig, EpochCommittees, FeeAmount,
+    NodeState, Payload, SeqTypes, ValidatedState,
 };
 use ethers_conv::ToAlloy;
 use hotshot::traits::BlockPayload;
@@ -25,9 +25,7 @@ use hotshot_types::{
     },
 };
 use marketplace_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
-use sequencer::{
-    catchup::StatePeers, persistence::no_storage::NoStorage, L1Params, SequencerApiVersion,
-};
+use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
 use tide_disco::Url;
 use tokio::spawn;
 use vbs::version::StaticVersionType;

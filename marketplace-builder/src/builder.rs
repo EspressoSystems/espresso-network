@@ -7,6 +7,7 @@ use async_broadcast::{
 use async_lock::RwLock;
 use espresso_types::{
     eth_signature_key::EthKeyPair,
+    v0_1::NoStorage,
     v0_99::{ChainConfig, RollupRegistration},
     EpochCommittees, FeeAmount, L1Client, MarketplaceVersion, MockSequencerVersions, NamespaceId,
     NodeState, Payload, SeqTypes, SequencerVersions, ValidatedState, V0_1,
@@ -43,10 +44,7 @@ use marketplace_builder_core::{
 };
 use marketplace_builder_shared::block::ParentBlockReferences;
 use marketplace_solver::SolverError;
-use sequencer::{
-    catchup::StatePeers, persistence::no_storage::NoStorage, L1Params, NetworkParams,
-    SequencerApiVersion,
-};
+use sequencer::{catchup::StatePeers, L1Params, NetworkParams, SequencerApiVersion};
 use surf::http::headers::ACCEPT;
 use surf_disco::Client;
 use tide_disco::{app, method::ReadState, App, Url};
