@@ -234,7 +234,7 @@ jobs:
         run: |
           # load all *.tar files in the temp directory, the layout should
           # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
-          for file in ${{ runner.temp }}/docker-images/**.tar; do
+          for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
             docker load --input $file
           done
 
