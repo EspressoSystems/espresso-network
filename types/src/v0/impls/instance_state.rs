@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot::types::BLSPubKey;
 use hotshot_types::{
@@ -15,7 +16,8 @@ use super::{
     state::ValidatedState,
     traits::MembershipPersistence,
     v0_1::NoStorage,
-    v0_3::{IndexedStake, Validator}, SeqTypes,
+    v0_3::{IndexedStake, Validator},
+    EpochCommittees, SeqTypes,
 };
 use crate::v0::{
     traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
@@ -232,6 +234,11 @@ impl NodeState {
         self
     }
 
+    pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
+        self.epoch_height = Some(epoch_height);
+        self
+    }
+
     pub fn with_chain_config(mut self, cfg: ChainConfig) -> Self {
         self.chain_config = cfg;
         self
@@ -440,6 +447,8 @@ pub mod mock {
 
 #[cfg(test)]
 mod test {
+
+    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{v0::Versions, EpochVersion, FeeVersion, SequencerVersions, ViewBasedUpgrade};
