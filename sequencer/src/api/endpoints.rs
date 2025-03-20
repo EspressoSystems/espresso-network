@@ -221,6 +221,9 @@ where
                 .await)
         }
         .boxed()
+    })?
+    .at("current_epoch", |_, state| {
+        async move { Ok(state.read(|state| state.get_current_epoch().boxed()).await) }.boxed()
     })?;
 
     Ok(api)

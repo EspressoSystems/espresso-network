@@ -25,6 +25,17 @@ use espresso_types::{
 };
 use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
+<<<<<<< HEAD
+use proposal_fetcher::ProposalFetcherConfig;
+use sequencer_utils::stake_table::PermissionedStakeTableUpdate;
+use std::sync::Arc;
+use tokio::select;
+||||||| bac363751
+use proposal_fetcher::ProposalFetcherConfig;
+use std::sync::Arc;
+use tokio::select;
+=======
+>>>>>>> origin/main
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 use libp2p::Multiaddr;
@@ -361,6 +372,9 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         upgrade.set_hotshot_config_parameters(&mut network_config.config);
     }
 
+    //todo(abdul): get from genesis file
+    network_config.config.epoch_height = 10;
+
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
     if let Some(bootstrap_nodes) = network_params.libp2p_bootstrap_nodes {
@@ -479,7 +493,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         node_id: node_index,
         upgrades: genesis.upgrades,
         current_version: V::Base::VERSION,
-        epoch_height: None,
+        epoch_height: network_config.config.epoch_height,
     };
 
     // Create the HotShot membership
@@ -490,6 +504,12 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         network_config.config.epoch_height,
         persistence.clone(),
     );
+
+    // save initial stake table into toml file
+    // this will be helpful to load it into contract
+    PermissionedStakeTableUpdate::save_initial_stake_table_from_hotshot_config(
+        network_config.config.clone(),
+    )?;
 
     // Initialize the Libp2p network
     let network = {
@@ -739,6 +759,11 @@ pub mod testing {
             self
         }
 
+        pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
+            self.config.epoch_height = epoch_height;
+            self
+        }
+
         pub fn upgrades<V: Versions>(mut self, upgrades: BTreeMap<Version, Upgrade>) -> Self {
             let upgrade = upgrades.get(&<V as Versions>::Upgrade::VERSION).unwrap();
             upgrade.set_hotshot_config_parameters(&mut self.config);
@@ -817,7 +842,7 @@ pub mod testing {
                 start_voting_time: 0,
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
-                epoch_height: 0,
+                epoch_height: 150,
                 epoch_start_block: 0,
             };
 
@@ -978,7 +1003,6 @@ pub mod testing {
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
-            .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades);
 
             // Create the HotShot membership

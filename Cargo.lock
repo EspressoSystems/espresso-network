@@ -2658,6 +2658,7 @@ dependencies = [
  "espresso-types",
  "ethers",
  "futures",
+ "hotshot-types",
  "jf-merkle-tree 0.1.0",
  "surf-disco",
  "tokio",
@@ -3977,6 +3978,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-query-service",
  "hotshot-types",
+ "indexmap 2.8.0",
  "itertools 0.12.1",
  "jf-merkle-tree 0.1.0",
  "jf-utils",
@@ -11689,9 +11691,11 @@ dependencies = [
  "ethers",
  "futures",
  "reqwest 0.12.14",
+ "sequencer-utils",
  "surf-disco",
  "tempfile",
  "tokio",
+ "tracing",
  "vbs",
 ]
 

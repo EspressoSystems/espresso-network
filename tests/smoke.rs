@@ -1,16 +1,40 @@
+<<<<<<< HEAD
+use crate::common::{test_stake_table_update, TestConfig};
+use anyhow::{Context, Result};
+||||||| bac363751
+use crate::common::TestConfig;
+use anyhow::Result;
+=======
 use std::time::Instant;
 
 use anyhow::Result;
+>>>>>>> origin/main
 use futures::StreamExt;
+<<<<<<< HEAD
+use sequencer_utils::test_utils::setup_test;
+use std::time::Instant;
+||||||| bac363751
+use std::time::Instant;
+=======
 
 use crate::common::{NativeDemo, TestConfig};
+>>>>>>> origin/main
 
 /// We allow for no change in state across this many consecutive iterations.
 const MAX_STATE_NOT_INCREMENTING: u8 = 1;
 /// We allow for no new transactions across this many consecutive iterations.
 const MAX_TXNS_NOT_INCREMENTING: u8 = 5;
 
+<<<<<<< HEAD
+#[tokio::test(flavor = "multi_thread")]
+async fn test_smoke() -> Result<()> {
+    setup_test();
+||||||| bac363751
+#[tokio::test(flavor = "multi_thread")]
+async fn test_smoke() -> Result<()> {
+=======
 pub async fn assert_native_demo_works() -> Result<()> {
+>>>>>>> origin/main
     let start = Instant::now();
     dotenvy::dotenv()?;
 
@@ -31,6 +55,7 @@ pub async fn assert_native_demo_works() -> Result<()> {
     let mut state_retries = 0;
     let mut txn_retries = 0;
     while (sub.next().await).is_some() {
+        dbg!("next");
         let new = testing.test_state().await;
         println!("New State:{}", new);
 
@@ -79,6 +104,19 @@ pub async fn assert_native_demo_works() -> Result<()> {
         }
 
         last = new;
+    }
+
+    let epoch = testing
+        .espresso
+        .current_epoch()
+        .await?
+        .context("curr epoch")?;
+
+    tracing::info!("epoch before stake table update {epoch:?}");
+
+    if epoch > 1 {
+        tracing::info!("testing stake table update");
+        test_stake_table_update(testing.sequencer_clients).await?;
     }
     Ok(())
 }

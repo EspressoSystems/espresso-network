@@ -17,6 +17,11 @@ use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 use vbs::version::StaticVersionType;
 
+use dotenvy::var;
+use sequencer_utils::stake_table::{
+    update_stake_table, PermissionedStakeTableUpdate, StakerIdentity,
+};
+
 const L1_PROVIDER_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 // TODO add to .env
 const RECIPIENT_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
@@ -285,6 +290,70 @@ async fn wait_for_service(url: Url, interval: u64, timeout_duration: u64) -> Res
     })
     .await
     .map_err(|e| anyhow!("Wait for service, timeout: ({}) {}", url, e))?
+}
+
+pub async fn test_stake_table_update(clients: Vec<SequencerClient>) -> Result<()> {
+    /*
+            EPOCH V3
+    */
+
+    let l1_port = var("ESPRESSO_SEQUENCER_L1_PORT")?;
+    let account_index = var("ESPRESSO_DEPLOYER_ACCOUNT_INDEX")?;
+    let contract_address = var("ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS")?;
+    let initial_stake_table_path = var("ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH")?;
+
+    let permissioned_stake_table =
+        PermissionedStakeTableUpdate::from_toml_file(Path::new(&initial_stake_table_path))?;
+
+    // initial stake table has 5 new stakers
+
+    let new_stakers = permissioned_stake_table.new_stakers;
+    //lets remove one
+    let staker_removed = new_stakers[0].clone();
+
+    let st_with_one_removed = PermissionedStakeTableUpdate::new(
+        vec![],
+        vec![StakerIdentity {
+            stake_table_key: staker_removed.stake_table_key.clone(),
+        }],
+    );
+    let client = clients[0].clone();
+
+    let epoch_before_update = client.current_epoch().await?.context("curr epoch")?;
+    tracing::warn!("current_epoch={epoch_before_update:?}");
+    update_stake_table(
+        format!("http://localhost:{l1_port}").parse()?,
+        Duration::from_secs(7),
+        "test test test test test test test test test test test junk".to_string(),
+        account_index.parse()?,
+        contract_address.parse()?,
+        st_with_one_removed,
+    )
+    .await?;
+
+    loop {
+        sleep(Duration::from_secs(10)).await;
+        let epoch = clients[0].current_epoch().await?.context("curr epoch")?;
+        tracing::info!("current_epoch={epoch:?}");
+        if epoch > epoch_before_update + 6 {
+            let stake_table = client.stake_table(epoch).await?;
+            tracing::info!("stake_table={stake_table:?}");
+            assert_eq!(stake_table.len(), 4);
+
+            assert!(
+                stake_table
+                    .iter()
+                    .all(|st| st.stake_key != staker_removed.stake_table_key),
+                "Entry for {} already exists in the stake table",
+                staker_removed.stake_table_key
+            );
+
+            break;
+        }
+    }
+    // TODO: randomize this test
+
+    Ok(())
 }
 
 pub struct NativeDemo {

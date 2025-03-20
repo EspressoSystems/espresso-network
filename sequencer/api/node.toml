@@ -6,3 +6,7 @@ DOC = "Get the stake table for the current epoch"
 PATH = ["stake-table/:epoch_number"]
 ":epoch_number" = "Integer"
 DOC = "Get the stake table for the given epoch"
+
+[route.current_epoch]
+PATH = ["current_epoch"]
+DOC = "Get the current epoch"

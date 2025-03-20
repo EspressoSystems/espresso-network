@@ -88,7 +88,11 @@ struct Options {
 async fn main() -> Result<()> {
     let opts = Options::parse();
     opts.logging.init();
-    let update = PermissionedStakeTableUpdate::from_toml_file(&opts.update_toml_path)?;
+
+    let path = opts.update_toml_path;
+
+    tracing::error!("updating stake table from path: {path:?}");
+    let update = PermissionedStakeTableUpdate::from_toml_file(&path)?;
 
     update_stake_table(
         opts.rpc_url,
