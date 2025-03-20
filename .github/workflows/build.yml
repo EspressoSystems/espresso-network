@@ -242,8 +242,12 @@ jobs:
             docker tag "$tag" "$tag_main"
           done
 
+      - name: Pull external docker images
+        run: |
+          docker compose pull --policy missing
+
       - name: Test docker demo
         run: |
-          just demo &
+          just demo --pull never &
           set -o pipefail
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
