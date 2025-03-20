@@ -162,9 +162,9 @@ impl<K: Key> StakeTableScheme for StakeTable<K> {
     ) -> Option<(&Self::Key, &Self::Amount)> {
         let mut bytes = [0u8; 64];
         rng.fill_bytes(&mut bytes);
-        let r = U512::from_big_endian(&bytes);
+        let r = U512::from_be_slice(&bytes);
         let m = U512::from(self.last_epoch_start.total_stakes());
-        let pos: U256 = (r % m).try_into().unwrap(); // won't fail
+        let pos = (r % m).to::<U256>();
         self.last_epoch_start.key_by_stake(pos)
     }
 
