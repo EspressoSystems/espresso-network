@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 use anyhow::{bail, ensure, Context};
 use ark_serialize::{
@@ -410,7 +410,8 @@ pub async fn catchup_missing_accounts(
         .context(format!("leader for epoch {epoch:?} not found"))?;
 
     let validator = membership.get_validator_config(&epoch, leader).unwrap();
-    let mut reward_accounts = vec![validator.account.to_ethers().into()];
+    let mut reward_accounts = HashSet::new();
+    reward_accounts.insert(validator.account.to_ethers().into());
     let delegators = validator
         .delegators
         .keys()
