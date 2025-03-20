@@ -1749,7 +1749,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
-        BackoffParams, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
+        BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState,
     };
