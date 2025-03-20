@@ -880,8 +880,11 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
-        // TODO: make a function for this
-        if version >= EpochVersion::version() {
+        // TODO(abdul): Change this to version >= EpochVersion::version()
+        // when we deploy the permissionless contract in native demo
+        // so that marketplace version also supports this,
+        // and the marketplace integration test passes
+        if version == EpochVersion::version() {
             let validator =
                 catchup_missing_accounts(instance, &mut validated_state, parent_leaf, parent_view)
                     .await?;

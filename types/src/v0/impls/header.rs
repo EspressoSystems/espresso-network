@@ -520,7 +520,11 @@ impl Header {
         assert!(major == 0, "Invalid major version {major}");
 
         // DISTRIBUTE REWARDS
-        if version >= EpochVersion::version() {
+        // TODO(abdul): Change this to version >= EpochVersion::version()
+        // when we deploy the permissionless contract in native demo
+        // so that marketplace version also supports this,
+        // and the marketplace integration test passes
+        if version == EpochVersion::version() {
             let validator = validator.ok_or_else(|| anyhow::anyhow!("Missing validator"))?;
             let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
             state.reward_merkle_tree = reward_state;
@@ -1079,7 +1083,11 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        let leader_config = if version >= EpochVersion::version() {
+        // TODO(abdul): Change this to version >= EpochVersion::version()
+        // when we deploy the permissionless contract in native demo
+        // so that marketplace version also supports this,
+        // and the marketplace integration test passes
+        let leader_config = if version == EpochVersion::version() {
             Some(
                 catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)
                     .await?,
