@@ -36,7 +36,7 @@ use thiserror::Error;
 
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{DAMembers, Validator},
+    v0_3::Validator,
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 
