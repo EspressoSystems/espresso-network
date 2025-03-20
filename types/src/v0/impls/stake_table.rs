@@ -54,7 +54,7 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
     let mut validators = IndexMap::new();
     let mut bls_keys = HashSet::new();
-    let mut schnor_keys = HashSet::new();
+    let mut schnorr_keys = HashSet::new();
     for event in events {
         tracing::debug!("Processing stake table event: {:?}", event);
         match event {
@@ -67,17 +67,20 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 // TODO(abdul): BLS and Schnorr signature keys verification
                 let stake_table_key = bls_alloy_to_jf2(blsVk.clone());
                 let state_ver_key = edward_bn254point_to_state_ver(schnorrVk.clone());
-                // if the keys exists throw an error
+                // TODO(MA): The stake table contract currently enforces that each bls key is only used once. We will
+                // move this check to the confirmation layer and remove it from the contract. Once we have the signature
+                // check in this functions we can skip if a BLS key, or Schnorr key was previously used.
                 if bls_keys.contains(&stake_table_key) {
                     bail!("bls key {} already used", stake_table_key.to_string());
                 };
 
-                if schnor_keys.contains(&state_ver_key) {
-                    bail!("schnor key {} already used", state_ver_key.to_string());
+                // The contract does *not* enforce that each schnorr key is only used once.
+                if schnorr_keys.contains(&state_ver_key) {
+                    tracing::warn!("schnorr key {} already used", state_ver_key.to_string());
                 };
 
                 bls_keys.insert(stake_table_key);
-                schnor_keys.insert(state_ver_key.clone());
+                schnorr_keys.insert(state_ver_key.clone());
 
                 match validators.entry(account) {
                     indexmap::map::Entry::Occupied(_occupied_entry) => {
