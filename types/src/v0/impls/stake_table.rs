@@ -31,7 +31,7 @@ use itertools::Itertools;
 use thiserror::Error;
 
 use super::{
-    traits::StateCatchup,
+    traits::{MembershipPersistence, StateCatchup},
     v0_3::{DAMembers, StakeTable, StakeTables},
     Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes,
 };
@@ -92,6 +92,11 @@ impl StakeTables {
         }
         Self::new(consensus_stake_table.into(), da_members.into())
     }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn mock() -> Self {
+        StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
+    }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -121,6 +126,10 @@ pub struct EpochCommittees {
     /// Contains the epoch after which initial_drb_result will not be used (set_first_epoch.epoch + 2)
     /// And the DrbResult to use before that epoch
     initial_drb_result: Option<(Epoch, DrbResult)>,
+
+    /// Methods for stake table persistence.
+    #[debug(skip)]
+    persistence: Arc<dyn MembershipPersistence>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -224,6 +233,7 @@ impl EpochCommittees {
         da_members: Vec<PeerConfig<PubKey>>,
         instance_state: &NodeState,
         epoch_size: u64,
+        persistence: impl MembershipPersistence,
     ) -> Self {
         // For each eligible leader, get the stake table entry
         let eligible_leaders: Vec<_> = committee_members
@@ -290,6 +300,7 @@ impl EpochCommittees {
             randomized_committees: BTreeMap::new(),
             peers: Some(instance_state.peers.clone()),
             initial_drb_result: None,
+            persistence: Arc::new(persistence),
         }
     }
 
@@ -300,6 +311,37 @@ impl EpochCommittees {
             Some(&self.non_epoch_committee)
         }
     }
+
+    /// Get the stake table by epoch. Try to load from DB and fall back to fetching from l1.
+    async fn get_stake_table(
+        &self,
+        epoch: Epoch,
+        contract_address: Address,
+        l1_block: u64,
+    ) -> Result<StakeTables, GetStakeTablesError> {
+        if let Some(stake_tables) = self
+            .persistence
+            .load_stake(epoch)
+            .await
+            .map_err(GetStakeTablesError::PersistenceLoadError)?
+        {
+            Ok(stake_tables)
+        } else {
+            self.l1_client
+                .get_stake_table(contract_address.to_alloy(), l1_block)
+                .await
+                .map_err(GetStakeTablesError::L1ClientFetchError)
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+/// Error representing fail cases for retrieving the stake table.
+enum GetStakeTablesError {
+    #[error("Error loading from persistence: {0}")]
+    PersistenceLoadError(anyhow::Error),
+    #[error("Error fetching from L1: {0}")]
+    L1ClientFetchError(anyhow::Error),
 }
 
 #[derive(Error, Debug)]
@@ -478,16 +520,30 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        let address = self.contract_address?;
-        self.l1_client
-            .get_stake_table(address.to_alloy(), block_header.height())
+        let Some(address) = self.contract_address else {
+            tracing::debug!("`add_epoch_root` called with `self.contract_address` value of `None`");
+            return None;
+        };
+
+        let stake_tables = self
+            .get_stake_table(epoch, address, block_header.height())
             .await
-            .ok()
-            .map(|stake_table| -> Box<dyn FnOnce(&mut Self) + Send> {
-                Box::new(move |committee: &mut Self| {
-                    let _ = committee.update_stake_table(epoch, stake_table);
-                })
+            .inspect_err(|e| {
+                tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
             })
+            .ok()?;
+
+        if let Err(e) = self
+            .persistence
+            .store_stake(epoch, stake_tables.clone())
+            .await
+        {
+            tracing::error!(?e, "`add_epoch_root`, error storing stake table");
+        }
+
+        Some(Box::new(move |committee: &mut Self| {
+            let _ = committee.update_stake_table(epoch, stake_tables);
+        }))
     }
 
     fn has_epoch(&self, epoch: Epoch) -> bool {
@@ -551,6 +607,30 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.state
             .insert(epoch + 1, self.non_epoch_committee.clone());
         self.initial_drb_result = Some((epoch + 2, initial_drb_result));
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+impl StakeTable {
+    /// Generate a `StakeTable` with `n` members.
+    pub fn mock(n: u64) -> Self {
+        [..n]
+            .iter()
+            .map(|_| PeerConfig::default())
+            .collect::<Vec<PeerConfig<PubKey>>>()
+            .into()
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+impl DAMembers {
+    /// Generate a `DaMembers` (alias committee) with `n` members.
+    pub fn mock(n: u64) -> Self {
+        [..n]
+            .iter()
+            .map(|_| PeerConfig::default())
+            .collect::<Vec<PeerConfig<PubKey>>>()
+            .into()
     }
 }
 

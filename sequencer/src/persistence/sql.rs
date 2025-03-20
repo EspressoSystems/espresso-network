@@ -8,8 +8,9 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
     parse_duration, parse_size,
+    traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::StakeTables,
+    v0_3::{IndexedStake, StakeTables},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
 };
 use futures::stream::StreamExt;
@@ -1011,39 +1012,6 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
-        let result = self
-            .db
-            .read()
-            .await?
-            .fetch_optional(
-                query("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
-                    .bind(epoch.u64() as i64),
-            )
-            .await?;
-
-        result
-            .map(|row| {
-                let bytes: Vec<u8> = row.get("stake");
-                anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
-            })
-            .transpose()
-    }
-
-    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
-        let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_drb_and_root",
-            ["epoch", "stake"],
-            ["epoch"],
-            [(epoch.u64() as i64, stake_table_bytes)],
-        )
-        .await?;
-        tx.commit().await
-    }
-
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
         Ok(self
             .db
@@ -1877,6 +1845,69 @@ impl SequencerPersistence for Persistence {
 }
 
 #[async_trait]
+impl MembershipPersistence for Persistence {
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+        let result = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(
+                query("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
+                    .bind(epoch.u64() as i64),
+            )
+            .await?;
+
+        result
+            .map(|row| {
+                let bytes: Vec<u8> = row.get("stake");
+                bincode::deserialize(&bytes).context("deserializing stake table")
+            })
+            .transpose()
+    }
+
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        let mut tx = self.db.write().await?;
+
+        let rows = match query_as::<(i64, Vec<u8>)>(
+            "SELECT epoch, stake FROM epoch_drb_and_root LIMIT $1",
+        )
+        .bind(limit as i64)
+        .fetch_all(tx.as_mut())
+        .await
+        {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::error!("error loading stake tables: {err:#}");
+                bail!("{err:#}");
+            },
+        };
+
+        rows.into_iter()
+            .map(|(id, bytes)| -> anyhow::Result<_> {
+                let st: StakeTables =
+                    bincode::deserialize(&bytes).context("deserializing stake table")?;
+                Ok(Some((EpochNumber::new(id as u64), st)))
+            })
+            .collect()
+    }
+
+    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
+        let mut tx = self.db.write().await?;
+
+        let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
+
+        tx.upsert(
+            "epoch_drb_and_root",
+            ["epoch", "stake"],
+            ["epoch"],
+            [(epoch.u64() as i64, stake_table_bytes)],
+        )
+        .await?;
+        tx.commit().await
+    }
+}
+
+#[async_trait]
 impl Provider<SeqTypes, VidCommonRequest> for Persistence {
     #[tracing::instrument(skip(self))]
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
@@ -2690,5 +2721,36 @@ mod test {
             quorum_certificates_count, rows as i64,
             "quorum certificates count does not match rows",
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_membership_persistence() -> anyhow::Result<()> {
+        setup_test();
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let st = StakeTables::mock();
+        storage
+            .store_stake(EpochNumber::new(10), st.clone())
+            .await?;
+
+        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        assert_eq!(st, table);
+
+        let st2 = StakeTables::mock();
+        storage
+            .store_stake(EpochNumber::new(11), st2.clone())
+            .await?;
+
+        let tables = storage.load_latest_stake(4).await?.unwrap();
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
+        assert_eq!(None, iter.next());
+
+        Ok(())
     }
 }
