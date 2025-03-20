@@ -6,7 +6,10 @@ use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
-use hotshot::{types::EventType, HotShotInitializer, InitializerEpochInfo};
+use hotshot::{
+    types::{BLSPubKey, EventType},
+    HotShotInitializer, InitializerEpochInfo,
+};
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
@@ -27,13 +30,15 @@ use hotshot_types::{
     utils::{genesis_epoch_from_version, verify_epoch_root_chain},
     PeerConfig,
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     impls::NodeState,
     utils::BackoffParams,
-    v0_3::{IndexedStake, StakeTables},
+    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
+    v0_3::{IndexedStake, Validator},
     EpochVersion, PubKey, SequencerVersions,
 };
 use crate::{
@@ -169,6 +174,59 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Try to fetch the given accounts state, failing without retrying if unable.
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        account: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree>;
+
+    /// Fetch the given list of accounts, retrying on transient errors.
+    async fn fetch_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                let accounts = &accounts;
+                async move {
+                    let tree = provider
+                        .try_fetch_reward_accounts(
+                            retry,
+                            instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            accounts,
+                        )
+                        .await
+                        .map_err(|err| {
+                            err.context(format!(
+                                "fetching reward accounts {accounts:?}, height {height}, view {view:?}"
+                            ))
+                        })?;
+                    accounts
+                        .iter()
+                        .map(|account| {
+                            RewardAccountProof::prove(&tree, (*account).into())
+                                .context(format!("missing reward account {account}"))
+                                .map(|(proof, _)| proof)
+                        })
+                        .collect::<anyhow::Result<Vec<RewardAccountProof>>>()
+                }
+                .boxed()
+            })
+            .await
+    }
+
     fn backoff(&self) -> &BackoffParams;
     fn name(&self) -> String;
 }
@@ -262,6 +320,40 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Box<T> {
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
         (**self).fetch_chain_config(commitment).await
+    }
+
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        (**self)
+            .try_fetch_reward_accounts(
+                retry,
+                instance,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
+            .await
+    }
+
+    async fn fetch_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        (**self)
+            .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
+            .await
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -362,6 +454,40 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
         (**self).fetch_chain_config(commitment).await
+    }
+
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        (**self)
+            .try_fetch_reward_accounts(
+                retry,
+                instance,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts,
+            )
+            .await
+    }
+
+    async fn fetch_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        (**self)
+            .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
+            .await
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -474,6 +600,42 @@ impl<T: StateCatchup> StateCatchup for Vec<T> {
         bail!("could not fetch chain config from any provider");
     }
 
+    #[tracing::instrument(skip(self, instance))]
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        for provider in self {
+            match provider
+                .try_fetch_reward_accounts(
+                    retry,
+                    instance,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    accounts,
+                )
+                .await
+            {
+                Ok(tree) => return Ok(tree),
+                Err(err) => {
+                    tracing::info!(
+                        ?accounts,
+                        provider = provider.name(),
+                        "failed to fetch reward accounts: {err:#}"
+                    );
+                },
+            }
+        }
+
+        bail!("could not fetch account from any provider");
+    }
+
     fn backoff(&self) -> &BackoffParams {
         // Use whichever provider's backoff is most conservative.
         self.iter()
@@ -500,13 +662,20 @@ pub trait PersistenceOptions: Clone + Send + Sync + 'static {
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load stake table for epoch from storage
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>>;
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>>;
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
 
     /// Store stake table at `epoch` in the persistence layer
-    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()>;
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]

@@ -4,6 +4,7 @@ use committable::Commitment;
 use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
+    v0_1::{RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleTree},
     v0_99::ChainConfig,
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
@@ -184,6 +185,39 @@ pub(crate) trait CatchupDataSource: Sync {
         &self,
         height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
+
+    /// Get the state of the requested `account`.
+    ///
+    /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
+    /// `height` is provided to simplify lookups for backends where data is not indexed by view.
+    /// This function is intended to be used for catchup, so `view` should be no older than the last
+    /// decided view.
+    fn get_reward_account(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        account: RewardAccount,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryData>> {
+        async move {
+            let tree = self
+                .get_reward_accounts(instance, height, view, &[account])
+                .await?;
+            let (proof, balance) =
+                RewardAccountProof::prove(&tree, account.into()).context(format!(
+                    "reward account {account} not available for height {height}, view {view:?}"
+                ))?;
+            Ok(RewardAccountQueryData { balance, proof })
+        }
+    }
+
+    fn get_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTree>>;
 }
 
 #[cfg(any(test, feature = "testing"))]

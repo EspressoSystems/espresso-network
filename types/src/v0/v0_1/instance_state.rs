@@ -9,7 +9,7 @@ use crate::{v0::utils::Timestamp, v0_99::ChainConfig};
 pub enum UpgradeType {
     Fee { chain_config: ChainConfig },
     Marketplace { chain_config: ChainConfig },
-    Epoch { chain_config: ChainConfig }
+    Epoch { chain_config: ChainConfig },
 }
 
 impl UpgradeType {
@@ -18,8 +18,8 @@ impl UpgradeType {
     pub fn chain_config(&self) -> Option<ChainConfig> {
         match self {
             UpgradeType::Fee { chain_config } => Some(*chain_config),
-            UpgradeType::Marketplace { chain_config } =>  Some(*chain_config),
-            UpgradeType::Epoch { chain_config } =>  Some(*chain_config),
+            UpgradeType::Marketplace { chain_config } => Some(*chain_config),
+            UpgradeType::Epoch { chain_config } => Some(*chain_config),
         }
     }
 }
@@ -68,3 +68,6 @@ pub struct Upgrade {
     /// The type of the upgrade.
     pub upgrade_type: UpgradeType,
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct NoStorage;

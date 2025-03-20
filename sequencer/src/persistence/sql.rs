@@ -10,11 +10,11 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{IndexedStake, StakeTables},
+    v0_3::{IndexedStake, Validator},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
 };
 use futures::stream::StreamExt;
-use hotshot::InitializerEpochInfo;
+use hotshot::{types::BLSPubKey, InitializerEpochInfo};
 use hotshot_query_service::{
     availability::LeafQueryData,
     data_source::{
@@ -52,6 +52,7 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
 
@@ -1846,7 +1847,10 @@ impl SequencerPersistence for Persistence {
 
 #[async_trait]
 impl MembershipPersistence for Persistence {
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
         let result = self
             .db
             .read()
@@ -1884,14 +1888,17 @@ impl MembershipPersistence for Persistence {
 
         rows.into_iter()
             .map(|(id, bytes)| -> anyhow::Result<_> {
-                let st: StakeTables =
-                    bincode::deserialize(&bytes).context("deserializing stake table")?;
+                let st = bincode::deserialize(&bytes).context("deserializing stake table")?;
                 Ok(Some((EpochNumber::new(id as u64), st)))
             })
             .collect()
     }
 
-    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()> {
         let mut tx = self.db.write().await?;
 
         let stake_table_bytes = bincode::serialize(&stake).context("serializing stake table")?;
@@ -2732,7 +2739,9 @@ mod test {
 
         let storage = opt.create().await.unwrap();
 
-        let st = StakeTables::mock();
+        let validator = Validator::mock();
+        let mut st = IndexMap::new();
+        st.insert(validator.account, validator);
         storage
             .store_stake(EpochNumber::new(10), st.clone())
             .await?;
@@ -2740,7 +2749,9 @@ mod test {
         let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
         assert_eq!(st, table);
 
-        let st2 = StakeTables::mock();
+        let val2 = Validator::mock();
+        let mut st2 = IndexMap::new();
+        st2.insert(val2.account, val2);
         storage
             .store_stake(EpochNumber::new(11), st2.clone())
             .await?;

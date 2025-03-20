@@ -7,7 +7,9 @@ use std::{
 
 use anyhow::Result;
 use committable::Committable;
-use espresso_types::{FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction};
+use espresso_types::{
+    v0_1::RewardAccount, FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
+};
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
@@ -341,6 +343,69 @@ where
                     async move {
                         state
                             .get_accounts(
+                                state.node_state().await,
+                                height,
+                                ViewNumber::new(view),
+                                &accounts,
+                            )
+                            .await
+                            .map_err(|err| {
+                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
+                            })
+                    }
+                    .boxed()
+                })
+                .await
+        }
+        .boxed()
+    })?
+    .get("reward_account", |req, state| {
+        async move {
+            let height = req
+                .integer_param("height")
+                .map_err(Error::from_request_error)?;
+            let view = req
+                .integer_param("view")
+                .map_err(Error::from_request_error)?;
+            let account = req
+                .string_param("address")
+                .map_err(Error::from_request_error)?;
+            let account = account.parse().map_err(|err| {
+                Error::catch_all(
+                    StatusCode::BAD_REQUEST,
+                    format!("malformed account {account}: {err}"),
+                )
+            })?;
+
+            state
+                .get_reward_account(
+                    state.node_state().await,
+                    height,
+                    ViewNumber::new(view),
+                    account,
+                )
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
+    .at("reward_accounts", |req, state| {
+        async move {
+            let height = req
+                .integer_param("height")
+                .map_err(Error::from_request_error)?;
+            let view = req
+                .integer_param("view")
+                .map_err(Error::from_request_error)?;
+            let accounts = req
+                .body_auto::<Vec<RewardAccount>, ApiVer>(ApiVer::instance())
+                .map_err(Error::from_request_error)?;
+
+            state
+                .read(|state| {
+                    async move {
+                        state
+                            .get_reward_accounts(
                                 state.node_state().await,
                                 height,
                                 ViewNumber::new(view),
