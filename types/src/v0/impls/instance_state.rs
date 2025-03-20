@@ -1,6 +1,5 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot::types::BLSPubKey;
 use hotshot_types::{
@@ -16,8 +15,7 @@ use super::{
     state::ValidatedState,
     traits::MembershipPersistence,
     v0_1::NoStorage,
-    v0_3::{IndexedStake, Validator},
-    EpochCommittees, SeqTypes,
+    v0_3::{IndexedStake, Validator}, SeqTypes,
 };
 use crate::v0::{
     traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
