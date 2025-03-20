@@ -123,6 +123,10 @@ jobs:
 
   build-dockers:
     runs-on: ubuntu-latest
+    # Tthis is non-deterministic, a limitation of GHA but only need the tags at
+    # the end which is the same for each matrix build.
+    outputs:
+      tags: ${{ steps.metadata.outputs.tags }}
     strategy:
       matrix:
         service:
@@ -206,7 +210,7 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels  }}
           outputs: type=registry
 
-      - name: Build and export ${{ matrix.service }} docker image (PR)
+      - name: Build and export ${{ matrix.service }} docker image (PR only)
         if: ${{ github.event_name == 'pull_request' }}
         uses: docker/build-push-action@v6
         with:
@@ -216,7 +220,7 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels  }}
           outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
 
-      - name: Upload artifact
+      - name: Upload artifact (PR only)
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
@@ -238,26 +242,25 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download artifacts (PR)
+      - name: Download artifacts (PR only)
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
 
-
-      - name: Load docker images (PR)
+      - name: Load docker images (PR only)
         if: ${{ github.event_name == 'pull_request' }}
         run: |
           # load all *.tar files in the temp directory, the layout should
           # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
           for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
-            tag="$(docker load --input $file | grep -o 'ghcr.io.*')"
-            tag_main="$(echo $tag | sed 's|:.*|:main|')"
-
-            echo Tagging "$tag" as "$tag_main"
-            docker tag "$tag" "$tag_main"
+            docker load --input $file
           done
+
+      - name: Match the docker image tag built or pushed to the registry
+        run: |
+          echo ${{ needs.build-dockers.outputs.tags }} | sed 's/.*://' >> $GITHUB_ENV
 
       - name: Pull remaining docker images
         run: |
