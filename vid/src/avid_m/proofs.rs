@@ -210,6 +210,7 @@ mod tests {
         };
         assert!(bad_proof.verify(&param, &commit).unwrap().is_err());
 
+        // duplicate indices may fool the verification
         let mut bad_witness = vec![F::from(0u64); 5];
         bad_witness[0] = shares[0].content.payload[0][0];
         let bad_proof2 = MalEncodingProof {
