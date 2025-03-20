@@ -139,7 +139,9 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                     .delegators
                     .get_mut(&delegator)
                     .with_context(|| format!("delegator {delegator:#x} not found"))?;
-                *delegator_stake = delegator_stake.checked_sub(amount).unwrap();
+                *delegator_stake = delegator_stake
+                    .checked_sub(amount)
+                    .with_context(|| "delegator_stake is less than undelegated amount")?;
 
                 if delegator_stake.is_zero() {
                     // if delegator stake is 0, remove from set
