@@ -1,6 +1,6 @@
 use crate::{v0_1, BlockSize, ChainId, FeeAccount, FeeAmount};
+use alloy::primitives::{Address, U256};
 use committable::{Commitment, Committable};
-use ethers::types::{Address, U256};
 use itertools::Either;
 use serde::{Deserialize, Serialize};
 

@@ -6,18 +6,17 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::{Address, U256};
 use anyhow::Context;
-use contract_bindings_alloy::permissionedstaketable::PermissionedStakeTable::StakersUpdated;
-use ethers::types::{Address, U256};
-use ethers_conv::ToAlloy;
 use hotshot::types::{BLSPubKey, SignatureKey as _};
-use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf, NodeInfoJf};
+use hotshot_contract_adapter::sol_types::StakersUpdated;
 use hotshot_types::{
     data::EpochNumber,
     drb::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
+    network::PeerConfigKeys,
     stake_table::StakeTableEntry,
     traits::{
         election::Membership,
@@ -60,7 +59,7 @@ impl StakeTables {
                 event
                     .removed
                     .into_iter()
-                    .map(|key| StakeTableChange::Remove(bls_alloy_to_jf(key)))
+                    .map(|key| StakeTableChange::Remove(key.into()))
                     .chain(
                         event
                             .added
@@ -124,7 +123,7 @@ pub struct EpochCommittees {
 
 #[derive(Debug, Clone, PartialEq)]
 enum StakeTableChange {
-    Add(NodeInfoJf),
+    Add(PeerConfigKeys<BLSPubKey>),
     Remove(BLSPubKey),
 }
 
@@ -483,7 +482,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
         let address = self.contract_address?;
         self.l1_client
-            .get_stake_table(address.to_alloy(), block_header.height())
+            .get_stake_table(address, block_header.height())
             .await
             .ok()
             .map(|stake_table| -> Box<dyn FnOnce(&mut Self) + Send> {
@@ -552,7 +551,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
 #[cfg(test)]
 mod tests {
-    use contract_bindings_alloy::permissionedstaketable::PermissionedStakeTable::NodeInfo;
+    use hotshot_contract_adapter::sol_types::NodeInfoSol;
 
     use super::*;
 
@@ -561,14 +560,19 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Build a stake table with one DA node and one consensus node.
-        let mut da_node = NodeInfoJf::random(&mut rng);
-        da_node.da = true;
-        let mut consensus_node = NodeInfoJf::random(&mut rng);
-        consensus_node.da = false;
-        let added: Vec<NodeInfo> = vec![da_node.clone().into(), consensus_node.clone().into()];
+        let mut da_node_sol = NodeInfoSol::rand(&mut rng);
+        da_node_sol.isDA = true;
+        let mut consensus_node_sol = NodeInfoSol::rand(&mut rng);
+        consensus_node_sol.isDA = false;
+
+        let da_node: PeerConfigKeys<BLSPubKey> = da_node_sol.into();
+        let consensus_node: PeerConfigKeys<BLSPubKey> = consensus_node_sol.clone().into();
+
+        let added_sol: Vec<NodeInfoSol> =
+            vec![da_node.clone().into(), consensus_node.clone().into()];
         let mut updates = vec![StakersUpdated {
             removed: vec![],
-            added,
+            added: added_sol,
         }];
 
         let st = StakeTables::from_l1_events(updates.clone());
@@ -594,11 +598,12 @@ mod tests {
         // Simulate making the consensus node a DA node. This is accomplished by
         // sending a transaction removes and re-adds the same node with updated
         // DA status.
-        let mut new_da_node = consensus_node.clone();
-        new_da_node.da = true;
+        let mut new_da_node_sol = consensus_node_sol.clone();
+        new_da_node_sol.isDA = true;
+        let new_da_node: PeerConfigKeys<BLSPubKey> = new_da_node_sol.clone().into();
         updates.push(StakersUpdated {
-            removed: vec![consensus_node.stake_table_key_alloy()],
-            added: vec![new_da_node.clone().into()],
+            removed: vec![consensus_node_sol.blsVK],
+            added: vec![new_da_node_sol.clone()],
         });
         let st = StakeTables::from_l1_events(updates.clone());
 
@@ -626,7 +631,7 @@ mod tests {
 
         // Simulate removing the second node
         updates.push(StakersUpdated {
-            removed: vec![new_da_node.stake_table_key_alloy()],
+            removed: vec![new_da_node_sol.blsVK.clone()],
             added: vec![],
         });
         let st = StakeTables::from_l1_events(updates);

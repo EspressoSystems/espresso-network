@@ -5,7 +5,7 @@ use alloy::sol;
 
 pub use crate::bindings::{
     erc1967proxy::ERC1967Proxy,
-    feecontract::FeeContract,
+    feecontract::FeeContract::{self, Deposit},
     iplonkverifier::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         BN254::G1Point as G1PointSol,
@@ -16,7 +16,7 @@ pub use crate::bindings::{
     lightclientmock::LightClientMock,
     permissionedstaketable::{
         EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
-        PermissionedStakeTable::{self, NodeInfo as NodeInfoSol},
+        PermissionedStakeTable::{self, NodeInfo as NodeInfoSol, StakersUpdated},
         BN254::G2Point as G2PointSol,
     },
     plonkverifier::PlonkVerifier::{self},
