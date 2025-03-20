@@ -212,6 +212,15 @@ impl EpochCommittees {
             .filter(|peer_config| peer_config.stake_table_entry.stake() > U256::zero())
             .collect();
 
+        let randomized_committee = generate_stake_cdf(
+            eligible_leaders
+                .clone()
+                .into_iter()
+                .map(|l| l.stake_table_entry)
+                .collect(),
+            [0u8; 32],
+        );
+
         let committee = Committee {
             eligible_leaders,
             stake_table,
@@ -221,6 +230,10 @@ impl EpochCommittees {
         };
 
         self.state.insert(epoch, committee.clone());
+
+        self.randomized_committees
+            .insert(epoch, randomized_committee.clone());
+
         committee
     }
 
@@ -276,6 +289,14 @@ impl EpochCommittees {
                 )
             })
             .collect();
+        let randomized_committee = generate_stake_cdf(
+            eligible_leaders
+                .clone()
+                .into_iter()
+                .map(|l| l.stake_table_entry)
+                .collect(),
+            [0u8; 32],
+        );
 
         let members = Committee {
             eligible_leaders,
@@ -285,10 +306,14 @@ impl EpochCommittees {
             indexed_da_members,
         };
 
+        let mut randomized_committees = BTreeMap::new();
+
+        // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1 and 2
         let mut map = HashMap::new();
-        map.insert(Epoch::genesis(), members.clone());
-        // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
-        map.insert(Epoch::genesis() + 1u64, members.clone());
+        for epoch in Epoch::genesis().u64()..=2 {
+            map.insert(Epoch::new(epoch), members.clone());
+            randomized_committees.insert(Epoch::new(epoch), randomized_committee.clone());
+        }
 
         Self {
             non_epoch_committee: members,
