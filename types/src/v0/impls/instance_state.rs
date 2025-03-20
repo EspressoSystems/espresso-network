@@ -145,6 +145,11 @@ impl NodeState {
         self
     }
 
+    pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
+        self.epoch_height = Some(epoch_height);
+        self
+    }
+
     pub fn with_current_version(mut self, version: Version) -> Self {
         self.current_version = version;
         self

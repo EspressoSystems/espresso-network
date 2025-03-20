@@ -739,6 +739,11 @@ pub mod testing {
             self
         }
 
+        pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
+            self.config.epoch_height = epoch_height;
+            self
+        }
+
         pub fn upgrades<V: Versions>(mut self, upgrades: BTreeMap<Version, Upgrade>) -> Self {
             let upgrade = upgrades.get(&<V as Versions>::Upgrade::VERSION).unwrap();
             upgrade.set_hotshot_config_parameters(&mut self.config);
