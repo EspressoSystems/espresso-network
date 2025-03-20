@@ -1,6 +1,4 @@
-use std::str::FromStr;
-
-use ethers::types::U256;
+use alloy::primitives::U256;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
@@ -24,11 +22,8 @@ impl FromStringOrInteger for ChainId {
     }
 
     fn from_string(s: String) -> anyhow::Result<Self> {
-        if s.starts_with("0x") {
-            Ok(Self(U256::from_str(&s)?))
-        } else {
-            Ok(Self(U256::from_dec_str(&s)?))
-        }
+        let v = U256::from_be_slice(&hex::decode(&s)?);
+        Ok(Self(v))
     }
 
     fn to_binary(&self) -> anyhow::Result<Self::Binary> {
@@ -42,7 +37,7 @@ impl FromStringOrInteger for ChainId {
 
 impl From<u64> for ChainId {
     fn from(id: u64) -> Self {
-        Self(id.into())
+        Self(U256::from(id))
     }
 }
 

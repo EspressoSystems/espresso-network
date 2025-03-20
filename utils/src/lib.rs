@@ -88,8 +88,7 @@ macro_rules! impl_to_fixed_bytes {
     ($struct_name:ident, $type:ty) => {
         impl $struct_name {
             pub(crate) fn to_fixed_bytes(self) -> [u8; core::mem::size_of::<$type>()] {
-                let mut bytes = [0u8; core::mem::size_of::<$type>()];
-                self.0.to_little_endian(&mut bytes);
+                let bytes: [u8; core::mem::size_of::<$type>()] = self.0.to_le_bytes();
                 bytes
             }
         }

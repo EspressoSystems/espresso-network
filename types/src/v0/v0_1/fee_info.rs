@@ -1,6 +1,6 @@
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use alloy::primitives::{Address, U256};
 use derive_more::{Add, Display, From, Into, Mul, Sub};
-use ethers::{abi::Address, types::U256};
 use jf_merkle_tree::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use serde::{Deserialize, Serialize};
 
