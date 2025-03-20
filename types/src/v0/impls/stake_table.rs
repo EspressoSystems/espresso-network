@@ -166,21 +166,25 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
         }
     }
 
-    validate_validaors(validators.clone())?;
+    validate_validators(&mut validators)?;
 
     Ok(validators)
 }
 
-fn validate_validaors(validators: IndexMap<Address, Validator<BLSPubKey>>) -> anyhow::Result<()> {
-    for (address, validator) in validators {
+fn validate_validators(
+    validators: &mut IndexMap<Address, Validator<BLSPubKey>>,
+) -> anyhow::Result<()> {
+    for (address, validator) in validators.clone() {
         // Ensure validator has at least one delegator
         if validator.delegators.is_empty() {
-            bail!("Validator {address:?} must have at least one delegator",);
+            tracing::info!("Validator {address:?} does not have any delegator");
+            validators.shift_remove(&address);
         }
 
         // Ensure total stake is not zero
         if validator.stake.is_zero() {
-            bail!("Validator {address:?} must have a non-zero total stake",);
+            tracing::info!("Validator {address:?} does not have any stake");
+            validators.shift_remove(&address);
         }
     }
 
@@ -371,7 +375,7 @@ impl EpochCommittees {
                 eligible_leaders: self.non_epoch_committee.eligible_leaders.clone(),
                 stake_table,
                 validators,
-                address_mapping: HashMap::new(),
+                address_mapping,
             },
         );
     }
