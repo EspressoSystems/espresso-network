@@ -122,9 +122,6 @@ pub struct EpochCommittees {
     /// Peers for catching up the stake table
     #[debug(skip)]
     peers: Option<Arc<dyn StateCatchup>>,
-    /// Contains the epoch after which initial_drb_result will not be used (set_first_epoch.epoch + 2)
-    /// And the DrbResult to use before that epoch
-    initial_drb_result: Option<(Epoch, DrbResult)>,
 
     /// Methods for stake table persistence.
     #[debug(skip)]
@@ -298,7 +295,6 @@ impl EpochCommittees {
             contract_address: instance_state.chain_config.stake_table_contract,
             randomized_committees: BTreeMap::new(),
             peers: Some(instance_state.peers.clone()),
-            initial_drb_result: None,
             persistence: Arc::new(persistence),
         }
     }
@@ -602,7 +598,8 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.state.insert(epoch, self.non_epoch_committee.clone());
         self.state
             .insert(epoch + 1, self.non_epoch_committee.clone());
-        self.initial_drb_result = Some((epoch + 2, initial_drb_result));
+        self.add_drb_result(epoch, initial_drb_result);
+        self.add_drb_result(epoch + 1, initial_drb_result);
     }
 }
 
