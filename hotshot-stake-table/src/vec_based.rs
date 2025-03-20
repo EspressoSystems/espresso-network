@@ -223,9 +223,9 @@ where
     ) -> Option<(&Self::Key, &Self::Amount)> {
         let mut bytes = [0u8; 64];
         rng.fill_bytes(&mut bytes);
-        let r = U512::from_big_endian(&bytes);
+        let r = U512::from_be_slice(&bytes);
         let m = U512::from(self.last_epoch_start_total_stake);
-        let mut pos: U256 = (r % m).try_into().unwrap(); // won't fail
+        let mut pos: U256 = (r % m).to::<U256>();
         let idx = 0;
         while pos > self.last_epoch_start.stake_amount[idx] {
             pos -= self.last_epoch_start.stake_amount[idx];
