@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::Context;
-use committable::Committable;
 use contract_bindings_alloy::permissionedstaketable::PermissionedStakeTable::StakersUpdated;
 use ethers::types::{Address, U256};
 use ethers_conv::ToAlloy;
@@ -33,7 +32,6 @@ use thiserror::Error;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{DAMembers, StakeTable, StakeTables},
-    v0_99::ChainConfig,
     Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes,
 };
 
