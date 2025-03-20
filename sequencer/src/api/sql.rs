@@ -222,6 +222,10 @@ impl CatchupStorage for SqlStorage {
             .context(format!("leaf chain {height} not available"))?;
         let mut chain = vec![];
 
+        if query_leaf_chain.len() < 3 {
+            bail!("chain not long enough {}", query_leaf_chain.len());
+        }
+
         for query_result in query_leaf_chain {
             let Ok(leaf_query) = query_result else {
                 bail!(format!("leaf chain {height} not available"));
