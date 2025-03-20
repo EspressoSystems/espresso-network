@@ -168,8 +168,23 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
+        use ethers_conv::ToAlloy;
         use vbs::version::StaticVersion;
 
+        let chain_config = ChainConfig::default();
+        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+            .expect("Failed to create L1 client");
+
+        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            l1.clone(),
+            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
+        )));
+
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
         Self::new(
             0,
             ChainConfig::default(),
@@ -177,6 +192,7 @@ impl NodeState {
                 .expect("Failed to create L1 client"),
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 3>::version(),
+            coordinator,
         )
     }
 
@@ -238,10 +254,10 @@ impl NodeState {
         let chain_config = (version > self.current_version).then(|| {
             self.upgrades
                 .get(&version)
-                .and_then(|upgrade| match upgrade.upgrade_type {
-                    UpgradeType::Fee { chain_config } => Some(chain_config),
-                    UpgradeType::Epoch { chain_config } => Some(chain_config),
-                    UpgradeType::Marketplace { chain_config } => Some(chain_config),
+                .map(|upgrade| match upgrade.upgrade_type {
+                    UpgradeType::Fee { chain_config } => chain_config,
+                    UpgradeType::Epoch { chain_config } => chain_config,
+                    UpgradeType::Marketplace { chain_config } => chain_config,
                 })
         });
         chain_config?
