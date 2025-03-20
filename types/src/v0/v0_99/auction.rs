@@ -1,4 +1,4 @@
-use crate::{eth_signature_key::CompatPrimitiveSignature, FeeAccount, FeeAmount, NamespaceId};
+use crate::{eth_signature_key::BuilderSignature, FeeAccount, FeeAmount, NamespaceId};
 use hotshot_types::data::ViewNumber;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -16,7 +16,7 @@ pub enum FullNetworkTx {
 /// it by calling `signed` on `BidTxBody`.
 pub struct BidTx {
     pub(crate) body: BidTxBody,
-    pub(crate) signature: PrimitiveSignature,
+    pub(crate) signature: BuilderSignature,
 }
 
 /// A transaction body holding data required for bid submission.

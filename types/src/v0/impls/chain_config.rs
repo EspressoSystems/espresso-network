@@ -10,11 +10,11 @@ impl_serde_from_string_or_integer!(ChainId);
 impl_to_fixed_bytes!(ChainId, U256);
 
 impl FromStringOrInteger for ChainId {
-    type Binary = U256;
+    type Binary = ethers_core::types::U256;
     type Integer = u64;
 
     fn from_binary(b: Self::Binary) -> anyhow::Result<Self> {
-        Ok(Self(b))
+        Ok(Self(U256::from_limbs(b.0)))
     }
 
     fn from_integer(i: Self::Integer) -> anyhow::Result<Self> {
@@ -22,12 +22,15 @@ impl FromStringOrInteger for ChainId {
     }
 
     fn from_string(s: String) -> anyhow::Result<Self> {
-        let v = U256::from_be_slice(&hex::decode(&s)?);
-        Ok(Self(v))
+        if s.starts_with("0x") {
+            Ok(Self(U256::from_str_radix(&s[2..], 16)?))
+        } else {
+            Ok(Self(U256::from_str_radix(&s, 10)?))
+        }
     }
 
     fn to_binary(&self) -> anyhow::Result<Self::Binary> {
-        Ok(self.0)
+        Ok(ethers_core::types::U256(self.0.into_limbs()))
     }
 
     fn to_string(&self) -> anyhow::Result<String> {
@@ -104,8 +107,9 @@ mod tests {
     #[test]
     fn test_chainid_serde_bincode_unchanged() {
         // For non-human-readable formats, ChainId just serializes as the underlying U256.
-        let n = U256::from(123);
-        let id = ChainId(n);
+        // note: for backward compat, it has to be the same as ethers' U256 instead of alloy's
+        let n = ethers_core::types::U256::from(123);
+        let id = ChainId(U256::from(123));
         assert_eq!(
             bincode::serialize(&n).unwrap(),
             bincode::serialize(&id).unwrap(),

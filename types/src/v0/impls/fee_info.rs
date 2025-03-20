@@ -177,11 +177,11 @@ impl FromStr for FeeAmount {
 }
 
 impl FromStringOrInteger for FeeAmount {
-    type Binary = U256;
+    type Binary = ethers_core::types::U256;
     type Integer = u64;
 
     fn from_binary(b: Self::Binary) -> anyhow::Result<Self> {
-        Ok(Self(b))
+        Ok(Self(U256::from_limbs(b.0)))
     }
 
     fn from_integer(i: Self::Integer) -> anyhow::Result<Self> {
@@ -192,7 +192,7 @@ impl FromStringOrInteger for FeeAmount {
         // For backwards compatibility, we have an ad hoc parser for WEI amounts represented as hex
         // strings.
         if let Some(s) = s.strip_prefix("0x") {
-            return Ok(Self(s.parse()?));
+            return Ok(Self(U256::from_str_radix(s, 16)?));
         }
 
         // Strip an optional non-numeric suffix, which will be interpreted as a unit.
@@ -206,7 +206,7 @@ impl FromStringOrInteger for FeeAmount {
     }
 
     fn to_binary(&self) -> anyhow::Result<Self::Binary> {
-        Ok(self.0)
+        Ok(ethers_core::types::U256(self.0.into_limbs()))
     }
 
     fn to_string(&self) -> anyhow::Result<String> {

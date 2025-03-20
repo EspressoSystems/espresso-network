@@ -7,6 +7,7 @@ use alloy::{
     },
     transports::http::{Client, Http},
 };
+use alloy_compat::ethers_serde;
 use async_broadcast::{InactiveReceiver, Sender};
 use clap::Parser;
 use derive_more::Deref;
@@ -30,7 +31,9 @@ use crate::v0::utils::parse_duration;
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Hash, PartialEq, Eq)]
 pub struct L1BlockInfo {
     pub number: u64,
+    #[serde(with = "ethers_serde::u256")]
     pub timestamp: U256,
+    #[serde(with = "ethers_serde::b256")]
     pub hash: B256,
 }
 
