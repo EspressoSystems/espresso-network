@@ -232,18 +232,34 @@ pub async fn run_standalone_service(options: Options) {
 
     // Let's get the current starting block height.
     let block_height = {
-        let block_height_result = client.get("status/block-height").send().await;
-        let block_height: u64 = match block_height_result {
-            Ok(block_height) => block_height,
-            Err(err) => {
-                tracing::warn!("retrieve block height request failed: {}", err);
-                panic!("error retrieving block height request failed: {}", err);
-            },
+        // Retry up to 4 times to get the block height
+        let mut i = 0;
+        let block_height: Option<u64> = loop {
+            let block_height_result = client.get("status/block-height").send().await;
+            match block_height_result {
+                Ok(block_height) => break Some(block_height),
+                Err(err) => {
+                    tracing::warn!("retrieve block height request failed: {}", err);
+                },
+            };
+
+            // Sleep so we're not spamming too much with back to back requests.
+            // The sleep time delay will be 10ms, then 100ms, then 1s, then 10s.
+            tokio::time::sleep(std::time::Duration::from_millis(10u64.pow(i + 1))).await;
+            i += 1;
+
+            if i >= 4 {
+                break None;
+            }
         };
 
-        // We want to make sure that we have at least MAX_VOTERS_HISTORY blocks of
-        // history that we are pulling
-        block_height.saturating_sub(MAX_VOTERS_HISTORY as u64 + 1)
+        if let Some(block_height) = block_height {
+            // We want to make sure that we have at least MAX_VOTERS_HISTORY blocks of
+            // history that we are pulling
+            block_height.saturating_sub(MAX_VOTERS_HISTORY as u64 + 1)
+        } else {
+            panic!("unable to retrieve block height");
+        }
     };
 
     tracing::debug!("creating stream starting at block height: {}", block_height);
