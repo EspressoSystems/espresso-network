@@ -235,7 +235,11 @@ jobs:
           # load all *.tar files in the temp directory, the layout should
           # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
           for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
-            docker load --input $file
+            tag="$(docker load --input $file | grep -o 'ghcr.io.*')"
+            tag_main="$(echo $tag | sed 's|:.*|:main|')"
+
+            echo Tagging "$tag" as "$tag_main"
+            docker tag "$tag" "$tag_main"
           done
 
       - name: Test docker demo
