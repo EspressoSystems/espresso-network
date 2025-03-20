@@ -30,7 +30,7 @@ use itertools::Itertools;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
-    impls::NodeState,
+    impls::{EpochCommittee, NodeState},
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     EpochCommittees, EpochVersion, SequencerVersions,
@@ -642,11 +642,24 @@ impl<T: StateCatchup> StateCatchup for Vec<T> {
 
 #[async_trait]
 pub trait PersistenceOptions: Clone + Send + Sync + 'static {
-    type Persistence: SequencerPersistence;
+    type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);
     async fn create(&mut self) -> anyhow::Result<Self::Persistence>;
     async fn reset(self) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+/// Trait used by `Memberships` implementations to interact with persistence layer.
+pub trait MembershipPersistence: Send + Sync + 'static {
+    /// Load stake table for epoch from storage
+    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<EpochCommittee>>;
+
+    /// Load stake tables for storage for latest `n` known epochs
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<EpochCommittee>>>;
+
+    /// Store stake table at `epoch` in the persistence layer
+    async fn store_stake(&self, epoch: EpochNumber, stake: EpochCommittee) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -693,8 +706,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         &self,
     ) -> anyhow::Result<Option<UpgradeCertificate<SeqTypes>>>;
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>>;
-    // async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>>;
-    // async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()>;
 
     /// Load the latest known consensus state.
     ///

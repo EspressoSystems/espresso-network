@@ -4,10 +4,10 @@ use alloy::primitives::{Address, U256};
 use derive_more::derive::{From, Into};
 use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::stake_table::NodeInfoJf;
-use hotshot_types::{light_client::StateVerKey, network::PeerConfigKeys, PeerConfig};
+use hotshot_types::{data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig};
 use serde::{Deserialize, Serialize};
 
-use crate::PubKey;
+use crate::{v0::impls::EpochCommittee, PubKey};
 
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct PermissionedStakeTableEntry(NodeInfoJf);
@@ -16,11 +16,11 @@ pub struct PermissionedStakeTableEntry(NodeInfoJf);
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct CombinedStakeTable(Vec<PeerConfigKeys<PubKey>>);
 
-#[derive(Clone, Debug, From, Into, Serialize, Deserialize)]
+#[derive(Clone, Debug, From, Into, Serialize, Deserialize, PartialEq, Eq)]
 /// NewType to disambiguate DA Membership
 pub struct DAMembers(pub Vec<PeerConfig<PubKey>>);
 
-#[derive(Clone, Debug, From, Into, Serialize, Deserialize)]
+#[derive(Clone, Debug, From, Into, Serialize, Deserialize, PartialEq, Eq)]
 /// NewType to disambiguate StakeTable
 pub struct StakeTable(pub Vec<PeerConfig<PubKey>>);
 
@@ -46,3 +46,6 @@ pub struct Delegator {
     pub validator: Address,
     pub stake: U256,
 }
+
+/// Type for holding result sets matching epochs to stake tables.
+pub type IndexedStake = (EpochNumber, EpochCommittee);
