@@ -200,7 +200,9 @@ fn select_validators(
         .max()
         .context("Failed to determine max stake")?;
 
-    let minimum_stake = maximum_stake / U256::from(VID_TARGET_TOTAL_STAKE);
+    let minimum_stake = maximum_stake
+        .checked_div(U256::from(VID_TARGET_TOTAL_STAKE))
+        .context("div err")?;
 
     // Collect validators that meet the minimum stake criteria
     let mut valid_stakers: Vec<_> = validators
