@@ -123,8 +123,8 @@ jobs:
 
   build-dockers:
     runs-on: ubuntu-latest
-    # Tthis is non-deterministic, a limitation of GHA but only need the tags at
-    # the end which is the same for each matrix build.
+    # This is non-deterministic, a limitation of GHA. We but we only need the
+    # tag like (:main) at the end which is the same for each matrix build.
     outputs:
       tags: ${{ steps.metadata.outputs.tags }}
     strategy:
