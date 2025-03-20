@@ -201,7 +201,7 @@ jobs:
           # always export to file for testing in test-demo
           outputs: |
             ${{ github.event_name != 'pull_request' && 'type=registry' || '' }}
-            type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
+            type=image,dest=${{ runner.temp }}/${{ matrix.service }}.tar
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
