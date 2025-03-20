@@ -12,6 +12,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-broadcast = { workspace = true }
+async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64-bytes = { workspace = true }
 bincode = { workspace = true }
@@ -31,7 +32,7 @@ hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
-indexmap.workspace = true
+indexmap = { workspace = true }
 itertools = { workspace = true }
 jf-merkle-tree = { workspace = true }
 jf-utils = { workspace = true }                                      # TODO temporary: used only for test_rng()
@@ -43,7 +44,6 @@ paste = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 sequencer-utils = { path = "../utils" }
-async-lock = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }                                                         # TODO temporary, used only for VID, should be set in hotshot
