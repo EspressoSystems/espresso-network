@@ -34,6 +34,7 @@ use crate::{
 mod config;
 
 pub mod namespaced;
+pub mod proofs;
 
 #[cfg(all(not(feature = "sha256"), not(feature = "keccak256")))]
 type Config = config::Poseidon2Config;
@@ -215,8 +216,7 @@ impl AvidMScheme {
         end_timer!(hash_timer);
 
         let mt_timer = start_timer!(|| "Constructing Merkle tree");
-        let mt = MerkleTree::from_elems(None, &compressed_raw_shares)
-            .map_err(|err| VidError::Internal(err.into()))?;
+        let mt = MerkleTree::from_elems(None, &compressed_raw_shares)?;
         end_timer!(mt_timer);
 
         Ok((mt, raw_shares))
@@ -226,6 +226,79 @@ impl AvidMScheme {
     fn pad_and_encode(param: &AvidMParam, payload: &[u8]) -> VidResult<(MerkleTree, Vec<Vec<F>>)> {
         let payload = Self::pad_to_fields(param, payload);
         Self::raw_encode(param, &payload)
+    }
+
+    /// Consume in the constructed Merkle tree and the raw shares from `raw_encode`, provide the AvidM commitment and shares.
+    fn distribute_shares(
+        param: &AvidMParam,
+        distribution: &[u32],
+        mt: MerkleTree,
+        raw_shares: Vec<Vec<F>>,
+        payload_byte_len: usize,
+    ) -> VidResult<(AvidMCommit, Vec<AvidMShare>)> {
+        // let payload_byte_len = payload.len();
+        let total_weights = distribution.iter().sum::<u32>() as usize;
+        if total_weights != param.total_weights {
+            return Err(VidError::Argument(
+                "Weight distribution is inconsistent with the given param".to_string(),
+            ));
+        }
+        if distribution.iter().any(|&w| w == 0) {
+            return Err(VidError::Argument("Weight cannot be zero".to_string()));
+        }
+
+        let distribute_timer = start_timer!(|| "Distribute codewords to the storage nodes");
+        // Distribute the raw shares to each storage node according to the weight
+        // distribution. For each chunk, storage `i` gets `distribution[i]`
+        // consecutive raw shares ranging as `ranges[i]`.
+        let ranges: Vec<_> = distribution
+            .iter()
+            .scan(0, |sum, w| {
+                let prefix_sum = *sum;
+                *sum += w;
+                Some(prefix_sum as usize..*sum as usize)
+            })
+            .collect();
+        let shares: Vec<_> = ranges
+            .par_iter()
+            .map(|range| {
+                range
+                    .clone()
+                    .map(|k| raw_shares[k].to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        end_timer!(distribute_timer);
+
+        let mt_proof_timer = start_timer!(|| "Generate Merkle tree proofs");
+        let shares = shares
+            .into_iter()
+            .enumerate()
+            .map(|(i, payload)| AvidMShare {
+                index: i as u32,
+                payload_byte_len,
+                content: RawAvidMShare {
+                    range: ranges[i].clone(),
+                    payload,
+                    mt_proofs: ranges[i]
+                        .clone()
+                        .map(|k| {
+                            mt.lookup(k as u64)
+                                .expect_ok()
+                                .expect("MT lookup shouldn't fail")
+                                .1
+                        })
+                        .collect::<Vec<_>>(),
+                },
+            })
+            .collect::<Vec<_>>();
+        end_timer!(mt_proof_timer);
+
+        let commit = AvidMCommit {
+            commit: mt.commitment(),
+        };
+
+        Ok((commit, shares))
     }
 
     pub(crate) fn verify_internal(
@@ -243,8 +316,7 @@ impl AvidMScheme {
                 index as u64,
                 compressed_payload,
                 &share.mt_proofs[i],
-            )
-            .map_err(|err| VidError::Internal(err.into()))?
+            )?
             .is_err()
             {
                 return Ok(Err(()));
@@ -338,74 +410,8 @@ impl VidScheme for AvidMScheme {
         distribution: &[u32],
         payload: &[u8],
     ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
-        let payload_byte_len = payload.len();
-        let total_weights = distribution.iter().sum::<u32>() as usize;
-        if total_weights != param.total_weights {
-            return Err(VidError::Argument(
-                "Weight distribution is inconsistent with the given param".to_string(),
-            ));
-        }
-        if distribution.iter().any(|&w| w == 0) {
-            return Err(VidError::Argument("Weight cannot be zero".to_string()));
-        }
-
-        let disperse_timer = start_timer!(|| format!("Disperse {} bytes", payload_byte_len));
-
         let (mt, raw_shares) = Self::pad_and_encode(param, payload)?;
-
-        let distribute_timer = start_timer!(|| "Distribute codewords to the storage nodes");
-        // Distribute the raw shares to each storage node according to the weight
-        // distribution. For each chunk, storage `i` gets `distribution[i]`
-        // consecutive raw shares ranging as `ranges[i]`.
-        let ranges: Vec<_> = distribution
-            .iter()
-            .scan(0, |sum, w| {
-                let prefix_sum = *sum;
-                *sum += w;
-                Some(prefix_sum as usize..*sum as usize)
-            })
-            .collect();
-        let shares: Vec<_> = ranges
-            .par_iter()
-            .map(|range| {
-                range
-                    .clone()
-                    .map(|k| raw_shares[k].to_owned())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        end_timer!(distribute_timer);
-
-        let mt_proof_timer = start_timer!(|| "Generate Merkle tree proofs");
-        let shares = shares
-            .into_iter()
-            .enumerate()
-            .map(|(i, payload)| AvidMShare {
-                index: i as u32,
-                payload_byte_len,
-                content: RawAvidMShare {
-                    range: ranges[i].clone(),
-                    payload,
-                    mt_proofs: ranges[i]
-                        .clone()
-                        .map(|k| {
-                            mt.lookup(k as u64)
-                                .expect_ok()
-                                .expect("MT lookup shouldn't fail")
-                                .1
-                        })
-                        .collect::<Vec<_>>(),
-                },
-            })
-            .collect::<Vec<_>>();
-        end_timer!(mt_proof_timer);
-
-        let commit = AvidMCommit {
-            commit: mt.commitment(),
-        };
-
-        end_timer!(disperse_timer);
-        Ok((commit, shares))
+        Self::distribute_shares(param, distribution, mt, raw_shares, payload.len())
     }
 
     fn verify_share(
@@ -540,7 +546,9 @@ pub mod tests {
             bytes_random
         };
 
+        let disperse_timer = start_timer!(|| format!("Disperse {} bytes", payload_byte_len));
         let (commit, shares) = AvidMScheme::disperse(&params, &weights, &payload).unwrap();
+        end_timer!(disperse_timer);
 
         let recover_timer = start_timer!(|| "Recovery");
         AvidMScheme::recover(&params, &commit, &shares).unwrap();
