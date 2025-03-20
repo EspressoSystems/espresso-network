@@ -64,7 +64,7 @@ impl AvidMScheme {
         }
 
         let mut raw_shares = vec![];
-        let mut visited_index = HashSet::new();
+        let mut visited_indices = HashSet::new();
         for share in shares {
             for (index, mt_proof) in share
                 .content
@@ -75,14 +75,14 @@ impl AvidMScheme {
                 if index > param.total_weights {
                     return Err(VidError::Argument("Invalid share".to_string()));
                 }
-                if visited_index.contains(&index) {
+                if visited_indices.contains(&index) {
                     return Err(VidError::Argument("Overlapping shares".to_string()));
                 }
                 raw_shares.push(MalEncodingProofRawShare {
                     index,
                     mt_proof: mt_proof.clone(),
                 });
-                visited_index.insert(index);
+                visited_indices.insert(index);
                 if raw_shares.len() >= param.recovery_threshold {
                     break;
                 }
@@ -121,8 +121,9 @@ impl MalEncodingProof {
         if mt.commitment() == commit.commit {
             return Ok(Err(()));
         }
+        let mut visited_indices = HashSet::new();
         for share in self.raw_shares.iter() {
-            if share.index >= param.total_weights {
+            if share.index >= param.total_weights || visited_indices.contains(&share.index) {
                 return Err(VidError::Argument("Invalid share".to_string()));
             }
             let digest = Config::raw_share_digest(&raw_shares[share.index])?;
@@ -131,6 +132,7 @@ impl MalEncodingProof {
             {
                 return Ok(Err(()));
             }
+            visited_indices.insert(share.index);
         }
         Ok(Ok(()))
     }
@@ -190,16 +192,16 @@ mod tests {
         assert!(proof.verify(&param, &commit).unwrap().is_ok());
 
         // proof generation shall not work on good commitment and shares
-        let payload = [1u8; 5];
+        let payload = [1u8; 50];
         let (commit, mut shares) = AvidMScheme::disperse(&param, &weights, &payload).unwrap();
         shares.shuffle(&mut rng);
         assert!(AvidMScheme::proof_of_incorrect_encoding(&param, &commit, &shares).is_err());
 
         let witness = AvidMScheme::pad_to_fields(&param, &payload);
         let bad_proof = MalEncodingProof {
-            witness,
+            witness: witness.clone(),
             raw_shares: shares
-                .into_iter()
+                .iter()
                 .map(|share| MalEncodingProofRawShare {
                     index: share.index as usize,
                     mt_proof: share.content.mt_proofs[0].clone(),
@@ -207,5 +209,15 @@ mod tests {
                 .collect(),
         };
         assert!(bad_proof.verify(&param, &commit).unwrap().is_err());
+
+        let mut bad_witness = vec![F::from(0u64); 5];
+        bad_witness[0] = shares[0].content.payload[0][0];
+        let bad_proof2 = MalEncodingProof {
+            witness: bad_witness,
+            raw_shares: std::iter::repeat(bad_proof.raw_shares[0].clone())
+                .take(6)
+                .collect(),
+        };
+        assert!(bad_proof2.verify(&param, &commit).is_err());
     }
 }
