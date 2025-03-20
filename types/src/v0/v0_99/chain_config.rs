@@ -130,6 +130,21 @@ impl From<&v0_1::ResolvableChainConfig> for ResolvableChainConfig {
     }
 }
 
+impl From<&v0_3::ResolvableChainConfig> for ResolvableChainConfig {
+    fn from(
+        &v0_3::ResolvableChainConfig { chain_config }: &v0_3::ResolvableChainConfig,
+    ) -> ResolvableChainConfig {
+        match chain_config {
+            Either::Left(chain_config) => ResolvableChainConfig {
+                chain_config: Either::Left(ChainConfig::from(chain_config)),
+            },
+            Either::Right(c) => ResolvableChainConfig {
+                chain_config: Either::Right(Commitment::from_raw(*c.as_ref())),
+            },
+        }
+    }
+}
+
 impl From<v0_1::ChainConfig> for ChainConfig {
     fn from(chain_config: v0_1::ChainConfig) -> ChainConfig {
         let v0_1::ChainConfig {
@@ -217,22 +232,44 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_upgrade_chain_config_v3_resolvable_chain_config_from_v1() {
+    fn test_upgrade_chain_config_v99_resolvable_chain_config_from_v1() {
         let expectation: ResolvableChainConfig = ChainConfig::default().into();
         let v1_resolvable: v0_1::ResolvableChainConfig = v0_1::ChainConfig::default().into();
-        let v3_resolvable: ResolvableChainConfig = ResolvableChainConfig::from(&v1_resolvable);
-        assert_eq!(expectation, v3_resolvable);
+        let v99_resolvable: ResolvableChainConfig = ResolvableChainConfig::from(&v1_resolvable);
+        assert_eq!(expectation, v99_resolvable);
         let expectation: ResolvableChainConfig = ChainConfig::default().commit().into();
         let v1_resolvable: v0_1::ResolvableChainConfig =
             v0_1::ChainConfig::default().commit().into();
-        let v3_resolvable: ResolvableChainConfig = ResolvableChainConfig::from(&v1_resolvable);
-        assert_eq!(expectation, v3_resolvable);
+        let v99_resolvable: ResolvableChainConfig = ResolvableChainConfig::from(&v1_resolvable);
+        assert_eq!(expectation, v99_resolvable);
     }
+
     #[test]
-    fn test_upgrade_chain_config_v1_chain_config_from_v3() {
+    fn test_upgrade_chain_config_v99_resolvable_chain_config_from_v3() {
+        let expectation: ResolvableChainConfig = ChainConfig::default().into();
+        let v3_resolvable: v0_3::ResolvableChainConfig = v0_3::ChainConfig::default().into();
+        let v99_resolvable: ResolvableChainConfig = ResolvableChainConfig::from(&v3_resolvable);
+        assert_eq!(expectation, v99_resolvable);
+        let expectation: ResolvableChainConfig = ChainConfig::default().commit().into();
+        let v3_resolvable: v0_3::ResolvableChainConfig =
+            v0_3::ChainConfig::default().commit().into();
+        let v99_resolvable: ResolvableChainConfig = ResolvableChainConfig::from(&v3_resolvable);
+        assert_eq!(expectation, v99_resolvable);
+    }
+
+    #[test]
+    fn test_upgrade_chain_config_v1_chain_config_from_v99() {
         let expectation = v0_1::ChainConfig::default();
-        let v3_chain_config = ChainConfig::default();
-        let v1_chain_config = v0_1::ChainConfig::from(v3_chain_config);
+        let v99_chain_config = ChainConfig::default();
+        let v1_chain_config = v0_1::ChainConfig::from(v99_chain_config);
         assert_eq!(expectation, v1_chain_config);
+    }
+
+    #[test]
+    fn test_upgrade_chain_config_v3_chain_config_from_v99() {
+        let expectation = v0_3::ChainConfig::default();
+        let v99_chain_config = ChainConfig::default();
+        let v3_chain_config = v0_3::ChainConfig::from(v99_chain_config);
+        assert_eq!(expectation, v3_chain_config);
     }
 }
