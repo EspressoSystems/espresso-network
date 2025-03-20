@@ -16,6 +16,7 @@ use alloy::{
         SignerSync,
     },
 };
+use alloy_compat::ethers_serde;
 use derive_more::*;
 use hotshot_types::traits::signature_key::{BuilderSignatureKey, PrivateSignatureKey};
 use serde::{Deserialize, Serialize};
@@ -155,11 +156,16 @@ impl Ord for EthKeyPair {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(self::Debug, Error)]
 #[error("Failed to sign builder message")]
 pub struct SigningError(#[from] signers::Error);
 
-pub type BuilderSignature = Signature;
+/// signature type for the builder
+#[derive(
+    self::Debug, Clone, Copy, Hash, Deref, PartialEq, Eq, From, Into, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct BuilderSignature(#[serde(with = "ethers_serde::signature")] pub PrimitiveSignature);
 
 impl BuilderSignatureKey for FeeAccount {
     type BuilderPrivateKey = EthKeyPair;

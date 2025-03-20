@@ -9,6 +9,7 @@ testing = ["hotshot-query-service/testing"]
 
 [dependencies]
 alloy = { workspace = true }
+alloy-compat = { path = "../alloy-compat" }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-broadcast = { workspace = true }
@@ -21,6 +22,7 @@ clap = { workspace = true }
 cld = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
+ethers-core = "2.0"
 fluent-asserter = "0.1.9"
 futures = { workspace = true }
 hotshot = { workspace = true }
