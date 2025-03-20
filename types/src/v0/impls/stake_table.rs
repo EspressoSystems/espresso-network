@@ -396,7 +396,9 @@ impl EpochCommittees {
             .address_mapping
             .clone();
 
-        Ok(*mapping.get(&bls_key).unwrap())
+        Ok(*mapping.get(&bls_key).context(format!(
+            "failed to get ethereum address for bls key {bls_key:?}"
+        ))?)
     }
 
     pub fn get_validator_config(
