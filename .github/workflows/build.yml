@@ -260,7 +260,8 @@ jobs:
 
       - name: Match the docker image tag built or pushed to the registry
         run: |
-          echo ${{ needs.build-dockers.outputs.tags }} | sed 's/.*://' >> $GITHUB_ENV
+          DOCKER_TAG=$(echo ${{ needs.build-dockers.outputs.tags }} | sed 's/.*://')
+          echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull remaining docker images
         run: |
