@@ -37,6 +37,7 @@ use super::{
     },
     v0_3::Validator,
     BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
+    MarketplaceVersion,
 };
 use crate::{
     traits::StateCatchup,
@@ -751,7 +752,7 @@ fn validate_builder_fee(
         // TODO Marketplace signatures are placeholders for now. In
         // finished Marketplace signatures will cover the full
         // transaction.
-        if version.minor >= 3 {
+        if version.minor >= MarketplaceVersion::MINOR {
             fee_info
                 .account()
                 .validate_sequencing_fee_signature_marketplace(
