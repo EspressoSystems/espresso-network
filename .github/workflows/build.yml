@@ -167,6 +167,7 @@ jobs:
           path: target/arm64/release
 
       - name: Setup QEMU
+        if: ${{ github.event_name != 'pull_request' }}
         uses: docker/setup-qemu-action@v3
         with:
           # Temporary fix (See https://github.com/docker/setup-qemu-action/issues/198)
@@ -176,8 +177,8 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Github Container Repo
-        uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -189,7 +190,13 @@ jobs:
         with:
           images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
 
-      - name: Build and push ${{ matrix.service }} docker image
+      # There is no straightforward way to import a multiplatform image from a tar file with with
+      # docker.
+      #   - On PRs: build only amd64 and upload as artifact to later run the demo test.
+      #   - On main: push to the registry and fetch from the registry to run the demo test.
+
+      - name: Build and push ${{ matrix.service }} docker image (non-PR)
+        if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -197,17 +204,25 @@ jobs:
           platforms: ${{ env.DOCKER_PLATFORMS }}
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels  }}
-          # push only if not a pull request
-          # always export to file for testing in test-demo
-          outputs: |
-            ${{ github.event_name != 'pull_request' && 'type=registry' || '' }}
-            type=image,dest=${{ runner.temp }}/${{ matrix.service }}.tar
+          outputs: type=registry
+
+      - name: Build and export ${{ matrix.service }} docker image (PR)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/${{ matrix.service }}.Dockerfile
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels  }}
+          outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
 
       - name: Upload artifact
+        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.service }}-docker-image
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
+          if-no-files-found: error
 
   test-demo:
     # if build_arm is skipped, run this job anyway
@@ -223,14 +238,16 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Download artifacts (PR)
+        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
 
 
-      - name: Load docker images
+      - name: Load docker images (PR)
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
           # load all *.tar files in the temp directory, the layout should
           # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
@@ -242,7 +259,7 @@ jobs:
             docker tag "$tag" "$tag_main"
           done
 
-      - name: Pull external docker images
+      - name: Pull remaining docker images
         run: |
           docker compose pull --policy missing
 
