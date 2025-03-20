@@ -12,6 +12,7 @@ members = [
     "client",
     "contract-bindings-alloy",
     "contract-bindings-ethers",
+    "alloy-compat",
     "contracts/rust/adapter",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
