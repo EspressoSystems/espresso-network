@@ -38,6 +38,7 @@ pub struct Validator<KEY: SignatureKey> {
     /// the peer's stake
     pub stake: U256,
     // commission
+    // TODO: MA commission is only valid from 0 to 10_000. Add newtype to enforce this.
     pub commission: u16,
     pub delegators: HashMap<Address, U256>,
 }

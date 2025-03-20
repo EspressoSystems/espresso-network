@@ -348,6 +348,11 @@ pub fn apply_rewards(
 pub fn compute_rewards(
     validator: Validator<BLSPubKey>,
 ) -> anyhow::Result<Vec<(alloy::primitives::Address, RewardAmount)>> {
+    ensure!(
+        validator.commission <= COMMISSION_BASIS_POINTS,
+        "commission must not exceed {COMMISSION_BASIS_POINTS}"
+    );
+
     let mut rewards = Vec::new();
 
     let total_reward = block_reward().0;
@@ -452,18 +457,40 @@ pub mod tests {
     // TODO: current tests are just sanity checks, we need more.
 
     #[test]
-    fn test_reward_calculation_sanity_check() {
+    fn test_reward_calculation_sanity_checks() {
         // This test verifies that the total rewards distributed match the block reward.
         // Due to rounding effects in distribution, the validator may receive a slightly higher amount
         // because the remainder after delegator distribution is sent to the validator.
 
         let validator = Validator::mock();
         let rewards = compute_rewards(validator).unwrap();
-        let mut total_calculated_rewards: RewardAmount = U256::zero().into();
-        for (_, amount) in rewards.clone() {
-            total_calculated_rewards += amount;
-        }
+        let total = |rewards: Vec<(_, RewardAmount)>| {
+            rewards.iter().fold(U256::zero(), |acc, (_, r)| acc + r.0)
+        };
+        assert_eq!(total(rewards), block_reward().into());
 
-        assert_eq!(total_calculated_rewards, block_reward());
+        let mut validator = Validator::mock();
+        validator.commission = 0;
+        let rewards = compute_rewards(validator.clone()).unwrap();
+        assert_eq!(total(rewards.clone()), block_reward().into());
+
+        let mut validator = Validator::mock();
+        validator.commission = 10000;
+        let rewards = compute_rewards(validator.clone()).unwrap();
+        assert_eq!(total(rewards.clone()), block_reward().into());
+        let validator_reward = rewards
+            .iter()
+            .find(|(a, _)| *a == validator.account)
+            .unwrap()
+            .1;
+        assert_eq!(validator_reward, block_reward());
+
+        let mut validator = Validator::mock();
+        validator.commission = 10001;
+        assert!(compute_rewards(validator.clone())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("must not exceed"));
     }
 }
