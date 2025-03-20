@@ -103,6 +103,7 @@ processes:
     environment:
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - RAYON_NUM_THREADS=$PROVER_RAYON_NUM_THREADS
+      - ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS=$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
     depends_on:
       sequencer0:
         condition: process_healthy
