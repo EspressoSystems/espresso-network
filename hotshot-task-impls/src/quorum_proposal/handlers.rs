@@ -330,14 +330,20 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let next_epoch_qc = if self.upgrade_lock.epochs_enabled(self.view_number).await
             && is_high_qc_for_last_block
         {
-            wait_for_next_epoch_qc(
-                &parent_qc,
-                &self.consensus,
-                self.timeout,
-                self.view_start_time,
-                &self.receiver,
+            Some(
+                wait_for_next_epoch_qc(
+                    &parent_qc,
+                    &self.consensus,
+                    self.timeout,
+                    self.view_start_time,
+                    &self.receiver,
+                )
+                .await
+                .context(
+                    "Jusify QC on our proposal is for the last block in the epoch \
+                    but we don't have the corresponding next epoch QC. Do not propose.",
+                )?,
             )
-            .await
         } else {
             None
         };
