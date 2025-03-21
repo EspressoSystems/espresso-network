@@ -194,7 +194,7 @@ jobs:
         with:
           images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
 
-      # There is no straightforward way to import a multiplatform image from a tar file with with
+      # There is no straightforward way to import a multiplatform image from a tar file with
       # docker.
       #   - On PRs: build only amd64 and upload as artifact to later run the demo test.
       #   - On main: push to the registry and fetch from the registry to run the demo test.
