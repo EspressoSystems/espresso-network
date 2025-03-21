@@ -130,7 +130,7 @@ impl<KEY: SignatureKey> HotShotConfigFile<KEY> {
             data_request_delay: Some(Duration::from_millis(REQUEST_DATA_DELAY)),
             builder_urls: default_builder_urls(),
             upgrade: UpgradeConfig::default(),
-            epoch_height: 0,
+            epoch_height: 150,
             epoch_start_block: 0,
         }
     }

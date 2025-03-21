@@ -1,8 +1,8 @@
 use crate::{v0_1::RewardMerkleCommitment, NsTable};
 
 use super::{
-    BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
-    ResolvableChainConfig,
+    chain_config::ResolvableChainConfig, BlockMerkleCommitment, BuilderSignature, FeeInfo,
+    FeeMerkleCommitment, L1BlockInfo,
 };
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};

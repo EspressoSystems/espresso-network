@@ -16,6 +16,7 @@ hotshot-types = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 snafu = "0.8"
+primitive-types.workspace = true
 tide-disco = "0.9"
 tokio = { workspace = true }
 toml = { workspace = true }

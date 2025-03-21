@@ -100,10 +100,10 @@ impl SignatureKey for BLSPubKey {
         (kp.ver_key(), kp.sign_key_ref().clone())
     }
 
-    fn stake_table_entry(&self, stake: u64) -> Self::StakeTableEntry {
+    fn stake_table_entry(&self, stake: U256) -> Self::StakeTableEntry {
         StakeTableEntry {
             stake_key: *self,
-            stake_amount: U256::from(stake),
+            stake_amount: stake,
         }
     }
 

@@ -1,6 +1,7 @@
 use std::{num::NonZeroUsize, time::Duration};
 
 use anyhow::Context;
+use ethers_conv::ToAlloy;
 use hotshot_types::{
     network::{
         BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
@@ -39,7 +40,7 @@ impl From<ValidatorConfig<PubKey>> for PublicValidatorConfig {
 
         Self {
             public_key,
-            stake_value,
+            stake_value: stake_value.as_u64(),
             is_da,
             state_public_key: state_public_key.to_string(),
             private_key: "*****".into(),

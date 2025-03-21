@@ -65,6 +65,7 @@ custom_debug = "0.6"
 derivative = { workspace = true }
 derive_more = { workspace = true }
 either = { workspace = true }
+primitive-types.workspace = true
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-testing = { workspace = true }

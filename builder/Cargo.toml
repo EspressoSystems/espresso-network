@@ -5,6 +5,12 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
+[features]
+default = ["fee"]
+fee = []
+pos = []
+marketplace = []
+
 [dependencies]
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }

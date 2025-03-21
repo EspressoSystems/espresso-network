@@ -538,6 +538,7 @@ impl TestNetwork {
                 base_fee: 1.into(),
                 ..Default::default()
             },
+            epoch_height: None,
             stake_table: StakeTableConfig { capacity: 10 },
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),
