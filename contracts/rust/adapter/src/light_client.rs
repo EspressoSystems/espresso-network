@@ -1,10 +1,14 @@
 //! Helpers and test mocks for Light Client logic
 
-use crate::sol_types::{LightClientStateSol, StakeTableStateSol};
-use crate::{field_to_u256, u256_to_field};
 use alloy::primitives::U256;
 use ark_ff::PrimeField;
 use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState};
+
+use crate::{
+    field_to_u256,
+    sol_types::{LightClient, LightClientStateSol, StakeTableStateSol},
+    u256_to_field,
+};
 
 impl LightClientStateSol {
     /// Return a dummy new genesis that will pass constructor/initializer sanity checks
@@ -18,6 +22,13 @@ impl LightClientStateSol {
             blockHeight: 0,
             blockCommRoot: U256::from(0),
         }
+    }
+}
+
+impl From<LightClient::finalizedStateReturn> for LightClientStateSol {
+    fn from(v: LightClient::finalizedStateReturn) -> Self {
+        let tuple: (u64, u64, U256) = v.into();
+        tuple.into()
     }
 }
 
@@ -54,6 +65,13 @@ impl StakeTableStateSol {
             schnorrKeyComm: U256::from(123),
             amountComm: U256::from(20),
         }
+    }
+}
+
+impl From<LightClient::genesisStakeTableStateReturn> for StakeTableStateSol {
+    fn from(v: LightClient::genesisStakeTableStateReturn) -> Self {
+        let tuple: (U256, U256, U256, U256) = v.into();
+        tuple.into()
     }
 }
 

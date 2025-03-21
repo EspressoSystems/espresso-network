@@ -1,17 +1,31 @@
 //! Solidity types for interacting with contracts
 //! Re-export types that are used, sometimes renamed to avoid collision.
+//!
+//! NOTE: Due to <https://github.com/foundry-rs/foundry/issues/10153>,
+//! try to re-export the same type from the "youngest" child contract since that is the contract whose functions are being called,
+//! thus from whom the rust bindings are expected.
+//! E.g. Both PlonkVerifier and LightClient, and LightClientV2 depends on BN254. The inheritance relationship is:
+//!   BN254 <- PlonkVerifier <- LIghtClient <- LightClientV2
+//! Most of the time, we interact with PlonkVerifier's function via LightClientV2, thus import BN254.G1Point from `bindings::plonkverifierv2`.
+//! When we need to directly interact with PlonkVerifier's method, implement stupid plain `From<lc2::BN254::G1Point> for pv::BN254::G1Point`.
+//! If you are lazy, you can even use unsafe memory transmute since they are literally the same representation, duplicated in different modules,
+//! thus treated by the rust type systems as distinct types.
+//!
+//! Another usage is in the differential testing in Solidity tests. In those cases, the actual types don't matter, since they will all `abi_encode()`
+//! into the exact same bytes before being communicated over to contract via FFI. Thus using any one of them is fine.
 
 use alloy::sol;
 
 pub use crate::bindings::{
     erc1967proxy::ERC1967Proxy,
     feecontract::FeeContract::{self, Deposit},
-    iplonkverifier::{
+    lightclient::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
+        LightClient::{
+            self, LightClientInstance, LightClientState as LightClientStateSol,
+            StakeTableState as StakeTableStateSol,
+        },
         BN254::G1Point as G1PointSol,
-    },
-    lightclient::LightClient::{
-        self, LightClientState as LightClientStateSol, StakeTableState as StakeTableStateSol,
     },
     lightclientmock::LightClientMock,
     permissionedstaketable::{
