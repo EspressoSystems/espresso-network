@@ -28,7 +28,8 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -192,8 +193,6 @@ impl Inner {
         self.path.join("upgrade_certificate")
     }
 
-    #[allow(dead_code)]
-    // TODO(abdul): fix stake table persistence for new stake table types
     fn stake_table_dir_path(&self) -> PathBuf {
         self.path.join("stake_table")
     }
@@ -208,6 +207,10 @@ impl Inner {
 
     fn epoch_root_block_header_dir_path(&self) -> PathBuf {
         self.path.join("epoch_root_block_header")
+    }
+
+    fn light_client_state_update_certificate_dir_path(&self) -> PathBuf {
+        self.path.join("state_cert")
     }
 
     fn update_migration(&mut self) -> anyhow::Result<()> {
@@ -1232,6 +1235,28 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn add_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.write().await;
+        let epoch = state_cert.epoch;
+        let dir_path = inner.light_client_state_update_certificate_dir_path();
+
+        fs::create_dir_all(dir_path.clone())
+            .context("failed to create light client state update certificate dir")?;
+
+        let bytes = bincode::serialize(&state_cert)
+            .context("serialize light client state update certificate")?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        fs::write(file_path, bytes).context(format!(
+            "writing light client state update certificate file for epoch {epoch:?}"
+        ))?;
+
+        Ok(())
+    }
+
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         let inner = self.inner.read().await;
         let drb_dir_path = inner.epoch_drb_result_dir_path();
@@ -1274,6 +1299,37 @@ impl SequencerPersistence for Persistence {
         }
 
         result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
+
+        Ok(result)
+    }
+
+    async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.light_client_state_update_certificate_dir_path();
+
+        let mut result = LightClientStateUpdateCertificate::genesis();
+
+        if !dir_path.is_dir() {
+            return Ok(result);
+        }
+        for (epoch, path) in epoch_files(dir_path)? {
+            if epoch <= result.epoch {
+                continue;
+            }
+            let bytes = fs::read(&path).context(format!(
+                "reading light client state update certificate {}",
+                path.display()
+            ))?;
+            let cert = bincode::deserialize::<LightClientStateUpdateCertificate<SeqTypes>>(&bytes)
+                .context(format!(
+                    "parsing light client state update certificate {}",
+                    path.display()
+                ))?;
+
+            if cert.epoch > result.epoch {
+                result = cert;
+            }
+        }
 
         Ok(result)
     }

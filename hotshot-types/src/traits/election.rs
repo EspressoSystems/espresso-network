@@ -21,15 +21,15 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn new(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
         // but they should not have voting power.
-        stake_committee_members: Vec<PeerConfig<TYPES::SignatureKey>>,
-        da_committee_members: Vec<PeerConfig<TYPES::SignatureKey>>,
+        stake_committee_members: Vec<PeerConfig<TYPES>>,
+        da_committee_members: Vec<PeerConfig<TYPES>>,
     ) -> Self;
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES::SignatureKey>>;
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES>>;
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES::SignatureKey>>;
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES>>;
 
     /// Get all participants in the committee for a specific view for a specific epoch
     fn committee_members(
@@ -51,7 +51,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
+    ) -> Option<PeerConfig<TYPES>>;
 
     /// Get the DA stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
@@ -59,7 +59,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
+    ) -> Option<PeerConfig<TYPES>>;
 
     /// See if a node has stake in the committee in a specific epoch
     fn has_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<TYPES::Epoch>) -> bool;

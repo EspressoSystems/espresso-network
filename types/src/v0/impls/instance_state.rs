@@ -20,8 +20,8 @@ use super::{
     EpochCommittees, SeqTypes,
 };
 use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
-    Timestamp, Upgrade, UpgradeMode,
+    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
+    Upgrade, UpgradeMode,
 };
 
 /// Represents the immutable state of a node.
@@ -262,7 +262,7 @@ impl Default for NodeState {
 impl InstanceState for NodeState {}
 
 impl Upgrade {
-    pub fn set_hotshot_config_parameters(&self, config: &mut HotShotConfig<PubKey>) {
+    pub fn set_hotshot_config_parameters(&self, config: &mut HotShotConfig<SeqTypes>) {
         match &self.mode {
             UpgradeMode::View(v) => {
                 config.start_proposing_view = v.start_proposing_view;

@@ -22,7 +22,7 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
         ValidatedState,
     },
@@ -684,6 +684,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
     epoch_height: u64,
+    _state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 ) -> Result<()> {
     let committee_member_in_current_epoch = membership.has_stake(&public_key).await;
     // If the proposed leaf is for the last block in the epoch and the node is part of the quorum committee

@@ -37,13 +37,7 @@ mod tests {
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
         state_types::{TestInstanceState, TestValidatedState},
     };
-    use hotshot_types::{
-        data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
-        signature_key::BuilderKey,
-        simple_vote::QuorumData2,
-        traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
-        utils::{BuilderCommitment, EpochTransitionIndicator},
-    };
+    use hotshot_types::utils::EpochTransitionIndicator;
     use marketplace_builder_shared::{
         block::ParentBlockReferences,
         testing::constants::{

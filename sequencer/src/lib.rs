@@ -292,7 +292,8 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         public_key: pub_key,
         private_key: network_params.private_staking_key,
         stake_value: 1,
-        state_key_pair,
+        state_public_key: state_key_pair.ver_key(),
+        state_private_key: state_key_pair.sign_key(),
         is_da,
     };
 
@@ -720,7 +721,7 @@ pub mod testing {
     }
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {
-        config: HotShotConfig<PubKey>,
+        config: HotShotConfig<SeqTypes>,
         priv_keys: Vec<BLSPrivKey>,
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
@@ -794,7 +795,7 @@ pub mod testing {
             let known_nodes_with_stake = pub_keys
                 .iter()
                 .zip(&state_key_pairs)
-                .map(|(pub_key, state_key_pair)| PeerConfig::<PubKey> {
+                .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                     stake_table_entry: pub_key.stake_table_entry(1),
                     state_ver_key: state_key_pair.ver_key(),
                 })
@@ -802,7 +803,7 @@ pub mod testing {
 
             let master_map = MasterMap::new();
 
-            let config: HotShotConfig<PubKey> = HotShotConfig {
+            let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 fixed_leader_for_gpuvid: 0,
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
@@ -850,7 +851,7 @@ pub mod testing {
 
     #[derive(Clone)]
     pub struct TestConfig<const NUM_NODES: usize> {
-        config: HotShotConfig<PubKey>,
+        config: HotShotConfig<SeqTypes>,
         priv_keys: Vec<BLSPrivKey>,
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
@@ -866,7 +867,7 @@ pub mod testing {
             self.priv_keys.len()
         }
 
-        pub fn hotshot_config(&self) -> &HotShotConfig<PubKey> {
+        pub fn hotshot_config(&self) -> &HotShotConfig<SeqTypes> {
             &self.config
         }
 
@@ -959,7 +960,8 @@ pub mod testing {
                 public_key: my_peer_config.stake_table_entry.stake_key,
                 private_key: self.priv_keys[i].clone(),
                 stake_value: my_peer_config.stake_table_entry.stake_amount.as_u64(),
-                state_key_pair: self.state_key_pairs[i].clone(),
+                state_public_key: self.state_key_pairs[i].ver_key(),
+                state_private_key: self.state_key_pairs[i].sign_key(),
                 is_da,
             };
 

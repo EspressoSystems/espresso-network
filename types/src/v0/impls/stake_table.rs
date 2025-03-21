@@ -311,19 +311,19 @@ struct NonEpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
-    eligible_leaders: Vec<PeerConfig<PubKey>>,
+    eligible_leaders: Vec<PeerConfig<SeqTypes>>,
 
     /// Keys for nodes participating in the network
-    stake_table: Vec<PeerConfig<PubKey>>,
+    stake_table: Vec<PeerConfig<SeqTypes>>,
 
     /// Keys for DA members
-    da_members: Vec<PeerConfig<PubKey>>,
+    da_members: Vec<PeerConfig<SeqTypes>>,
 
     /// Stake entries indexed by public key, for efficient lookup.
-    indexed_stake_table: HashMap<PubKey, PeerConfig<PubKey>>,
+    indexed_stake_table: HashMap<PubKey, PeerConfig<SeqTypes>>,
 
     /// DA entries indexed by public key, for efficient lookup.
-    indexed_da_members: HashMap<PubKey, PeerConfig<PubKey>>,
+    indexed_da_members: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
 /// Holds Stake table and da stake
@@ -332,9 +332,9 @@ pub struct EpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
-    eligible_leaders: Vec<PeerConfig<PubKey>>,
+    eligible_leaders: Vec<PeerConfig<SeqTypes>>,
     /// Keys for nodes participating in the network
-    stake_table: IndexMap<PubKey, PeerConfig<PubKey>>,
+    stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>>,
     validators: IndexMap<Address, Validator<BLSPubKey>>,
     address_mapping: HashMap<BLSPubKey, Address>,
 }
@@ -422,8 +422,8 @@ impl EpochCommittees {
     pub fn new_stake(
         // TODO remove `new` from trait and rename this to `new`.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        committee_members: Vec<PeerConfig<PubKey>>,
-        da_members: Vec<PeerConfig<PubKey>>,
+        committee_members: Vec<PeerConfig<SeqTypes>>,
+        da_members: Vec<PeerConfig<SeqTypes>>,
         l1_client: L1Client,
         contract_address: Option<Address>,
         peers: Arc<dyn StateCatchup>,
@@ -512,7 +512,7 @@ impl EpochCommittees {
             first_epoch: Epoch::genesis(),
         }
     }
-    fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<PubKey>>> {
+    fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<SeqTypes>>> {
         if let Some(epoch) = epoch {
             self.state
                 .get(epoch)
@@ -566,18 +566,18 @@ impl Membership<SeqTypes> for EpochCommittees {
     fn new(
         // TODO remove `new` from trait and remove this fn as well.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        _committee_members: Vec<PeerConfig<PubKey>>,
-        _da_members: Vec<PeerConfig<PubKey>>,
+        _committee_members: Vec<PeerConfig<SeqTypes>>,
+        _da_members: Vec<PeerConfig<SeqTypes>>,
     ) -> Self {
         panic!("This function has been replaced with new_stake()");
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
+    fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<SeqTypes>> {
         self.get_stake_table(&epoch).unwrap_or_default()
     }
     /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
+    fn da_stake_table(&self, _epoch: Option<Epoch>) -> Vec<PeerConfig<SeqTypes>> {
         self.non_epoch_committee.da_members.clone()
     }
 
@@ -608,7 +608,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the stake table entry for a public key
-    fn stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
+    fn stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<SeqTypes>> {
         // Only return the stake if it is above zero
         if let Some(epoch) = epoch {
             self.state
@@ -624,7 +624,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the DA stake table entry for a public key
-    fn da_stake(&self, pub_key: &PubKey, _epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
+    fn da_stake(&self, pub_key: &PubKey, _epoch: Option<Epoch>) -> Option<PeerConfig<SeqTypes>> {
         // Only return the stake if it is above zero
         self.non_epoch_committee
             .indexed_da_members
@@ -818,7 +818,7 @@ impl super::v0_3::StakeTable {
         [..n]
             .iter()
             .map(|_| PeerConfig::default())
-            .collect::<Vec<PeerConfig<PubKey>>>()
+            .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
 }
@@ -830,7 +830,7 @@ impl DAMembers {
         [..n]
             .iter()
             .map(|_| PeerConfig::default())
-            .collect::<Vec<PeerConfig<PubKey>>>()
+            .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
 }
