@@ -1288,8 +1288,10 @@ mod test {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, QuorumProposal, ViewNumber},
-        simple_vote::QuorumData,
+        data::{
+            vid_commitment, QuorumProposal, QuorumProposal2, QuorumProposalWrapper, ViewNumber,
+        },
+        simple_vote::{QuorumData, QuorumData2},
         traits::{
             block_contents::BlockHeader,
             node_implementation::{ConsensusTime, Versions},
@@ -1303,11 +1305,14 @@ mod test {
     use jf_vid::VidScheme;
     use tokio::time::sleep;
     use vbs::version::StaticVersionType;
+    use vec1::vec1;
 
     use super::{testing::TmpDb, *};
     use crate::{
         availability::{LeafQueryData, QueryableHeader},
-        data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
+        data_source::storage::{
+            pruning::PrunedHeightStorage, AvailabilityStorage, UpdateAvailabilityStorage,
+        },
         merklized_state::{MerklizedState, UpdateStateData},
         testing::{
             mocks::{MockHeader, MockMerkleTree, MockPayload, MockTypes, MockVersions},
@@ -1838,5 +1843,180 @@ mod test {
 
         assert_eq!(leaf_count as u64, num_rows, "not all leaves migrated");
         assert_eq!(vid_count as u64, num_rows, "not all vid migrated");
+    }
+
+    async fn make_leaf_query_data(height: u64, view: u64) -> LeafQueryData<MockTypes> {
+        let view = ViewNumber::new(view);
+        let validated_state = TestValidatedState::default();
+        let instance_state = TestInstanceState::default();
+
+        let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
+            [],
+            &validated_state,
+            &instance_state,
+        )
+        .await
+        .unwrap();
+        let builder_commitment =
+            <MockPayload as BlockPayload<MockTypes>>::builder_commitment(&payload, &metadata);
+        let payload_bytes = payload.encode();
+
+        let payload_commitment = vid_commitment::<MockVersions>(
+            &payload_bytes,
+            &metadata.encode(),
+            4,
+            <MockVersions as Versions>::Base::VERSION,
+        );
+
+        let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis(
+            &instance_state,
+            payload_commitment,
+            builder_commitment,
+            metadata,
+        );
+
+        block_header.block_number = height;
+
+        let null_quorum_data = QuorumData2 {
+            leaf_commit: Commitment::<Leaf2<MockTypes>>::default_commitment_no_preimage(),
+            epoch: None,
+        };
+
+        let mut qc = QuorumCertificate2::new(
+            null_quorum_data.clone(),
+            null_quorum_data.commit(),
+            view,
+            None,
+            std::marker::PhantomData,
+        );
+
+        let quorum_proposal = QuorumProposalWrapper {
+            proposal: QuorumProposal2 {
+                block_header,
+                view_number: view,
+                epoch: None,
+                justify_qc: qc.clone(),
+                next_epoch_justify_qc: None,
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+            },
+        };
+
+        let mut leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+        leaf.fill_block_payload::<MockVersions>(
+            payload.clone(),
+            4,
+            <MockVersions as Versions>::Base::VERSION,
+        )
+        .unwrap();
+        qc.data.leaf_commit = <Leaf2<MockTypes> as Committable>::commit(&leaf);
+
+        LeafQueryData::<MockTypes> { leaf, qc }
+    }
+
+    async fn tx_insert_leaf(tx: &mut Transaction<Write>, height: u64, view: u64) {
+        tx.insert_leaf(make_leaf_query_data(height, view).await)
+            .await
+            .expect("insert leaf ({height},{view})");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_get_leaves() {
+        setup_test();
+
+        let db = TmpDb::init().await;
+
+        let storage = SqlStorage::connect(db.config()).await.unwrap();
+
+        let mut tx = storage
+            .write()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })
+            .unwrap();
+
+        tx_insert_leaf(&mut tx, 10, 1).await;
+        tx_insert_leaf(&mut tx, 20, 2).await;
+        tx_insert_leaf(&mut tx, 30, 3).await;
+        tx_insert_leaf(&mut tx, 30, 4).await;
+        tx_insert_leaf(&mut tx, 40, 5).await;
+        tx_insert_leaf(&mut tx, 50, 6).await;
+        tx_insert_leaf(&mut tx, 60, 9).await;
+        tx_insert_leaf(&mut tx, 60, 8).await;
+        tx_insert_leaf(&mut tx, 60, 7).await;
+        tx_insert_leaf(&mut tx, 70, 10).await;
+        tx_insert_leaf(&mut tx, 80, 11).await;
+
+        // get_leaves should return all leaves for the height, sorted by view
+        assert_eq!(
+            tx.get_leaves(20).await.unwrap(),
+            vec1![make_leaf_query_data(20, 2).await,]
+        );
+
+        assert_eq!(
+            tx.get_leaves(30).await.unwrap(),
+            vec1![
+                make_leaf_query_data(30, 3).await,
+                make_leaf_query_data(30, 4).await,
+            ]
+        );
+
+        assert_eq!(
+            tx.get_leaves(40).await.unwrap(),
+            vec1![make_leaf_query_data(40, 5).await,]
+        );
+
+        assert_eq!(
+            tx.get_leaves(60).await.unwrap(),
+            vec1![
+                make_leaf_query_data(60, 7).await,
+                make_leaf_query_data(60, 8).await,
+                make_leaf_query_data(60, 9).await,
+            ]
+        );
+
+        // get_leaf_range should only return the highest-view leaf for each height
+        assert_eq!(
+            tx.get_leaf_range(10..=30).await.unwrap(),
+            vec![
+                Ok(make_leaf_query_data(10, 1).await),
+                Ok(make_leaf_query_data(20, 2).await),
+                Ok(make_leaf_query_data(30, 4).await),
+            ]
+        );
+
+        assert_eq!(
+            tx.get_leaf_range(20..=70).await.unwrap(),
+            vec![
+                Ok(make_leaf_query_data(20, 2).await),
+                Ok(make_leaf_query_data(30, 4).await),
+                Ok(make_leaf_query_data(40, 5).await),
+                Ok(make_leaf_query_data(50, 6).await),
+                Ok(make_leaf_query_data(60, 9).await),
+                Ok(make_leaf_query_data(70, 10).await),
+            ]
+        );
+
+        assert_eq!(
+            tx.get_leaf_range(30..=70).await.unwrap(),
+            vec![
+                Ok(make_leaf_query_data(30, 4).await),
+                Ok(make_leaf_query_data(40, 5).await),
+                Ok(make_leaf_query_data(50, 6).await),
+                Ok(make_leaf_query_data(60, 9).await),
+                Ok(make_leaf_query_data(70, 10).await),
+            ]
+        );
+
+        assert_eq!(
+            tx.get_leaf_range(60..=80).await.unwrap(),
+            vec![
+                Ok(make_leaf_query_data(60, 9).await),
+                Ok(make_leaf_query_data(70, 10).await),
+                Ok(make_leaf_query_data(80, 11).await),
+            ]
+        );
     }
 }
