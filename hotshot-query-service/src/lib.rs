@@ -460,7 +460,7 @@ pub type Metadata<Types> = <Payload<Types> as BlockPayload<Types>>::Metadata;
 pub type Transaction<Types> = <Payload<Types> as BlockPayload<Types>>::Transaction;
 pub type SignatureKey<Types> = <Types as NodeType>::SignatureKey;
 
-#[derive(Clone, Debug, Snafu, Deserialize, Serialize)]
+#[derive(Clone, Debug, Snafu, Deserialize, Serialize, Eq, PartialEq)]
 #[snafu(visibility(pub))]
 pub enum QueryError {
     /// The requested resource does not exist or is not known to this query service.
