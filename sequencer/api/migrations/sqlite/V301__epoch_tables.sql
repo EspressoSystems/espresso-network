@@ -18,16 +18,6 @@ CREATE TABLE vid_share2 (
 );
 
 
-CREATE TABLE undecided_state2 (
-    -- The ID is always set to 0. Setting it explicitly allows us to enforce with every insert or
-    -- update that there is only a single entry in this table: the latest known state.
-    id INT PRIMARY KEY,
-
-    leaves BLOB NOT NULL,
-    state  BLOB NOT NULL
-);
-
-
 CREATE TABLE quorum_proposals2 (
     view BIGINT PRIMARY KEY,
     leaf_hash VARCHAR,
@@ -51,4 +41,4 @@ CREATE TABLE epoch_migration (
     completed bool NOT NULL DEFAULT FALSE
 );
 
-INSERT INTO epoch_migration (table_name) VALUES ('anchor_leaf'), ('da_proposal'), ('vid_share'), ('undecided_state'), ('quorum_proposals'), ('quorum_certificate');
+INSERT INTO epoch_migration (table_name) VALUES ('anchor_leaf'), ('da_proposal'), ('vid_share'), ('quorum_proposals'), ('quorum_certificate');

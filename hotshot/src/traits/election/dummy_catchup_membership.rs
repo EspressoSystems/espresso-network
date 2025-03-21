@@ -1,6 +1,7 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use anyhow::Ok;
+use async_lock::RwLock;
 use hotshot_types::{
     drb::DrbResult,
     traits::{election::Membership, node_implementation::NodeType},
@@ -82,15 +83,6 @@ where
         self.inner.da_committee_members(view_number, epoch)
     }
 
-    fn committee_leaders(
-        &self,
-        view_number: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
-    ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
-        self.assert_has_epoch(epoch);
-        self.inner.committee_leaders(view_number, epoch)
-    }
-
     fn stake(
         &self,
         pub_key: &TYPES::SignatureKey,
@@ -164,7 +156,7 @@ where
     }
 
     async fn get_epoch_root_and_drb(
-        &self,
+        _membership: Arc<RwLock<Self>>,
         _block_height: u64,
         _epoch_height: u64,
         _epoch: TYPES::Epoch,
