@@ -160,6 +160,11 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         _initializeState(_genesis, _genesisStakeTableState, _stateHistoryRetentionPeriod);
     }
 
+    /// @notice returns the current block number
+    function currentBlockNumber() public view virtual returns (uint256) {
+        return block.number;
+    }
+
     /// @notice Use this to get the implementation contract version
     /// @return majorVersion The major version of the contract
     /// @return minorVersion The minor version of the contract
@@ -210,8 +215,6 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         finalizedState = _genesis;
 
         stateHistoryRetentionPeriod = _stateHistoryRetentionPeriod;
-
-        updateStateHistory(uint64(block.number), uint64(block.timestamp), _genesis);
     }
 
     // === State Modifying APIs ===
@@ -252,7 +255,7 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         // upon successful verification, update the latest finalized state
         finalizedState = newState;
 
-        updateStateHistory(uint64(block.number), uint64(block.timestamp), newState);
+        updateStateHistory(uint64(currentBlockNumber()), uint64(block.timestamp), newState);
 
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
     }
@@ -371,16 +374,16 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         // 3. Provided block number is earlier than the first recorded state update
         // the stateHistoryFirstIndex is used to check for the first nonZero element
         if (
-            blockNumber > block.number || updatesCount == 0
+            blockNumber > currentBlockNumber() || updatesCount == 0
                 || blockNumber < stateHistoryCommitments[stateHistoryFirstIndex].l1BlockHeight
         ) {
             revert InsufficientSnapshotHistory();
         }
 
         uint256 eligibleStateUpdateBlockNumber; // the eligibleStateUpdateBlockNumber is <=
-            // blockNumber
+        // blockNumber
         bool stateUpdateFound; // if an eligible block number is found in the state update history,
-            // then this variable is set to true
+        // then this variable is set to true
 
         // Search from the most recent state update back to find the first update <= blockNumber
         uint256 i = updatesCount - 1;
@@ -411,8 +414,9 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     /// @notice get the HotShot commitment that represents the Merkle root containing the leaf at
     /// the provided hotShotBlockHeight where the block height in the array is greater than
-    // or equal to the provided hotShotBlockHeight.
-    /// @dev if the provided hotShotBlockHeight is greater than the latest commitment in the array,
+    //  the provided hotShotBlockHeight.
+    /// @dev if the provided hotShotBlockHeight is greater than or equal to the latest commitment in
+    /// the array,
     /// the function reverts.
     /// @param hotShotBlockHeight the HotShot block height
     /// @return hotShotBlockCommRoot the HotShot commitment root
@@ -424,14 +428,14 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         returns (BN254.ScalarField hotShotBlockCommRoot, uint64 hotshotBlockHeight)
     {
         uint256 commitmentsHeight = stateHistoryCommitments.length;
-        if (hotShotBlockHeight > stateHistoryCommitments[commitmentsHeight - 1].hotShotBlockHeight)
+        if (hotShotBlockHeight >= stateHistoryCommitments[commitmentsHeight - 1].hotShotBlockHeight)
         {
             revert InvalidHotShotBlockForCommitmentCheck();
         }
         for (uint256 i = stateHistoryFirstIndex; i < commitmentsHeight; i++) {
-            // Finds and returns the first HotShot commitment whose height is greater than
-            // or equal to the specified HotShot height.
-            if (stateHistoryCommitments[i].hotShotBlockHeight >= hotShotBlockHeight) {
+            // Finds and returns the first HotShot commitment whose height is greater than the
+            // requested hotshot height
+            if (stateHistoryCommitments[i].hotShotBlockHeight > hotShotBlockHeight) {
                 return (
                     stateHistoryCommitments[i].hotShotBlockCommRoot,
                     stateHistoryCommitments[i].hotShotBlockHeight

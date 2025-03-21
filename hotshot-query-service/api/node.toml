@@ -1,0 +1,154 @@
+# Copyright (c) 2022 Espresso Systems (espressosys.com)
+# This file is part of the HotShot Query Service library.
+#
+# This program is free software: you can redistribute it and/or modify it under the terms of the GNU
+# General Public License as published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+# even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+# You should have received a copy of the GNU General Public License along with this program. If not,
+# see <https://www.gnu.org/licenses/>.
+
+[meta]
+FORMAT_VERSION = "0.1.0"
+NAME = "hotshot-node"
+DESCRIPTION = """
+A node's view of a HotShot chain
+
+The node API provides a subjective view of the HotShot blockchain, from the perspective of one
+particular node. It provides access to information that the availability API does not, because this
+information depends on the perspective of the node observing it, and may be subject to eventual
+consistency. For example, `/node/block-height` may return smaller counts than expected, if the node
+being queried is not fully synced with the entire history of the chain. However, the node will
+_eventually_ sync and return the expected counts. See `/node/sync-status` for information on how in
+or out of sync the node currently is.
+"""
+
+[route.block_height]
+PATH = ["block-height"]
+DOC = """
+The current height of the chain, as observed by this node.
+
+Returns an integer.
+"""
+
+[route.count_transactions]
+PATH = ["transactions/count", "transactions/count/:to", "transactions/count/:from/:to"]
+":from" = "Integer"
+":to" = "Integer"
+DOC = """
+Get the number of transactions in the chain.
+
+If `:from` or `:to` is specified, they restrict the range of blocks considered.
+`transactions/count/:to` will return the number of transactions in all blocks up to and including
+block number `:to`, while `transactions/count/:from/:to` will count the transactions in all blocks
+between `:from` (inclusive) and `:to` (inclusive).
+
+Returns an integer.
+"""
+
+[route.payload_size]
+PATH = ["payloads/size", "payloads/size/:to", "payloads/size/:from/:to", "payloads/total-size"]
+":from" = "Integer"
+":to" = "Integer"
+DOC = """
+Get the size (in bytes) of all payload data in the chain.
+
+If `:from` or `:to` is specified, they restrict the range of blocks considered. `payloads/size/:to`
+will return the cumulative size of all payloads in blocks up to and including block number `:to`,
+while `payloads/size/:from/:to` will return the cumulative size in all blocks between `:from`
+(inclusive) and `:to` (inclusive).
+
+`payloads/total-size` is a deprecated alias for `payloads/size`.
+
+Returns an integer.
+"""
+
+[route.get_vid_share]
+PATH = ["vid/share/:height", "vid/share/hash/:hash", "vid/share/payload-hash/:payload-hash"]
+":height" = "Integer"
+":hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
+DOC = """
+Get information needed to run the VID reconstruction protocol for a block.
+
+Returns this node's VID share, if available.
+"""
+
+[route.sync_status]
+PATH = ["sync-status"]
+DOC = """
+Get the node's progress in syncing with the latest state of the blockchain.
+
+Returns
+```
+{
+    "missing_blocks": integer,
+    "missing_leaves": integer,
+    "missing_vid_common": integer,
+    "missing_vid_shares": integer,
+    "pruned_height": null | integer,
+}
+```
+"""
+
+[route.get_header_window]
+PATH = [
+    "header/window/:start/:end",
+    "header/window/from/:height/:end",
+    "header/window/from/hash/:hash/:end",
+]
+":start" = "Integer"
+":end" = "Integer"
+":height" = "Integer"
+":hash" = "TaggedBase64"
+DOC = """
+Get block headers in a time window.
+
+Returns all available headers, in order, whose timestamps fall between `:start` (inclusive) and
+`:end` (exclusive), or between the block indicated by `:height` or `:hash` (inclusive) and `:end`
+(exclusive). The response also includes one block before the desired window (unless the window
+includes the genesis block) and one block after the window. This proves to the client that the
+server has not omitted any blocks whose timestamps fall within the desired window.
+
+It is possible that not all blocks in the desired window are available when this endpoint is called.
+In that case, whichever blocks are available are included in the response, and `next` is `null` to
+indicate that the response is not complete. The client can then use one of the `/from/` forms of
+this endpoint to fetch the remaining blocks from where the first response left off, once they become
+available. If no blocks are available, not even `prev`, this endpoint will return an error.
+
+It is also possible that the number of blocks returned may be restricted by an implementation-
+defined limit (see `/limits`), even if subsequent blocks within the window are currently available.
+In this case, `next` will be `null` and the client should call again using one of the `/from/` forms
+to get the next page of results, exactly as in the case where some blocks in the window have yet to
+be produced.
+
+Returns
+
+```json
+{
+    "window": ["Header"],
+    "prev": "Header", // nullable
+    "next": "Header"  // nullable
+}
+```
+
+All timestamps are denominated in an integer number of seconds.
+"""
+
+[route.get_limits]
+PATH = ["limits"]
+DOC = """
+Get implementation-defined limits restricting certain requests.
+
+* `window_limit`: the maximum number of headers which can be loaded in a single `header/window`
+  query.
+
+Returns
+```
+{
+    "window_limit": integer
+}
+```
+"""

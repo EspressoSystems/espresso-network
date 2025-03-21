@@ -33,7 +33,7 @@ impl Scheme {
             Self::All => {
                 Self::Bls.gen(seed, index, env_file)?;
                 Self::Schnorr.gen(seed, index, env_file)?;
-            }
+            },
             Self::Bls => {
                 let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed(seed, index);
                 let priv_key = priv_key.to_tagged_base64()?;
@@ -43,7 +43,7 @@ impl Scheme {
                     "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={priv_key}"
                 )?;
                 tracing::info!(%pub_key, "generated staking key")
-            }
+            },
             Self::Schnorr => {
                 let key_pair = StateKeyPair::generate_from_seed_indexed(seed, index);
                 let priv_key = key_pair.sign_key_ref().to_tagged_base64()?;
@@ -54,7 +54,7 @@ impl Scheme {
                 )?;
                 writeln!(env_file, "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={priv_key}")?;
                 tracing::info!(pub_key = %key_pair.ver_key(), "generated state key");
-            }
+            },
         }
         Ok(())
     }

@@ -1,11 +1,15 @@
+use std::collections::{HashSet, VecDeque};
+
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     get_l1_deposits,
+    v0_1::{RewardAccount, RewardMerkleTree},
     v0_99::{ChainConfig, IterableFeeInfo},
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf, Leaf2, NodeState, ValidatedState,
+    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
+use ethers_conv::ToEthers;
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
     availability::LeafId,
@@ -21,16 +25,17 @@ use hotshot_query_service::{
     Resolvable,
 };
 use hotshot_types::{
-    data::{QuorumProposal, ViewNumber},
+    data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
     traits::node_implementation::ConsensusTime,
+    utils::epoch_from_block_number,
+    vote::HasViewNumber,
 };
 use jf_merkle_tree::{
     prelude::MerkleNode, ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme,
     LookupResult, MerkleTreeScheme,
 };
 use sqlx::{Encode, Type};
-use std::collections::{HashSet, VecDeque};
 
 use super::{
     data_source::{Provider, SequencerDataSource},
@@ -65,6 +70,11 @@ impl SequencerDataSource for DataSource {
             builder = builder.with_rate_limit(limit);
         }
 
+        if opt.lightweight {
+            tracing::warn!("enabling light weight mode..");
+            builder = builder.leaf_only();
+        }
+
         if let Some(delay) = active_fetch_delay {
             builder = builder.with_active_fetch_delay(delay);
         }
@@ -77,6 +87,45 @@ impl SequencerDataSource for DataSource {
 }
 
 impl CatchupStorage for SqlStorage {
+    async fn get_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<(RewardMerkleTree, Leaf2)> {
+        let mut tx = self.read().await.context(format!(
+            "opening transaction to fetch reward account {accounts:?}; height {height}"
+        ))?;
+
+        let block_height = NodeStorage::<SeqTypes>::block_height(&mut tx)
+            .await
+            .context("getting block height")? as u64;
+        ensure!(
+            block_height > 0,
+            "cannot get accounts for height {height}: no blocks available"
+        );
+
+        // Check if we have the desired state snapshot. If so, we can load the desired accounts
+        // directly.
+        if height < block_height {
+            load_reward_accounts(&mut tx, height, accounts).await
+        } else {
+            // If we do not have the exact snapshot we need, we can try going back to the last
+            // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
+            let (state, leaf) = reconstruct_state(
+                instance,
+                &mut tx,
+                block_height - 1,
+                view,
+                None,
+                Some(accounts),
+            )
+            .await?;
+            Ok((state.reward_merkle_tree, leaf))
+        }
+    }
+
     async fn get_accounts(
         &self,
         instance: &NodeState,
@@ -103,8 +152,15 @@ impl CatchupStorage for SqlStorage {
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, leaf) =
-                reconstruct_state(instance, &mut tx, block_height - 1, view, accounts).await?;
+            let (state, leaf) = reconstruct_state(
+                instance,
+                &mut tx,
+                block_height - 1,
+                view,
+                Some(accounts),
+                None,
+            )
+            .await?;
             Ok((state.fee_merkle_tree, leaf))
         }
     }
@@ -135,12 +191,12 @@ impl CatchupStorage for SqlStorage {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
             let (state, _) =
-                reconstruct_state(instance, &mut tx, block_height - 1, view, &[]).await?;
+                reconstruct_state(instance, &mut tx, block_height - 1, view, None, None).await?;
             match state.block_merkle_tree.lookup(height - 1) {
                 LookupResult::Ok(_, proof) => Ok(proof),
                 _ => {
                     bail!("state snapshot {view:?},{height} was found but does not contain frontier at height {}; this should not be possible", height - 1);
-                }
+                },
             }
         }
     }
@@ -154,6 +210,59 @@ impl CatchupStorage for SqlStorage {
         ))?;
         load_chain_config(&mut tx, commitment).await
     }
+
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        let mut tx = self
+            .read()
+            .await
+            .context(format!("opening transaction to fetch leaf at {height}"))?;
+        let leaf = tx
+            .get_leaf((height as usize).into())
+            .await
+            .context(format!("leaf {height} not available"))?;
+        let mut last_leaf: Leaf2 = leaf.leaf().clone();
+        let mut chain = vec![last_leaf.clone()];
+        let mut h = height + 1;
+
+        let mut found = false;
+        while !found {
+            for leaf in tx.get_leaves(h).await? {
+                let leaf = leaf.leaf();
+
+                if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                    chain.push(leaf.clone());
+                } else {
+                    h += 1;
+                    continue;
+                }
+
+                // just one away from deciding
+                if leaf.view_number() == last_leaf.view_number() + 1 {
+                    last_leaf = leaf.clone();
+                    h += 1;
+                    found = true;
+                    break;
+                }
+                h += 1;
+                last_leaf = leaf.clone();
+            }
+        }
+
+        found = false;
+        while !found {
+            for leaf in tx.get_leaves(h).await? {
+                let leaf = leaf.leaf();
+                if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                    chain.push(leaf.clone());
+                    found = true;
+                    break;
+                }
+                h += 1;
+            }
+        }
+
+        Ok(chain)
+    }
 }
 
 impl CatchupStorage for DataSource {
@@ -166,6 +275,18 @@ impl CatchupStorage for DataSource {
     ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
         self.as_ref()
             .get_accounts(instance, height, view, accounts)
+            .await
+    }
+
+    async fn get_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<(RewardMerkleTree, Leaf2)> {
+        self.as_ref()
+            .get_reward_accounts(instance, height, view, accounts)
             .await
     }
 
@@ -184,6 +305,9 @@ impl CatchupStorage for DataSource {
     ) -> anyhow::Result<ChainConfig> {
         self.as_ref().get_chain_config(commitment).await
     }
+    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        self.as_ref().get_leaf_chain(height).await
+    }
 }
 
 #[async_trait]
@@ -198,7 +322,6 @@ impl ChainConfigPersistence for Transaction<Write> {
             [(commitment.to_string(), data)],
         )
         .await
-        .map_err(Into::into)
     }
 }
 
@@ -208,10 +331,60 @@ async fn load_frontier<Mode: TransactionMode>(
 ) -> anyhow::Result<BlocksFrontier> {
     tx.get_path(
         Snapshot::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::Index(height),
-        height - 1,
+        height
+            .checked_sub(1)
+            .ok_or(anyhow::anyhow!("Subtract with overflow ({height})!"))?,
     )
     .await
     .context(format!("fetching frontier at height {height}"))
+}
+
+async fn load_reward_accounts<Mode: TransactionMode>(
+    tx: &mut Transaction<Mode>,
+    height: u64,
+    accounts: &[RewardAccount],
+) -> anyhow::Result<(RewardMerkleTree, Leaf2)> {
+    let leaf = tx
+        .get_leaf(LeafId::<SeqTypes>::from(height as usize))
+        .await
+        .context(format!("leaf {height} not available"))?;
+    let header = leaf.header();
+
+    let Some(merkle_root) = header.reward_merkle_tree_root() else {
+        bail!("reward merkle tree root not available");
+    };
+
+    let mut snapshot = RewardMerkleTree::from_commitment(merkle_root);
+    for account in accounts {
+        let proof = tx
+            .get_path(
+                Snapshot::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::Index(
+                    header.height(),
+                ),
+                *account,
+            )
+            .await
+            .context(format!(
+                "fetching reward account {account}; height {}",
+                header.height()
+            ))?;
+        match proof.proof.first().context(format!(
+            "empty proof for reward account {account}; height {}",
+            header.height()
+        ))? {
+            MerkleNode::Leaf { pos, elem, .. } => {
+                snapshot.remember(*pos, *elem, proof)?;
+            },
+            MerkleNode::Empty => {
+                snapshot.non_membership_remember(*account, proof)?;
+            },
+            _ => {
+                bail!("Invalid proof");
+            },
+        }
+    }
+
+    Ok((snapshot, leaf.leaf().clone()))
 }
 
 async fn load_accounts<Mode: TransactionMode>(
@@ -245,17 +418,17 @@ async fn load_accounts<Mode: TransactionMode>(
         ))? {
             MerkleNode::Leaf { pos, elem, .. } => {
                 snapshot.remember(*pos, *elem, proof)?;
-            }
+            },
             MerkleNode::Empty => {
                 snapshot.non_membership_remember(*account, proof)?;
-            }
+            },
             _ => {
                 bail!("Invalid proof");
-            }
+            },
         }
     }
 
-    Ok((snapshot, leaf.leaf().clone().into()))
+    Ok((snapshot, leaf.leaf().clone()))
 }
 
 async fn load_chain_config<Mode: TransactionMode>(
@@ -277,14 +450,15 @@ async fn reconstruct_state<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     from_height: u64,
     to_view: ViewNumber,
-    accounts: &[FeeAccount],
+    fee_accounts: Option<&[FeeAccount]>,
+    reward_accounts: Option<&[RewardAccount]>,
 ) -> anyhow::Result<(ValidatedState, Leaf2)> {
     tracing::info!("attempting to reconstruct fee state");
     let from_leaf = tx
         .get_leaf((from_height as usize).into())
         .await
         .context(format!("leaf {from_height} not available"))?;
-    let from_leaf: Leaf2 = from_leaf.leaf().clone().into();
+    let from_leaf: Leaf2 = from_leaf.leaf().clone();
     ensure!(
         from_leaf.view_number() < to_view,
         "state reconstruction: starting state {:?} must be before ending state {to_view:?}",
@@ -318,20 +492,51 @@ async fn reconstruct_state<Mode: TransactionMode>(
 
     // Pre-load the state with the accounts we care about to ensure they will be present in the
     // final state.
-    let mut accounts = accounts.iter().copied().collect::<HashSet<_>>();
-    // Add in all the accounts we will need to replay any of the headers, to ensure that we don't
-    // need to do catchup recursively.
-    let (catchup, dependencies) = header_dependencies(tx, instance, &parent, &leaves).await?;
-    accounts.extend(dependencies);
-    let accounts = accounts.into_iter().collect::<Vec<_>>();
-    state.fee_merkle_tree = load_accounts(tx, from_height, &accounts)
-        .await
-        .context("unable to reconstruct state because accounts are not available at origin")?
-        .0;
-    ensure!(
-        state.fee_merkle_tree.commitment() == parent.block_header().fee_merkle_tree_root(),
-        "loaded fee state does not match parent header"
-    );
+    let mut catchup = NullStateCatchup::default();
+    if let Some(accounts) = fee_accounts {
+        let mut accounts = accounts.iter().copied().collect::<HashSet<_>>();
+        // Add in all the accounts we will need to replay any of the headers, to ensure that we don't
+        // need to do catchup recursively.
+        let dependencies =
+            fee_header_dependencies(&mut catchup, tx, instance, &parent, &leaves).await?;
+        accounts.extend(dependencies);
+        let accounts = accounts.into_iter().collect::<Vec<_>>();
+        state.fee_merkle_tree = load_accounts(tx, from_height, &accounts)
+            .await
+            .context("unable to reconstruct state because accounts are not available at origin")?
+            .0;
+        ensure!(
+            state.fee_merkle_tree.commitment() == parent.block_header().fee_merkle_tree_root(),
+            "loaded fee state does not match parent header"
+        );
+    }
+
+    if let Some(accounts) = reward_accounts {
+        // TODO: don't think this is needed?
+        // What if we are reconstructing a state from the leaf which is on pre-epoch version?
+        // that is okie?
+        // if parent.block_header().reward_merkle_tree_root().is_none() {
+        //     bail!("reward merkle tree root not set");
+        // }
+
+        let mut accounts = accounts.iter().copied().collect::<HashSet<_>>();
+
+        let dependencies =
+            reward_header_dependencies(&mut catchup, tx, instance, &parent, &leaves).await?;
+        accounts.extend(dependencies);
+        let accounts = accounts.into_iter().collect::<Vec<_>>();
+        state.reward_merkle_tree = load_reward_accounts(tx, from_height, &accounts)
+            .await
+            .context(
+                "unable to reconstruct state because reward accounts are not available at origin",
+            )?
+            .0;
+        ensure!(
+            Some(state.reward_merkle_tree.commitment())
+                == parent.block_header().reward_merkle_tree_root(),
+            "loaded reward state does not match parent header"
+        );
+    }
 
     // We need the blocks frontier as well, to apply the STF.
     let frontier = load_frontier(tx, from_height)
@@ -371,13 +576,13 @@ async fn reconstruct_state<Mode: TransactionMode>(
 /// * A state catchup implementation seeded with all the chain configs required to apply the headers
 ///   in `leaves`
 /// * The set of accounts that must be preloaded to apply these headers
-async fn header_dependencies<Mode: TransactionMode>(
+async fn fee_header_dependencies<Mode: TransactionMode>(
+    catchup: &mut NullStateCatchup,
     tx: &mut Transaction<Mode>,
     instance: &NodeState,
     mut parent: &Leaf2,
     leaves: impl IntoIterator<Item = &Leaf2>,
-) -> anyhow::Result<(NullStateCatchup, HashSet<FeeAccount>)> {
-    let mut catchup = NullStateCatchup::default();
+) -> anyhow::Result<HashSet<FeeAccount>> {
     let mut accounts = HashSet::default();
 
     for proposal in leaves {
@@ -412,7 +617,7 @@ async fn header_dependencies<Mode: TransactionMode>(
                     // so the STF will be able to look it up later.
                     catchup.add_chain_config(cf);
                     cf
-                }
+                },
             }
         };
 
@@ -426,7 +631,84 @@ async fn header_dependencies<Mode: TransactionMode>(
         accounts.extend(header.fee_info().accounts());
         parent = proposal;
     }
-    Ok((catchup, accounts))
+    Ok(accounts)
+}
+
+async fn reward_header_dependencies<Mode: TransactionMode>(
+    catchup: &mut NullStateCatchup,
+    tx: &mut Transaction<Mode>,
+    instance: &NodeState,
+    parent: &Leaf2,
+    leaves: impl IntoIterator<Item = &Leaf2>,
+) -> anyhow::Result<HashSet<RewardAccount>> {
+    let mut reward_accounts = HashSet::default();
+    let epoch_height = instance.epoch_height;
+
+    let Some(epoch_height) = epoch_height else {
+        bail!("epoch height not set");
+    };
+
+    // we apply reward function in each block
+    // however, the stake table can only be changed every epoch
+    // so in order to get all the reward accounts that need to be loaded, we can call membership for every epoch
+    let leaves: Vec<_> = leaves.into_iter().collect();
+
+    if leaves.is_empty() {
+        bail!(format!("no leaves found for parent={parent:?}"));
+    }
+
+    let last_leaf = leaves.last().unwrap();
+
+    let from_epoch = epoch_from_block_number(parent.height(), epoch_height);
+    let to_epoch = epoch_from_block_number(last_leaf.height(), epoch_height);
+
+    let coordinator = instance.coordinator.clone();
+    for epoch in from_epoch..=to_epoch {
+        let epoch_membership = coordinator
+            .membership_for_epoch(Some(EpochNumber::new(epoch)))
+            .await?;
+        let membership = epoch_membership.coordinator.membership().read().await;
+        let validators = membership.validators(&EpochNumber::new(epoch))?;
+
+        for (validator, config) in validators {
+            let delegators: Vec<RewardAccount> = config
+                .delegators
+                .keys()
+                .map(|d| RewardAccount(d.to_ethers()))
+                .collect();
+            reward_accounts.insert(RewardAccount(validator.to_ethers()));
+            reward_accounts.extend(delegators);
+        }
+    }
+
+    // add all the chain configs needed to apply STF to headers to the catchup
+    for proposal in leaves {
+        let header = proposal.block_header();
+        let height = header.height();
+        let view = proposal.view_number();
+        tracing::debug!(height, ?view, "fetching dependencies for proposal");
+
+        let header_cf = header.chain_config();
+        if header_cf.commit() != instance.chain_config.commit() && header_cf.resolve().is_none() {
+            tracing::info!(
+                height,
+                ?view,
+                commit = %header_cf.commit(),
+                "chain config not available, attempting to load from storage",
+            );
+            let cf = load_chain_config(tx, header_cf.commit())
+                .await
+                .context(format!(
+                    "loading chain config {} for header {},{:?}",
+                    header_cf.commit(),
+                    header.height(),
+                    proposal.view_number()
+                ))?;
+
+            catchup.add_chain_config(cf);
+        };
+    }
+    Ok(reward_accounts)
 }
 
 async fn get_leaf_from_proposal<Mode, P>(
@@ -438,13 +720,14 @@ where
     P: Type<Db> + for<'q> Encode<'q, Db>,
 {
     let (data,) = query_as::<(Vec<u8>,)>(&format!(
-        "SELECT data FROM quorum_proposals WHERE {where_clause} LIMIT 1",
+        "SELECT data FROM quorum_proposals2 WHERE {where_clause} LIMIT 1",
     ))
     .bind(param)
     .fetch_one(tx.as_mut())
     .await?;
-    let proposal: Proposal<SeqTypes, QuorumProposal<SeqTypes>> = bincode::deserialize(&data)?;
-    Ok(Leaf::from_quorum_proposal(&proposal.data).into())
+    let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
+        bincode::deserialize(&data)?;
+    Ok(Leaf2::from_quorum_proposal(&proposal.data))
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -488,6 +771,15 @@ mod impl_testable_data_source {
 
         fn persistence_options(storage: &Self::Storage) -> Self::Options {
             tmp_options(storage)
+        }
+
+        fn leaf_only_ds_options(
+            storage: &Self::Storage,
+            opt: api::Options,
+        ) -> anyhow::Result<api::Options> {
+            let mut ds_opts = tmp_options(storage);
+            ds_opts.lightweight = true;
+            Ok(opt.query_sql(Default::default(), ds_opts))
         }
 
         fn options(storage: &Self::Storage, opt: api::Options) -> api::Options {

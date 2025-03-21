@@ -14,18 +14,21 @@ ark-ff = { workspace = true }
 ark-poly = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
-contract-bindings = { path = "../../../contract-bindings" }
-derive_more = { workspace = true }
-diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git" }
+contract-bindings-alloy = { workspace = true }
+contract-bindings-ethers = { path = "../../../contract-bindings-ethers" }
+diff-test-bn254 = { workspace = true }
 ethers = { version = "2.0.4" }
+ethers-conv = { workspace = true }
 hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
 jf-utils = { workspace = true }
-libp2p = { workspace = true, features = ["serde"] }
 num-bigint = { version = "0.4", default-features = false }
 num-traits = { version = "0.2", default-features = false }
 serde = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
 
 [[bin]]
 name = "eval-domain"

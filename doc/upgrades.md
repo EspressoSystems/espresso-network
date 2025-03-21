@@ -71,7 +71,7 @@ Time based:
 
 - **start_voting_time:** UNIX timestamp at which voting for the upgrade proposal starts.
 - **stop_voting_time:** UNIX timestamp at which voting for the upgrade proposal stops.
-- **start_proposing_time:** the earliest UNIX timestamnp in which the node can propose an upgrade.
+- **start_proposing_time:** the earliest UNIX timestamp in which the node can propose an upgrade.
 - **stop_proposing_time:** UNIX timestamp after which the node stops proposing an upgrade.
 
 The window between `start_proposing_view/time` and `stop_proposing_view/time` should provide sufficient time for nodes

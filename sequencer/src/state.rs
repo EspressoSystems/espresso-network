@@ -1,17 +1,18 @@
 use core::fmt::Debug;
-use std::{sync::Arc, time::Duration};
+use std::{cmp::max, sync::Arc, time::Duration};
 
 use anyhow::{bail, ensure, Context};
 use espresso_types::{
-    traits::StateCatchup, v0_99::ChainConfig, BlockMerkleTree, Delta, FeeAccount, FeeMerkleTree,
-    Leaf2, ValidatedState,
+    traits::StateCatchup,
+    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_99::ChainConfig,
+    BlockMerkleTree, Delta, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
-use futures::future::Future;
-use futures::StreamExt;
+use futures::{future::Future, StreamExt};
 use hotshot::traits::ValidatedState as HotShotState;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, LeafQueryData},
-    data_source::{Transaction, VersionedDataSource},
+    data_source::{storage::pruning::PrunedHeightDataSource, Transaction, VersionedDataSource},
     merklized_state::{MerklizedStateHeightPersistence, UpdateStateData},
     status::StatusDataSource,
     types::HeightIndexed,
@@ -55,6 +56,15 @@ pub(crate) async fn compute_state_update(
         parent_header.fee_merkle_tree_root()
     );
 
+    if let Some(reward_root) = parent_header.reward_merkle_tree_root() {
+        ensure!(
+            state.reward_merkle_tree.commitment() == reward_root,
+            "internal error! in-memory reward tree {:?} does not match parent header {:?}",
+            state.reward_merkle_tree.commitment(),
+            reward_root
+        );
+    }
+
     state
         .apply_header(instance, peers, parent_leaf, header, header.version())
         .await
@@ -69,9 +79,13 @@ async fn store_state_update(
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
+        reward_merkle_tree,
         ..
     } = state;
-    let Delta { fees_delta } = delta;
+    let Delta {
+        fees_delta,
+        rewards_delta,
+    } = delta;
 
     // Insert fee merkle tree nodes
     for delta in fees_delta {
@@ -87,7 +101,7 @@ async fn store_state_update(
             );
 
         tracing::debug!(%delta, "inserting fee account");
-        UpdateStateData::<SeqTypes, _, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
             path,
@@ -109,7 +123,7 @@ async fn store_state_update(
 
     {
         tracing::debug!("inserting blocks frontier");
-        UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::insert_merkle_nodes(
+        UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
             path,
@@ -126,6 +140,29 @@ async fn store_state_update(
     )
     .await
     .context("setting state height")?;
+
+    for delta in rewards_delta {
+        let proof = match reward_merkle_tree.universal_lookup(delta) {
+            LookupResult::Ok(_, proof) => proof,
+            LookupResult::NotFound(proof) => proof,
+            LookupResult::NotInMemory => bail!("missing merkle path for reward account {delta}"),
+        };
+        let path: Vec<usize> =
+            <RewardAccount as ToTraversalPath<{ RewardMerkleTree::ARITY }>>::to_traversal_path(
+                &delta,
+                reward_merkle_tree.height(),
+            );
+
+        tracing::debug!(%delta, "inserting fee account");
+        UpdateStateData::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::insert_merkle_nodes(
+            tx,
+            proof,
+            path,
+            block_number,
+        )
+        .await
+        .context("failed to store fee merkle nodes")?;
+    }
     Ok(())
 }
 
@@ -155,8 +192,8 @@ where
         parent_state,
         instance,
         peers,
-        &parent_leaf.leaf().clone().into(),
-        &proposed_leaf.leaf().clone().into(),
+        &parent_leaf.leaf().clone(),
+        &proposed_leaf.leaf().clone(),
     )
     .await
     .context("computing state update")?;
@@ -208,7 +245,7 @@ where
                 state.fee_merkle_tree.height(),
             );
 
-        UpdateStateData::<SeqTypes, _, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
             &mut tx, proof, path, 0,
         )
         .await
@@ -236,6 +273,18 @@ where
     // get last saved merklized state
     let (last_height, parent_leaf, mut leaves) = {
         let last_height = storage.get_last_state_height().await?;
+        let pruned_height = storage.load_pruned_height().await?;
+
+        let height = match pruned_height {
+            // If `last_height > pruned_height`, start from `last_height`
+            // as it represents the latest state in storage.
+            // If `pruned_height > last_height`, start from `pruned_height`
+            // as data below this height is no longer needed and will be pruned again during the next pruner run.
+            Some(pruned_height) => max(last_height, pruned_height as usize + 1),
+            // if we have not pruned any data then just start from last_height
+            None => last_height,
+        };
+
         let current_height = storage.block_height().await?;
         tracing::info!(
             node_id = instance.node_id,
@@ -244,8 +293,8 @@ where
             "updating state storage"
         );
 
-        let parent_leaf = storage.get_leaf(last_height).await;
-        let leaves = storage.subscribe_leaves(last_height + 1).await;
+        let parent_leaf = storage.get_leaf(height).await;
+        let leaves = storage.subscribe_leaves(height + 1).await;
         (last_height, parent_leaf, leaves)
     };
     // resolve the parent leaf future _after_ dropping our lock on the state, in case it is not
@@ -288,12 +337,12 @@ where
                     parent_leaf = leaf;
                     parent_state = state;
                     break;
-                }
+                },
                 Err(err) => {
                     tracing::error!(height = leaf.height(), "failed to updated state: {err:#}");
                     // If we fail, delay for a second and retry.
                     sleep(Duration::from_secs(1)).await;
-                }
+                },
             }
         }
     }
@@ -308,6 +357,7 @@ pub(crate) trait SequencerStateDataSource:
     + StatusDataSource
     + VersionedDataSource
     + CatchupStorage
+    + PrunedHeightDataSource
     + MerklizedStateHeightPersistence
 {
 }
@@ -319,6 +369,7 @@ impl<T> SequencerStateDataSource for T where
         + StatusDataSource
         + VersionedDataSource
         + CatchupStorage
+        + PrunedHeightDataSource
         + MerklizedStateHeightPersistence
 {
 }
@@ -327,6 +378,7 @@ pub(crate) trait SequencerStateUpdate:
     Transaction
     + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
     + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+    + UpdateStateData<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
     + ChainConfigPersistence
 {
 }
@@ -335,6 +387,7 @@ impl<T> SequencerStateUpdate for T where
     T: Transaction
         + UpdateStateData<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
         + UpdateStateData<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + UpdateStateData<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
         + ChainConfigPersistence
 {
 }

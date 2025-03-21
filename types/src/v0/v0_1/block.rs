@@ -5,7 +5,7 @@ use derive_more::Display;
 use std::ops::Range;
 use thiserror::Error;
 
-use hotshot_types::vid::{LargeRangeProofType, SmallRangeProofType};
+use hotshot_types::vid::advz::{LargeRangeProofType, SmallRangeProofType};
 
 use std::default::Default;
 

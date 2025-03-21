@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use hotshot::traits::BlockPayload;
 use hotshot_query_service::availability::QueryablePayload;
-use hotshot_types::{traits::EncodeBytes, vid::vid_scheme};
+use hotshot_types::{data::VidCommitment, traits::EncodeBytes, vid::advz::advz_scheme};
 use jf_vid::VidScheme;
 use rand::RngCore;
 use sequencer_utils::test_utils::setup_test;
@@ -24,7 +24,7 @@ async fn basic_correctness() {
     let mut rng = jf_utils::test_rng();
     let valid_tests = ValidTest::many_from_tx_lengths(test_cases, &mut rng);
 
-    let mut vid = vid_scheme(10);
+    let mut vid = advz_scheme(10);
 
     for mut test in valid_tests {
         let mut all_txs = test.all_txs();
@@ -75,6 +75,8 @@ async fn basic_correctness() {
             all_txs.is_empty(),
             "not all test txs consumed by block.iter"
         );
+
+        let vid_commit = VidCommitment::V0(vid_commit);
 
         // test iterate over all namespaces
         for ns_index in block.ns_table().iter() {

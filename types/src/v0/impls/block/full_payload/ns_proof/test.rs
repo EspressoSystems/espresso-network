@@ -1,9 +1,9 @@
 use futures::future;
-use hotshot::helpers::initialize_logging;
-use hotshot::traits::BlockPayload;
+use hotshot::{helpers::initialize_logging, traits::BlockPayload};
 use hotshot_types::{
+    data::VidCommitment,
     traits::EncodeBytes,
-    vid::{vid_scheme, VidSchemeType},
+    vid::advz::{advz_scheme, ADVZScheme},
 };
 use jf_vid::{VidDisperse, VidScheme};
 
@@ -30,7 +30,7 @@ async fn ns_proof() {
 
     struct BlockInfo {
         block: Payload,
-        vid: VidDisperse<VidSchemeType>,
+        vid: VidDisperse<ADVZScheme>,
         ns_proofs: Vec<NsProof>,
     }
 
@@ -46,7 +46,7 @@ async fn ns_proof() {
         }))
         .await;
 
-        let mut vid = vid_scheme(10);
+        let mut vid = advz_scheme(10);
         blocks_only
             .into_iter()
             .map(|block| {
@@ -84,7 +84,11 @@ async fn ns_proof() {
 
             // verify ns_proof
             let (ns_proof_txs, ns_proof_ns_id) = ns_proof
-                .verify(block.ns_table(), &vid.commit, &vid.common)
+                .verify(
+                    block.ns_table(),
+                    &VidCommitment::V0(vid.commit),
+                    &vid.common,
+                )
                 .unwrap_or_else(|| panic!("namespace {} proof verification failure", ns_id));
 
             assert_eq!(ns_proof_ns_id, ns_id);
@@ -97,8 +101,8 @@ async fn ns_proof() {
     let ns_proof_0_0 = &blocks[0].ns_proofs[0];
     let ns_table_0 = blocks[0].block.ns_table();
     let ns_table_1 = blocks[1].block.ns_table();
-    let vid_commit_0 = &blocks[0].vid.commit;
-    let vid_commit_1 = &blocks[1].vid.commit;
+    let vid_commit_0 = &VidCommitment::V0(blocks[0].vid.commit);
+    let vid_commit_1 = &VidCommitment::V0(blocks[1].vid.commit);
     let vid_common_0 = &blocks[0].vid.common;
     let vid_common_1 = &blocks[1].vid.common;
 

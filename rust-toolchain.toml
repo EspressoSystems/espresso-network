@@ -1,4 +1,4 @@
 [toolchain]
 channel = "stable"
-components = ["rustfmt", "llvm-tools-preview", "rust-src", "clippy"]
+components = ["llvm-tools-preview", "rust-src", "clippy"]
 profile = "minimal"

@@ -6,8 +6,13 @@ name = "sequencer-sqlite"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["embedded-db"]
+sqlite-unbundled = ["sequencer/sqlite-unbundled"]
+embedded-db = ["sequencer/embedded-db"]
+
 [dependencies]
-sequencer = { path = "../sequencer" , features = ["embedded-db"] }
+sequencer = { path = "../sequencer" }
 tokio = { version = "1", default-features = false, features = [
 	"rt-multi-thread",
 	"macros",
@@ -26,8 +31,4 @@ strip = true
 [profile.test]
 opt-level = 1
 [profile.test.package.hotshot-state-prover]
-opt-level = 3
-[profile.test.package.gen-vk-contract]
-opt-level = 3
-[profile.test.package.diff-test-hotshot]
 opt-level = 3

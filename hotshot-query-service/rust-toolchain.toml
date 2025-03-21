@@ -1,0 +1,9 @@
+[toolchain]
+# TODO: Compilation of jf-pcs with rust 1.84 takes a very long time, while this
+# is being fixed we use rust 1.83. See
+# https://github.com/rust-lang/rust/issues/135457 for upstream issue.
+#
+# channel = "stable"
+channel = "1.83"
+components = ["rustfmt", "llvm-tools-preview", "rust-src", "clippy"]
+profile = "minimal"

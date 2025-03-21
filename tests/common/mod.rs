@@ -1,11 +1,21 @@
-use anyhow::{anyhow, Result};
+use std::{
+    fmt,
+    fs::File,
+    io::{stderr, stdout},
+    path::PathBuf,
+    process::{Child, Command},
+    str::FromStr,
+    time::Duration,
+};
+
+use anyhow::{anyhow, Context, Result};
 use client::SequencerClient;
-use espresso_types::FeeAmount;
+use espresso_types::{FeeAmount, FeeVersion, MarketplaceVersion};
 use ethers::prelude::*;
 use futures::future::join_all;
-use std::{fmt, str::FromStr, time::Duration};
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
+use vbs::version::StaticVersionType;
 
 const L1_PROVIDER_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 // TODO add to .env
@@ -81,10 +91,10 @@ impl TestConfig {
         // which is the initial mainnet version without any upgrades.
         let sequencer_version: u8 = dotenvy::var("INTEGRATION_TEST_SEQUENCER_VERSION")
             .map(|v| v.parse().unwrap())
-            .unwrap_or(2);
+            .unwrap_or(FeeVersion::version().minor as u8);
 
         // Varies between v0 and v3.
-        let load_generator_url = if sequencer_version >= 3 {
+        let load_generator_url = if sequencer_version >= MarketplaceVersion::version().minor as u8 {
             url_from_port(dotenvy::var(
                 "ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_RESERVE_PORT",
             )?)?
@@ -93,17 +103,18 @@ impl TestConfig {
         };
 
         // TODO test both builders (probably requires some refactoring).
-        let builder_url = if sequencer_version >= 3 {
+        let builder_url = if sequencer_version as u16 >= MarketplaceVersion::version().minor {
             let url = url_from_port(dotenvy::var("ESPRESSO_RESERVE_BUILDER_SERVER_PORT")?)?;
+            let url = Url::from_str(&url)?;
+            wait_for_service(url.clone(), 1000, 200).await.unwrap();
 
-            Url::from_str(&url)?
-                .join("bundle_info/builderaddress")
-                .unwrap()
+            url.join("bundle_info/builderaddress").unwrap()
         } else {
             let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
-            Url::from_str(&url)?
-                .join("block_info/builderaddress")
-                .unwrap()
+            let url = Url::from_str(&url)?;
+            wait_for_service(url.clone(), 1000, 200).await.unwrap();
+
+            url.join("block_info/builderaddress").unwrap()
         };
 
         let builder_address = get_builder_address(builder_url).await;
@@ -222,9 +233,8 @@ impl TestConfig {
     }
 }
 
-/// Get Address from builder after waiting for builder to become ready.
+/// Get Address from builder
 pub async fn get_builder_address(url: Url) -> Address {
-    let _ = wait_for_service(url.clone(), 1000, 200).await;
     for _ in 0..5 {
         // Try to get builder address somehow
         if let Ok(body) = reqwest::get(url.clone()).await {
@@ -236,22 +246,117 @@ pub async fn get_builder_address(url: Url) -> Address {
     panic!("Error: Failed to retrieve address from builder!");
 }
 
+/// [wait_for_service] will check to see if a service, identified by the given
+/// Url, is available, by checking it's health check endpoint.  If the health
+/// check does not any time before the timeout, then the service will return
+/// an [Err] with the relevant error.
+///
+/// > Note: This function only waits for a single health check pass before
+/// > returning an [Ok] result.
 async fn wait_for_service(url: Url, interval: u64, timeout_duration: u64) -> Result<String> {
+    // utilize the correct path for the health check
+    let Ok(url) = url.join("/healthcheck") else {
+        return Err(anyhow!("Wait for service, could not join url: {}", url));
+    };
+
     timeout(Duration::from_secs(timeout_duration), async {
         loop {
-            if let Ok(body) = reqwest::get(format!("{url}/healthcheck")).await {
-                return body.text().await.map_err(|e| {
-                    anyhow!(
-                        "Wait for service, could not decode response: ({}) {}",
-                        url,
-                        e
-                    )
-                });
-            } else {
+            // Ensure that we get a response from the server
+            let Ok(response) = reqwest::get(url.clone()).await else {
                 sleep(Duration::from_millis(interval)).await;
+                continue;
+            };
+
+            // Check the status code of the response
+            if !response.status().is_success() {
+                // The server did not return a success
+                sleep(Duration::from_millis(interval)).await;
+                continue;
             }
+
+            return response.text().await.map_err(|e| {
+                anyhow!(
+                    "Wait for service, could not decode response: ({}) {}",
+                    url,
+                    e
+                )
+            });
         }
     })
     .await
     .map_err(|e| anyhow!("Wait for service, timeout: ({}) {}", url, e))?
+}
+
+pub struct NativeDemo {
+    _child: Child,
+}
+
+impl Drop for NativeDemo {
+    fn drop(&mut self) {
+        // It would be preferable to send a SIGINT or similar to the process that we started
+        // originally but despite quite some effort this never worked for the process-compose
+        // process started from within the scripts/demo-native script.
+        //
+        // Using `process-compose down` seems to pretty reliably stop the process-compose process
+        // and all the services it started.
+        println!("Terminating process compose");
+        let res = Command::new("process-compose")
+            .arg("down")
+            .stdout(stdout())
+            .stderr(stderr())
+            .spawn()
+            .expect("process-compose runs")
+            .wait()
+            .unwrap();
+        println!("process-compose down exited with: {}", res);
+    }
+}
+
+impl NativeDemo {
+    pub(crate) fn run(process_compose_extra_args: Option<String>) -> anyhow::Result<Self> {
+        // Because we use nextest with the archive feature on CI we need to use the **runtime**
+        // value of CARGO_MANIFEST_DIR.
+        let crate_dir = PathBuf::from(
+            std::env::var("CARGO_MANIFEST_DIR")
+                .expect("CARGO_MANIFEST_DIR is set")
+                .clone(),
+        );
+        let workspace_dir = crate_dir.parent().expect("crate_dir has a parent");
+
+        let mut cmd = Command::new("bash");
+        cmd.arg("scripts/demo-native")
+            .current_dir(workspace_dir)
+            .arg("--tui=false");
+
+        if let Some(args) = process_compose_extra_args {
+            cmd.args(args.split(' '));
+        }
+
+        // Save output to file if PC_LOGS if that's set.
+        let log_path = std::env::var("PC_LOGS").unwrap_or_else(|_| {
+            tempfile::NamedTempFile::new()
+                .expect("tempfile creation succeeds")
+                .into_temp_path()
+                .to_string_lossy()
+                .to_string()
+        });
+
+        println!("Writing native demo logs to file: {}", log_path);
+        let outputs = File::create(log_path).context("unable to create log file")?;
+        cmd.stdout(outputs);
+
+        println!("Spawning: {:?}", cmd);
+        let mut child = cmd.spawn().context("failed to spawn command")?;
+
+        // Wait for three seconds and check if process has already exited so we don't waste time
+        // waiting for results later.
+        std::thread::sleep(Duration::from_secs(3));
+        if let Some(exit_code) = child.try_wait()? {
+            return Err(anyhow!("process-compose exited early with: {}", exit_code));
+        }
+
+        println!("process-compose started ...");
+
+        Ok(Self { _child: child })
+    }
 }

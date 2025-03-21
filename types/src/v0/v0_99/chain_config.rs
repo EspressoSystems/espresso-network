@@ -1,4 +1,4 @@
-use crate::{v0_1, BlockSize, ChainId, FeeAccount, FeeAmount};
+use crate::{v0_1, v0_3, BlockSize, ChainId, FeeAccount, FeeAmount};
 use committable::{Commitment, Committable};
 use ethers::types::{Address, U256};
 use itertools::Either;
@@ -30,6 +30,13 @@ pub struct ChainConfig {
     /// contract can decide what to do with tokens locked in this account in Espresso.
     pub fee_recipient: FeeAccount,
 
+    /// `StakeTable `(proxy) contract address on L1.
+    ///
+    /// This is optional so that stake can easily be toggled on/off, with no need to deploy a
+    /// contract when they are off. In a future release, after PoS is switched on and thoroughly
+    /// tested, this may be made mandatory.
+    pub stake_table_contract: Option<Address>,
+
     /// Account that receives sequencing bids.
     pub bid_recipient: Option<FeeAccount>,
 }
@@ -55,6 +62,13 @@ impl Committable for ChainConfig {
             comm.u64_field("fee_contract", 1).fixed_size_bytes(&addr.0)
         } else {
             comm.u64_field("fee_contract", 0)
+        };
+
+        let comm = if let Some(addr) = self.stake_table_contract {
+            comm.u64_field("stake_table_contract", 1)
+                .fixed_size_bytes(&addr.0)
+        } else {
+            comm
         };
 
         // With `ChainConfig` upgrades we want commitments w/out
@@ -133,6 +147,31 @@ impl From<v0_1::ChainConfig> for ChainConfig {
             base_fee,
             fee_contract,
             fee_recipient,
+            stake_table_contract: None,
+            bid_recipient: None,
+        }
+    }
+}
+
+impl From<v0_3::ChainConfig> for ChainConfig {
+    fn from(chain_config: v0_3::ChainConfig) -> ChainConfig {
+        let v0_3::ChainConfig {
+            chain_id,
+            max_block_size,
+            base_fee,
+            fee_contract,
+            fee_recipient,
+            stake_table_contract,
+            ..
+        } = chain_config;
+
+        ChainConfig {
+            chain_id,
+            max_block_size,
+            base_fee,
+            fee_contract,
+            fee_recipient,
+            stake_table_contract,
             bid_recipient: None,
         }
     }
@@ -167,6 +206,7 @@ impl Default for ChainConfig {
             base_fee: 0.into(),
             fee_contract: None,
             fee_recipient: Default::default(),
+            stake_table_contract: None,
             bid_recipient: None,
         }
     }

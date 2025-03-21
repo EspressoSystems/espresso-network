@@ -7,17 +7,20 @@ use std::{
 
 use anyhow::Result;
 use committable::Committable;
-use espresso_types::{FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction};
+use espresso_types::{
+    v0_1::RewardAccount, FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
+};
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
     explorer::{self, ExplorerDataSource},
     merklized_state::{
-        self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence,
+        self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
-    node, ApiState, Error,
+    node,
+    node::NodeDataSource,
+    ApiState, Error, VidCommon,
 };
-use hotshot_query_service::{merklized_state::Snapshot, node::NodeDataSource};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{
@@ -90,6 +93,7 @@ type AvailabilityApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, availabil
 // Snafu has been replaced by `this_error` everywhere.
 // However, the query service still uses snafu
 pub(super) fn availability<N, P, D, V: Versions>(
+    api_ver: semver::Version,
 ) -> Result<AvailabilityApi<N, P, D, V, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
@@ -104,6 +108,7 @@ where
     let mut api = availability::define_api::<AvailState<N, P, D, _>, SeqTypes, _>(
         &options,
         SequencerApiVersion::instance(),
+        api_ver,
     )?;
 
     api.get("getnamespaceproof", move |req, state| {
@@ -132,14 +137,18 @@ where
                         })
                 }
             )?;
-
+            let VidCommon::V0(common) = &common.common().clone() else {
+                return Err(availability::Error::Custom {
+                    message: format!("failed to make proof for namespace {ns_id}"),
+                    status: StatusCode::NOT_FOUND,
+                });
+            };
             if let Some(ns_index) = block.payload().ns_table().find_ns_id(&ns_id) {
-                let proof = NsProof::new(block.payload(), &ns_index, common.common()).context(
-                    CustomSnafu {
+                let proof =
+                    NsProof::new(block.payload(), &ns_index, common).context(CustomSnafu {
                         message: format!("failed to make proof for namespace {ns_id}"),
                         status: StatusCode::NOT_FOUND,
-                    },
-                )?;
+                    })?;
 
                 Ok(NamespaceProofQueryData {
                     transactions: proof.export_all_txs(&ns_id),
@@ -193,15 +202,16 @@ where
         async move {
             // Try to get the epoch from the request. If this fails, error
             // as it was probably a mistake
-            let epoch = EpochNumber::new(req.integer_param("epoch_number").map_err(|_| {
-                hotshot_query_service::node::Error::Custom {
+            let epoch = req
+                .opt_integer_param("epoch_number")
+                .map_err(|_| hotshot_query_service::node::Error::Custom {
                     message: "Epoch number is required".to_string(),
                     status: StatusCode::BAD_REQUEST,
-                }
-            })?);
+                })?
+                .map(EpochNumber::new);
 
             Ok(state
-                .read(|state| state.get_stake_table(Some(epoch)).boxed())
+                .read(|state| state.get_stake_table(epoch).boxed())
                 .await)
         }
         .boxed()
@@ -209,7 +219,7 @@ where
     .at("stake_table_current", |_, state| {
         async move {
             Ok(state
-                .read(|state| state.get_stake_table(None).boxed())
+                .read(|state| state.get_stake_table_current().boxed())
                 .await)
         }
         .boxed()
@@ -349,6 +359,69 @@ where
         }
         .boxed()
     })?
+    .get("reward_account", |req, state| {
+        async move {
+            let height = req
+                .integer_param("height")
+                .map_err(Error::from_request_error)?;
+            let view = req
+                .integer_param("view")
+                .map_err(Error::from_request_error)?;
+            let account = req
+                .string_param("address")
+                .map_err(Error::from_request_error)?;
+            let account = account.parse().map_err(|err| {
+                Error::catch_all(
+                    StatusCode::BAD_REQUEST,
+                    format!("malformed account {account}: {err}"),
+                )
+            })?;
+
+            state
+                .get_reward_account(
+                    state.node_state().await,
+                    height,
+                    ViewNumber::new(view),
+                    account,
+                )
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
+    .at("reward_accounts", |req, state| {
+        async move {
+            let height = req
+                .integer_param("height")
+                .map_err(Error::from_request_error)?;
+            let view = req
+                .integer_param("view")
+                .map_err(Error::from_request_error)?;
+            let accounts = req
+                .body_auto::<Vec<RewardAccount>, ApiVer>(ApiVer::instance())
+                .map_err(Error::from_request_error)?;
+
+            state
+                .read(|state| {
+                    async move {
+                        state
+                            .get_reward_accounts(
+                                state.node_state().await,
+                                height,
+                                ViewNumber::new(view),
+                                &accounts,
+                            )
+                            .await
+                            .map_err(|err| {
+                                Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}"))
+                            })
+                    }
+                    .boxed()
+                })
+                .await
+        }
+        .boxed()
+    })?
     .get("blocks", |req, state| {
         async move {
             let height = req
@@ -373,6 +446,18 @@ where
 
             state
                 .get_chain_config(commitment)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
+        }
+        .boxed()
+    })?
+    .get("leafchain", |req, state| {
+        async move {
+            let height = req
+                .integer_param("height")
+                .map_err(Error::from_request_error)?;
+            state
+                .get_leaf_chain(height)
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }

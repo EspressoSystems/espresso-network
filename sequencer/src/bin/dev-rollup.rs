@@ -10,7 +10,6 @@ use espresso_types::{
 use hotshot::types::BLSPubKey;
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
 use marketplace_solver::{SolverError, SOLVER_API_PATH};
-
 use sequencer_utils::logging;
 use tagged_base64::TaggedBase64;
 use url::Url;

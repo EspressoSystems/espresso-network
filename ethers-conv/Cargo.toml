@@ -1,0 +1,9 @@
+[package]
+name = "ethers-conv"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+alloy = { workspace = true }
+ethers = { workspace = true }

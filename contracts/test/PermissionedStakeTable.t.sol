@@ -6,6 +6,7 @@ import { PermissionedStakeTable } from "../src/PermissionedStakeTable.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { InitializedAt } from "../src/InitializedAt.sol";
 
 contract PermissionedStakeTableTest is Test {
     PermissionedStakeTable stakeTable;
@@ -13,12 +14,12 @@ contract PermissionedStakeTableTest is Test {
 
     function setUp() public {
         vm.prank(owner);
-        PermissionedStakeTable.NodeInfo[] memory initialStakers = nodes(0, 1);
+        PermissionedStakeTable.NodeInfo[] memory initialStakers = createNodes(0, 1);
         stakeTable = new PermissionedStakeTable(initialStakers);
     }
 
     // Create `numNodes` node IDs from `start` for testing.
-    function nodes(uint64 start, uint64 numNodes)
+    function createNodes(uint64 start, uint64 numNodes)
         private
         returns (PermissionedStakeTable.NodeInfo[] memory)
     {
@@ -38,37 +39,60 @@ contract PermissionedStakeTableTest is Test {
         return ps;
     }
 
+    // Convert NodeInfo array to BLS keys array
+    function toBls(PermissionedStakeTable.NodeInfo[] memory nodes)
+        private
+        pure
+        returns (BN254.G2Point[] memory)
+    {
+        BN254.G2Point[] memory bls = new BN254.G2Point[](nodes.length);
+        for (uint64 i = 0; i < nodes.length; i++) {
+            bls[i] = nodes[i].blsVK;
+        }
+        return bls;
+    }
+
+    // Empty array of NodeInfo
+    // solhint-disable-next-line no-empty-blocks
+    function emptyNodes() private pure returns (PermissionedStakeTable.NodeInfo[] memory nodes) { }
+
+    // Empty array of BLS keys
+    // solhint-disable-next-line no-empty-blocks
+    function emptyKeys() private pure returns (BN254.G2Point[] memory keys) { }
+
+    function testDeploymentStoresBlockNumber() public {
+        setUp();
+        assertEq(stakeTable.initializedAtBlock(), block.number);
+    }
+
     function testInsert() public {
         vm.prank(owner);
-        PermissionedStakeTable.NodeInfo[] memory stakers = nodes(1, 1);
-        PermissionedStakeTable.NodeInfo[] memory empty = nodes(1, 0);
+        PermissionedStakeTable.NodeInfo[] memory stakers = createNodes(1, 1);
 
         vm.expectEmit();
-        emit PermissionedStakeTable.StakersUpdated(empty, stakers);
+        emit PermissionedStakeTable.StakersUpdated(emptyKeys(), stakers);
 
-        stakeTable.update(empty, stakers);
+        stakeTable.update(emptyKeys(), stakers);
 
         assertTrue(stakeTable.isStaker(stakers[0].blsVK));
     }
 
     function testInsertMany() public {
         vm.prank(owner);
-        PermissionedStakeTable.NodeInfo[] memory stakers = nodes(1, 10);
-        PermissionedStakeTable.NodeInfo[] memory empty = nodes(1, 0);
+        PermissionedStakeTable.NodeInfo[] memory stakers = createNodes(1, 10);
 
         vm.expectEmit();
-        emit PermissionedStakeTable.StakersUpdated(empty, stakers);
+        emit PermissionedStakeTable.StakersUpdated(emptyKeys(), stakers);
 
-        stakeTable.update(empty, stakers);
+        stakeTable.update(emptyKeys(), stakers);
 
         assertTrue(stakeTable.isStaker(stakers[0].blsVK));
     }
 
     function testInsertRevertsIfStakerExists() public {
         vm.prank(owner);
-        PermissionedStakeTable.NodeInfo[] memory stakers = nodes(1, 1);
-        PermissionedStakeTable.NodeInfo[] memory empty = nodes(1, 0);
-        stakeTable.update(empty, stakers);
+        PermissionedStakeTable.NodeInfo[] memory stakers = createNodes(1, 1);
+        stakeTable.update(emptyKeys(), stakers);
 
         // Try adding the same staker again
         vm.expectRevert(
@@ -77,34 +101,35 @@ contract PermissionedStakeTableTest is Test {
             )
         );
         vm.prank(owner);
-        stakeTable.update(empty, stakers);
+        stakeTable.update(emptyKeys(), stakers);
     }
 
     function testRemove() public {
-        PermissionedStakeTable.NodeInfo[] memory stakers = nodes(1, 1);
-        PermissionedStakeTable.NodeInfo[] memory empty = nodes(1, 0);
+        PermissionedStakeTable.NodeInfo[] memory stakersToInsert = createNodes(1, 1);
+        BN254.G2Point[] memory keysToRemove = toBls(stakersToInsert);
         vm.prank(owner);
-        stakeTable.update(empty, stakers);
+
+        // Insert the stakers we want to remove later.
+        stakeTable.update(emptyKeys(), stakersToInsert);
 
         vm.prank(owner);
 
         vm.expectEmit();
-        emit PermissionedStakeTable.StakersUpdated(stakers, empty);
+        emit PermissionedStakeTable.StakersUpdated(keysToRemove, emptyNodes());
 
-        stakeTable.update(stakers, empty);
+        stakeTable.update(keysToRemove, emptyNodes());
 
-        assertFalse(stakeTable.isStaker(stakers[0].blsVK));
+        assertFalse(stakeTable.isStaker(keysToRemove[0]));
     }
 
     function testRemoveRevertsIfStakerNotFound() public {
         vm.prank(owner);
-        PermissionedStakeTable.NodeInfo[] memory stakers = nodes(1, 1);
-        PermissionedStakeTable.NodeInfo[] memory empty = nodes(1, 0);
+        BN254.G2Point[] memory keysToRemove = toBls(createNodes(1, 1));
         vm.expectRevert(
-            abi.encodeWithSelector(PermissionedStakeTable.StakerNotFound.selector, stakers[0].blsVK)
+            abi.encodeWithSelector(PermissionedStakeTable.StakerNotFound.selector, keysToRemove[0])
         );
         // Attempt to remove a non-existent staker
-        stakeTable.update(stakers, empty);
+        stakeTable.update(keysToRemove, emptyNodes());
     }
 
     function testNonOwnerCannotInsert() public {
@@ -112,9 +137,8 @@ contract PermissionedStakeTableTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(2))
         );
-        PermissionedStakeTable.NodeInfo[] memory stakers = nodes(1, 1);
-        PermissionedStakeTable.NodeInfo[] memory empty = nodes(1, 0);
-        stakeTable.update(empty, stakers);
+        PermissionedStakeTable.NodeInfo[] memory stakers = createNodes(1, 1);
+        stakeTable.update(emptyKeys(), stakers);
     }
 
     function testNonOwnerCannotRemove() public {
@@ -122,8 +146,7 @@ contract PermissionedStakeTableTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(2))
         );
-        PermissionedStakeTable.NodeInfo[] memory stakers = nodes(1, 1);
-        PermissionedStakeTable.NodeInfo[] memory empty = nodes(1, 0);
-        stakeTable.update(stakers, empty);
+        BN254.G2Point[] memory keys = toBls(createNodes(1, 1));
+        stakeTable.update(keys, emptyNodes());
     }
 }

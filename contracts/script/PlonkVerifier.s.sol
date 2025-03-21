@@ -3,9 +3,9 @@ pragma solidity ^0.8.20;
 import { Script } from "forge-std/Script.sol";
 
 import { Options, Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
-
 /// @notice Deploys an upgradeable Plonk Verifier Contract using the OpenZeppelin Upgrades plugin.
 /// @dev The Upgrades library has a deployImplementation function which is used here
+
 contract DeployPlonkVerifierScript is Script {
     string public contractName = "PlonkVerifier.sol";
 

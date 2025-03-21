@@ -21,7 +21,7 @@ env:
 
 jobs:
   contracts:
-    timeout-minutes: 30
+    timeout-minutes: 120
     runs-on: ubuntu-latest
     steps:
       - name: Install Nix
@@ -45,7 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
         with:
-          prefix-key: v2-rust
+          prefix-key: v2-rust-${{ hashFiles('flake.*') }}
 
       - name: Check toolchain versions
         run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions

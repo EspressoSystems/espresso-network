@@ -13,6 +13,10 @@
   };
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs-legacy-foundry.url = "github:NixOS/nixpkgs/9abb87b552b7f55ac8916b6fc9e5cb486656a2f3";
+
+  inputs.foundry-nix.url = "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
+
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
 
   inputs.nixpkgs-cross-overlay.url =
@@ -20,10 +24,7 @@
 
   inputs.flake-utils.url = "github:numtide/flake-utils";
 
-  inputs.foundry.url =
-    "github:shazow/foundry.nix/monthly"; # Use monthly branch for permanent releases
   inputs.solc-bin.url = "github:EspressoSystems/nix-solc-bin";
-
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
 
@@ -32,11 +33,12 @@
   outputs =
     { self
     , nixpkgs
+    , nixpkgs-legacy-foundry
+    , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
     , pre-commit-hooks
-    , foundry
     , solc-bin
     , ...
     }:
@@ -65,11 +67,19 @@
 
       overlays = [
         (import rust-overlay)
-        foundry.overlay
+        foundry-nix.overlay
         solc-bin.overlays.default
         (final: prev: {
           solhint =
             solhintPkg { inherit (prev) buildNpmPackage fetchFromGitHub; };
+        })
+
+        # The mold linker is around 50% faster on Linux than the default linker.
+        # This overlays a mkShell that is configured to use mold on Linux.
+        (final: prev: prev.lib.optionalAttrs prev.stdenv.isLinux {
+          mkShell = prev.mkShell.override {
+            stdenv = prev.stdenvAdapters.useMoldLinker prev.clangStdenv;
+          };
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
@@ -106,7 +116,7 @@
             cargo-fmt = {
               enable = true;
               description = "Enforce rustfmt";
-              entry = "cargo fmt --all";
+              entry = "just fmt";
               types_or = [ "rust" "toml" ];
               pass_filenames = false;
             };
@@ -117,11 +127,18 @@
               types_or = [ "toml" ];
               pass_filenames = false;
             };
-            cargo-clippy = {
+            cargo-lock = {
               enable = true;
-              description = "Run clippy";
-              entry = "just clippy";
-              types_or = [ "rust" "toml" ];
+              description = "Ensure Cargo.lock is compatible with Cargo.toml";
+              entry = "cargo update --workspace --verbose";
+              types_or = [ "toml" ];
+              pass_filenames = false;
+            };
+            cargo-lock-sqlite = {
+              enable = true;
+              description = "Ensure Cargo.lock is compatible with Cargo.toml";
+              entry = "cargo update --manifest-path sequencer-sqlite/Cargo.toml --workspace --verbose";
+              types_or = [ "toml" ];
               pass_filenames = false;
             };
             forge-fmt = {
@@ -166,18 +183,11 @@
       };
       devShells.default =
         let
-          stableToolchain = pkgs.rust-bin.stable.latest.minimal.override {
-            extensions = [ "rustfmt" "clippy" "llvm-tools-preview" "rust-src" ];
-          };
+          stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.minimal.override {
-            extensions = [ "rust-analyzer" ];
+            extensions = [ "rust-analyzer" "rustfmt" ];
           });
-          # nixWithFlakes allows pre v2.4 nix installations to use
-          # flake commands (like `nix flake update`)
-          nixWithFlakes = pkgs.writeShellScriptBin "nix" ''
-            exec ${pkgs.nixFlakes}/bin/nix --experimental-features "nix-command flakes" "$@"
-          '';
-          solc = pkgs.solc-bin.latest;
+          solc = pkgs.solc-bin."0.8.23";
         in
         mkShell (rustEnvVars // {
           buildInputs = [
@@ -198,9 +208,9 @@
             typos
             just
             nightlyToolchain.passthru.availableComponents.rust-analyzer
+            nightlyToolchain.passthru.availableComponents.rustfmt
 
             # Tools
-            nixWithFlakes
             nixpkgs-fmt
             entr
             process-compose
@@ -234,10 +244,28 @@
 
             # Add rust binaries to PATH for native demo
             export PATH="$PWD/$CARGO_TARGET_DIR/debug:$PATH"
+
+            # Needed to compile with the sqlite-unbundled feature
+            export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib";
           '' + self.checks.${system}.pre-commit-check.shellHook;
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
+      # A shell with foundry v0.3.0 which can still build ethers-rs bindings.
+      # Can be removed when we are no longer using the ethers-rs bindings.
+      devShells.legacyFoundry =
+        let
+          overlays = [
+            solc-bin.overlays.default
+          ];
+          pkgs = import nixpkgs-legacy-foundry { inherit system overlays; };
+        in
+        mkShell {
+          packages = with pkgs; [
+            solc
+            foundry
+          ];
+        };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =

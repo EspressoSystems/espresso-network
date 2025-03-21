@@ -1,12 +1,13 @@
-use std::{collections::VecDeque, num::NonZeroUsize, time::Duration};
+use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::RwLock;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_99::ChainConfig, FeeAmount, NodeState, Payload, SeqTypes,
-    ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_99::ChainConfig, EpochCommittees, FeeAmount,
+    NodeState, Payload, SeqTypes, ValidatedState,
 };
+use ethers_conv::ToAlloy;
 use hotshot::traits::BlockPayload;
 use hotshot_builder_core::{
     builder_state::{BuilderState, MessageType},
@@ -16,18 +17,15 @@ use hotshot_builder_core::{
     },
 };
 use hotshot_types::{
-    data::{fake_commitment, ViewNumber},
+    data::{fake_commitment, vid_commitment, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::{
-        block_contents::{vid_commitment, GENESIS_VID_NUM_STORAGE_NODES},
-        metrics::NoMetrics,
-        node_implementation::Versions,
-        EncodeBytes,
+        block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics,
+        node_implementation::Versions, EncodeBytes,
     },
 };
-use marketplace_builder_shared::block::ParentBlockReferences;
-use marketplace_builder_shared::utils::EventServiceStream;
+use marketplace_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
-use std::sync::Arc;
 use tide_disco::Url;
 use tokio::spawn;
 use vbs::version::StaticVersionType;
@@ -41,24 +39,42 @@ pub struct BuilderConfig {
     pub hotshot_builder_apis_url: Url,
 }
 
-pub async fn build_instance_state<V: Versions>(
+pub fn build_instance_state<V: Versions>(
     chain_config: ChainConfig,
     l1_params: L1Params,
     state_peers: Vec<Url>,
-) -> anyhow::Result<NodeState> {
-    let l1_client = l1_params.options.connect(l1_params.url).await?;
-    let instance_state = NodeState::new(
+) -> NodeState {
+    let l1_client = l1_params
+        .options
+        .connect(l1_params.urls)
+        .expect("failed to create L1 client");
+
+    let peers = Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
+        state_peers,
+        Default::default(),
+        &NoMetrics,
+    ));
+
+    let coordinator = EpochMembershipCoordinator::new(
+        Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            l1_client.clone(),
+            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            peers.clone(),
+            NoStorage,
+        ))),
+        100,
+    );
+
+    NodeState::new(
         u64::MAX, // dummy node ID, only used for debugging
         chain_config,
         l1_client,
-        Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
-            state_peers,
-            Default::default(),
-            &NoMetrics,
-        )),
-        V::Base::VERSION,
-    );
-    Ok(instance_state)
+        peers,
+        V::Base::version(),
+        coordinator,
+    )
 }
 
 impl BuilderConfig {
@@ -120,7 +136,12 @@ impl BuilderConfig {
 
         let vid_commitment = {
             let payload_bytes = genesis_payload.encode();
-            vid_commitment(&payload_bytes, GENESIS_VID_NUM_STORAGE_NODES)
+            vid_commitment::<V>(
+                &payload_bytes,
+                &genesis_ns_table.encode(),
+                GENESIS_VID_NUM_STORAGE_NODES,
+                V::Base::VERSION,
+            )
         };
 
         // create the global state
@@ -139,12 +160,14 @@ impl BuilderConfig {
         let global_state = Arc::new(RwLock::new(global_state));
         let global_state_clone = global_state.clone();
 
-        let builder_state = BuilderState::<SeqTypes>::new(
+        let builder_state = BuilderState::<SeqTypes, V>::new(
             ParentBlockReferences {
                 view_number: bootstrapped_view,
                 vid_commitment,
                 leaf_commit: fake_commitment(),
                 builder_commitment,
+                tx_count: 0,
+                last_nonempty_view: None,
             },
             decide_receiver,
             da_receiver,

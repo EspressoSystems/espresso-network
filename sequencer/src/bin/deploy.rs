@@ -18,12 +18,13 @@ use url::Url;
 /// This script deploys contracts needed to run the sequencer to an L1. It outputs a .env file
 /// containing the addresses of the deployed contracts.
 ///
-/// This script can also be used to do incremental deployments. The only contract addresses needed
-/// to configure the sequencer network are ESPRESSO_SEQUENCER_HOTSHOT_ADDRESS and
-/// ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS. These contracts, however, have dependencies, and
-/// a full deployment may involve up to 5 total contracts. Some of these contracts, especially
-/// libraries may already have been deployed, or perhaps one of the top-level contracts has been
-/// deployed and we only need to deploy the other one.
+/// This script can also be used to do incremental deployments. The only contract addresses
+/// needed to configure the sequencer network are ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS,
+/// ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS and (soon) PERMISSIONED_STAKE_TABLE_ADDRESS.
+/// These contracts, however, have dependencies, and a full deployment involves several
+/// contracts. Some of these contracts, especially libraries may already have been deployed, or
+/// perhaps one of the top-level contracts has been deployed and we only need to deploy the other
+/// one.
 ///
 /// It is possible to pass in the addresses of already deployed contracts, in which case those
 /// addresses will be used in place of deploying a new contract wherever that contract is required
@@ -131,10 +132,20 @@ struct Options {
     ///     stake_table_key = "BLS_VER_KEY~...",
     ///     state_ver_key = "SCHNORR_VER_KEY~...",
     ///     da = true,
+    ///     stake = 1, # this value is ignored, but needs to be set
     ///   },
     /// ]
     #[clap(long, env = "ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH")]
     initial_stake_table_path: Option<PathBuf>,
+
+    /// Exit escrow period for the stake table contract.
+    ///
+    /// This is the period for which stake table contract will retain funds after withdrawals have
+    /// been requested. It should be set to a value that is at least 3 hotshot epochs plus ample
+    /// time to allow for submission of slashing evidence. Initially it will probably be around one
+    /// week.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD", value_parser = parse_duration)]
+    exit_escrow_period: Option<Duration>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -170,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
         opt.permissioned_prover,
         contracts,
         initial_stake_table,
+        opt.exit_escrow_period,
     )
     .await?;
 

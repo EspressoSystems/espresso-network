@@ -9,8 +9,10 @@ use cdn_broker::reexports::discovery::{DiscoveryClient, Embedded, Redis};
 use clap::Parser;
 use espresso_types::SeqTypes;
 use hotshot_orchestrator::client::OrchestratorClient;
-use hotshot_types::network::NetworkConfig;
-use hotshot_types::traits::{node_implementation::NodeType, signature_key::SignatureKey};
+use hotshot_types::{
+    network::NetworkConfig,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+};
 use surf_disco::Url;
 
 #[derive(Parser, Debug)]

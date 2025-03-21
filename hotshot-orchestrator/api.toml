@@ -1,0 +1,104 @@
+[meta]
+NAME = "orchestrator"
+DESCRIPTION = "Orchestrator for HotShot"
+FORMAT_VERSION = "0.1.0"
+
+# POST node's identity
+[route.post_identity]
+PATH = ["identity"]
+METHOD = "POST"
+DOC = """
+POST a node's identity (IP address) to the orchestrator.  Returns the node's node_index.
+"""
+
+# POST retrieve the network configuration
+[route.post_getconfig]
+PATH = ["config/:node_index"]
+METHOD = "POST"
+":node_index" = "Integer"
+DOC = """
+Get networking configuration needed for nodes to initialize HotShot and themselves. See `config.rs` for more information. 
+This must be a POST request so we can update the OrchestratorState in the server accordingly.  Must use the node_index previously 
+received from the 'identity' endpoint
+"""
+
+# POST the latest temporary node index only for generating validator's key pair
+[route.get_tmp_node_index]
+PATH = ["get_tmp_node_index"]
+METHOD = "POST"
+DOC = """
+Get the latest temporary node index only for generating validator's key pair for testing in hotshot, later the generated key pairs might be bound with other node_index.
+"""
+
+# POST the node's node index for pubkey and is_da collection
+[route.post_pubkey]
+PATH = ["pubkey/:is_da"]
+METHOD = "POST"
+":is_da" = "Boolean"
+DOC = """
+Post a node's node_index so that its public key could be posted and collected by the orchestrator. 
+Supply whether or not we are DA.
+"""
+
+# GET whether or not the config with all peers' public keys / configs are ready
+[route.peer_pubconfig_ready]
+PATH = ["peer_pub_ready"]
+DOC = """
+Get whether the node can collect the final config which includes all peer's public config/info like public keys, returns a boolean.
+"""
+
+# POST the updated config with all peers' public keys / configs
+[route.post_config_after_peer_collected]
+PATH = ["post_config_after_peer_collected"]
+METHOD = "POST"
+DOC = """
+Get the updated config with all peers' public keys / configs, returns a NetworkConfig.
+"""
+
+# POST whether the node is ready to begin the run
+# TODO ED Use the node index parameter
+[route.post_ready]
+PATH = ["ready"]
+METHOD = "POST"
+":node_index" = "Integer"
+DOC = """
+Post whether the node with node_index is ready to start the run
+"""
+
+# GET whether or not to start the run
+[route.get_start]
+PATH = ["start"]
+DOC = """
+Get whether the node should start the run, returns a boolean
+"""
+
+# POST the run results
+[route.post_results]
+PATH = ["results"]
+METHOD = "POST"
+DOC = """
+Post run results.
+"""
+
+# POST to manually start the run
+[route.post_manual_start]
+PATH = ["manual_start"]
+METHOD = "POST"
+DOC = """
+Post whether the orchestrator should start the run immediately, with the nodes that have already registered.
+"""
+
+# GET builder URLs
+[route.get_builders]
+PATH = ["builders"]
+DOC = """
+Get list of builder URLs
+"""
+
+# POST builder URL
+[route.post_builder]
+PATH = ["builder"]
+METHOD = "POST"
+DOC = """
+Register a builder URL to orchestrator's pool of builder URLs
+"""

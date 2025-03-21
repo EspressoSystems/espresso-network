@@ -19,6 +19,7 @@ concurrency:
 
 env:
   RUST_LOG: info,libp2p=off,node=error
+  RUSTFLAGS: "--cfg feature=\"fee\" --cfg feature=\"marketplace\""
   CARGO_TERM_COLOR: always
   # Save the process compose logs
   PC_LOGS: /tmp/pc.log
@@ -40,6 +41,14 @@ jobs:
         with:
           cache-all-crates: true
           cache-provider: buildjet
+
+      - name: Show memory
+        run: free -h
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
 
       - name: Build and archive tests
         run: cargo nextest archive --locked --workspace --archive-file nextest-archive-postgres.tar.zst
@@ -68,6 +77,14 @@ jobs:
           cache-all-crates: true
           cache-provider: buildjet
 
+      - name: Show memory
+        run: free -h
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - name: Build and archive tests
         run: cargo nextest archive --locked --features "embedded-db testing" --workspace --archive-file nextest-archive-sqlite.tar.zst
 
@@ -95,7 +112,7 @@ jobs:
         run: |
           cargo build --locked --profile test --bins
           cargo build --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
-        timeout-minutes: 30
+        timeout-minutes: 60
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -117,6 +134,7 @@ jobs:
             target/debug/keygen
             target/debug/permissionless-builder
             target/debug/nasty-client
+            target/debug/update-permissioned-stake-table
             target/debug/espresso-dev-node
             target/debug/pub-key
             target/debug/espresso-bridge
@@ -129,6 +147,10 @@ jobs:
   test-postgres:
     needs: build-test-artifacts-postgres
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      fail-fast: false
     steps:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -145,12 +167,17 @@ jobs:
       - name: Test
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
-          --workspace-remap $PWD
+          --workspace-remap $PWD \
+          --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 20
 
   test-sqlite:
     needs: build-test-artifacts-sqlite
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      fail-fast: false
     steps:
       - name: Fix submodule permissions check
         run: |
@@ -175,7 +202,8 @@ jobs:
       - name: Test
         run: |
           cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
-          --workspace-remap $PWD
+          --workspace-remap $PWD \
+          --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 20
 
   test-integration:
@@ -185,10 +213,12 @@ jobs:
         version: [02,99]
         include:
           - version: 02
-            compose: "-f process-compose.yaml -D"
-            
+            test-name: test_native_demo_basic
+
           - version: 99
-            compose: "-f process-compose.yaml -f process-compose-mp.yml -D"
+            test-name: test_native_demo_upgrade
+
+      fail-fast: false
     runs-on: ubuntu-latest
     steps:
       - name: Install Nix
@@ -214,9 +244,6 @@ jobs:
       - name: Install process-compose
         run: nix profile install nixpkgs#process-compose
 
-      - name: Run Demo-Native ${{matrix.version}}
-        run: bash -x scripts/demo-native ${{matrix.compose}} --tui=false > ${{ env.PC_LOGS }} 2>&1 &
-
       - name: Test Integration
         env:
           RUST_LOG: debug
@@ -224,8 +251,13 @@ jobs:
           INTEGRATION_TEST_SEQUENCER_VERSION: ${{ matrix.version }}
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
-          --workspace-remap $PWD $(if [ "${{ matrix.version }}" == "2" ]; then echo " smoke"; fi)
+          --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 10
+
+      - name: Show end of logs
+        if: always()
+        run: |
+          tail -n 1000 ${{ env.PC_LOGS }}
 
       - name: Upload process compose logs
         if: always()
@@ -233,6 +265,7 @@ jobs:
         with:
           name: process-compose-logs-integration-v${{ matrix.version  }}
           path: ${{ env.PC_LOGS }}
+
 
   demo-native:
     needs: build-test-bins

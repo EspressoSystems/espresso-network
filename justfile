@@ -1,3 +1,5 @@
+mod hotshot
+
 default:
     just --list
 
@@ -9,6 +11,10 @@ demo *args:
 
 demo-native *args: build
     scripts/demo-native {{args}}
+
+fmt:
+    cargo fmt --all
+    cargo fmt -- hotshot-testing/tests/**/*.rs
 
 lint:
     #!/usr/bin/env bash
@@ -69,8 +75,10 @@ test-all:
     cargo nextest run --locked --release --workspace --verbose --profile all
 
 test-integration:
-	@echo 'NOTE that demo-native must be running for this test to succeed.'
-	cargo nextest run --all-features --nocapture --profile integration
+	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
+
+test-integration-mp:
+    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
 
 clippy:
     @echo 'features: "embedded-db"'
@@ -79,6 +87,31 @@ clippy:
 
 check-features *args:
     cargo hack check --each-feature {{args}}
+
+check-features-ci *args:
+    # check each pair of features plus `default` and `--no-default-features`
+    cargo hack check --feature-powerset \
+        --depth 2 \
+        --exclude contract-bindings-alloy \
+        --exclude contract-bindings-ethers \
+        --exclude hotshot \
+        --exclude hotshot-builder-api \
+        --exclude hotshot-contract-adapter \
+        --exclude hotshot-events-service \
+        --exclude hotshot-example-types \
+        --exclude hotshot-libp2p-networking \
+        --exclude hotshot-macros \
+        --exclude hotshot-orchestrator \
+        --exclude hotshot-query-service \
+        --exclude hotshot-stake-table \
+        --exclude hotshot-state-prover \
+        --exclude hotshot-task \
+        --exclude hotshot-task-impls \
+        --exclude hotshot-testing \
+        --exclude hotshot-types \
+        --exclude hotshot-utils \
+        --exclude vid \
+        {{args}}
 
 # Helpful shortcuts for local development
 dev-orchestrator:
@@ -100,18 +133,41 @@ dev-sequencer:
 build-docker-images:
     scripts/build-docker-images-native
 
-# generate rust bindings for contracts
-REGEXP := "^LightClient$|^LightClientStateUpdateVK$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^LightClientStateUpdateVKMock$|^PlonkVerifier2$|^PermissionedStakeTable$"
+# generate rust bindings for contracts, the ethers bindings are deprecated,
+# please only add alloy bindings for new contracts.
+ETHERS_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$"
+ALLOY_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$|^StakeTable$|^EspToken$"
 gen-bindings:
-    forge bind --contracts ./contracts/src/ --crate-name contract-bindings --bindings-path contract-bindings --select "{{REGEXP}}" --overwrite --force
+    # Update the git submodules
+    git submodule update --init --recursive
+
+    # Generate the ethers bindings
+    nix develop .#legacyFoundry -c forge bind --contracts ./contracts/src/ --ethers --crate-name contract-bindings-ethers --bindings-path contract-bindings-ethers --select "{{ETHERS_REGEXP}}" --overwrite --force
 
     # Foundry doesn't include bytecode in the bindings for LightClient.sol, since it links with
     # libraries. However, this bytecode is still needed to link and deploy the contract. Copy it to
     # the source tree so that the deploy script can be compiled whenever the bindings are up to
     # date, without needed to recompile the contracts.
+    #
+    # The bytecode is extracted *before* the forge bind --alloy ... step because we're forced to
+    # parse a library address to generate the bindings which leads to the bytecode being pre-linked
+    # with that library address. We need the unlinked contract bytecode to later link it at runtime.
     mkdir -p contract-bindings/artifacts
     jq '.bytecode.object' < contracts/out/LightClient.sol/LightClient.json > contract-bindings/artifacts/LightClient_bytecode.json
+    jq '.bytecode.object' < contracts/out/LightClientArbitrum.sol/LightClientArbitrum.json > contract-bindings/artifacts/LightClientArbitrum_bytecode.json
     jq '.bytecode.object' < contracts/out/LightClientMock.sol/LightClientMock.json > contract-bindings/artifacts/LightClientMock_bytecode.json
+
+    # Generate the alloy bindings
+    # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
+    forge bind --skip test --skip script --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0x5fbdb2315678afecb367f032d93f642f64180aa3 --alloy --contracts ./contracts/src/ --crate-name contract-bindings-alloy --bindings-path contract-bindings-alloy --select "{{ALLOY_REGEXP}}" --overwrite --force
+
+    # For some reason `alloy` likes to use the wrong version of itself in `contract-bindings`.
+    # Use the workspace version.
+    sed -i 's|{.*https://github.com/alloy-rs/alloy.*}|{ workspace = true }|' contract-bindings-alloy/Cargo.toml
+
+    # # Alloy requires us to copy the ABI in since it's not included in the bindings
+    # jq '.abi' < contracts/out/LightClient.sol/LightClient.json > contract-bindings/artifacts/LightClient_abi.json
+    # jq '.abi' < contracts/out/LightClientMock.sol/LightClientMock.json > contract-bindings/artifacts/LightClientMock_abi.json
 
     cargo fmt --all
     cargo sort -g -w
@@ -123,9 +179,10 @@ sol-lint:
 
 # Build diff-test binary and forge test
 # Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-sequencer/issues/979
-sol-test:
-    cargo build --profile test --bin diff-test
-    forge test
+sol-test *args:
+    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
+    cargo build --release --bin diff-test
+    env PATH="${CARGO_TARGET_DIR}/release:$PATH" forge test {{ args }}
 
 # Deploys the light client contract on Sepolia and call it for profiling purposes.
 NUM_INIT_VALIDATORS := "5"

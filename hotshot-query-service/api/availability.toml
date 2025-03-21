@@ -1,0 +1,324 @@
+# Copyright (c) 2022 Espresso Systems (espressosys.com)
+# This file is part of the HotShot Query Service library.
+#
+# This program is free software: you can redistribute it and/or modify it under the terms of the GNU
+# General Public License as published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+# even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+# You should have received a copy of the GNU General Public License along with this program. If not,
+# see <https://www.gnu.org/licenses/>.
+
+[meta]
+FORMAT_VERSION = "0.1.0"
+NAME = "hotshot-availability"
+DESCRIPTION = """
+HotShot chain state
+
+The availability API provides an objective view of the HotShot blockchain. It provides access only
+to normative data: that is, data which is agreed upon by all honest consensus nodes and which is
+immutable. This means access to core consensus data structures including leaves, blocks, and
+headers, where each query is pure and idempotent. This also means that it is possible for a client
+to verify all of the information provided by this API, by running a HotShot light client and
+downloading the appropriate evidence with each query.
+
+This API does not provide any queries which represent only the _current_ state of the chain or may
+change over time, and it does not provide information for which there is not (yet) agreement of a
+supermajority of consensus nodes. For information about the current dynamic state of consensus and
+uncommitted state, try the `status` API. For information about the chain which is tabulated by this
+specific node and not subject to full consensus agreement, try the `node` API.
+"""
+
+[route.get_leaf]
+PATH = ["leaf/:height", "leaf/hash/:hash"]
+":height" = "Integer"
+":hash" = "TaggedBase64"
+DOC = """
+Get a leaf by its position in the ledger (0 is the genesis leaf) or its hash.
+
+Returns
+```
+{
+    "leaf": {
+        "view_number": integer,
+        "justify_qc": QC,
+        "parent_commitment": TaggedBase64,
+        "block_header": app-specific header type,
+        "proposer_id": TaggedBase64,
+    },
+    "qc": QC,
+}
+```
+
+Note that `leaf.justify_qc` is the quorum certificate linking this leaf to its parent, while `qc` is
+the quorum certificate signing this leaf. Both QCs have the schema
+```
+{
+    "block_commitment": TaggedBase64,
+    "leaf_commitment": TaggedBase64,
+    "view_number": integer,
+    // Map from signing keys to (signature, vote) pairs
+    "signatures": {TaggedBase64: [TaggedBase64, TaggedBase64]},
+    genesis: boolean,
+}
+```
+"""
+
+[route.get_leaf_range]
+PATH = ["leaf/:from/:until"]
+":from" = "Integer"
+":until" = "Integer"
+DOC = """
+Get the leaves based on their position in the ledger,
+the leaves are taken starting from the given :from up until the given :until.
+
+The allowable length of the requested range may be restricted by an implementation-defined limit
+(see `/limits`). Requests for ranges exceeding these limits will fail with a 400 status code.
+"""
+
+[route.stream_leaves]
+PATH = ["stream/leaves/:height"]
+METHOD = "SOCKET"
+":height" = "Integer"
+DOC = """
+Subscribe to a stream of leaves in the order they are sequenced, starting at `:height`.
+
+Opens a WebSockets connection and sends a stream of the same data type returned by `leaf/:height`.
+"""
+
+[route.get_header]
+PATH = ["header/:height", "header/hash/:hash",  "header/payload-hash/:payload-hash"]
+":height" = "Integer"
+":hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
+DOC = """
+Get a header by its position in the ledger (0 is the genesis block) or its hash.
+
+Returns an application-specific header type.
+"""
+
+[route.get_header_range]
+PATH = ["header/:from/:until"]
+":from" = "Integer"
+":until" = "Integer"
+DOC = """
+Get the headers based on their position in the ledger,
+the headers are taken starting from the given :from up until the given :until.
+
+The allowable length of the requested range may be restricted by an implementation-defined limit
+(see `/limits`). Requests for ranges exceeding these limits will fail with a 400 status code.
+"""
+
+[route.stream_headers]
+PATH = ["stream/headers/:height"]
+METHOD = "SOCKET"
+":height" = "Integer"
+DOC = """
+Subscribe to a stream that returns the metadata of available blocks, starting at `:height`.
+Useful for applications like rollups that do not need to fetch the entire block.
+
+Opens a WebSocket connection and sends a stream of application-specific headers.
+"""
+
+[route.get_block]
+PATH = ["block/:height", "block/hash/:hash", "block/payload-hash/:payload-hash"]
+":height" = "Integer"
+":hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
+DOC = """
+Get a block by its position in the ledger (0 is the genesis block) or its hash.
+
+Note that block data in HotShot disseminates asynchronously. That means that the full data for a
+block may not be available immediately after that block is committed. In this situation, `leaf/i`
+may succeed but `block/i` may fail. However, once `leaf/i` succeeds, it is guaranteed that
+`block/i` will _eventually_ succeed, and return a block whose `hash` is the same as the
+`block_hash` from the corresponding leaf.
+
+Returns
+```
+{
+    "header": application-specific header type,
+    "payload": application-specific payload type,
+    "hash": TaggedBase64,
+    "size": integer,
+}
+```
+"""
+
+[route.get_block_range]
+PATH = ["block/:from/:until"]
+":from" = "Integer"
+":until" = "Integer"
+DOC = """
+Get the blocks based on their position in the ledger,
+the blocks are taken starting from the given :from up until the given :until.
+
+The allowable length of the requested range may be restricted by an implementation-defined limit
+(see `/limits`). Requests for ranges exceeding these limits will fail with a 400 status code.
+"""
+
+[route.stream_blocks]
+PATH = ["stream/blocks/:height"]
+METHOD = "SOCKET"
+":height" = "Integer"
+DOC = """
+Subscribe to a stream of blocks in the order they are sequenced, starting at `:height`.
+
+Opens a WebSockets connection and sends a stream of the same data type returned by `block/:height`.
+"""
+
+[route.get_payload]
+PATH = ["payload/:height", "payload/hash/:hash", "payload/block-hash/:block-hash"]
+":height" = "Integer"
+":hash" = "TaggedBase64"
+":block-hash" = "TaggedBase64"
+DOC = """
+Get the payload of a block by its position in the ledger (0 is the genesis block) or its hash.
+"""
+
+[route.get_payload_range]
+PATH = ["payload/:from/:until"]
+":from" = "Integer"
+":until" = "Integer"
+DOC = """
+Get the payloads of blocks based on their position in the ledger,
+the payloads are taken starting from the given :from up until the given :until.
+
+The allowable length of the requested range may be restricted by an implementation-defined limit
+(see `/limits`). Requests for ranges exceeding these limits will fail with a 400 status code.
+"""
+
+[route.stream_payloads]
+PATH = ["stream/payloads/:height"]
+METHOD = "SOCKET"
+":height" = "Integer"
+DOC = """
+Subscribe to a stream of block payloads in the order they are sequenced, starting at `:height`.
+
+Opens a WebSockets connection and sends a stream of the same data type returned by
+`payload/:height`.
+"""
+
+[route.get_vid_common]
+PATH = ["vid/common/:height", "vid/common/hash/:hash", "vid/common/payload-hash/:payload-hash"]
+":height" = "Integer"
+":hash" = "TaggedBase64"
+":payload-hash" = "TaggedBase64"
+DOC = """
+Get common VID data.
+
+Only data common to all storage nodes is provided. This is _not_ a VID share and does not help in
+the reconstruction of a block. It is only useful to aid in the interpretation of other VID-related
+data, such as VID range proofs.
+
+To recover the VID share belonging to this node, see the `node` API endpoint `/node/vid/share`.
+"""
+
+[route.stream_vid_common]
+PATH = ["stream/vid/common/:height"]
+METHOD = "SOCKET"
+":height" = "Integer"
+DOC = """
+Subscribe to a stream of VID common data in the order they are sequenced, starting at `:height`.
+
+Opens a WebSockets connection and sends a stream of the same data type returned by
+`vid/common/:height`.
+"""
+
+[route.get_transaction]
+PATH = ["transaction/:height/:index", "transaction/hash/:hash"]
+":height" = "Integer"
+":index" = "Integer"
+":hash" = "TaggedBase64"
+DOC = """
+Get a transaction by its `index` in the block at `height` or by its hash.
+
+If specified, `:height` and `:index` represent the block containing the transaction and the index
+of the transaction within the block, respectively. Otherwise, `:hash` is the hash of the
+transaction.
+
+HotShot consensus does not validate the transactions it sequences, and in particular it does not
+prohibit duplicate transactions. While each transaction has a unique position in the log (indicated
+by its height and index) there may be multiple transactions at different positions with the same
+hash. In such cases, this endpoint will return the _earliest_ transaction with the requested hash.
+
+The response includes the hash of the block containing this transaction as well as an application-
+defined inclusion proof relative to the block hash. Applications may use `proof` to prove that the
+returned transaction is actually a member of its block, but note that the proof system used here
+will vary by application. Some may prove more (for example, a shared sequencer proving that the
+transaction belongs not only to the block but to a section of the block dedicated to a specific
+rollup), some may prove less (for example, a trusted query service may return `null` for the proof).
+
+Returns
+```
+{
+    "transaction": application-specific transaction type,
+    "index": integer,
+    "hash": TaggedBase64,
+    "proof": application-specific proof type,
+    "block_hash": TaggedBase64,
+    "block_height": integer,
+}
+```
+"""
+
+[route.get_stake_table]
+PATH = ["stake-table/:height", "stake-table/view/:view_number"]
+":height" = "Integer"
+":view_number" = "Integer"
+DOC = """
+Get the stake table after `:height` leaves or after `:view_number`.
+
+Returns a map from staking public keys to amounts.
+"""
+
+
+[route.get_block_summary]
+PATH = ["block/summary/:height"]
+":height" = "Integer"
+DOC = """
+Get the Block Summary for a block based on its position in the ledger.
+"""
+
+[route.get_block_summary_range]
+PATH = ["block/summaries/:from/:until"]
+":from" = "Integer"
+":until" = "Integer"
+DOC = """
+Get the Block Summary entries for blocks based on their position in the ledger,
+the blocks are taken starting from the given :from up until the given :until.
+
+The allowable length of the requested range may be restricted by an implementation-defined limit
+(see `/limits`). Requests for ranges exceeding these limits will fail with a 400 status code.
+"""
+
+[route.get_limits]
+PATH = ["limits"]
+DOC = """
+Get implementation-defined limits restricting certain requests.
+
+* `small_object_range_limit`: the maximum number of small objects which can be loaded in a single
+  range query.
+
+  Currently small objects include leaves only. In the future this limit will also apply to headers,
+  block summaries, and VID common, however
+  - loading of headers and block summaries is currently implemented by loading the entire block
+  - imperfect VID parameter tuning means that VID common can be much larger than it should
+
+* `large_object_range_limit`: the maximum number of large objects which can be loaded in a single
+  range query.
+
+  Large objects include anything that _might_ contain a full payload or an object proportional in
+  size to a payload. Note that this limit applies to the entire class of objects: we do not check
+  the size of objects while loading to determine which limit to apply. If an object belongs to a
+  class which might contain a large payload, the large object limit always applies.
+
+Returns
+```
+{
+    "large_object_range_limit": integer,
+    "small_object_range_limit": integer
+}
+```
+"""

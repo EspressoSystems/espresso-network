@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use super::{client_id::ClientId, data_state::NodeIdentity};
 use bitvec::vec::BitVec;
 use espresso_types::SeqTypes;
 use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
 use serde::{Deserialize, Serialize};
+
+use super::{client_id::ClientId, data_state::NodeIdentity};
 
 /// [ServerMessage] represents the messages that the server can send to the
 /// client for a response.
@@ -33,7 +34,7 @@ pub enum ServerMessage {
     /// for the snapshot of the current node identity information.
     NodeIdentitySnapshot(Arc<Vec<NodeIdentity>>),
 
-    /// HistogramSnapshot is a message that is sent in response to to a request
+    /// HistogramSnapshot is a message that is sent in response to a request
     /// for the snapshot of the current histogram information.
     HistogramSnapshot(Arc<ExplorerHistograms>),
 

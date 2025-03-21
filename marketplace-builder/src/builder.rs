@@ -1,22 +1,23 @@
-use std::{collections::HashSet, num::NonZeroUsize, time::Duration};
+use std::{arch::global_asm, collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_broadcast::{
     broadcast, Receiver as BroadcastReceiver, RecvError, Sender as BroadcastSender, TryRecvError,
 };
-
 use async_lock::RwLock;
 use espresso_types::{
     eth_signature_key::EthKeyPair,
+    v0_1::NoStorage,
     v0_99::{ChainConfig, RollupRegistration},
-    FeeAmount, L1Client, MarketplaceVersion, MockSequencerVersions, NamespaceId, NodeState,
-    Payload, SeqTypes, SequencerVersions, ValidatedState, V0_1,
+    EpochCommittees, FeeAmount, L1Client, MarketplaceVersion, MockSequencerVersions, NamespaceId,
+    NodeState, Payload, SeqTypes, SequencerVersions, ValidatedState, V0_1,
 };
 use ethers::{
     core::k256::ecdsa::SigningKey,
     signers::{coins_bip39::English, MnemonicBuilder, Signer as _, Wallet},
     types::{Address, U256},
 };
+use ethers_conv::ToAlloy;
 use futures::FutureExt;
 use hotshot::traits::BlockPayload;
 use hotshot_builder_api::v0_99::builder::{
@@ -28,20 +29,22 @@ use hotshot_events_service::{
 };
 use hotshot_types::{
     data::{fake_commitment, Leaf, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::{
-        block_contents::{vid_commitment, Transaction as _, GENESIS_VID_NUM_STORAGE_NODES},
+        block_contents::{Transaction as _, GENESIS_VID_NUM_STORAGE_NODES},
         metrics::NoMetrics,
         node_implementation::{ConsensusTime, NodeType, Versions},
         EncodeBytes,
     },
     utils::BuilderCommitment,
 };
-use marketplace_builder_core::service::{GlobalState, ProxyGlobalState};
-use marketplace_builder_core::{hooks::BuilderHooks, service::EventServiceStream};
+use marketplace_builder_core::{
+    hooks::BuilderHooks,
+    service::{EventServiceStream, GlobalState, ProxyGlobalState},
+};
 use marketplace_builder_shared::block::ParentBlockReferences;
 use marketplace_solver::SolverError;
 use sequencer::{catchup::StatePeers, L1Params, NetworkParams, SequencerApiVersion};
-use std::sync::Arc;
 use surf::http::headers::ACCEPT;
 use surf_disco::Client;
 use tide_disco::{app, method::ReadState, App, Url};
@@ -61,25 +64,40 @@ pub struct BuilderConfig {
     pub hotshot_builder_apis_url: Url,
 }
 
-pub async fn build_instance_state<V: Versions>(
+pub fn build_instance_state<V: Versions>(
     chain_config: ChainConfig,
     l1_params: L1Params,
     state_peers: Vec<Url>,
-) -> anyhow::Result<NodeState> {
-    let l1_client = l1_params.options.connect(l1_params.url).await?;
+) -> NodeState {
+    let l1_client = l1_params
+        .options
+        .connect(l1_params.urls)
+        .expect("failed to create L1 client");
 
-    let instance_state = NodeState::new(
+    let peers = Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
+        state_peers,
+        Default::default(),
+        &NoMetrics,
+    ));
+
+    NodeState::new(
         u64::MAX, // dummy node ID, only used for debugging
         chain_config,
-        l1_client,
-        Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
-            state_peers,
-            Default::default(),
-            &NoMetrics,
-        )),
+        l1_client.clone(),
+        peers.clone(),
         V::Base::version(),
-    );
-    Ok(instance_state)
+        EpochMembershipCoordinator::new(
+            Arc::new(RwLock::new(EpochCommittees::new_stake(
+                vec![],
+                vec![],
+                l1_client,
+                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                peers,
+                NoStorage,
+            ))),
+            10,
+        ),
+    )
 }
 
 impl BuilderConfig {
@@ -105,11 +123,8 @@ impl BuilderConfig {
         // spawn the builder service
         tracing::info!("Running builder against hotshot events API at {events_api_url}",);
 
-        let stream = marketplace_builder_core::service::EventServiceStream::<
-            SeqTypes,
-            SequencerApiVersion,
-        >::connect(events_api_url)
-        .await?;
+        let stream =
+            EventServiceStream::<SeqTypes, SequencerApiVersion>::connect(events_api_url).await?;
 
         spawn(async move {
             let res = global_state.start_event_loop(stream).await;
@@ -169,13 +184,16 @@ impl BuilderConfig {
         };
 
         // create the global state
-        let global_state: Arc<GlobalState<SeqTypes, DynamicHooks>> = GlobalState::new(
-            (builder_key_pair.fee_account(), builder_key_pair),
-            api_timeout,
-            maximize_txns_count_timeout_duration,
-            Duration::from_secs(60),
-            tx_channel_capacity.get(),
-            base_fee.as_u64().expect("Base fee too high"),
+        let global_state = GlobalState::new(
+            marketplace_builder_core::service::BuilderConfig {
+                builder_keys: (builder_key_pair.fee_account(), builder_key_pair),
+                api_timeout,
+                tx_capture_timeout: maximize_txns_count_timeout_duration,
+                txn_garbage_collect_duration: Duration::from_secs(60),
+                txn_channel_capacity: tx_channel_capacity.get(),
+                tx_status_cache_capacity: 81920,
+                base_fee: base_fee.as_u64().expect("Base fee too high"),
+            },
             hooks,
         );
 
@@ -205,8 +223,7 @@ mod test {
 
     use anyhow::Error;
     use async_lock::RwLock;
-    use committable::Commitment;
-    use committable::Committable;
+    use committable::{Commitment, Committable};
     use espresso_types::{
         mock::MockStateCatchup,
         v0_99::{RollupRegistration, RollupRegistrationBody},
@@ -216,20 +233,23 @@ mod test {
     use ethers::{core::k256::elliptic_curve::rand_core::block, utils::Anvil};
     use futures::{Stream, StreamExt};
     use hooks::connect_to_solver;
-    use hotshot::helpers::initialize_logging;
-    use hotshot::types::{
-        BLSPrivKey,
-        EventType::{Decide, *},
+    use hotshot::{
+        helpers::initialize_logging,
+        rand,
+        types::{
+            BLSPrivKey, EventType,
+            EventType::{Decide, *},
+        },
     };
-    use hotshot::{rand, types::EventType};
     use hotshot_builder_api::v0_99::builder::BuildError;
     use hotshot_events_service::{
         events::{Error as EventStreamApiError, Options as EventStreamingApiOptions},
         events_source::{EventConsumer, EventsStreamer},
     };
-    use hotshot_query_service::{availability::LeafQueryData, VidCommitment};
+    use hotshot_query_service::availability::LeafQueryData;
     use hotshot_types::{
         bundle::Bundle,
+        data::VidCommitment,
         event::LeafInfo,
         light_client::StateKeyPair,
         signature_key::BLSPubKey,
@@ -243,14 +263,16 @@ mod test {
     use marketplace_solver::{testing::MockSolver, SolverError};
     use portpicker::pick_unused_port;
     use sequencer::{
-        api::test_helpers::TestNetworkConfigBuilder,
+        api::{
+            fs::DataSource,
+            options::HotshotEvents,
+            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            Options,
+        },
+        persistence,
         persistence::no_storage::{self, NoStorage},
         testing::TestConfigBuilder,
         SequencerApiVersion,
-    };
-    use sequencer::{
-        api::{fs::DataSource, options::HotshotEvents, test_helpers::TestNetwork, Options},
-        persistence,
     };
     use sequencer_utils::test_utils::setup_test;
     use surf_disco::{
@@ -398,7 +420,7 @@ mod test {
     /// Get the view number and commitment if given a `QuorumProposal` event.
     async fn proposal_view_number_and_commitment(event: Event) -> Option<(u64, VidCommitment)> {
         if let EventType::QuorumProposal { proposal, .. } = event.event {
-            let view_number = *proposal.data.view_number;
+            let view_number = *proposal.data.view_number();
             let commitment = Leaf2::from_quorum_proposal(&proposal.data).payload_commitment();
             return Some((view_number, commitment));
         }
@@ -603,7 +625,7 @@ mod test {
                     get_bundle(builder_client, parent_view_number, parent_commitment).await,
                     parent_view_number,
                 )
-            }
+            },
             Mempool::Private => {
                 submit_and_get_bundle_with_private_mempool(
                     builder_client,
@@ -611,7 +633,7 @@ mod test {
                     urls,
                 )
                 .await
-            }
+            },
         };
 
         assert_eq!(bundle.transactions, vec![registered_transaction.clone()]);
@@ -723,7 +745,7 @@ mod test {
                     get_bundle(builder_client, parent_view_number, parent_commitment).await,
                     parent_view_number,
                 )
-            }
+            },
             Mempool::Private => {
                 submit_and_get_bundle_with_private_mempool(
                     builder_client,
@@ -731,7 +753,7 @@ mod test {
                     urls,
                 )
                 .await
-            }
+            },
         };
 
         assert_eq!(bundle.transactions, vec![unregistered_transaction.clone()]);

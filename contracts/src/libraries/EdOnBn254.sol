@@ -35,5 +35,14 @@ library EdOnBN254 {
         return abi.encodePacked(Utils.reverseEndianness(point.x | mask));
     }
 
+    /// @dev Check if two points are equal
+    function isEqual(EdOnBN254Point memory a, EdOnBN254Point memory b)
+        internal
+        pure
+        returns (bool)
+    {
+        return a.x == b.x && a.y == b.y;
+    }
+
     // TODO: (alex) add `validatePoint` methods and tests
 }

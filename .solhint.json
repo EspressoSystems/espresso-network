@@ -13,7 +13,7 @@
       , "modifier-name-mixedcase": "error"
       , "named-parameters-mapping": "error"
       , "no-console": "error"
-      , "no-empty-blocks": "error"
+      , "no-empty-blocks": ["error", { "ignoreConstructors": true }]
       , "no-unused-vars": "error"
       , "no-global-import": "off"
       , "var-name-mixedcase": "error"

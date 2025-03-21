@@ -26,14 +26,23 @@ jobs:
       - uses: actions/checkout@v4
         name: Checkout Repository
 
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt
+
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
 
       - name: Format Check
-        run: cargo fmt -- --check
+        run: cargo +nightly fmt -- --check
 
       - name: Check (embedded-db)
-        run: cargo clippy --workspace --features "embedded-db testing" --all-targets -- -D warnings
+        run: |
+          cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going \
+          -- -D warnings
       
       - name: Check (postgres)
-        run: cargo clippy --workspace --features testing --all-targets -- -D warnings
+        run: |
+          cargo clippy --workspace --features testing --all-targets --keep-going \
+          -- -D warnings

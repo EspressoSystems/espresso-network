@@ -1,4 +1,5 @@
-use hotshot::traits::election::static_committee::StaticCommittee;
+use std::marker::PhantomData;
+
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     signature_key::BLSPubKey,
@@ -8,22 +9,21 @@ use hotshot_types::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::marker::PhantomData;
 
+pub mod config;
 mod header;
 mod impls;
 pub mod traits;
 mod utils;
 pub use header::Header;
+#[cfg(any(test, feature = "testing"))]
+pub use impls::mock;
 pub use impls::{
-    get_l1_deposits, retain_accounts, BuilderValidationError, FeeError, ProposalValidationError,
-    StateValidationError,
+    get_l1_deposits, retain_accounts, BuilderValidationError, EpochCommittees, FeeError,
+    ProposalValidationError, StateValidationError,
 };
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
-
-#[cfg(any(test, feature = "testing"))]
-pub use impls::mock;
 
 // This is the single source of truth for minor versions supported by this major version.
 //
@@ -123,9 +123,7 @@ reexport_unchanged_types!(
     BlockSize,
 );
 
-pub(crate) use v0_3::{
-    L1ClientMetrics, L1Event, L1ReconnectTask, L1State, L1UpdateTask, RpcClient,
-};
+pub(crate) use v0_3::{L1BlockInfoWithParent, L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
@@ -141,7 +139,7 @@ impl NodeType for SeqTypes {
     type Transaction = Transaction;
     type InstanceState = NodeState;
     type ValidatedState = ValidatedState;
-    type Membership = StaticCommittee<Self>;
+    type Membership = EpochCommittees;
     type BuilderSignatureKey = FeeAccount;
     type AuctionResult = SolverAuctionResults;
 }

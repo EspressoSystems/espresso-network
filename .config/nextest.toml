@@ -1,14 +1,17 @@
 [profile.default]
 # Kill tests after 3 periods of 2m, because they are probably hanging
 slow-timeout = { period = "2m", terminate-after = 3 }
-default-filter = 'not (test(slow_) | package(tests))'
+default-filter = 'not (deps(hotshot-testing) | test(slow_) | package(tests))'
 retries = 2
 
 [[profile.default.overrides]]
-# This test is fast if it works (usually about 150ms) but sometimes hangs,
-# especially when running concurrently with other tests. Kill it after a while
-# and retry up to 10 times.
-filter = 'test(test_process_client_handling_stream_subscribe_node_identity)'
+# These tests are fast if they work (usually about 150ms) but sometimes they
+# hang, especially when running Concurrently with other tests. Kill after a
+# while and retry up to 10 times to avoid failing the test suite.
+filter = """
+test(test_process_client_handling_stream_subscribe_node_identity) |
+test(test_process_client_handling_stream_subscribe_voters)
+"""
 slow-timeout = { period = "2s", terminate-after = 1 }
 retries  = 10
 
@@ -16,6 +19,14 @@ retries  = 10
 [[profile.default.overrides]]
 filter = 'test(slow_test_restart)'
 threads-required = 'num-cpus'
+
+# HotShot integration tests
+[profile.hotshot]
+retries = 2
+slow-timeout = { period = "1m", terminate-after = 3 }
+default-filter = 'deps(hotshot-testing)'
+final-status-level = "flaky"
+threads-required = "num-test-threads"
 
 [profile.slow]
 slow-timeout = "2m"
@@ -31,3 +42,14 @@ retries = 2
 slow-timeout = "2m"
 default-filter = 'package(tests)'
 retries = 2
+
+# Serial required
+# TRY 3 FAIL [   2.790s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_builders_down::testtypes_::memoryimpl_::test_marketplace_builders_down
+# TRY 3 FAIL [   4.446s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_fallback_builder_down::testtypes_::memoryimpl_::test_marketplace_fallback_builder_down
+# TRY 3 FAIL [   5.119s] hotshot-testing::tests_4 tests_4::test_marketplace::test_marketplace_upgrade::testtypes_::memoryimpl_::test_marketplace_upgrade
+#
+# FLAKY 2/3 [  12.037s] hotshot-testing::tests_2 tests_2::catchup::test_all_restart::testtypes_::pushcdnimpl_::test_all_restart
+# FLAKY 2/3 [  49.943s] hotshot-testing::tests_6 tests_6::test_epochs::test_combined_network_cdn_crash_with_epochs::testtypes_::combinedimpl_::test_combined_network_cdn_crash_with_epochs
+# FLAKY 2/3 [   6.968s] hotshot-testing::tests_6 tests_6::test_epochs::test_epoch_end::testtwostaketablestypes_::pushcdnimpl_::test_epoch_end
+# FLAKY 2/3 [ 125.353s] sequencer api::test::test_fee_upgrade_view_based
+# FLAKY 2/3 [   2.870s] sequencer api::test::test_hotshot_event_streaming

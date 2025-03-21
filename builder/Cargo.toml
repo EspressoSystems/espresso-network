@@ -13,12 +13,13 @@ clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types" }
 ethers = { workspace = true }
+ethers-conv = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-builder-core = { workspace = true }
 hotshot-events-service = { workspace = true }
-hotshot-state-prover = { path = "../hotshot-state-prover" }
+hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 marketplace-builder-shared = { workspace = true }
 portpicker = { workspace = true }

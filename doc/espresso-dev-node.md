@@ -5,19 +5,27 @@ a complete Espresso network, such as `builder`, `sequencer`, `state_prover` etc.
 light client contracts on alternative chains and running a separate prover for each which can be useful for testing
 involving L3s. Developers can use dev node for development and testing.
 
-## Download
+## Running the Dev Node
 
 We highly recommend you to use our Docker image. You can run it from the command line:
 
 ```cmd
-docker run ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:main
+docker run -p 8770:8770 ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:main
 ```
+
+This command will run the minimal setup of the dev node with the default options. It will run an API server on port
+8770, which you can use to interact with the dev node in exactly the same way you would connect to a node in the real
+Espresso network. For example, hit http://localhost:8770/v0/status/metrics to check the status of the node and use
+http://localhost:8770/v0/availability to query blockchain data.
 
 ## Parameters
 
+While the command above is sufficient to run the dev node with the default settings, there are many options for
+customizing the node, depending on what type of testing you are trying to do.
+
 | Name                            | Type            | Environment Variable                         | Default Value                                                 | Description                                                                                                                                                                                    |
 | ------------------------------- | --------------- | -------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rpc_url`                       | `Option<Url>`   | `ESPRESSO_SEQUENCER_L1_PROVIDER`             | Automatically launched Anvil node if not provided.             | The JSON-RPC endpoint of the L1. If not provided, an Anvil node will be launched automatically.                                                                                                 |
+| `rpc_url`                       | `Option<Url>`   | `ESPRESSO_SEQUENCER_L1_PROVIDER`             | Automatically launched Anvil node if not provided.            | The JSON-RPC endpoint of the L1. If not provided, an Anvil node will be launched automatically.                                                                                                |
 | `mnemonic`                      | `String`        | `ESPRESSO_SEQUENCER_ETH_MNEMONIC`            | `test test test test test test test test test test test junk` | Mnemonic for an L1 wallet. This wallet is used to deploy the contracts, so the account indicated by`ACCOUNT_INDEX` must be funded with ETH.                                                    |
 | `account_index`                 | `u32`           | `ESPRESSO_DEPLOYER_ACCOUNT_INDEX`            | `0`                                                           | Account index of the L1 wallet generated from`MNEMONIC`. Used when deploying contracts.                                                                                                        |
 | `sequencer_api_port`            | `u16`           | `ESPRESSO_SEQUENCER_API_PORT`                | Required                                                      | Port that the HTTP API will use.                                                                                                                                                               |

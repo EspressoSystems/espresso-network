@@ -1,13 +1,17 @@
+use std::str::FromStr;
+
 use anyhow::{bail, ensure, Context};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use contract_bindings::fee_contract::DepositFilter;
+use contract_bindings_alloy::feecontract::FeeContract::Deposit;
+use contract_bindings_ethers::fee_contract::DepositFilter;
 use ethers::{
     prelude::{Address, U256},
     utils::{parse_units, ParseUnits},
 };
+use ethers_conv::ToEthers;
 use hotshot_query_service::explorer::MonetaryValue;
 use hotshot_types::traits::block_contents::BuilderFee;
 use itertools::Itertools;
@@ -20,7 +24,6 @@ use num_traits::CheckedSub;
 use sequencer_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
-use std::str::FromStr;
 use thiserror::Error;
 
 use crate::{
@@ -130,6 +133,15 @@ impl From<DepositFilter> for FeeInfo {
         Self {
             amount: item.amount.into(),
             account: item.user.into(),
+        }
+    }
+}
+
+impl From<Deposit> for FeeInfo {
+    fn from(item: Deposit) -> Self {
+        Self {
+            amount: item.amount.to_ethers().into(),
+            account: item.user.to_ethers().into(),
         }
     }
 }
@@ -379,7 +391,7 @@ impl FeeAccountProof {
                     .elem()
                     .context("presence proof is missing account balance")?
                     .0)
-            }
+            },
             FeeMerkleProof::Absence(proof) => {
                 let tree = FeeMerkleTree::from_commitment(comm);
                 ensure!(
@@ -387,7 +399,7 @@ impl FeeAccountProof {
                     "invalid proof"
                 );
                 Ok(0.into())
-            }
+            },
         }
     }
 
@@ -402,11 +414,11 @@ impl FeeAccountProof {
                     proof,
                 )?;
                 Ok(())
-            }
+            },
             FeeMerkleProof::Absence(proof) => {
                 tree.non_membership_remember(FeeAccount(self.account), proof)?;
                 Ok(())
-            }
+            },
         }
     }
 }
@@ -431,14 +443,14 @@ pub fn retain_accounts(
                 // This remember cannot fail, since we just constructed a valid proof, and are
                 // remembering into a tree with the same commitment.
                 snapshot.remember(account, *elem, proof).unwrap();
-            }
+            },
             LookupResult::NotFound(proof) => {
                 // Likewise this cannot fail.
                 snapshot.non_membership_remember(account, proof).unwrap()
-            }
+            },
             LookupResult::NotInMemory => {
                 bail!("missing account {account}");
-            }
+            },
         }
     }
 
@@ -449,9 +461,8 @@ pub fn retain_accounts(
 mod test {
     use ethers::abi::Address;
 
-    use crate::{FeeAccount, FeeAmount, FeeInfo};
-
     use super::IterableFeeInfo;
+    use crate::{FeeAccount, FeeAmount, FeeInfo};
 
     #[test]
     fn test_iterable_fee_info() {

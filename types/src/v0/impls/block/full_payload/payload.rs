@@ -3,22 +3,21 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_query_service::availability::QueryablePayload;
-use hotshot_types::data::ViewNumber;
 use hotshot_types::{
+    data::ViewNumber,
     traits::{BlockPayload, EncodeBytes},
     utils::BuilderCommitment,
-    vid::{VidCommon, VidSchemeType},
+    vid::advz::{ADVZCommon, ADVZScheme},
 };
 use jf_vid::VidScheme;
 use sha2::Digest;
 use thiserror::Error;
 
-use crate::Transaction;
 use crate::{
     v0::impls::{NodeState, ValidatedState},
     v0_1::ChainConfig,
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
-    NsTableBuilder, Payload, PayloadByteLen, SeqTypes, TxProof,
+    NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxProof,
 };
 
 #[derive(serde::Deserialize, serde::Serialize, Error, Debug, Eq, PartialEq)]
@@ -64,7 +63,7 @@ impl Payload {
         self.read_ns_payload(&ns_payload_range)
     }
 
-    pub(crate) fn byte_len(&self) -> PayloadByteLen {
+    pub fn byte_len(&self) -> PayloadByteLen {
         PayloadByteLen(self.raw_payload.len())
     }
 
@@ -230,10 +229,10 @@ impl QueryablePayload<SeqTypes> for Payload {
         // TODO HACK! THE RETURNED PROOF MIGHT FAIL VERIFICATION.
         // https://github.com/EspressoSystems/hotshot-query-service/issues/639
         //
-        // Need a `VidCommon` to proceed. Need to modify `QueryablePayload`
-        // trait to add a `VidCommon` arg. In the meantime tests fail if I leave
+        // Need a `ADVZCommon` to proceed. Need to modify `QueryablePayload`
+        // trait to add a `ADVZCommon` arg. In the meantime tests fail if I leave
         // it `todo!()`, so this hack allows tests to pass.
-        let common = hotshot_types::vid::vid_scheme(10)
+        let common = hotshot_types::vid::advz::advz_scheme(10)
             .disperse(&self.raw_payload)
             .unwrap()
             .common;
@@ -263,31 +262,31 @@ impl EncodeBytes for Payload {
 }
 
 impl PayloadByteLen {
-    /// Extract payload byte length from a [`VidCommon`] and construct a new [`Self`] from it.
-    pub fn from_vid_common(common: &VidCommon) -> Self {
-        Self(usize::try_from(VidSchemeType::get_payload_byte_len(common)).unwrap())
+    /// Extract payload byte length from a [`ADVZCommon`] and construct a new [`Self`] from it.
+    pub fn from_vid_common(common: &ADVZCommon) -> Self {
+        Self(usize::try_from(ADVZScheme::get_payload_byte_len(common)).unwrap())
     }
 
     #[allow(clippy::result_unit_err)]
-    /// Is the payload byte length declared in a [`VidCommon`] equal [`Self`]?
-    pub fn is_consistent(&self, common: &VidCommon) -> bool {
+    /// Is the payload byte length declared in a [`ADVZCommon`] equal [`Self`]?
+    pub fn is_consistent(&self, common: &ADVZCommon) -> bool {
         // failure to convert to usize implies that `common` cannot be
         // consistent with `self`.
-        let expected = match usize::try_from(VidSchemeType::get_payload_byte_len(common)) {
+        let expected = match usize::try_from(ADVZScheme::get_payload_byte_len(common)) {
             Ok(n) => n,
             Err(_) => {
                 tracing::warn!(
-                    "VidCommon byte len u32 {} should convert to usize",
-                    VidSchemeType::get_payload_byte_len(common)
+                    "ADVZCommon byte len u32 {} should convert to usize",
+                    ADVZScheme::get_payload_byte_len(common)
                 );
                 return false;
-            }
+            },
         };
 
         self.0 == expected
     }
 
-    pub(in crate::v0::impls::block::full_payload) fn as_usize(&self) -> usize {
+    pub fn as_usize(&self) -> usize {
         self.0
     }
 }

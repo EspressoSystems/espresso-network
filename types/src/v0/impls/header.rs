@@ -1,8 +1,13 @@
+use std::fmt;
+
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+use ethers_conv::ToAlloy;
+use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
+    data::VidCommitment,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::NodeType,
@@ -10,32 +15,32 @@ use hotshot_types::{
         BlockPayload, ValidatedState as _,
     },
     utils::BuilderCommitment,
-    vid::{VidCommitment, VidCommon, VidSchemeType},
 };
 use jf_merkle_tree::{AppendableMerkleTreeScheme, MerkleTreeScheme};
-use jf_vid::VidScheme;
 use serde::{
     de::{self, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use serde_json::{Map, Value};
-use std::fmt;
 use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
+use super::{
+    instance_state::NodeState, state::ValidatedState, v0_1::RewardMerkleCommitment, v0_3::Validator,
+};
 use crate::{
     v0::{
         header::{EitherOrVersion, VersionedHeader},
+        impls::reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
         MarketplaceVersion,
     },
     v0_1, v0_2, v0_3,
     v0_99::{self, ChainConfig, IterableFeeInfo, SolverAuctionResults},
-    BlockMerkleCommitment, BuilderSignature, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
-    Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes, UpgradeType,
+    BlockMerkleCommitment, BuilderSignature, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
+    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes,
+    UpgradeType,
 };
-
-use super::{instance_state::NodeState, state::ValidatedState};
 
 impl v0_1::Header {
     pub(crate) fn commit(&self) -> Commitment<Header> {
@@ -55,7 +60,7 @@ impl v0_1::Header {
             .u64_field("l1_head", self.l1_head)
             .optional("l1_finalized", &self.l1_finalized)
             .constant_str("payload_commitment")
-            .fixed_size_bytes(self.payload_commitment.as_ref().as_ref())
+            .fixed_size_bytes(self.payload_commitment.as_ref())
             .constant_str("builder_commitment")
             .fixed_size_bytes(self.builder_commitment.as_ref())
             .field("ns_table", self.ns_table.commit())
@@ -174,7 +179,7 @@ impl<'de> Deserialize<'de> for Header {
                     )),
                     EitherOrVersion::Version(v) => {
                         Err(serde::de::Error::custom(format!("invalid version {v:?}")))
-                    }
+                    },
                 }
             }
 
@@ -211,7 +216,7 @@ impl<'de> Deserialize<'de> for Header {
                         )),
                         EitherOrVersion::Version(v) => {
                             Err(de::Error::custom(format!("invalid version {v:?}")))
-                        }
+                        },
                         chain_config => Err(de::Error::custom(format!(
                             "expected version, found chain_config {chain_config:?}"
                         ))),
@@ -284,6 +289,7 @@ impl Header {
         ns_table: NsTable,
         fee_merkle_tree_root: FeeMerkleCommitment,
         block_merkle_tree_root: BlockMerkleCommitment,
+        reward_merkle_tree_root: Option<RewardMerkleCommitment>,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
         version: Version,
@@ -343,6 +349,7 @@ impl Header {
                 fee_merkle_tree_root,
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root: reward_merkle_tree_root.unwrap(),
             }),
 
             99 => Self::V99(v0_99::Header {
@@ -407,6 +414,7 @@ impl Header {
         chain_config: ChainConfig,
         version: Version,
         auction_results: Option<SolverAuctionResults>,
+        validator: Option<Validator<BLSPubKey>>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -480,12 +488,7 @@ impl Header {
         {
             if version < MarketplaceVersion::version() {
                 ensure!(
-                    fee_account.validate_fee_signature(
-                        fee_signature,
-                        *fee_amount,
-                        &ns_table,
-                        &payload_commitment,
-                    ),
+                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table,),
                     "invalid builder signature"
                 );
             } else {
@@ -515,6 +518,16 @@ impl Header {
         let Version { major, minor } = version;
 
         assert!(major == 0, "Invalid major version {major}");
+
+        // DISTRIBUTE REWARDS
+        // TODO(abdul): Change this to version >= EpochVersion::version()
+        // when we deploy the permissionless contract in native demo
+        // so that marketplace version also supports this,
+        // and the marketplace integration test passes
+        if let Some(validator) = validator {
+            let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
+            state.reward_merkle_tree = reward_state;
+        }
 
         let header = match minor {
             1 => Self::V1(v0_1::Header {
@@ -562,6 +575,7 @@ impl Header {
                 ns_table,
                 block_merkle_tree_root,
                 fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
             }),
@@ -609,7 +623,7 @@ impl Header {
                     .as_ref()
                     .fetch_chain_config(validated_cf.commit())
                     .await
-            }
+            },
         }
     }
 }
@@ -743,6 +757,17 @@ impl Header {
         }
     }
 
+    /// Fee paid by the block builder
+    pub fn reward_merkle_tree_root(&self) -> Option<RewardMerkleCommitment> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(_) => None,
+            Self::V3(fields) => Some(fields.reward_merkle_tree_root),
+            // TODO: add reward commitment to v99
+            Self::V99(_) => None,
+        }
+    }
+
     /// Account (etheruem address) of builder
     ///
     /// This signature is not considered formally part of the header; it is just evidence proving
@@ -812,7 +837,6 @@ impl BlockHeader<SeqTypes> for Header {
             height = parent_leaf.block_header().block_number() + 1,
             parent_view = ?parent_leaf.view_number(),
             payload_commitment,
-            payload_size = VidSchemeType::get_payload_byte_len(&_vid_common),
             ?auction_results,
             version,
         )
@@ -826,7 +850,6 @@ impl BlockHeader<SeqTypes> for Header {
         metadata: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
         builder_fee: Vec<BuilderFee<SeqTypes>>,
         view_number: u64,
-        _vid_common: VidCommon,
         auction_results: Option<SolverAuctionResults>,
         version: Version,
     ) -> Result<Self, Self::Error> {
@@ -838,11 +861,12 @@ impl BlockHeader<SeqTypes> for Header {
         let mut validated_state = parent_state.clone();
 
         let chain_config = if version >= MarketplaceVersion::version() {
-            match instance_state.upgrades.get(&version) {
-                Some(upgrade) => match upgrade.upgrade_type {
-                    UpgradeType::Marketplace { chain_config } => chain_config,
-                    UpgradeType::Fee { chain_config } => chain_config,
-                },
+            match instance_state
+                .upgrades
+                .get(&version)
+                .and_then(|u| u.upgrade_type.chain_config())
+            {
+                Some(cf) => cf,
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
             }
         } else {
@@ -860,7 +884,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state
                 .l1_client
                 .get_finalized_deposits(
-                    addr,
+                    addr.to_alloy(),
                     parent_leaf
                         .block_header()
                         .l1_finalized()
@@ -941,6 +965,7 @@ impl BlockHeader<SeqTypes> for Header {
             chain_config,
             version,
             auction_results,
+            None,
         )?)
     }
 
@@ -950,7 +975,6 @@ impl BlockHeader<SeqTypes> for Header {
             height = parent_leaf.block_header().block_number() + 1,
             parent_view = ?parent_leaf.view_number(),
             payload_commitment,
-            payload_size = VidSchemeType::get_payload_byte_len(&_vid_common),
             version,
         )
     )]
@@ -962,7 +986,6 @@ impl BlockHeader<SeqTypes> for Header {
         builder_commitment: BuilderCommitment,
         metadata: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
         builder_fee: BuilderFee<SeqTypes>,
-        _vid_common: VidCommon,
         version: Version,
     ) -> Result<Self, Self::Error> {
         tracing::info!("preparing to propose legacy header");
@@ -995,7 +1018,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state
                 .l1_client
                 .get_finalized_deposits(
-                    addr,
+                    addr.to_alloy(),
                     parent_leaf
                         .block_header()
                         .l1_finalized()
@@ -1059,6 +1082,22 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
+        // TODO(abdul): Change this to version >= EpochVersion::version()
+        // when we deploy the permissionless contract in native demo
+        // so that marketplace version also supports this,
+        // and the marketplace integration test passes
+        let mut leader_config = None;
+        // Rewards are distributed only if the current epoch is not the first or second epoch
+        // this is because we don't have stake table from the contract for the first two epochs
+        if version == EpochVersion::version()
+            && !first_two_epochs(parent_leaf.height(), instance_state).await?
+        {
+            leader_config = Some(
+                catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)
+                    .await?,
+            );
+        };
+
         Ok(Self::from_info(
             payload_commitment,
             builder_commitment,
@@ -1074,6 +1113,7 @@ impl BlockHeader<SeqTypes> for Header {
             chain_config,
             version,
             None,
+            leader_config,
         )?)
     }
 
@@ -1086,10 +1126,12 @@ impl BlockHeader<SeqTypes> for Header {
         let ValidatedState {
             fee_merkle_tree,
             block_merkle_tree,
+            reward_merkle_tree,
             ..
         } = ValidatedState::genesis(instance_state).0;
         let block_merkle_tree_root = block_merkle_tree.commitment();
         let fee_merkle_tree_root = fee_merkle_tree.commitment();
+        let reward_merkle_tree_root = reward_merkle_tree.commitment();
 
         //  The Header is versioned,
         //  so we create the genesis header for the current version of the sequencer.
@@ -1107,6 +1149,7 @@ impl BlockHeader<SeqTypes> for Header {
             ns_table.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
+            Some(reward_merkle_tree_root),
             vec![FeeInfo::genesis()],
             vec![],
             instance_state.current_version,
@@ -1182,15 +1225,19 @@ mod test_headers {
     use std::sync::Arc;
 
     use ethers::{types::Address, utils::Anvil};
-    use hotshot_types::{traits::signature_key::BuilderSignatureKey, vid::vid_scheme};
-
+    use hotshot_query_service::testing::mocks::MockVersions;
+    use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::test_utils::setup_test;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
     use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
 
-    use crate::{eth_signature_key::EthKeyPair, mock::MockStateCatchup, Leaf};
-
     use super::*;
+    use crate::{
+        eth_signature_key::EthKeyPair,
+        mock::MockStateCatchup,
+        v0_1::{RewardInfo, RewardMerkleTree},
+        Leaf,
+    };
 
     #[derive(Debug, Default)]
     #[must_use]
@@ -1239,21 +1286,27 @@ mod test_headers {
                 Vec::from([(fee_info.account(), fee_info.amount())]),
             )
             .unwrap();
+
+            let reward_info = RewardInfo {
+                account: Default::default(),
+                amount: Default::default(),
+            };
+            let reward_merkle_tree = RewardMerkleTree::from_kv_set(
+                20,
+                Vec::from([(reward_info.account, reward_info.amount)]),
+            )
+            .unwrap();
             let mut validated_state = ValidatedState {
                 block_merkle_tree: block_merkle_tree.clone(),
                 fee_merkle_tree,
+                reward_merkle_tree,
                 chain_config: genesis.instance_state.chain_config.into(),
             };
 
             let (fee_account, fee_key) = FeeAccount::generated_from_seed_indexed([0; 32], 0);
             let fee_amount = 0;
-            let fee_signature = FeeAccount::sign_fee(
-                &fee_key,
-                fee_amount,
-                &genesis.ns_table,
-                &genesis.header.payload_commitment(),
-            )
-            .unwrap();
+            let fee_signature =
+                FeeAccount::sign_fee(&fee_key, fee_amount, &genesis.ns_table).unwrap();
 
             let header = Header::from_info(
                 genesis.header.payload_commitment(),
@@ -1275,6 +1328,7 @@ mod test_headers {
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 Version { major: 0, minor: 1 },
+                None,
                 None,
             )
             .unwrap();
@@ -1465,7 +1519,7 @@ mod test_headers {
         async fn default() -> Self {
             let instance_state = NodeState::mock();
             let validated_state = ValidatedState::genesis(&instance_state).0;
-            let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state)
+            let leaf: Leaf2 = Leaf::genesis::<MockVersions>(&validated_state, &instance_state)
                 .await
                 .into();
             let header = leaf.block_header().clone();
@@ -1487,14 +1541,12 @@ mod test_headers {
         let anvil = Anvil::new().block_time(1u32).spawn();
         let mut genesis_state = NodeState::mock()
             .with_l1(
-                L1Client::new(anvil.endpoint().parse().unwrap())
-                    .await
-                    .unwrap(),
+                L1Client::new(vec![anvil.endpoint().parse().unwrap()])
+                    .expect("Failed to create L1 client"),
             )
             .with_current_version(StaticVersion::<0, 1>::version());
 
         let genesis = GenesisForTest::default().await;
-        let vid_common = vid_scheme(1).disperse([]).unwrap().common;
 
         let mut parent_state = genesis.validated_state.clone();
 
@@ -1530,8 +1582,7 @@ mod test_headers {
         let payload_commitment = parent_header.payload_commitment();
         let builder_commitment = parent_header.builder_commitment();
         let ns_table = genesis.ns_table;
-        let fee_signature =
-            FeeAccount::sign_fee(&key_pair, fee_amount, &ns_table, &payload_commitment).unwrap();
+        let fee_signature = FeeAccount::sign_fee(&key_pair, fee_amount, &ns_table).unwrap();
         let builder_fee = BuilderFee {
             fee_amount,
             fee_account: key_pair.fee_account(),
@@ -1545,7 +1596,6 @@ mod test_headers {
             builder_commitment.clone(),
             ns_table,
             builder_fee,
-            vid_common.clone(),
             StaticVersion::<0, 1>::version(),
         )
         .await
@@ -1554,7 +1604,7 @@ mod test_headers {
         let mut proposal_state = parent_state.clone();
         for fee_info in genesis_state
             .l1_client
-            .get_finalized_deposits(Address::default(), None, 0)
+            .get_finalized_deposits(Address::default().to_alloy(), None, 0)
             .await
         {
             proposal_state.insert_fee_deposit(fee_info).unwrap();
@@ -1578,7 +1628,7 @@ mod test_headers {
         // ValidatedTransition::new(
         //     proposal_state.clone(),
         //     &parent_leaf.block_header(),
-        //     Proposal::new(&proposal, VidSchemeType::get_payload_byte_len(&vid_common)),
+        //     Proposal::new(&proposal, ADVZScheme::get_payload_byte_len(&vid_common)),
         // )
         // .validate()
         // .unwrap();
@@ -1624,6 +1674,7 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
+            None,
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1647,6 +1698,7 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
+            None,
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1670,6 +1722,7 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
+            None,
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,

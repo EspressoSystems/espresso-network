@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>HotShot web UI</title>
+        <style>
+            .hsplit {
+                width: 100%;
+                display: flex;
+                justify-content: space-evenly;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="hsplit">
+            <div>
+                <b id="identifier"></b><br />
+                min/max peers: <span id="min_peers"></span>/<span id="max_peers"></span><br />
+                <div id="state"></div>
+                <div class="hsplit">
+                    <div>
+                        <b>Connected</b>
+                        <ul id="connected_peers"></ul>
+                    </div>
+                    <div>
+                        <b>Connecting</b>
+                        <ul id="connecting_peers"></ul>
+                    </div>
+                    <div>
+                        <b>Known</b>
+                        <ul id="known_peers"></ul>
+                    </div>
+                </div>
+            </div>
+            <div id="log">
+            </div>
+        </div>
+        
+        <script type="text/javascript">
+            function connect() {
+                let reconnect_timeout = 0;
+
+                // Connects to examples/common/web.rs. See that file for more info
+                const evtSource = new EventSource("/sse");
+                evtSource.onopen = function(msg) {
+                    log("connected: " + JSON.stringify(msg));
+                };
+                evtSource.addEventListener("node_state", function(msg) {
+                    log("New state");
+                    update_ui(JSON.parse(msg.data));
+                });
+                evtSource.onerror = function() {
+                    log("error, reconnecting in 1s");
+                    clearTimeout(reconnect_timeout);
+                    reconnect_timeout = setTimeout(connect, 1000);
+                };
+            }
+
+            function update_ui(state) {
+                console.log(state);
+                // TODO: Typescript the state for auto completion etc
+                document.getElementById("identifier").innerText = state.network_config.node_type + ": " + state.network_config.identity;
+                document.getElementById("min_peers").innerText = state.network_config.min_num_peers;
+                document.getElementById("max_peers").innerText = state.network_config.max_num_peers;
+
+                switch(state.network_config.node_type){
+                    case "Conductor":
+                        let dl = document.createElement("dl");
+                        for (const key of Object.keys(state.state)) {
+                            let dt = document.createElement("dt");
+                            dt.innerText = key;
+                            let dd = document.createElement("dd");
+                            dd.innerText = state.state[key];
+                            dl.append(dt, dd);
+                        }
+                        document.getElementById("state").innerHTML = "";
+                        document.getElementById("state").append(dl)
+                        break;
+                    default:
+                        document.getElementById("state").innerText = "State not implemented";
+                }
+
+                peer_list(state.connection_state.connected_peers, document.getElementById("connected_peers"));
+                peer_list(state.connection_state.connecting_peers, document.getElementById("connecting_peers"));
+                peer_list(state.connection_state.known_peers, document.getElementById("known_peers"));
+            }
+
+            function peer_list(peers, target) {
+                target.innerHTML = "";
+                for (const peer of peers) {
+                    let li = document.createElement("li");
+                    li.innerText = peer;
+                    target.append(li);
+                }
+            }
+
+            function log(msg) {
+                let entry = document.createElement("p");
+                entry.innerText = msg.toString();
+                document.getElementById("log").prepend(entry);
+            }
+
+            connect();
+        </script>
+    </body>
+</html>

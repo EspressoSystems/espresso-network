@@ -1,0 +1,33 @@
+[package]
+name = "hotshot-example-types"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Types and traits for the HotShot consesus module"
+authors = { workspace = true }
+license = "MIT"
+
+[features]
+default = []
+# NOTE this is used to activate the slow tests we don't wish to run in CI
+slow-tests = []
+
+[dependencies]
+anyhow = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+committable = { workspace = true }
+hotshot = { workspace = true }
+hotshot-task-impls = { workspace = true }
+hotshot-types = { workspace = true }
+jf-vid = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+sha3 = "^0.10"
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }

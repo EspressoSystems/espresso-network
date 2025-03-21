@@ -2,8 +2,8 @@
   "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
   "builder_commitment": "BUILDER_COMMITMENT~jlEvJoHPETCSwXF6UKcD22zOjfoHGuyVFTVkP_BNc-no",
   "builder_signature": {
-    "r": "0xa1c3795850b7b490e616b60fead89753841fbc9fffe1a939d483f1d959ad1c45",
-    "s": "0x20228f5b63b14792d371dce479978e45020f19602189ef6d325b73029a2848ac",
+    "r": "0xa66e49fb371b83d36a6f326b95eb6146c397f3b037fd04b5f3c973d0e5624105",
+    "s": "0x43c6d12317c58dd8f831d34e2fa64bba04f51374ef7fce826121ba5dc5df64cf",
     "v": 27
   },
   "chain_config": {

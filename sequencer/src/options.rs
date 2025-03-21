@@ -1,8 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
 use core::fmt::Display;
-use jf_signature::{bls_over_bn254, schnorr};
-use sequencer_utils::logging;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -11,14 +9,16 @@ use std::{
     path::PathBuf,
     time::Duration,
 };
-use tagged_base64::TaggedBase64;
 
 use anyhow::{bail, Context};
 use clap::{error::ErrorKind, Args, FromArgMatches, Parser};
 use derivative::Derivative;
 use espresso_types::{parse_duration, BackoffParams, L1ClientOptions};
 use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+use jf_signature::{bls_over_bn254, schnorr};
 use libp2p::Multiaddr;
+use sequencer_utils::logging;
+use tagged_base64::TaggedBase64;
 use url::Url;
 
 use crate::{api, persistence, proposal_fetcher::ProposalFetcherConfig};
@@ -340,10 +340,12 @@ pub struct Options {
     #[clap(
         long,
         env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
-        default_value = "http://localhost:8545"
+        default_value = "http://localhost:8545",
+        value_delimiter = ',',
+        num_args = 1..,
     )]
-    #[derivative(Debug(format_with = "Display::fmt"))]
-    pub l1_provider_url: Url,
+    #[derivative(Debug = "ignore")]
+    pub l1_provider_url: Vec<Url>,
 
     /// Configuration for the L1 client.
     #[clap(flatten)]
@@ -470,10 +472,10 @@ fn fmt_opt_urls(
             write!(fmt, "Some(")?;
             fmt_urls(urls, fmt)?;
             write!(fmt, ")")?;
-        }
+        },
         None => {
             write!(fmt, "None")?;
-        }
+        },
     }
     Ok(())
 }
@@ -534,26 +536,25 @@ impl ModuleArgs {
             match module {
                 SequencerModule::Storage(m) => {
                     curr = m.add(&mut modules.storage_fs, &mut provided)?
-                }
+                },
                 SequencerModule::StorageFs(m) => {
                     curr = m.add(&mut modules.storage_fs, &mut provided)?
-                }
+                },
                 SequencerModule::StorageSql(m) => {
                     curr = m.add(&mut modules.storage_sql, &mut provided)?
-                }
+                },
                 SequencerModule::Http(m) => curr = m.add(&mut modules.http, &mut provided)?,
                 SequencerModule::Query(m) => curr = m.add(&mut modules.query, &mut provided)?,
                 SequencerModule::Submit(m) => curr = m.add(&mut modules.submit, &mut provided)?,
                 SequencerModule::Status(m) => curr = m.add(&mut modules.status, &mut provided)?,
-                SequencerModule::State(m) => curr = m.add(&mut modules.state, &mut provided)?,
                 SequencerModule::Catchup(m) => curr = m.add(&mut modules.catchup, &mut provided)?,
                 SequencerModule::Config(m) => curr = m.add(&mut modules.config, &mut provided)?,
                 SequencerModule::HotshotEvents(m) => {
                     curr = m.add(&mut modules.hotshot_events, &mut provided)?
-                }
+                },
                 SequencerModule::Explorer(m) => {
                     curr = m.add(&mut modules.explorer, &mut provided)?
-                }
+                },
             }
         }
 
@@ -584,7 +585,6 @@ module!("http", api::options::Http);
 module!("query", api::options::Query, requires: "http");
 module!("submit", api::options::Submit, requires: "http");
 module!("status", api::options::Status, requires: "http");
-module!("state", api::options::State, requires: "http", "storage-sql");
 module!("catchup", api::options::Catchup, requires: "http");
 module!("config", api::options::Config, requires: "http");
 module!("hotshot-events", api::options::HotshotEvents, requires: "http");
@@ -658,11 +658,9 @@ enum SequencerModule {
     ///
     /// This module requires the http module to be started.
     Catchup(Module<api::options::Catchup>),
+    /// Run the config API module.
     Config(Module<api::options::Config>),
-    /// Run the merklized state  API module.
-    ///
-    /// This module requires the http and storage-sql modules to be started.
-    State(Module<api::options::State>),
+
     /// Run the hotshot events API module.
     ///
     /// This module requires the http module to be started.
@@ -681,7 +679,6 @@ pub struct Modules {
     pub query: Option<api::options::Query>,
     pub submit: Option<api::options::Submit>,
     pub status: Option<api::options::Status>,
-    pub state: Option<api::options::State>,
     pub catchup: Option<api::options::Catchup>,
     pub config: Option<api::options::Config>,
     pub hotshot_events: Option<api::options::HotshotEvents>,

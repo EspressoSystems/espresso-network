@@ -14,7 +14,7 @@ ark-ff = { workspace = true }
 ark-srs = { workspace = true }
 ark-std = { workspace = true }
 clap = { workspace = true }
-contract-bindings = { path = "../contract-bindings" }
+contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 displaydoc = { version = "0.2.3", default-features = false }
 espresso-types = { path = "../types" }
 ethers = { workspace = true }

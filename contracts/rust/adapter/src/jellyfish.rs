@@ -13,10 +13,12 @@ use ethers::{
     utils::hex::ToHex,
 };
 use jf_pcs::prelude::Commitment;
-use jf_plonk::constants::KECCAK256_STATE_SIZE;
-use jf_plonk::proof_system::structs::{OpenKey, Proof, ProofEvaluations, VerifyingKey};
-use jf_plonk::testing_apis::Challenges;
-use jf_plonk::transcript::SolidityTranscript;
+use jf_plonk::{
+    constants::KECCAK256_STATE_SIZE,
+    proof_system::structs::{OpenKey, Proof, ProofEvaluations, VerifyingKey},
+    testing_apis::Challenges,
+    transcript::SolidityTranscript,
+};
 use jf_utils::to_bytes;
 use num_bigint::BigUint;
 use num_traits::Num;
@@ -376,7 +378,7 @@ impl From<ParsedPlonkProof> for Proof<Bn254> {
 // NOTE: this extra "middle-man" conversion is the unfortunate result of type in rust binding is auto-generated,
 // and are mutually oblivious of the types in Jellyfish, thus no From can be implemented at either side.
 // Since we cannot implement foreign traits on foreign types, we can only transit via our own `ParsedPlonkProof`.
-impl From<ParsedPlonkProof> for contract_bindings::i_plonk_verifier::PlonkProof {
+impl From<ParsedPlonkProof> for contract_bindings_ethers::i_plonk_verifier::PlonkProof {
     fn from(p: ParsedPlonkProof) -> Self {
         // parsed_proof is our own defined type, which share exactly the same structure and field types
         // as the auto-generated rust binding types, thus, we can safely do mem::transmute()
@@ -390,7 +392,8 @@ fn test_unsafe_plonk_proof_conversion() {
     let mut rng = jf_utils::test_rng();
     for _ in 0..10 {
         let parsed_proof = ParsedPlonkProof::dummy(&mut rng);
-        let proof: contract_bindings::i_plonk_verifier::PlonkProof = parsed_proof.clone().into();
+        let proof: contract_bindings_ethers::i_plonk_verifier::PlonkProof =
+            parsed_proof.clone().into();
         // this test abi.encode hex string of both struct which includes the types and values
         assert_eq!(parsed_proof.encode_hex(), proof.encode_hex());
     }

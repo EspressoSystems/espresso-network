@@ -20,8 +20,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Just
-        run: sudo apt-get install -y just
+      - uses: taiki-e/install-action@just
 
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching

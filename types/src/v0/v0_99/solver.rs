@@ -1,4 +1,4 @@
-use crate::{FeeAmount, NamespaceId, SeqTypes, Update};
+use crate::{v0::utils::Update, FeeAmount, NamespaceId, SeqTypes};
 use hotshot::types::SignatureKey;
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};

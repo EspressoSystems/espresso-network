@@ -4,13 +4,14 @@ pragma solidity ^0.8.0;
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
+import { InitializedAt } from "./InitializedAt.sol";
 
 /**
  * @title SimpleStakeTable
  * @dev An stake table mapping with owner-only access control.
  */
-contract PermissionedStakeTable is Ownable {
-    event StakersUpdated(NodeInfo[] removed, NodeInfo[] added);
+contract PermissionedStakeTable is Ownable, InitializedAt {
+    event StakersUpdated(BN254.G2Point[] removed, NodeInfo[] added);
 
     error StakerAlreadyExists(BN254.G2Point);
     error StakerNotFound(BN254.G2Point);
@@ -27,13 +28,15 @@ contract PermissionedStakeTable is Ownable {
     // State mapping from staker IDs to their staking status
     mapping(bytes32 nodeID => bool isStaker) private stakers;
 
-    constructor(NodeInfo[] memory initialStakers) Ownable(msg.sender) {
+    constructor(NodeInfo[] memory initialStakers) Ownable(msg.sender) InitializedAt() {
+        // This contract isn't deployed behind a proxy, so we manually initialize the block number.
+        initializedAtBlock = block.number;
         insert(initialStakers);
     }
 
     // public methods
 
-    function update(NodeInfo[] memory stakersToRemove, NodeInfo[] memory newStakers)
+    function update(BN254.G2Point[] memory stakersToRemove, NodeInfo[] memory newStakers)
         public
         onlyOwner
     {
@@ -55,12 +58,12 @@ contract PermissionedStakeTable is Ownable {
         }
     }
 
-    function remove(NodeInfo[] memory stakersToRemove) internal {
+    function remove(BN254.G2Point[] memory stakersToRemove) internal {
         // TODO: revert if array empty
         for (uint256 i = 0; i < stakersToRemove.length; i++) {
-            bytes32 stakerID = _hashBlsKey(stakersToRemove[i].blsVK);
+            bytes32 stakerID = _hashBlsKey(stakersToRemove[i]);
             if (!stakers[stakerID]) {
-                revert StakerNotFound(stakersToRemove[i].blsVK);
+                revert StakerNotFound(stakersToRemove[i]);
             }
             stakers[stakerID] = false;
         }

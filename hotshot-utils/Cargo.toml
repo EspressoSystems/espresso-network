@@ -1,0 +1,10 @@
+[package]
+name = "hotshot-utils"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Utils"
+license = "MIT"
+
+[dependencies]
+tracing = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }

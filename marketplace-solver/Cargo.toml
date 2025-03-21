@@ -5,10 +5,7 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2021"
 
 [features]
-testing = [
-	"hotshot-query-service/testing",
-	"portpicker",
-]
+testing = ["hotshot-query-service/testing", "portpicker"]
 embedded-db  = []
 
 [dependencies]

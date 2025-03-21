@@ -13,30 +13,40 @@ on:
   pull_request:
   workflow_dispatch:
 
-concurrency: 
+concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   cargo-features:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        command:
+          - just check-features-ci
+          - just check-features-ci --tests
     steps:
       - uses: taiki-e/install-action@cargo-hack
+      - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          tool-cache: false
+          dotnet: false
+          haskell: false
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
       # Note: this job doesn't use a cache on purpose because it mostly compiles
       # the crates in this repo over and over again with different feature
-      # combinations. Adding caching would not speed it up much and further
-      # contribute to our cache usage.
-
-      # Includes checks for `--no-default-features` and `--all-features` as well
-      # as each individual feature enabled.
-      - name: Check compilation for feature combinations
+      # combinations. The target directory gets really large. Adding caching
+      # would not speed it up much and further contribute to our cache usage.
+      - name: Check compilation feature combinations
         run: |
-          cargo hack check --feature-powerset
-
-      - name: Check compilation for feature combinations (--tests)
-        run: |
-          cargo hack check --feature-powerset --tests
+          ${{ matrix.command }}

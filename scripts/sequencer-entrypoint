@@ -11,6 +11,6 @@ if [ "$ESPRESSO_SEQUENCER_EMBEDDED_DB" = "true" ]; then
     echo "Starting sequencer with sqlite..."
     /bin/sequencer-sqlite -- storage-sql "$@"
 else
-    echo "Starting sequencer with postgres..."
+    echo "Starting sequencer..."
     /bin/sequencer-postgres "$@"
 fi

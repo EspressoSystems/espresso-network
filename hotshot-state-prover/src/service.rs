@@ -7,15 +7,15 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use contract_bindings::light_client::{LightClient, LightClientErrors};
+use contract_bindings_ethers::light_client::{LightClient, LightClientErrors};
 use displaydoc::Display;
-use ethers::middleware::{
-    gas_oracle::{GasCategory, GasOracle},
-    signer::SignerMiddlewareError,
-};
 use ethers::{
     core::k256::ecdsa::SigningKey,
-    middleware::SignerMiddleware,
+    middleware::{
+        gas_oracle::{GasCategory, GasOracle},
+        signer::SignerMiddlewareError,
+        SignerMiddleware,
+    },
     providers::{Http, Middleware, Provider, ProviderError},
     signers::{LocalWallet, Signer, Wallet},
     types::{transaction::eip2718::TypedTransaction, Address, U256},
@@ -42,8 +42,7 @@ use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
 use jf_signature::constants::CS_ID_SCHNORR;
-use sequencer_utils::blocknative::BlockNative;
-use sequencer_utils::deployer::is_proxy_contract;
+use sequencer_utils::{blocknative::BlockNative, deployer::is_proxy_contract};
 use serde::Deserialize;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
@@ -88,7 +87,10 @@ impl StateProverConfig {
         let provider = Provider::<Http>::try_from(self.provider.to_string())?;
 
         if !is_proxy_contract(&provider, self.light_client_address).await? {
-            anyhow::bail!("Light Client contract's address is not a proxy");
+            anyhow::bail!(
+                "Light Client contract's address {:?} is not a proxy",
+                self.light_client_address
+            );
         }
 
         Ok(())
@@ -152,12 +154,12 @@ async fn init_stake_table_from_sequencer(
                 Err(e) => {
                     tracing::error!("Failed to parse the network config: {e}");
                     sleep(Duration::from_secs(5)).await;
-                }
+                },
             },
             Err(e) => {
                 tracing::error!("Failed to fetch the network config: {e}");
                 sleep(Duration::from_secs(5)).await;
-            }
+            },
         }
     };
 
@@ -285,7 +287,7 @@ pub async fn read_contract_state(
         Err(e) => {
             tracing::error!("unable to read finalized_state from contract: {}", e);
             return Err(ProverError::ContractError(e.into()));
-        }
+        },
     };
     let st_state: ParsedStakeTableState = match contract.genesis_stake_table_state().call().await {
         Ok(s) => s.into(),
@@ -295,7 +297,7 @@ pub async fn read_contract_state(
                 e
             );
             return Err(ProverError::ContractError(e.into()));
-        }
+        },
     };
 
     Ok((state.into(), st_state.into()))
@@ -327,10 +329,10 @@ pub async fn submit_state_and_proof(
                         priority_fee
                     );
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!("!! BlockNative Price Oracle failed: {}", e);
-            }
+            },
         }
     }
 
@@ -694,7 +696,8 @@ mod test {
         genesis: ParsedLightClientState,
         stake_genesis: ParsedStakeTableState,
     ) -> Result<(Arc<SignerWallet>, LightClient<SignerWallet>)> {
-        let provider = Provider::<Http>::try_from(anvil.endpoint())?;
+        let provider =
+            Provider::<Http>::try_from(anvil.endpoint())?.interval(Duration::from_millis(20));
         let signer = Wallet::from(anvil.keys()[0].clone())
             .with_chain_id(provider.get_chainid().await?.as_u64());
         let l1_wallet = Arc::new(SignerWallet::new(provider.clone(), signer));
@@ -821,14 +824,6 @@ mod test {
             deploy_contract_for_test(&anvil, dummy_genesis.clone(), dummy_stake_genesis.clone())
                 .await?;
 
-        // now test if we can read from the contract
-        let genesis: ParsedLightClientState = contract.genesis_state().await?.into();
-        assert_eq!(genesis, dummy_genesis);
-
-        let stake_genesis: ParsedStakeTableState =
-            contract.genesis_stake_table_state().await?.into();
-        assert_eq!(stake_genesis, dummy_stake_genesis);
-
         let config = StateProverConfig {
             provider: Url::parse(anvil.endpoint().as_str())
                 .expect("Cannot parse anvil endpoint to URL."),
@@ -836,16 +831,13 @@ mod test {
             ..Default::default()
         };
 
-        let result = config.validate_light_client_contract().await;
-        // check if the result is an error
-        if let Err(e) = result {
-            // assert that the error message contains "Light Client contract's address is not a proxy"
-            assert!(e
-                .to_string()
-                .contains("Light Client contract's address is not a proxy"));
-        } else {
-            panic!("Expected the light contract to not be a proxy, but the validation succeeded");
-        }
+        assert!(config
+            .validate_light_client_contract()
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("not a proxy"));
         Ok(())
     }
 

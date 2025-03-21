@@ -6,16 +6,20 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+default = ["fee"]
 testing = [
-  "hotshot-testing",
-  "marketplace-builder-core",
-  "marketplace-builder-shared",
-  "espresso-types/testing",
-  "sequencer-utils/testing",
-  "hotshot-query-service/testing",
+    "hotshot-testing",
+    "marketplace-builder-core",
+    "espresso-types/testing",
+    "sequencer-utils/testing",
+    "hotshot-query-service/testing"
 ]
 benchmarking = []
-embedded-db = ["hotshot-query-service/embedded-db"]
+embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
+sqlite-unbundled = ["hotshot-query-service/sqlite-unbundled", "sqlx/sqlite-unbundled"]
+fee = []
+pos = []
+marketplace = []
 
 [[bin]]
 name = "espresso-dev-node"
@@ -48,27 +52,31 @@ async-lock = { workspace = true }
 async-once-cell = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
-todo_by = "0.3"
+byteorder = "1"
 
 # CDN imports
-cdn-broker = { workspace = true }
-cdn-marshal = { workspace = true }
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = ["global-permits"] }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-marshal" }
 
+alloy = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = "0.2"
-contract-bindings = { path = "../contract-bindings" }
+contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 espresso-types = { path = "../types" }
 ethers = { workspace = true }
+ethers-conv = { workspace = true }
 futures = { workspace = true }
+indexmap = { workspace = true }
 
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
+hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-stake-table = { workspace = true }
@@ -87,9 +95,7 @@ jf-rescue = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-vid = { workspace = true }
 libp2p = { workspace = true }
-libp2p-networking = { workspace = true }
 marketplace-builder-core = { workspace = true, optional = true }
-marketplace-builder-shared = { workspace = true, optional = true }
 marketplace-solver = { path = "../marketplace-solver" }
 num_enum = "0.7"
 parking_lot = "0.12"
@@ -98,29 +104,31 @@ priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
+request-response = { path = "../request-response" }
+semver = { workspace = true }
 sequencer-utils = { path = "../utils" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"                                                      # TODO temporary, used only for VID, should be set in hotshot
+sha2 = { workspace = true }
 snafu = "0.8"
 sqlx = { workspace = true, features = [
 	"bit-vec",
 	"postgres",
 	"runtime-tokio",
-	"sqlite",
 	"tls-native-tls",
 ] }
 static_assertions = "1"
 strum = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
-tempfile = { workspace = true, optional = true }
+tempfile = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
+todo_by = "0.3"
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = "0.3.18"
+tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }

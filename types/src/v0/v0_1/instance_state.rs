@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
-use crate::{v0_99::ChainConfig, Timestamp};
+use crate::{v0::utils::Timestamp, v0_99::ChainConfig};
 
 /// Represents the specific type of upgrade.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -9,15 +9,17 @@ use crate::{v0_99::ChainConfig, Timestamp};
 pub enum UpgradeType {
     Fee { chain_config: ChainConfig },
     Marketplace { chain_config: ChainConfig },
+    Epoch { chain_config: ChainConfig },
 }
 
 impl UpgradeType {
     /// Get the upgrade data from `UpgradeType`. As of this writing,
     /// we are only concerned w/ `ChainConfig`.
-    pub fn data(&self) -> ChainConfig {
+    pub fn chain_config(&self) -> Option<ChainConfig> {
         match self {
-            UpgradeType::Fee { chain_config } => *chain_config,
-            UpgradeType::Marketplace { chain_config } => *chain_config,
+            UpgradeType::Fee { chain_config } => Some(*chain_config),
+            UpgradeType::Marketplace { chain_config } => Some(*chain_config),
+            UpgradeType::Epoch { chain_config } => Some(*chain_config),
         }
     }
 }
@@ -66,3 +68,6 @@ pub struct Upgrade {
     /// The type of the upgrade.
     pub upgrade_type: UpgradeType,
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct NoStorage;

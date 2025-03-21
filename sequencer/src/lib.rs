@@ -3,6 +3,7 @@ pub mod catchup;
 pub mod context;
 pub mod genesis;
 mod proposal_fetcher;
+mod request_response;
 
 mod external_event_handler;
 pub mod options;
@@ -12,46 +13,49 @@ mod restart_tests;
 
 mod message_compat_tests;
 
+use std::sync::Arc;
+
 use anyhow::Context;
+use async_lock::RwLock;
 use catchup::StatePeers;
 use context::SequencerContext;
 use espresso_types::{
-    traits::EventConsumer, BackoffParams, L1ClientOptions, NodeState, PubKey, SeqTypes,
+    traits::{EventConsumer, MembershipPersistence},
+    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes,
     SolverAuctionResultsProvider, ValidatedState,
 };
+use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
-use hotshot::traits::election::static_committee::StaticCommittee;
-use hotshot_types::traits::election::Membership;
-use proposal_fetcher::ProposalFetcherConfig;
-use std::sync::Arc;
-use tokio::select;
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
+use proposal_fetcher::ProposalFetcherConfig;
 use state_signature::static_stake_table_commitment;
+use tokio::select;
 use tracing::info;
 use url::Url;
 pub mod persistence;
 pub mod state;
+use std::{fmt::Debug, marker::PhantomData, time::Duration};
+
 use derivative::Derivative;
 use espresso_types::v0::traits::SequencerPersistence;
 pub use genesis::Genesis;
-use hotshot::traits::implementations::{
-    derive_libp2p_multiaddr, CombinedNetworks, GossipConfig, Libp2pNetwork, RequestResponseConfig,
-};
 use hotshot::{
     traits::implementations::{
-        derive_libp2p_peer_id, CdnMetricsValue, CdnTopic, KeyPair, MemoryNetwork, PushCdnNetwork,
-        WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id, CdnMetricsValue, CdnTopic,
+        CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork,
+        RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
     MarketplaceConfig,
 };
-use hotshot_orchestrator::client::get_complete_config;
-use hotshot_orchestrator::client::OrchestratorClient;
+use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
+    epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
@@ -64,8 +68,6 @@ use hotshot_types::{
 };
 pub use options::Options;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use std::{fmt::Debug, marker::PhantomData};
 use vbs::version::{StaticVersion, StaticVersionType};
 pub mod network;
 
@@ -185,12 +187,12 @@ pub struct NetworkParams {
 }
 
 pub struct L1Params {
-    pub url: Url,
+    pub urls: Vec<Url>,
     pub options: L1ClientOptions,
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<P: SequencerPersistence, V: Versions>(
+pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versions>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
@@ -310,7 +312,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         (Some(config), _) => {
             tracing::info!("loaded network config from storage, rejoining existing network");
             (config, false)
-        }
+        },
         // If we were told to fetch the config from an already-started peer, do so.
         (None, Some(peers)) => {
             tracing::info!(?peers, "loading network config from peers");
@@ -328,7 +330,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
             );
             persistence.save_config(&config).await?;
             (config, false)
-        }
+        },
         // Otherwise, this is a fresh network; load from the orchestrator.
         (None, None) => {
             tracing::info!("loading network config from orchestrator");
@@ -354,7 +356,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
             persistence.save_config(&config).await?;
             tracing::error!("all nodes connected");
             (config, true)
-        }
+        },
     };
 
     if let Some(upgrade) = genesis.upgrades.get(&V::Upgrade::VERSION) {
@@ -390,12 +392,6 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         }
         topics
     };
-
-    // Create the HotShot membership
-    let membership = StaticCommittee::new(
-        network_config.config.known_nodes_with_stake.clone(),
-        network_config.config.known_nodes_with_stake.clone(),
-    );
 
     // Initialize the push CDN network (and perform the initial connection)
     let cdn_network = PushCdnNetwork::new(
@@ -439,11 +435,80 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         response_size_maximum: network_params.libp2p_max_direct_transmit_size,
     };
 
+    let l1_client = l1_params
+        .options
+        .with_metrics(metrics)
+        .connect(l1_params.urls)
+        .with_context(|| "failed to create L1 client")?;
+
+    l1_client.spawn_tasks().await;
+    let l1_genesis = match genesis.l1_finalized {
+        L1Finalized::Block(b) => b,
+        L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
+        L1Finalized::Timestamp { timestamp } => {
+            l1_client
+                .wait_for_finalized_block_with_timestamp(
+                    ethers::types::U256::from(timestamp.unix_timestamp()).to_alloy(),
+                )
+                .await
+        },
+    };
+
+    let mut genesis_state = ValidatedState {
+        chain_config: genesis.chain_config.into(),
+        ..Default::default()
+    };
+    for (address, amount) in genesis.accounts {
+        tracing::info!(%address, %amount, "Prefunding account for demo");
+        genesis_state.prefund_account(address, amount);
+    }
+
+    let peers = catchup::local_and_remote(
+        persistence.clone(),
+        StatePeers::<SequencerApiVersion>::from_urls(
+            network_params.state_peers,
+            network_params.catchup_backoff,
+            metrics,
+        ),
+    )
+    .await;
+    // Create the HotShot membership
+    let membership = EpochCommittees::new_stake(
+        network_config.config.known_nodes_with_stake.clone(),
+        network_config.config.known_da_nodes.clone(),
+        l1_client.clone(),
+        genesis
+            .chain_config
+            .stake_table_contract
+            .map(|a| a.to_alloy()),
+        peers.clone(),
+        persistence.clone(),
+    );
+
+    let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, network_config.config.epoch_height);
+
+    let instance_state = NodeState {
+        chain_config: genesis.chain_config,
+        l1_client,
+        genesis_header: genesis.header,
+        genesis_state,
+        l1_genesis: Some(l1_genesis),
+        node_id: node_index,
+        upgrades: genesis.upgrades,
+        current_version: V::Base::VERSION,
+        epoch_height: None,
+        peers,
+        coordinator: coordinator.clone(),
+    };
+
     // Initialize the Libp2p network
     let network = {
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
-            membership.clone(),
+            DhtNoPersistence,
+            coordinator.membership().clone(),
             gossip_config,
             request_response_config,
             libp2p_bind_address,
@@ -479,61 +544,16 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         ))
     };
 
-    let mut genesis_state = ValidatedState {
-        chain_config: genesis.chain_config.into(),
-        ..Default::default()
-    };
-    for (address, amount) in genesis.accounts {
-        tracing::info!(%address, %amount, "Prefunding account for demo");
-        genesis_state.prefund_account(address, amount);
-    }
-
-    let l1_client = l1_params
-        .options
-        .with_metrics(metrics)
-        .connect(l1_params.url)
-        .await?;
-    l1_client.spawn_tasks().await;
-    let l1_genesis = match genesis.l1_finalized {
-        L1Finalized::Block(b) => b,
-        L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
-        L1Finalized::Timestamp { timestamp } => {
-            l1_client
-                .wait_for_finalized_block_with_timestamp(timestamp.unix_timestamp().into())
-                .await
-        }
-    };
-    let instance_state = NodeState {
-        chain_config: genesis.chain_config,
-        l1_client,
-        genesis_header: genesis.header,
-        genesis_state,
-        l1_genesis: Some(l1_genesis),
-        peers: catchup::local_and_remote(
-            persistence.clone(),
-            StatePeers::<SequencerApiVersion>::from_urls(
-                network_params.state_peers,
-                network_params.catchup_backoff,
-                metrics,
-            ),
-        )
-        .await,
-        node_id: node_index,
-        upgrades: genesis.upgrades,
-        current_version: V::Base::VERSION,
-    };
-
     let mut ctx = SequencerContext::init(
         network_config,
         validator_config,
-        membership,
+        coordinator,
         instance_state,
         persistence,
         network,
         Some(network_params.state_relay_server_url),
         metrics,
         genesis.stake_table.capacity,
-        network_params.public_api_url,
         event_consumer,
         seq_versions,
         marketplace_config,
@@ -557,6 +577,7 @@ pub mod testing {
         time::Duration,
     };
 
+    use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_types::{
@@ -581,17 +602,22 @@ pub mod testing {
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
-    use hotshot_types::traits::network::Topic;
-    use hotshot_types::traits::signature_key::StakeTableEntryType;
     use hotshot_types::{
         event::LeafInfo,
         light_client::{CircuitField, StateKeyPair, StateVerKey},
-        traits::signature_key::BuilderSignatureKey,
-        traits::{block_contents::BlockHeader, metrics::NoMetrics, stake_table::StakeTableScheme},
+        traits::{
+            block_contents::BlockHeader,
+            metrics::NoMetrics,
+            network::Topic,
+            signature_key::{BuilderSignatureKey, StakeTableEntryType},
+            stake_table::StakeTableScheme,
+        },
         HotShotConfig, PeerConfig,
     };
-    use marketplace_builder_core::{hooks::NoHooks, service::GlobalState};
-
+    use marketplace_builder_core::{
+        hooks::NoHooks,
+        service::{BuilderConfig, GlobalState},
+    };
     use portpicker::pick_unused_port;
     use tokio::spawn;
     use vbs::version::Version;
@@ -634,20 +660,21 @@ pub mod testing {
             .parse()
             .expect("Failed to parse builder URL");
 
-        let hooks = NoHooks(PhantomData);
-
         // create the global state
-        let global_state: Arc<GlobalState<SeqTypes, NoHooks<SeqTypes>>> = GlobalState::new(
-            (builder_key_pair.fee_account(), builder_key_pair),
-            Duration::from_secs(60),
-            Duration::from_millis(100),
-            Duration::from_secs(60),
-            BUILDER_CHANNEL_CAPACITY_FOR_TEST,
-            10,
-            hooks,
+        let global_state = GlobalState::new(
+            BuilderConfig {
+                builder_keys: (builder_key_pair.fee_account(), builder_key_pair),
+                api_timeout: Duration::from_secs(60),
+                tx_capture_timeout: Duration::from_millis(100),
+                txn_garbage_collect_duration: Duration::from_secs(60),
+                txn_channel_capacity: BUILDER_CHANNEL_CAPACITY_FOR_TEST,
+                tx_status_cache_capacity: 81920,
+                base_fee: 10,
+            },
+            NoHooks(PhantomData),
         );
 
-        // create the proxy global state it will server the builder apis
+        // Create and spawn the tide-disco app to serve the builder APIs
         let app = Arc::clone(&global_state)
             .into_app()
             .expect("Failed to create builder tide-disco app");
@@ -661,6 +688,7 @@ pub mod testing {
             ),
         );
 
+        // Pass on the builder task to be injected in the testing harness
         (
             Box::new(MarketplaceBuilderImplementation { global_state }),
             url,
@@ -731,6 +759,11 @@ pub mod testing {
             self
         }
 
+        pub fn epoch_height(mut self, epoch_height: u64) -> Self {
+            self.config.epoch_height = epoch_height;
+            self
+        }
+
         pub fn build(self) -> TestConfig<NUM_NODES> {
             TestConfig {
                 config: self.config,
@@ -797,7 +830,8 @@ pub mod testing {
                 start_voting_time: 0,
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
-                epoch_height: 0,
+                epoch_height: 300,
+                epoch_start_block: 0,
             };
 
             Self {
@@ -948,22 +982,36 @@ pub mod testing {
             state.prefund_account(builder_account, U256::max_value().into());
 
             let persistence = persistence_opt.create().await.unwrap();
+
+            let chain_config = state.chain_config.resolve().unwrap_or_default();
+            let l1_client =
+                L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
+            let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
+            // Create the HotShot membership
+            let membership = EpochCommittees::new_stake(
+                config.known_nodes_with_stake.clone(),
+                config.known_da_nodes.clone(),
+                l1_client.clone(),
+                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                peers.clone(),
+                persistence.clone(),
+            );
+            let membership = Arc::new(RwLock::new(membership));
+
+            let coordinator = EpochMembershipCoordinator::new(membership, 100);
+
             let node_state = NodeState::new(
                 i as u64,
-                state.chain_config.resolve().unwrap_or_default(),
-                L1Client::new(self.l1_url.clone()).await.unwrap(),
-                catchup::local_and_remote(persistence.clone(), catchup).await,
+                chain_config,
+                l1_client,
+                peers,
                 V::Base::VERSION,
+                coordinator.clone(),
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
+            .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades);
-
-            // Create the HotShot membership
-            let membership = StaticCommittee::new(
-                config.known_nodes_with_stake.clone(),
-                config.known_nodes_with_stake.clone(),
-            );
 
             tracing::info!(
                 i,
@@ -981,14 +1029,13 @@ pub mod testing {
                     ..Default::default()
                 },
                 validator_config,
-                membership,
+                coordinator,
                 node_state,
                 persistence,
                 network,
                 self.state_relay_url.clone(),
                 metrics,
                 stake_table_capacity,
-                None, // The public API URL
                 event_consumer,
                 bind_version,
                 MarketplaceConfig::<SeqTypes, Node<network::Memory, P::Persistence>> {
@@ -1047,10 +1094,12 @@ mod test {
     use espresso_types::{Header, MockSequencerVersions, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
+    use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
+        data::vid_commitment,
         event::LeafInfo,
         traits::block_contents::{
-            vid_commitment, BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES,
+            BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES,
         },
     };
     use sequencer_utils::{test_utils::setup_test, AnvilOptions};
@@ -1136,7 +1185,12 @@ mod test {
             let genesis_commitment = {
                 // TODO we should not need to collect payload bytes just to compute vid_commitment
                 let payload_bytes = genesis_payload.encode();
-                vid_commitment(&payload_bytes, GENESIS_VID_NUM_STORAGE_NODES)
+                vid_commitment::<TestVersions>(
+                    &payload_bytes,
+                    &genesis_ns_table.encode(),
+                    GENESIS_VID_NUM_STORAGE_NODES,
+                    <TestVersions as Versions>::Base::VERSION,
+                )
             };
             let genesis_state = NodeState::mock();
             Header::genesis(

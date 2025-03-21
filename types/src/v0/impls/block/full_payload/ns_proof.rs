@@ -1,6 +1,7 @@
 use hotshot_types::{
+    data::VidCommitment,
     traits::EncodeBytes,
-    vid::{vid_scheme, VidCommitment, VidCommon, VidSchemeType},
+    vid::advz::{advz_scheme, ADVZCommon, ADVZScheme},
 };
 use jf_vid::{
     payload_prover::{PayloadProver, Statement},
@@ -21,13 +22,13 @@ impl NsProof {
     /// conforms to this convention.) In the future we should change this API to
     /// conform to convention. But that would require a change to our RPC
     /// endpoint API at [`endpoints`](crate::api::endpoints), which is a hassle.
-    pub fn new(payload: &Payload, index: &NsIndex, common: &VidCommon) -> Option<NsProof> {
+    pub fn new(payload: &Payload, index: &NsIndex, common: &ADVZCommon) -> Option<NsProof> {
         let payload_byte_len = payload.byte_len();
         if !payload_byte_len.is_consistent(common) {
             tracing::warn!(
                 "payload byte len {} inconsistent with common {}",
                 payload_byte_len,
-                VidSchemeType::get_payload_byte_len(common)
+                ADVZScheme::get_payload_byte_len(common)
             );
             return None; // error: payload byte len inconsistent with common
         }
@@ -39,10 +40,8 @@ impl NsProof {
 
         // TODO vid_scheme() arg should be u32 to match get_num_storage_nodes
         // https://github.com/EspressoSystems/HotShot/issues/3298
-        let vid = vid_scheme(
-            VidSchemeType::get_num_storage_nodes(common)
-                .try_into()
-                .ok()?, // error: failure to convert u32 to usize
+        let vid = advz_scheme(
+            ADVZScheme::get_num_storage_nodes(common).try_into().ok()?, // error: failure to convert u32 to usize
         );
 
         let ns_proof = if ns_payload_range.as_block_range().is_empty() {
@@ -78,56 +77,59 @@ impl NsProof {
         &self,
         ns_table: &NsTable,
         commit: &VidCommitment,
-        common: &VidCommon,
+        common: &ADVZCommon,
     ) -> Option<(Vec<Transaction>, NamespaceId)> {
-        VidSchemeType::is_consistent(commit, common).ok()?;
-        if !ns_table.in_bounds(&self.ns_index) {
-            return None; // error: index out of bounds
-        }
+        match commit {
+            VidCommitment::V0(commit) => {
+                ADVZScheme::is_consistent(commit, common).ok()?;
+                if !ns_table.in_bounds(&self.ns_index) {
+                    return None; // error: index out of bounds
+                }
 
-        let range = ns_table
-            .ns_range(&self.ns_index, &PayloadByteLen::from_vid_common(common))
-            .as_block_range();
+                let range = ns_table
+                    .ns_range(&self.ns_index, &PayloadByteLen::from_vid_common(common))
+                    .as_block_range();
 
-        match (&self.ns_proof, range.is_empty()) {
-            (Some(proof), false) => {
-                // TODO vid_scheme() arg should be u32 to match get_num_storage_nodes
-                // https://github.com/EspressoSystems/HotShot/issues/3298
-                let vid = vid_scheme(
-                    VidSchemeType::get_num_storage_nodes(common)
-                        .try_into()
-                        .ok()?, // error: failure to convert u32 to usize
-                );
+                match (&self.ns_proof, range.is_empty()) {
+                    (Some(proof), false) => {
+                        // TODO advz_scheme() arg should be u32 to match get_num_storage_nodes
+                        // https://github.com/EspressoSystems/HotShot/issues/3298
+                        let vid = advz_scheme(
+                            ADVZScheme::get_num_storage_nodes(common).try_into().ok()?, // error: failure to convert u32 to usize
+                        );
 
-                vid.payload_verify(
-                    Statement {
-                        payload_subslice: self.ns_payload.as_bytes_slice(),
-                        range,
-                        commit,
-                        common,
+                        vid.payload_verify(
+                            Statement {
+                                payload_subslice: self.ns_payload.as_bytes_slice(),
+                                range,
+                                commit,
+                                common,
+                            },
+                            proof,
+                        )
+                        .ok()? // error: internal to payload_verify()
+                        .ok()?; // verification failure
                     },
-                    proof,
-                )
-                .ok()? // error: internal to payload_verify()
-                .ok()?; // verification failure
-            }
-            (None, true) => {} // 0-length namespace, nothing to verify
-            (None, false) => {
-                tracing::error!(
-                    "ns verify: missing proof for nonempty ns payload range {:?}",
-                    range
-                );
-                return None;
-            }
-            (Some(_), true) => {
-                tracing::error!("ns verify: unexpected proof for empty ns payload range");
-                return None;
-            }
-        }
+                    (None, true) => {}, // 0-length namespace, nothing to verify
+                    (None, false) => {
+                        tracing::error!(
+                            "ns verify: missing proof for nonempty ns payload range {:?}",
+                            range
+                        );
+                        return None;
+                    },
+                    (Some(_), true) => {
+                        tracing::error!("ns verify: unexpected proof for empty ns payload range");
+                        return None;
+                    },
+                }
 
-        // verification succeeded, return some data
-        let ns_id = ns_table.read_ns_id_unchecked(&self.ns_index);
-        Some((self.ns_payload.export_all_txs(&ns_id), ns_id))
+                // verification succeeded, return some data
+                let ns_id = ns_table.read_ns_id_unchecked(&self.ns_index);
+                Some((self.ns_payload.export_all_txs(&ns_id), ns_id))
+            },
+            VidCommitment::V1(_) => None,
+        }
     }
 
     /// Return all transactions in the namespace whose payload is proven by

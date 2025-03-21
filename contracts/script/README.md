@@ -368,3 +368,22 @@ This error occurs when build_info is set to true in the foundry.toml configurati
 foundry profile is set to default when running commands like `just gen-bindings`.
 
 Solution: `export FOUNDRY_PROFILE=default`
+
+## Deploy LightClientArbitrum
+
+Additional Pre-requisites:
+
+- an API key from arbiscan to verify the contract.
+
+```bash
+ source .env.contracts && \
+   forge clean && \
+   forge script contracts/script/LightClientArb.s.sol:DeployLightClientArbitrum $NUM_INIT_VALIDATORS $STATE_HISTORY_RETENTION_PERIOD $SAFE_MULTISIG_ADDRESS \
+   --sig 'run(uint32, uint32, address)' \
+   --ffi \
+   --rpc-url $RPC_URL \
+   --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS \
+   --build-info true \
+   --verify --etherscan-api-key $ARBISCAN_API_KEY \
+   --broadcast
+```

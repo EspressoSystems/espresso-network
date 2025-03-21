@@ -1,7 +1,9 @@
+use std::{sync::Arc, time::Duration};
+
 use anyhow::{bail, ensure, Context};
 use clap::{Parser, Subcommand};
 use client::SequencerClient;
-use contract_bindings::fee_contract::FeeContract;
+use contract_bindings_ethers::fee_contract::FeeContract;
 use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, Header};
 use ethers::{
     middleware::{Middleware, SignerMiddleware},
@@ -10,7 +12,6 @@ use ethers::{
 };
 use futures::stream::StreamExt;
 use sequencer_utils::logging;
-use std::{sync::Arc, time::Duration};
 use surf_disco::Url;
 
 /// Command-line utility for working with the Espresso bridge.
@@ -213,7 +214,7 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
             Err(err) => {
                 tracing::warn!("error in header stream: {err:#}");
                 continue;
-            }
+            },
         };
         let Some(l1_finalized) = header.l1_finalized() else {
             continue;
