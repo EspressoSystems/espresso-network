@@ -307,6 +307,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 config.epoch_start_block,
             )
             .await;
+        } else {
+            tracing::error!("SKIPPING LOAD_START_EPOCH_INFO");
         }
 
         // Insert the validated state to state map.
