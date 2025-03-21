@@ -1,5 +1,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use super::{
+    state::ValidatedState,
+    traits::MembershipPersistence,
+    v0_1::NoStorage,
+    v0_3::{IndexedStake, Validator},
+    SeqTypes,
+};
+use crate::v0::{
+    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
+    Timestamp, Upgrade, UpgradeMode, UpgradeType,
+};
+#[cfg(any(test, feature = "testing"))]
+use crate::EpochCommittees;
+#[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot::types::BLSPubKey;
@@ -11,18 +25,6 @@ use indexmap::IndexMap;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
-
-use super::{
-    state::ValidatedState,
-    traits::MembershipPersistence,
-    v0_1::NoStorage,
-    v0_3::{IndexedStake, Validator},
-    EpochCommittees, SeqTypes,
-};
-use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
-    Timestamp, Upgrade, UpgradeMode, UpgradeType,
-};
 
 /// Represents the immutable state of a node.
 ///
