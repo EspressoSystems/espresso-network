@@ -9,9 +9,9 @@ use circular_buffer::CircularBuffer;
 use espresso_types::{Header, Payload, SeqTypes};
 use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
 use hotshot_query_service::{
-    availability::{QueryableHeader, QueryablePayload},
+    availability::{BlockQueryData, Leaf1QueryData, QueryableHeader},
     explorer::{BlockDetail, ExplorerHeader, Timestamp},
-    Leaf2, Resolvable,
+    Resolvable,
 };
 use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
@@ -20,7 +20,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         stake_table::{SnapshotVersion, StakeTableScheme},
-        BlockPayload,
+        BlockPayload, EncodeBytes,
     },
 };
 pub use location_details::LocationDetails;
@@ -28,16 +28,22 @@ pub use node_identity::NodeIdentity;
 use time::OffsetDateTime;
 use tokio::{spawn, task::JoinHandle};
 
+use crate::api::node_validator::v0::LeafAndBlock;
+
 /// MAX_HISTORY represents the last N records that are stored within the
 /// DataState structure for the various different sample types.
-const MAX_HISTORY: usize = 50;
+pub const MAX_HISTORY: usize = 50;
+
+/// MAX_VOTERS_HISTORY represents the last N records that are stored within
+/// the DataState structure for the voters.
+pub const MAX_VOTERS_HISTORY: usize = 100;
 
 /// [DataState] represents the state of the data that is being stored within
 /// the service.
 #[cfg_attr(test, derive(Default))]
 pub struct DataState {
     latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
-    latest_voters: CircularBuffer<MAX_HISTORY, BitVec<u16>>,
+    latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
     stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
     // Do we need any other data at the moment?
     node_identity: Vec<NodeIdentity>,
@@ -46,7 +52,7 @@ pub struct DataState {
 impl DataState {
     pub fn new(
         latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
-        latest_voters: CircularBuffer<MAX_HISTORY, BitVec<u16>>,
+        latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
         stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
     ) -> Self {
         let node_identity = {
@@ -150,44 +156,6 @@ impl DataState {
     }
 }
 
-/// [create_block_detail_from_leaf] is a helper function that will build a
-/// [BlockDetail] from the reference to [Leaf].
-pub fn create_block_detail_from_leaf(leaf: &Leaf2<SeqTypes>) -> BlockDetail<SeqTypes> {
-    let block_header = leaf.block_header();
-    let block_payload = &leaf.block_payload().unwrap_or(Payload::empty().0);
-
-    let transaction_iter = block_payload.iter(block_header.metadata());
-
-    // Calculate the number of transactions and the total payload size of the
-    // transactions contained within the Payload.
-    let (num_transactions, total_payload_size) = transaction_iter.fold(
-        (0u64, 0u64),
-        |(num_transactions, total_payload_size), tx_index| {
-            (
-                num_transactions + 1,
-                total_payload_size
-                    + block_payload
-                        .transaction(&tx_index)
-                        .map_or(0u64, |tx| tx.payload().len() as u64),
-            )
-        },
-    );
-
-    BlockDetail::<SeqTypes> {
-        hash: block_header.commitment(),
-        height: block_header.height(),
-        time: Timestamp(
-            OffsetDateTime::from_unix_timestamp(block_header.timestamp() as i64)
-                .unwrap_or(OffsetDateTime::UNIX_EPOCH),
-        ),
-        proposer_id: block_header.proposer_id(),
-        num_transactions,
-        block_reward: vec![block_header.fee_info_balance().into()],
-        fee_recipient: block_header.fee_info_account(),
-        size: total_payload_size,
-    }
-}
-
 /// [ProcessLeafError] represents the error that can occur when processing
 /// a [Leaf].
 #[derive(Debug)]
@@ -218,13 +186,38 @@ impl std::error::Error for ProcessLeafError {
     }
 }
 
-/// [process_incoming_leaf] is a helper function that will process an incoming
-/// [Leaf] and update the [DataState] with the new information.
+/// create_block_detail_from_block is a helper function that will create a
+/// [BlockDetail] from a [BlockQueryData].
+pub fn create_block_detail_from_block(block: &BlockQueryData<SeqTypes>) -> BlockDetail<SeqTypes> {
+    let block_header = block.header();
+    let block_payload = block.payload();
+    let num_transactions = block.num_transactions();
+    let encoded_bytes = block_payload.encode();
+    let total_payload_size = encoded_bytes.len() as u64;
+
+    BlockDetail::<SeqTypes> {
+        hash: block_header.commitment(),
+        height: block_header.height(),
+        time: Timestamp(
+            OffsetDateTime::from_unix_timestamp(block_header.timestamp() as i64)
+                .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+        ),
+        proposer_id: block_header.proposer_id(),
+        num_transactions,
+        block_reward: vec![block_header.fee_info_balance().into()],
+        fee_recipient: block_header.fee_info_account(),
+        size: total_payload_size,
+    }
+}
+
+/// [process_incoming_leaf_and_block] is a helper function that will process
+/// an incoming [Leaf] and update the [DataState] with the new information.
 /// Additionally, the block that is contained within the [Leaf] will be
 /// computed into a [BlockDetail] and sent to the [Sink] so that it can be
 /// processed for real-time considerations.
-async fn process_incoming_leaf<BDSink, BVSink>(
-    leaf: Leaf2<SeqTypes>,
+async fn process_incoming_leaf_and_block<BDSink, BVSink>(
+    leaf: Leaf1QueryData<SeqTypes>,
+    block: BlockQueryData<SeqTypes>,
     data_state: Arc<RwLock<DataState>>,
     mut block_sender: BDSink,
     mut voters_sender: BVSink,
@@ -235,10 +228,10 @@ where
     BDSink: Sink<BlockDetail<SeqTypes>, Error = SendError> + Unpin,
     BVSink: Sink<BitVec<u16>, Error = SendError> + Unpin,
 {
-    let block_detail = create_block_detail_from_leaf(&leaf);
-    let block_detail_copy = create_block_detail_from_leaf(&leaf);
+    let block_detail = create_block_detail_from_block(&block);
+    let block_detail_copy = create_block_detail_from_block(&block);
 
-    let certificate = leaf.justify_qc();
+    let certificate = leaf.leaf().justify_qc();
     let signatures = &certificate.signatures;
 
     // Let's take a look at the quorum certificate signatures.
@@ -320,13 +313,13 @@ where
     Ok(())
 }
 
-/// [ProcessLeafStreamTask] represents the task that is responsible for
-/// processing a stream of incoming [Leaf]s.
-pub struct ProcessLeafStreamTask {
+/// [ProcessLeafAndBlockPairStreamTask] represents the task that is responsible
+/// for processing a stream of incoming pairs of [Leaf]s and [BlockQueryData].
+pub struct ProcessLeafAndBlockPairStreamTask {
     pub task_handle: Option<JoinHandle<()>>,
 }
 
-impl ProcessLeafStreamTask {
+impl ProcessLeafAndBlockPairStreamTask {
     /// [new] creates a new [ProcessLeafStreamTask] that will process a stream
     /// of incoming [Leaf]s.
     ///
@@ -340,7 +333,7 @@ impl ProcessLeafStreamTask {
         voters_sender: K2,
     ) -> Self
     where
-        S: Stream<Item = Leaf2<SeqTypes>> + Send + Sync + Unpin + 'static,
+        S: Stream<Item = LeafAndBlock<SeqTypes>> + Send + Sync + Unpin + 'static,
         K1: Sink<BlockDetail<SeqTypes>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
         K2: Sink<BitVec<u16>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
     {
@@ -364,7 +357,7 @@ impl ProcessLeafStreamTask {
         block_sender: BDSink,
         voters_senders: BVSink,
     ) where
-        S: Stream<Item = Leaf2<SeqTypes>> + Unpin,
+        S: Stream<Item = LeafAndBlock<SeqTypes>> + Unpin,
         Header: BlockHeader<SeqTypes> + QueryableHeader<SeqTypes> + ExplorerHeader<SeqTypes>,
         Payload: BlockPayload<SeqTypes>,
         BDSink: Sink<BlockDetail<SeqTypes>, Error = SendError> + Clone + Unpin,
@@ -372,16 +365,17 @@ impl ProcessLeafStreamTask {
     {
         loop {
             let leaf_result = stream.next().await;
-            let leaf = if let Some(leaf) = leaf_result {
-                leaf
+            let (leaf, block) = if let Some(pair) = leaf_result {
+                pair
             } else {
                 // We have reached the end of the stream
                 tracing::error!("process leaf stream: end of stream reached for leaf stream.");
                 return;
             };
 
-            if let Err(err) = process_incoming_leaf(
+            if let Err(err) = process_incoming_leaf_and_block(
                 leaf,
+                block,
                 data_state.clone(),
                 block_sender.clone(),
                 voters_senders.clone(),
@@ -409,7 +403,7 @@ impl ProcessLeafStreamTask {
 
 /// [Drop] implementation for [ProcessLeafStreamTask] that will cancel the
 /// task if it is dropped.
-impl Drop for ProcessLeafStreamTask {
+impl Drop for ProcessLeafAndBlockPairStreamTask {
     fn drop(&mut self) {
         let task_handle = self.task_handle.take();
         if let Some(task_handle) = task_handle {
@@ -568,16 +562,22 @@ mod tests {
 
     use async_lock::RwLock;
     use espresso_types::{
-        v0_1::RewardMerkleTree, v0_99::ChainConfig, BlockMerkleTree, FeeMerkleTree, Leaf2,
-        NodeState, ValidatedState,
+        v0_1::RewardMerkleTree, v0_99::ChainConfig, BlockMerkleTree, FeeMerkleTree, NodeState,
+        ValidatedState,
     };
     use futures::{channel::mpsc, SinkExt, StreamExt};
     use hotshot_example_types::node_types::TestVersions;
-    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+    use hotshot_query_service::{
+        availability::{BlockQueryData, Leaf1QueryData},
+        testing::mocks::MockVersions,
+    };
+    use hotshot_types::{
+        data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
+    };
     use tokio::time::timeout;
     use url::Url;
 
-    use super::{DataState, ProcessLeafStreamTask};
+    use super::{DataState, ProcessLeafAndBlockPairStreamTask};
     use crate::service::data_state::{
         LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask,
     };
@@ -610,7 +610,7 @@ mod tests {
         let (voters_sender, voters_receiver) = futures::channel::mpsc::channel(1);
         let (leaf_sender, leaf_receiver) = futures::channel::mpsc::channel(1);
 
-        let mut process_leaf_stream_task_handle = ProcessLeafStreamTask::new(
+        let mut process_leaf_stream_task_handle = ProcessLeafAndBlockPairStreamTask::new(
             leaf_receiver,
             data_state.clone(),
             block_sender,
@@ -634,10 +634,23 @@ mod tests {
         let instance_state = NodeState::mock();
 
         let sample_leaf = Leaf2::genesis::<TestVersions>(&validated_state, &instance_state).await;
+        let sample_block_query_data =
+            BlockQueryData::genesis::<MockVersions>(&validated_state, &instance_state).await;
 
         let mut leaf_sender = leaf_sender;
         // We should be able to send a leaf without issue
-        assert_eq!(leaf_sender.send(sample_leaf).await, Ok(()),);
+        assert_eq!(
+            leaf_sender
+                .send((
+                    Leaf1QueryData::new(
+                        sample_leaf.clone().to_leaf_unsafe(),
+                        sample_leaf.justify_qc().to_qc()
+                    ),
+                    sample_block_query_data
+                ))
+                .await,
+            Ok(()),
+        );
 
         let mut block_receiver = block_receiver;
         // We should receive a Block Detail.
