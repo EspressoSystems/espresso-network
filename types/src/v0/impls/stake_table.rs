@@ -302,6 +302,7 @@ pub struct EpochCommittees {
     /// Methods for stake table persistence.
     #[debug(skip)]
     persistence: Arc<dyn MembershipPersistence>,
+    first_epoch: Epoch,
 }
 
 /// Holds Stake table and da stake
@@ -339,6 +340,10 @@ pub struct EpochCommittee {
 }
 
 impl EpochCommittees {
+    pub fn first_epoch(&self) -> Epoch {
+        self.first_epoch
+    }
+
     /// Updates `Self.stake_table` with stake_table for
     /// `Self.contract_address` at `l1_block_height`. This is intended
     /// to be called before calling `self.stake()` so that
@@ -504,6 +509,7 @@ impl EpochCommittees {
             randomized_committees: BTreeMap::new(),
             peers,
             persistence: Arc::new(persistence),
+            first_epoch: Epoch::genesis(),
         }
     }
     fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<PubKey>>> {
@@ -795,6 +801,8 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     fn set_first_epoch(&mut self, epoch: Epoch, initial_drb_result: DrbResult) {
+        self.first_epoch = epoch;
+
         let epoch_committee = self.state.get(&Epoch::genesis()).unwrap().clone();
         self.state.insert(epoch, epoch_committee.clone());
         self.state.insert(epoch + 1, epoch_committee);

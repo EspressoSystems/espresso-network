@@ -30,7 +30,7 @@ use super::{
     auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
-    reward::{apply_rewards, catchup_missing_accounts},
+    reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
     v0_1::{
         RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
@@ -885,7 +885,9 @@ impl ValidatedState {
         // when we deploy the permissionless contract in native demo
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
-        if version == EpochVersion::version() {
+        if version == EpochVersion::version()
+            && !first_two_epochs(parent_leaf.height(), instance).await?
+        {
             let validator =
                 catchup_missing_accounts(instance, &mut validated_state, parent_leaf, parent_view)
                     .await?;
