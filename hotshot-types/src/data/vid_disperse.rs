@@ -280,7 +280,7 @@ impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidMDisperse<TYPES> {
 }
 
 /// The target total stake to scale to for VID.
-const VID_TARGET_TOTAL_STAKE: u32 = 1000;
+pub const VID_TARGET_TOTAL_STAKE: u32 = 1000;
 
 /// The weights and total weight used in VID calculations
 struct Weights {
