@@ -334,14 +334,14 @@ impl VidCommitment {
 pub fn vid_commitment<V: Versions>(
     encoded_transactions: &[u8],
     metadata: &[u8],
-    num_storage_nodes: usize,
+    total_weight: usize,
     version: Version,
 ) -> VidCommitment {
     if version < V::Epochs::VERSION {
         let encoded_tx_len = encoded_transactions.len();
-        advz_scheme(num_storage_nodes).commit_only(encoded_transactions).map(VidCommitment::V0).unwrap_or_else(|err| panic!("VidScheme::commit_only failure:(num_storage_nodes,payload_byte_len)=({num_storage_nodes},{encoded_tx_len}) error: {err}"))
+        advz_scheme(total_weight).commit_only(encoded_transactions).map(VidCommitment::V0).unwrap_or_else(|err| panic!("VidScheme::commit_only failure:(total_weight,payload_byte_len)=({total_weight},{encoded_tx_len}) error: {err}"))
     } else {
-        let param = init_avidm_param(num_storage_nodes).unwrap();
+        let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(
             &param,

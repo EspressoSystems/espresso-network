@@ -16,11 +16,13 @@ mod message_compat_tests;
 use std::sync::Arc;
 
 use anyhow::Context;
+use async_lock::RwLock;
 use catchup::StatePeers;
 use context::SequencerContext;
 use espresso_types::{
-    traits::EventConsumer, BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey,
-    SeqTypes, SolverAuctionResultsProvider, ValidatedState,
+    traits::{EventConsumer, MembershipPersistence},
+    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes,
+    SolverAuctionResultsProvider, ValidatedState,
 };
 use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
@@ -53,6 +55,7 @@ use hotshot::{
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
+    epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
@@ -189,7 +192,7 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<P: SequencerPersistence, V: Versions>(
+pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versions>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
@@ -460,41 +463,52 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         genesis_state.prefund_account(address, amount);
     }
 
+    let peers = catchup::local_and_remote(
+        persistence.clone(),
+        StatePeers::<SequencerApiVersion>::from_urls(
+            network_params.state_peers,
+            network_params.catchup_backoff,
+            metrics,
+        ),
+    )
+    .await;
+    // Create the HotShot membership
+    let membership = EpochCommittees::new_stake(
+        network_config.config.known_nodes_with_stake.clone(),
+        network_config.config.known_da_nodes.clone(),
+        l1_client.clone(),
+        genesis
+            .chain_config
+            .stake_table_contract
+            .map(|a| a.to_alloy()),
+        peers.clone(),
+        persistence.clone(),
+    );
+
+    let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, network_config.config.epoch_height);
+
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
         l1_client,
         genesis_header: genesis.header,
         genesis_state,
         l1_genesis: Some(l1_genesis),
-        peers: catchup::local_and_remote(
-            persistence.clone(),
-            StatePeers::<SequencerApiVersion>::from_urls(
-                network_params.state_peers,
-                network_params.catchup_backoff,
-                metrics,
-            ),
-        )
-        .await,
         node_id: node_index,
         upgrades: genesis.upgrades,
         current_version: V::Base::VERSION,
         epoch_height: None,
+        peers,
+        coordinator: coordinator.clone(),
     };
-
-    // Create the HotShot membership
-    let membership = EpochCommittees::new_stake(
-        network_config.config.known_nodes_with_stake.clone(),
-        network_config.config.known_da_nodes.clone(),
-        &instance_state,
-        network_config.config.epoch_height,
-    );
 
     // Initialize the Libp2p network
     let network = {
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             DhtNoPersistence,
-            Arc::new(async_lock::RwLock::new(membership.clone())),
+            coordinator.membership().clone(),
             gossip_config,
             request_response_config,
             libp2p_bind_address,
@@ -533,7 +547,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
     let mut ctx = SequencerContext::init(
         network_config,
         validator_config,
-        membership,
+        coordinator,
         instance_state,
         persistence,
         network,
@@ -563,6 +577,7 @@ pub mod testing {
         time::Duration,
     };
 
+    use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_types::{
@@ -815,7 +830,7 @@ pub mod testing {
                 start_voting_time: 0,
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
-                epoch_height: 0,
+                epoch_height: 300,
                 epoch_start_block: 0,
             };
 
@@ -967,25 +982,36 @@ pub mod testing {
             state.prefund_account(builder_account, U256::max_value().into());
 
             let persistence = persistence_opt.create().await.unwrap();
+
+            let chain_config = state.chain_config.resolve().unwrap_or_default();
+            let l1_client =
+                L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
+            let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
+            // Create the HotShot membership
+            let membership = EpochCommittees::new_stake(
+                config.known_nodes_with_stake.clone(),
+                config.known_da_nodes.clone(),
+                l1_client.clone(),
+                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                peers.clone(),
+                persistence.clone(),
+            );
+            let membership = Arc::new(RwLock::new(membership));
+
+            let coordinator = EpochMembershipCoordinator::new(membership, 100);
+
             let node_state = NodeState::new(
                 i as u64,
-                state.chain_config.resolve().unwrap_or_default(),
-                L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client"),
-                catchup::local_and_remote(persistence.clone(), catchup).await,
+                chain_config,
+                l1_client,
+                peers,
                 V::Base::VERSION,
+                coordinator.clone(),
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades);
-
-            // Create the HotShot membership
-            let membership = EpochCommittees::new_stake(
-                config.known_nodes_with_stake.clone(),
-                config.known_da_nodes.clone(),
-                &node_state,
-                100,
-            );
 
             tracing::info!(
                 i,
@@ -1003,7 +1029,7 @@ pub mod testing {
                     ..Default::default()
                 },
                 validator_config,
-                membership,
+                coordinator,
                 node_state,
                 persistence,
                 network,

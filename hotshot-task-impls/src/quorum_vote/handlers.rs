@@ -53,7 +53,6 @@ async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     drb_result: DrbResult,
 ) {
     tracing::debug!("Calling add_drb_result for epoch {:?}", membership.epoch());
-
     // membership.epoch should always be Some
     if let Some(epoch) = membership.epoch() {
         if let Err(e) = storage
@@ -559,7 +558,6 @@ pub(crate) async fn update_shared_state<
     upgrade_lock: UpgradeLock<TYPES, V>,
     view_number: TYPES::View,
     instance_state: Arc<TYPES::InstanceState>,
-    storage: Arc<RwLock<I::Storage>>,
     proposed_leaf: &Leaf2<TYPES>,
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
     parent_view_number: Option<TYPES::View>,
@@ -666,19 +664,7 @@ pub(crate) async fn update_shared_state<
         tracing::trace!("{e:?}");
     }
 
-    // Kick back our updated structures for downstream usage.
-    let new_leaves = consensus_writer.saved_leaves().clone();
-    let new_state = consensus_writer.validated_state_map().clone();
     drop(consensus_writer);
-
-    // Send the new state up to the sequencer.
-    storage
-        .write()
-        .await
-        .update_undecided_state2(new_leaves, new_state)
-        .await
-        .wrap()
-        .context(error!("Failed to update undecided state"))?;
 
     Ok(())
 }

@@ -534,7 +534,7 @@ cross_tests!(
           num_successful_views: 22,
           expected_view_failures: vec![10],
           possible_view_failures: vec![9, 11, 12],
-          decide_timeout: Duration::from_secs(20),
+          decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
 
@@ -583,7 +583,7 @@ cross_tests!(
           num_successful_views: 22,
           expected_view_failures: vec![10],
           possible_view_failures: vec![9, 11, 12],
-          decide_timeout: Duration::from_secs(20),
+          decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
 

@@ -200,6 +200,35 @@ mod persistence_tests {
                 }
             ]
         );
+
+        // Make a header
+        let instance_state = NodeState::mock();
+        let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
+        let leaf: Leaf2 = Leaf::genesis::<MockVersions>(&validated_state, &instance_state)
+            .await
+            .into();
+        let header = leaf.block_header().clone();
+
+        // Test storing the header
+        storage
+            .add_epoch_root(EpochNumber::new(1), header.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_start_epoch_info().await.unwrap(),
+            vec![
+                InitializerEpochInfo::<SeqTypes> {
+                    epoch: EpochNumber::new(1),
+                    drb_result: [1; 32],
+                    block_header: Some(header.clone()),
+                },
+                InitializerEpochInfo::<SeqTypes> {
+                    epoch: EpochNumber::new(2),
+                    drb_result: [3; 32],
+                    block_header: None,
+                }
+            ]
+        );
     }
 
     fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
@@ -232,7 +261,10 @@ mod persistence_tests {
         let avidm_param = init_avidm_param(2).unwrap();
         let weights = vec![1u32; 2];
 
-        let ns_table = parse_ns_table(leaf_payload.byte_len().as_usize(), &leaf_payload.encode());
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
         let (payload_commitment, shares) =
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();
@@ -728,7 +760,10 @@ mod persistence_tests {
         let leaf_payload_bytes_arc = leaf_payload.encode();
         let avidm_param = init_avidm_param(2).unwrap();
         let weights = vec![1u32; 2];
-        let ns_table = parse_ns_table(leaf_payload.byte_len().as_usize(), &leaf_payload.encode());
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
         let (payload_commitment, shares) =
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();
@@ -932,7 +967,10 @@ mod persistence_tests {
         let avidm_param = init_avidm_param(2).unwrap();
         let weights = vec![1u32; 2];
 
-        let ns_table = parse_ns_table(leaf_payload.byte_len().as_usize(), &leaf_payload.encode());
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
         let (payload_commitment, shares) =
             AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
                 .unwrap();

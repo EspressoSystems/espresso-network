@@ -13,7 +13,7 @@ ark-ff = { workspace = true }
 ark-poly = { workspace = true }
 ark-std = { workspace = true }
 clap = { version = "^4.4", features = ["derive"] }
-diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git" }
+diff-test-bn254 = { workspace = true }
 ethers = { version = "2.0.4" }
 hotshot-contract-adapter = { path = "../adapter" }
 hotshot-state-prover = { workspace = true }

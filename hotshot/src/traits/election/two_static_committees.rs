@@ -250,28 +250,6 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
         }
     }
 
-    /// Get all eligible leaders of the committee for the current view
-    fn committee_leaders(
-        &self,
-        _view_number: <TYPES as NodeType>::View,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
-        let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
-        if *epoch != 0 && *epoch % 2 == 0 {
-            self.eligible_leaders
-                .0
-                .iter()
-                .map(|leader| TYPES::SignatureKey::public_key(&leader.stake_table_entry))
-                .collect()
-        } else {
-            self.eligible_leaders
-                .1
-                .iter()
-                .map(|leader| TYPES::SignatureKey::public_key(&leader.stake_table_entry))
-                .collect()
-        }
-    }
-
     /// Get the stake table entry for a public key
     fn stake(
         &self,

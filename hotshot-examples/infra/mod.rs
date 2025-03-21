@@ -533,7 +533,7 @@ pub trait RunDa<
             .membership_for_epoch(genesis_epoch_from_version::<V, TYPES>())
             .await
             .unwrap()
-            .committee_leaders(TYPES::View::genesis())
+            .stake_table()
             .await
             .len();
         let consensus_lock = context.hotshot.consensus();

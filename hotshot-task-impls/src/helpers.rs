@@ -215,7 +215,6 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
                 .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
                 .await
         };
-
         if let Some(write_callback) = write_callback {
             let mut membership_writer = membership.write().await;
             write_callback(&mut *membership_writer);
@@ -320,7 +319,6 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
             }
         }
 
-        res.leaf_views.push(info.clone());
         // If the block payload is available for this leaf, include it in
         // the leaf chain that we send to the client.
         if let Some(payload) = consensus_reader
@@ -338,6 +336,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         }
 
         current_leaf_info = consensus_reader.parent_leaf_info(&info.leaf, public_key);
+        res.leaf_views.push(info.clone());
     }
 
     if !txns.is_empty() {
@@ -911,7 +910,7 @@ pub async fn wait_for_next_epoch_qc<TYPES: NodeType>(
         return None;
     };
     let receiver = receiver.clone();
-    let Ok(Some(event)) = tokio::time::timeout(time_left, async move {
+    let event = tokio::time::timeout(time_left, async move {
         let this_epoch_high_qc = high_qc.clone();
         EventDependency::new(
             receiver,
@@ -928,15 +927,7 @@ pub async fn wait_for_next_epoch_qc<TYPES: NodeType>(
         .await
     })
     .await
-    else {
-        // Check again, there is a chance we missed it
-        if let Some(next_epoch_qc) = consensus.read().await.next_epoch_high_qc() {
-            if next_epoch_qc.data.leaf_commit == high_qc.data.leaf_commit {
-                return Some(next_epoch_qc.clone());
-            }
-        };
-        return None;
-    };
+    .ok()??;
     let HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) = event.as_ref() else {
         // this shouldn't happen
         return None;

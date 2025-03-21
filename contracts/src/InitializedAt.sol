@@ -12,17 +12,12 @@ contract InitializedAt is Initializable {
     // @notice The block number the contract was initialized at.
     uint256 public initializedAtBlock;
 
-    // @dev If this contract is used as part of a non-upgradable contract the constructor is
-    // expected to be called.
     constructor() {
-        initialize();
+        _disableInitializers();
     }
 
-    // @dev If this contract is used as part of an upgradable contract the `initialize` function
-    // must be called during initialization.
-    // @dev The initializer modifier assures that this function can only be called (once except for
-    //      in the constructor, for testing).
-    function initialize() public initializer {
+    // @dev The `initializeAtBlock` function must be called during initialization.
+    function initializeAtBlock() internal initializer {
         initializedAtBlock = block.number;
     }
 }
