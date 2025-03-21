@@ -4,11 +4,8 @@ use alloy::{
     contract::RawCallBuilder,
     hex::{FromHex, ToHexExt},
     network::TransactionBuilder,
-    primitives::Bytes,
+    primitives::{Address, Bytes, U256},
     providers::Provider,
-};
-use alloy::{
-    primitives::{Address, U256},
     rpc::types::TransactionReceipt,
 };
 use anyhow::{anyhow, Result};
