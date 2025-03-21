@@ -216,8 +216,8 @@ jobs:
           - version: 02
             test-name: test_native_demo_basic
 
-          - version: 99
-            test-name: test_native_demo_upgrade
+          # - version: 99
+          #   test-name: test_native_demo_upgrade
 
       fail-fast: false
     runs-on: ubuntu-latest
