@@ -746,8 +746,12 @@ impl Membership<SeqTypes> for EpochCommittees {
         }))
     }
 
-    fn has_epoch(&self, epoch: Epoch) -> bool {
+    fn has_stake_table(&self, epoch: Epoch) -> bool {
         self.state.contains_key(&epoch)
+    }
+
+    fn has_randomized_stake_table(&self, epoch: Epoch) -> bool {
+        self.randomized_committees.contains_key(&epoch)
     }
 
     async fn get_epoch_root_and_drb(
