@@ -21,10 +21,9 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
-use hotshot_types::signature_key::SchnorrPubKey;
 use hotshot_types::{
     data::{QuorumProposal, ViewNumber},
-    signature_key::BLSPubKey,
+    signature_key::{BLSPubKey, SchnorrPubKey},
     traits::node_implementation::{NodeType, Versions},
 };
 use jf_merkle_tree::{

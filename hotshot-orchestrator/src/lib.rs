@@ -23,8 +23,10 @@ use csv::Writer;
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_types::{
     network::{BuilderType, NetworkConfig, PublicKeysFile},
-    traits::node_implementation::NodeType,
-    traits::signature_key::{SignatureKey, StakeTableEntryType},
+    traits::{
+        node_implementation::NodeType,
+        signature_key::{SignatureKey, StakeTableEntryType},
+    },
     PeerConfig,
 };
 use libp2p_identity::{
