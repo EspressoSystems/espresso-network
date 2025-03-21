@@ -203,7 +203,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 })
                 .await;
                 let payload_commitment = payload_commitment.unwrap();
-                let next_epoch_payload_commitment = if self
+                let next_epoch_payload_commitment = if matches!(
+                    proposal.data.epoch_transition_indicator,
+                    EpochTransitionIndicator::InTransition
+                ) && self
                     .upgrade_lock
                     .epochs_enabled(proposal.data.view_number())
                     .await
@@ -400,12 +403,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     );
                     return Ok(());
                 }
+                let epoch_transition_indicator =
+                    if self.consensus.read().await.is_high_qc_ge_root_block() {
+                        EpochTransitionIndicator::InTransition
+                    } else {
+                        EpochTransitionIndicator::NotInTransition
+                    };
                 let data: DaProposal2<TYPES> = DaProposal2 {
                     encoded_transactions: Arc::clone(encoded_transactions),
                     metadata: metadata.clone(),
                     // Upon entering a new view we want to send a DA Proposal for the next view -> Is it always the case that this is cur_view + 1?
                     view_number,
                     epoch,
+                    epoch_transition_indicator,
                 };
 
                 let message = Proposal {

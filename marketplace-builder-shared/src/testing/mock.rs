@@ -22,7 +22,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         BlockPayload, EncodeBytes,
     },
-    utils::BuilderCommitment,
+    utils::{BuilderCommitment, EpochTransitionIndicator},
     vid::advz::advz_scheme,
 };
 use jf_vid::VidScheme;
@@ -148,6 +148,7 @@ pub async fn proposals_with_transactions(
             metadata,
             view_number,
             epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         },
         QuorumProposalWrapper {
             proposal: QuorumProposal2 {

@@ -23,7 +23,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, Versions},
         EncodeBytes,
     },
-    utils::BuilderCommitment,
+    utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use marketplace_builder_shared::{
     block::{BuilderStateId, ParentBlockReferences},
@@ -152,6 +152,7 @@ pub async fn calc_proposal_msg<V: Versions>(
             },
             view_number: ViewNumber::new(round as u64),
             epoch: None,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
         let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
         let da_signature =
