@@ -7,9 +7,9 @@ edition = { workspace = true }
 license = "MIT"
 
 [dependencies]
-ark-bn254 = "0.4"
-ark-ed-on-bn254 = "0.4"
-ark-ff = "0.4"
+ark-bn254 = "0.5"
+ark-ed-on-bn254 = "0.5"
+ark-ff = "0.5"
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 digest = { workspace = true }
