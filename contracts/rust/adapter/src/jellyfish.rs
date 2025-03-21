@@ -1,16 +1,16 @@
 //! Helpers for connecting types between Jellyfish and Solidity.
 //! Usually used during differential testing (via FFI).
 
-use crate::sol_types::*;
-use crate::{field_to_u256, u256_to_field};
 use alloy::{
     hex::ToHexExt,
     primitives::{B256, U256},
 };
 use ark_bn254::{Bn254, Fq, Fr, G1Affine, G2Affine};
-use ark_ec::short_weierstrass::{Affine, SWCurveConfig};
-use ark_ec::twisted_edwards::{self, TECurveConfig};
-use ark_ec::AffineRepr;
+use ark_ec::{
+    short_weierstrass::{Affine, SWCurveConfig},
+    twisted_edwards::{self, TECurveConfig},
+    AffineRepr,
+};
 use ark_ff::{Fp2, Fp2Config, MontFp, PrimeField};
 use ark_std::{rand::Rng, UniformRand};
 use jf_pcs::prelude::Commitment;
@@ -23,6 +23,8 @@ use jf_plonk::{
 use jf_utils::to_bytes;
 use num_bigint::BigUint;
 use num_traits::Num;
+
+use crate::{field_to_u256, sol_types::*, u256_to_field};
 
 // this is convention from BN256 precompile
 impl Default for G1PointSol {
