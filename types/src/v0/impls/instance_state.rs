@@ -1,5 +1,18 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+#[cfg(any(test, feature = "testing"))]
+use async_lock::RwLock;
+use async_trait::async_trait;
+use hotshot::types::BLSPubKey;
+use hotshot_types::{
+    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
+    HotShotConfig,
+};
+use indexmap::IndexMap;
+#[cfg(any(test, feature = "testing"))]
+use vbs::version::StaticVersionType;
+use vbs::version::Version;
+
 use super::{
     state::ValidatedState,
     traits::MembershipPersistence,
@@ -13,18 +26,6 @@ use crate::v0::{
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::EpochCommittees;
-#[cfg(any(test, feature = "testing"))]
-use async_lock::RwLock;
-use async_trait::async_trait;
-use hotshot::types::BLSPubKey;
-use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
-    HotShotConfig,
-};
-use indexmap::IndexMap;
-#[cfg(any(test, feature = "testing"))]
-use vbs::version::StaticVersionType;
-use vbs::version::Version;
 
 /// Represents the immutable state of a node.
 ///
