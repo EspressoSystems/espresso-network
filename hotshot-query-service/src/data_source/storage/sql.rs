@@ -22,7 +22,10 @@ use futures::future::FutureExt;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidShare},
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
-    traits::{metrics::Metrics, node_implementation::NodeType},
+    traits::{
+        metrics::Metrics,
+        node_implementation::{ConsensusTime, NodeType},
+    },
     vid::advz::ADVZShare,
 };
 use itertools::Itertools;
@@ -892,6 +895,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 vid_rows.push((leaf2.height() as i64, vid_common_bytes, new_vid_share_bytes));
                 leaf_rows.push((
                     leaf2.height() as i64,
+                    leaf2.view_number().u64() as i64,
                     commit.to_string(),
                     leaf2.block_header().commit().to_string(),
                     leaf2_json,
@@ -900,15 +904,17 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             }
 
             // migrate leaf2
-            let mut query_builder: sqlx::QueryBuilder<Db> =
-                sqlx::QueryBuilder::new("INSERT INTO leaf2 (height, hash, block_hash, leaf, qc) ");
+            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                "INSERT INTO leaf2 (height, view, hash, block_hash, leaf, qc) ",
+            );
 
             query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
                 b.push_bind(row.0)
                     .push_bind(row.1)
                     .push_bind(row.2)
                     .push_bind(row.3)
-                    .push_bind(row.4);
+                    .push_bind(row.4)
+                    .push_bind(row.5);
             });
 
             let query = query_builder.build();

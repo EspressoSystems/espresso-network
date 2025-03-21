@@ -5,9 +5,13 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    config::PublicNetworkConfig, traits::SequencerPersistence, v0::traits::StateCatchup,
-    v0_99::ChainConfig, BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof,
-    FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState,
+    config::PublicNetworkConfig,
+    traits::SequencerPersistence,
+    v0::traits::StateCatchup,
+    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
+    v0_99::ChainConfig,
+    BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    FeeMerkleTree, Leaf2, NodeState,
 };
 use futures::future::{Future, FutureExt, TryFuture, TryFutureExt};
 use hotshot_types::{
@@ -334,6 +338,41 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         .await
     }
 
+    #[tracing::instrument(skip(self, _instance))]
+    async fn try_fetch_reward_accounts(
+        &self,
+        retry: usize,
+        _instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        self.fetch(retry, |client| async move {
+            let snapshot = client
+                .inner
+                .post::<RewardMerkleTree>(&format!(
+                    "catchup/{height}/{}/reward-accounts",
+                    view.u64()
+                ))
+                .body_binary(&accounts.to_vec())?
+                .send()
+                .await?;
+
+            // Verify proofs.
+            for account in accounts {
+                let (proof, _) = RewardAccountProof::prove(&snapshot, (*account).into())
+                    .context(format!("response missing account {account}"))?;
+                proof
+                    .verify(&reward_merkle_tree_root)
+                    .context(format!("invalid proof for account {account}"))?;
+            }
+
+            anyhow::Ok(snapshot)
+        })
+        .await
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -371,6 +410,18 @@ pub(crate) trait CatchupStorage: Sync {
         // state storage. This default implementation is overridden for those that do. Otherwise,
         // catchup can still be provided by fetching undecided merklized state from consensus
         // memory.
+        async {
+            bail!("merklized state catchup is not supported for this data source");
+        }
+    }
+
+    fn get_reward_accounts(
+        &self,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _accounts: &[RewardAccount],
+    ) -> impl Send + Future<Output = anyhow::Result<(RewardMerkleTree, Leaf2)>> {
         async {
             bail!("merklized state catchup is not supported for this data source");
         }
@@ -432,6 +483,18 @@ where
     ) -> anyhow::Result<(FeeMerkleTree, Leaf2)> {
         self.inner()
             .get_accounts(instance, height, view, accounts)
+            .await
+    }
+
+    async fn get_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<(RewardMerkleTree, Leaf2)> {
+        self.inner()
+            .get_reward_accounts(instance, height, view, accounts)
             .await
     }
 
@@ -539,6 +602,29 @@ where
         Ok(cf)
     }
 
+    #[tracing::instrument(skip(self, _retry, instance))]
+    async fn try_fetch_reward_accounts(
+        &self,
+        _retry: usize,
+        instance: &NodeState,
+        block_height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        let merkle_tree = self
+            .db
+            .get_reward_accounts(instance, block_height, view, accounts)
+            .await?
+            .0;
+
+        if merkle_tree.commitment() != reward_merkle_tree_root {
+            bail!("reward merkle tree root mismatch");
+        }
+
+        Ok(merkle_tree)
+    }
+
     fn backoff(&self) -> &BackoffParams {
         &self.backoff
     }
@@ -593,6 +679,18 @@ impl StateCatchup for NullStateCatchup {
         _fee_merkle_tree_root: FeeMerkleCommitment,
         _account: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
+        bail!("state catchup is disabled");
+    }
+
+    async fn try_fetch_reward_accounts(
+        &self,
+        _retry: usize,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _fee_merkle_tree_root: RewardMerkleCommitment,
+        _account: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
         bail!("state catchup is disabled");
     }
 

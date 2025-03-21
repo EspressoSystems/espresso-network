@@ -81,3 +81,26 @@ For catching up the stake table, where `:height` is the block height of the epoc
 
 Returns a list of leaves which includes `:height` as the last leaf and should prove the block with `:height` was decided.  
 """
+
+[route.reward_account]
+PATH = ["/:height/:view/reward-account/:address"]
+":height" = "Integer"
+":view" = "Integer"
+":address" = "Literal"
+DOC = """
+Get the reward account balance for `address`.
+"""
+
+[route.reward_accounts]
+PATH = ["/:height/:view/reward-accounts"]
+":height" = "Integer"
+":view" = "Integer"
+METHOD = "POST"
+DOC = """
+Bulk version of `/:height/:view/account`. The request body should be a JSON array consisting of
+TaggedBase64-encoded reward accounts.
+
+The response is a `RewardMErkleTree` containing sub-trees for each of the requested accounts, which is
+a more condensed way to represent the union of account proofs for each requested account. Individual
+Merkle proofs for each account can be extracted from this tree.
+"""

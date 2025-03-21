@@ -117,12 +117,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                 // Request VID share only if:
                 // 1. we are part of the current epoch or
                 // 2. we are part of the next epoch and this is a proposal for the last block.
-                let membership_reader = self
+                let membership = self
                     .membership_coordinator
                     .membership_for_epoch(prop_epoch)
                     .await?;
-                if !membership_reader.has_stake(&self.public_key).await
-                    && (!membership_reader
+                if !membership.has_stake(&self.public_key).await
+                    && (!membership
                         .next_epoch()
                         .await?
                         .has_stake(&self.public_key)
@@ -239,7 +239,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
             .await
             .into_iter()
             .collect();
-        drop(membership_reader);
 
         // Randomize the recipients so all replicas don't overload the same 1 recipients
         // and so we don't implicitly rely on the same replica all the time.

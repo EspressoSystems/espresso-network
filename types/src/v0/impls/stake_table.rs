@@ -1,17 +1,22 @@
 use std::{
     cmp::max,
-    collections::{BTreeMap, BTreeSet, HashMap},
-    fmt::Debug,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     num::NonZeroU64,
     sync::Arc,
 };
 
-use anyhow::Context;
-use contract_bindings_alloy::permissionedstaketable::PermissionedStakeTable::StakersUpdated;
-use ethers::types::{Address, U256};
-use ethers_conv::ToAlloy;
+use alloy::{
+    primitives::{Address, U256},
+    rpc::types::Log,
+};
+use anyhow::{bail, Context};
+use async_lock::RwLock;
+use contract_bindings_alloy::staketable::StakeTable::{
+    ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
+};
+use ethers_conv::ToEthers;
 use hotshot::types::{BLSPubKey, SignatureKey as _};
-use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf, NodeInfoJf};
+use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
 use hotshot_types::{
     data::EpochNumber,
     drb::{
@@ -26,89 +31,260 @@ use hotshot_types::{
     },
     PeerConfig,
 };
-use itertools::Itertools;
+use indexmap::IndexMap;
 use thiserror::Error;
 
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{DAMembers, StakeTable, StakeTables},
-    Header, L1Client, Leaf2, NodeState, PubKey, SeqTypes,
+    v0_3::{DAMembers, Validator},
+    Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 
-impl StakeTables {
-    pub fn new(stake_table: StakeTable, da_members: DAMembers) -> Self {
-        Self {
-            stake_table,
-            da_members,
+/// Create the consensus and DA stake tables from L1 events
+///
+/// This is a pure function, to make it easily testable.
+///
+/// We expect have at most a few hundred EVM events in the
+/// PermissionedStakeTable contract over the liftetime of the contract so it
+/// should not significantly affect performance to fetch all events and
+/// perform the computation in this functions once per epoch.
+pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+    events: I,
+) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    let mut validators = IndexMap::new();
+    let mut bls_keys = HashSet::new();
+    let mut schnorr_keys = HashSet::new();
+    for event in events {
+        tracing::debug!("Processing stake table event: {:?}", event);
+        match event {
+            StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk,
+                schnorrVk,
+                commission,
+            }) => {
+                // TODO(abdul): BLS and Schnorr signature keys verification
+                let stake_table_key = bls_alloy_to_jf2(blsVk.clone());
+                let state_ver_key = edward_bn254point_to_state_ver(schnorrVk.clone());
+                // TODO(MA): The stake table contract currently enforces that each bls key is only used once. We will
+                // move this check to the confirmation layer and remove it from the contract. Once we have the signature
+                // check in this functions we can skip if a BLS key, or Schnorr key was previously used.
+                if bls_keys.contains(&stake_table_key) {
+                    bail!("bls key {} already used", stake_table_key.to_string());
+                };
+
+                // The contract does *not* enforce that each schnorr key is only used once.
+                if schnorr_keys.contains(&state_ver_key) {
+                    tracing::warn!("schnorr key {} already used", state_ver_key.to_string());
+                };
+
+                bls_keys.insert(stake_table_key);
+                schnorr_keys.insert(state_ver_key.clone());
+
+                match validators.entry(account) {
+                    indexmap::map::Entry::Occupied(_occupied_entry) => {
+                        bail!("validator {:#x} already registered", *account)
+                    },
+                    indexmap::map::Entry::Vacant(vacant_entry) => vacant_entry.insert(Validator {
+                        account,
+                        stake_table_key,
+                        state_ver_key,
+                        stake: U256::from(0_u64),
+                        commission,
+                        delegators: HashMap::default(),
+                    }),
+                };
+            },
+            StakeTableEvent::Deregister(exit) => {
+                validators
+                    .shift_remove(&exit.validator)
+                    .with_context(|| format!("validator {:#x} not found", exit.validator))?;
+            },
+            StakeTableEvent::Delegate(delegated) => {
+                let Delegated {
+                    delegator,
+                    validator,
+                    amount,
+                } = delegated;
+                let validator_entry = validators
+                    .get_mut(&validator)
+                    .with_context(|| format!("validator {validator:#x} not found"))?;
+
+                if amount.is_zero() {
+                    tracing::warn!("delegator {delegator:?} has 0 stake");
+                    continue;
+                }
+                // Increase stake
+                validator_entry.stake += amount;
+                // Add delegator to the set
+                validator_entry.delegators.insert(delegator, amount);
+            },
+            StakeTableEvent::Undelegate(undelegated) => {
+                let Undelegated {
+                    delegator,
+                    validator,
+                    amount,
+                } = undelegated;
+                let validator_entry = validators
+                    .get_mut(&validator)
+                    .with_context(|| format!("validator {validator:#x} not found"))?;
+
+                validator_entry.stake = validator_entry
+                    .stake
+                    .checked_sub(amount)
+                    .with_context(|| "stake is less than undelegated amount")?;
+
+                let delegator_stake = validator_entry
+                    .delegators
+                    .get_mut(&delegator)
+                    .with_context(|| format!("delegator {delegator:#x} not found"))?;
+                *delegator_stake = delegator_stake
+                    .checked_sub(amount)
+                    .with_context(|| "delegator_stake is less than undelegated amount")?;
+
+                if delegator_stake.is_zero() {
+                    // if delegator stake is 0, remove from set
+                    validator_entry.delegators.remove(&delegator);
+                }
+            },
+            StakeTableEvent::KeyUpdate(update) => {
+                let ConsensusKeysUpdated {
+                    account,
+                    blsVK,
+                    schnorrVK,
+                } = update;
+                let validator = validators
+                    .get_mut(&account)
+                    .with_context(|| "validator {account:#x} not found")?;
+                let bls = bls_alloy_to_jf2(blsVK);
+                let state_ver_key = edward_bn254point_to_state_ver(schnorrVK);
+
+                validator.stake_table_key = bls;
+                validator.state_ver_key = state_ver_key;
+            },
         }
     }
 
-    /// Create the consensus and DA stake tables from L1 events
-    ///
-    /// This is a pure function, to make it easily testable.
-    ///
-    /// We expect have at most a few hundred EVM events in the
-    /// PermissionedStakeTable contract over the liftetime of the contract so it
-    /// should not significantly affect performance to fetch all events and
-    /// perform the computation in this functions once per epoch.
-    pub fn from_l1_events(updates: Vec<StakersUpdated>) -> Self {
-        let changes_per_node = updates
-            .into_iter()
-            .flat_map(|event| {
-                event
-                    .removed
-                    .into_iter()
-                    .map(|key| StakeTableChange::Remove(bls_alloy_to_jf(key)))
-                    .chain(
-                        event
-                            .added
-                            .into_iter()
-                            .map(|node_info| StakeTableChange::Add(node_info.into())),
-                    )
-            })
-            .group_by(|change| change.key());
+    validate_validators(&mut validators)?;
 
-        // If the last event for a stakers is `Added` the staker is currently
-        // staking, if the last event is removed or (or the staker is not present)
-        // they are not staking.
-        let currently_staking = changes_per_node
-            .into_iter()
-            .map(|(_pub_key, deltas)| deltas.last().expect("deltas non-empty").clone())
-            .filter_map(|change| match change {
-                StakeTableChange::Add(node_info) => Some(node_info),
-                StakeTableChange::Remove(_) => None,
-            });
+    Ok(validators)
+}
 
-        let mut consensus_stake_table: Vec<PeerConfig<PubKey>> = vec![];
-        let mut da_members: Vec<PeerConfig<PubKey>> = vec![];
-        for node in currently_staking {
-            consensus_stake_table.push(node.clone().into());
-            if node.da {
-                da_members.push(node.into());
-            }
+fn validate_validators(
+    validators: &mut IndexMap<Address, Validator<BLSPubKey>>,
+) -> anyhow::Result<()> {
+    for (address, validator) in validators.clone() {
+        // Ensure validator has at least one delegator
+        if validator.delegators.is_empty() {
+            tracing::info!("Validator {address:?} does not have any delegator");
+            validators.shift_remove(&address);
         }
-        Self::new(consensus_stake_table.into(), da_members.into())
+
+        // Ensure total stake is not zero
+        if validator.stake.is_zero() {
+            tracing::info!("Validator {address:?} does not have any stake");
+            validators.shift_remove(&address);
+        }
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn mock() -> Self {
-        StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
+    Ok(())
+}
+
+#[derive(Clone, derive_more::From)]
+pub enum StakeTableEvent {
+    Register(ValidatorRegistered),
+    Deregister(ValidatorExit),
+    Delegate(Delegated),
+    Undelegate(Undelegated),
+    KeyUpdate(ConsensusKeysUpdated),
+}
+
+impl std::fmt::Debug for StakeTableEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StakeTableEvent::Register(event) => write!(f, "Register({:?})", event.account),
+            StakeTableEvent::Deregister(event) => write!(f, "Deregister({:?})", event.validator),
+            StakeTableEvent::Delegate(event) => write!(f, "Delegate({:?})", event.delegator),
+            StakeTableEvent::Undelegate(event) => write!(f, "Undelegate({:?})", event.delegator),
+            StakeTableEvent::KeyUpdate(event) => write!(f, "KeyUpdate({:?})", event.account),
+        }
     }
+}
+
+impl StakeTableEvent {
+    pub fn sort_events(
+        registrations: Vec<(ValidatorRegistered, Log)>,
+        deregistrations: Vec<(ValidatorExit, Log)>,
+        delegations: Vec<(Delegated, Log)>,
+        undelegated_events: Vec<(Undelegated, Log)>,
+        keys_update: Vec<(ConsensusKeysUpdated, Log)>,
+    ) -> anyhow::Result<BTreeMap<(u64, u64), StakeTableEvent>> {
+        let mut map = BTreeMap::new();
+        for (registration, log) in registrations {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                registration.into(),
+            );
+        }
+        for (dereg, log) in deregistrations {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                dereg.into(),
+            );
+        }
+        for (delegation, log) in delegations {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                delegation.into(),
+            );
+        }
+        for (undelegated, log) in undelegated_events {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                undelegated.into(),
+            );
+        }
+
+        for (update, log) in keys_update {
+            map.insert(
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                update.into(),
+            );
+        }
+        Ok(map)
+    }
+
+    // #[cfg(any(test, feature = "testing"))]
+    // pub fn mock() -> Self {
+    //     StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
+    // }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
 /// Type to describe DA and Stake memberships
 pub struct EpochCommittees {
     /// Committee used when we're in pre-epoch state
-    non_epoch_committee: Committee,
+    non_epoch_committee: NonEpochCommittee,
 
     /// Holds Stake table and da stake
-    state: HashMap<Epoch, Committee>,
-
-    /// Number of blocks in an epoch
-    _epoch_size: u64,
+    state: HashMap<Epoch, EpochCommittee>,
 
     /// L1 provider
     l1_client: L1Client,
@@ -121,34 +297,16 @@ pub struct EpochCommittees {
 
     /// Peers for catching up the stake table
     #[debug(skip)]
-    peers: Option<Arc<dyn StateCatchup>>,
-    /// Contains the epoch after which initial_drb_result will not be used (set_first_epoch.epoch + 2)
-    /// And the DrbResult to use before that epoch
-    initial_drb_result: Option<(Epoch, DrbResult)>,
+    peers: Arc<dyn StateCatchup>,
 
     /// Methods for stake table persistence.
     #[debug(skip)]
     persistence: Arc<dyn MembershipPersistence>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum StakeTableChange {
-    Add(NodeInfoJf),
-    Remove(BLSPubKey),
-}
-
-impl StakeTableChange {
-    pub(crate) fn key(&self) -> BLSPubKey {
-        match self {
-            StakeTableChange::Add(node_info) => node_info.stake_table_key,
-            StakeTableChange::Remove(key) => *key,
-        }
-    }
-}
-
 /// Holds Stake table and da stake
 #[derive(Clone, Debug)]
-struct Committee {
+struct NonEpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
@@ -167,61 +325,92 @@ struct Committee {
     indexed_da_members: HashMap<PubKey, PeerConfig<PubKey>>,
 }
 
+/// Holds Stake table and da stake
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct EpochCommittee {
+    /// The nodes eligible for leadership.
+    /// NOTE: This is currently a hack because the DA leader needs to be the quorum
+    /// leader but without voting rights.
+    eligible_leaders: Vec<PeerConfig<PubKey>>,
+    /// Keys for nodes participating in the network
+    stake_table: IndexMap<PubKey, PeerConfig<PubKey>>,
+    validators: IndexMap<Address, Validator<BLSPubKey>>,
+    address_mapping: HashMap<BLSPubKey, Address>,
+}
+
 impl EpochCommittees {
     /// Updates `Self.stake_table` with stake_table for
     /// `Self.contract_address` at `l1_block_height`. This is intended
     /// to be called before calling `self.stake()` so that
     /// `Self.stake_table` only needs to be updated once in a given
     /// life-cycle but may be read from many times.
-    fn update_stake_table(&mut self, epoch: EpochNumber, st: StakeTables) -> Committee {
-        // This works because `get_stake_table` is fetching *all*
-        // update events and building the table for us. We will need
-        // more subtlety when start fetching only the events since last update.
-
-        let stake_table = st.stake_table.0.clone();
-        let da_members = st.da_members.0.clone();
-
-        let indexed_stake_table: HashMap<PubKey, _> = st
-            .stake_table
-            .0
-            .iter()
-            .map(|peer_config| {
+    fn update_stake_table(
+        &mut self,
+        epoch: EpochNumber,
+        validators: IndexMap<Address, Validator<BLSPubKey>>,
+    ) {
+        let mut address_mapping = HashMap::new();
+        let stake_table = validators
+            .values()
+            .map(|v| {
+                address_mapping.insert(v.stake_table_key, v.account);
                 (
-                    PubKey::public_key(&peer_config.stake_table_entry),
-                    peer_config.clone(),
+                    v.stake_table_key,
+                    PeerConfig {
+                        stake_table_entry: BLSPubKey::stake_table_entry(
+                            &v.stake_table_key,
+                            v.stake.to_ethers().as_u64(),
+                        ),
+                        state_ver_key: v.state_ver_key.clone(),
+                    },
                 )
             })
             .collect();
 
-        let indexed_da_members: HashMap<PubKey, _> = st
-            .da_members
-            .0
-            .iter()
-            .map(|peer_config| {
-                (
-                    PubKey::public_key(&peer_config.stake_table_entry),
-                    peer_config.clone(),
-                )
-            })
-            .collect();
+        self.state.insert(
+            epoch,
+            EpochCommittee {
+                eligible_leaders: self.non_epoch_committee.eligible_leaders.clone(),
+                stake_table,
+                validators,
+                address_mapping,
+            },
+        );
+    }
 
-        let eligible_leaders: Vec<_> = st
-            .stake_table
-            .0
-            .into_iter()
-            .filter(|peer_config| peer_config.stake_table_entry.stake() > U256::zero())
-            .collect();
+    pub fn validators(
+        &self,
+        epoch: &Epoch,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        Ok(self
+            .state
+            .get(epoch)
+            .context("state for found")?
+            .validators
+            .clone())
+    }
 
-        let committee = Committee {
-            eligible_leaders,
-            stake_table,
-            da_members,
-            indexed_stake_table,
-            indexed_da_members,
-        };
+    pub fn address(&self, epoch: &Epoch, bls_key: BLSPubKey) -> anyhow::Result<Address> {
+        let mapping = self
+            .state
+            .get(epoch)
+            .context("state for found")?
+            .address_mapping
+            .clone();
 
-        self.state.insert(epoch, committee.clone());
-        committee
+        Ok(*mapping.get(&bls_key).context(format!(
+            "failed to get ethereum address for bls key {bls_key:?}"
+        ))?)
+    }
+
+    pub fn get_validator_config(
+        &self,
+        epoch: &Epoch,
+        key: BLSPubKey,
+    ) -> anyhow::Result<Validator<BLSPubKey>> {
+        let address = self.address(epoch, key)?;
+        let validators = self.validators(epoch)?;
+        Ok(validators.get(&address).unwrap().clone())
     }
 
     // We need a constructor to match our concrete type.
@@ -230,28 +419,35 @@ impl EpochCommittees {
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<PubKey>>,
         da_members: Vec<PeerConfig<PubKey>>,
-        instance_state: &NodeState,
-        epoch_size: u64,
+        l1_client: L1Client,
+        contract_address: Option<Address>,
+        peers: Arc<dyn StateCatchup>,
         persistence: impl MembershipPersistence,
     ) -> Self {
         // For each eligible leader, get the stake table entry
         let eligible_leaders: Vec<_> = committee_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| {
+                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
+            })
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| {
+                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
+            })
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let da_members: Vec<_> = da_members
             .iter()
-            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::zero())
+            .filter(|&peer_config| {
+                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
+            })
             .cloned()
             .collect();
 
@@ -277,7 +473,7 @@ impl EpochCommittees {
             })
             .collect();
 
-        let members = Committee {
+        let members = NonEpochCommittee {
             eligible_leaders,
             stake_table,
             da_members,
@@ -286,38 +482,48 @@ impl EpochCommittees {
         };
 
         let mut map = HashMap::new();
-        map.insert(Epoch::genesis(), members.clone());
+        let epoch_committee = EpochCommittee {
+            eligible_leaders: members.eligible_leaders.clone(),
+            stake_table: members
+                .stake_table
+                .iter()
+                .map(|x| (PubKey::public_key(&x.stake_table_entry), x.clone()))
+                .collect(),
+            validators: Default::default(),
+            address_mapping: HashMap::new(),
+        };
+        map.insert(Epoch::genesis(), epoch_committee.clone());
         // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
-        map.insert(Epoch::genesis() + 1u64, members.clone());
+        map.insert(Epoch::genesis() + 1u64, epoch_committee.clone());
 
         Self {
             non_epoch_committee: members,
             state: map,
-            _epoch_size: epoch_size,
-            l1_client: instance_state.l1_client.clone(),
-            contract_address: instance_state.chain_config.stake_table_contract,
+            l1_client,
+            contract_address,
             randomized_committees: BTreeMap::new(),
-            peers: Some(instance_state.peers.clone()),
-            initial_drb_result: None,
+            peers,
             persistence: Arc::new(persistence),
         }
     }
-
-    fn state(&self, epoch: &Option<Epoch>) -> Option<&Committee> {
+    fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<PubKey>>> {
         if let Some(epoch) = epoch {
-            self.state.get(epoch)
+            self.state
+                .get(epoch)
+                .map(|committee| committee.stake_table.clone().into_values().collect())
         } else {
-            Some(&self.non_epoch_committee)
+            Some(self.non_epoch_committee.stake_table.clone())
         }
     }
 
     /// Get the stake table by epoch. Try to load from DB and fall back to fetching from l1.
-    async fn get_stake_table(
+    async fn get_stake_table_by_epoch(
         &self,
         epoch: Epoch,
         contract_address: Address,
         l1_block: u64,
-    ) -> Result<StakeTables, GetStakeTablesError> {
+    ) -> Result<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>, GetStakeTablesError>
+    {
         if let Some(stake_tables) = self
             .persistence
             .load_stake(epoch)
@@ -327,7 +533,7 @@ impl EpochCommittees {
             Ok(stake_tables)
         } else {
             self.l1_client
-                .get_stake_table(contract_address.to_alloy(), l1_block)
+                .get_stake_table(contract_address, l1_block)
                 .await
                 .map_err(GetStakeTablesError::L1ClientFetchError)
         }
@@ -362,19 +568,11 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     /// Get the stake table for the current view
     fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
-        if let Some(st) = self.state(&epoch) {
-            st.stake_table.clone()
-        } else {
-            vec![]
-        }
+        self.get_stake_table(&epoch).unwrap_or_default()
     }
     /// Get the stake table for the current view
-    fn da_stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
-        if let Some(sc) = self.state(&epoch) {
-            sc.da_members.clone()
-        } else {
-            vec![]
-        }
+    fn da_stake_table(&self, _epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
+        self.non_epoch_committee.da_members.clone()
     }
 
     /// Get all members of the committee for the current view
@@ -383,66 +581,63 @@ impl Membership<SeqTypes> for EpochCommittees {
         _view_number: <SeqTypes as NodeType>::View,
         epoch: Option<Epoch>,
     ) -> BTreeSet<PubKey> {
-        if let Some(sc) = self.state(&epoch) {
-            sc.indexed_stake_table.clone().into_keys().collect()
-        } else {
-            BTreeSet::new()
-        }
+        let stake_table = self.stake_table(epoch);
+        stake_table
+            .iter()
+            .map(|x| PubKey::public_key(&x.stake_table_entry))
+            .collect()
     }
 
     /// Get all members of the committee for the current view
     fn da_committee_members(
         &self,
         _view_number: <SeqTypes as NodeType>::View,
-        epoch: Option<Epoch>,
+        _epoch: Option<Epoch>,
     ) -> BTreeSet<PubKey> {
-        if let Some(sc) = self.state(&epoch) {
-            sc.indexed_da_members.clone().into_keys().collect()
-        } else {
-            BTreeSet::new()
-        }
-    }
-
-    /// Get all eligible leaders of the committee for the current view
-    fn committee_leaders(
-        &self,
-        _view_number: <SeqTypes as NodeType>::View,
-        epoch: Option<Epoch>,
-    ) -> BTreeSet<PubKey> {
-        self.state(&epoch)
-            .unwrap()
-            .eligible_leaders
-            .iter()
-            .map(|x| PubKey::public_key(&x.stake_table_entry))
+        self.non_epoch_committee
+            .indexed_da_members
+            .clone()
+            .into_keys()
             .collect()
     }
 
     /// Get the stake table entry for a public key
     fn stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
         // Only return the stake if it is above zero
-        self.state(&epoch)
-            .and_then(|h| h.indexed_stake_table.get(pub_key).cloned())
+        if let Some(epoch) = epoch {
+            self.state
+                .get(&epoch)
+                .and_then(|h| h.stake_table.get(pub_key))
+                .cloned()
+        } else {
+            self.non_epoch_committee
+                .indexed_stake_table
+                .get(pub_key)
+                .cloned()
+        }
     }
 
     /// Get the DA stake table entry for a public key
-    fn da_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
+    fn da_stake(&self, pub_key: &PubKey, _epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
         // Only return the stake if it is above zero
-        self.state(&epoch)
-            .and_then(|h| h.indexed_da_members.get(pub_key).cloned())
+        self.non_epoch_committee
+            .indexed_da_members
+            .get(pub_key)
+            .cloned()
     }
 
     /// Check if a node has stake in the committee
     fn has_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> bool {
-        self.state(&epoch)
-            .and_then(|h| h.indexed_stake_table.get(pub_key))
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+        self.stake(pub_key, epoch)
+            .map(|x| x.stake_table_entry.stake() > ethers::types::U256::zero())
+            .unwrap_or_default()
     }
 
     /// Check if a node has stake in the committee
     fn has_da_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> bool {
-        self.state(&epoch)
-            .and_then(|h| h.indexed_da_members.get(pub_key))
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+        self.da_stake(pub_key, epoch)
+            .map(|x| x.stake_table_entry.stake() > ethers::types::U256::zero())
+            .unwrap_or_default()
     }
 
     /// Index the vector of public keys with the current view number
@@ -475,40 +670,36 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     /// Get the total number of nodes in the committee
     fn total_nodes(&self, epoch: Option<Epoch>) -> usize {
-        self.state(&epoch)
-            .map(|sc| sc.stake_table.len())
-            .unwrap_or_default()
+        self.stake_table(epoch).len()
     }
 
     /// Get the total number of DA nodes in the committee
     fn da_total_nodes(&self, epoch: Option<Epoch>) -> usize {
-        self.state(&epoch)
-            .map(|sc: &Committee| sc.da_members.len())
-            .unwrap_or_default()
+        self.da_stake_table(epoch).len()
     }
 
     /// Get the voting success threshold for the committee
     fn success_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.state(&epoch).unwrap().stake_table.len();
+        let quorum_len = self.stake_table(epoch).len();
         NonZeroU64::new(((quorum_len as u64 * 2) / 3) + 1).unwrap()
     }
 
     /// Get the voting success threshold for the committee
     fn da_success_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let da_len = self.state(&epoch).unwrap().da_members.len();
+        let da_len = self.da_stake_table(epoch).len();
         NonZeroU64::new(((da_len as u64 * 2) / 3) + 1).unwrap()
     }
 
     /// Get the voting failure threshold for the committee
     fn failure_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.state(&epoch).unwrap().stake_table.len();
+        let quorum_len = self.stake_table(epoch).len();
 
         NonZeroU64::new(((quorum_len as u64) / 3) + 1).unwrap()
     }
 
     /// Get the voting upgrade threshold for the committee
     fn upgrade_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.state(&epoch).unwrap().indexed_stake_table.len();
+        let quorum_len = self.total_nodes(epoch);
 
         NonZeroU64::new(max(
             (quorum_len as u64 * 9) / 10,
@@ -529,7 +720,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         let stake_tables = self
-            .get_stake_table(epoch, address, block_header.height())
+            .get_stake_table_by_epoch(epoch, address, block_header.height())
             .await
             .inspect_err(|e| {
                 tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
@@ -545,7 +736,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         Some(Box::new(move |committee: &mut Self| {
-            let _ = committee.update_stake_table(epoch, stake_tables);
+            committee.update_stake_table(epoch, stake_tables);
         }))
     }
 
@@ -554,22 +745,27 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     async fn get_epoch_root_and_drb(
-        &self,
+        membership: Arc<RwLock<Self>>,
         block_height: u64,
         epoch_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<(Header, DrbResult)> {
-        let Some(ref peers) = self.peers else {
-            anyhow::bail!("No Peers Configured for Catchup");
-        };
+        let peers = membership.read().await.peers.clone();
+        let stake_table = membership.read().await.stake_table(Some(epoch)).clone();
+        let success_threshold = membership.read().await.success_threshold(Some(epoch));
         // Fetch leaves from peers
         let leaf: Leaf2 = peers
-            .fetch_leaf(block_height, self, epoch, epoch_height)
+            .fetch_leaf(
+                block_height,
+                stake_table.clone(),
+                success_threshold,
+                epoch_height,
+            )
             .await?;
         //DRB height is decided in the next epoch's last block
         let drb_height = block_height + epoch_height + 3;
         let drb_leaf = peers
-            .fetch_leaf(drb_height, self, epoch, epoch_height)
+            .fetch_leaf(drb_height, stake_table, success_threshold, epoch_height)
             .await?;
 
         Ok((
@@ -599,15 +795,16 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     fn set_first_epoch(&mut self, epoch: Epoch, initial_drb_result: DrbResult) {
-        self.state.insert(epoch, self.non_epoch_committee.clone());
-        self.state
-            .insert(epoch + 1, self.non_epoch_committee.clone());
-        self.initial_drb_result = Some((epoch + 2, initial_drb_result));
+        let epoch_committee = self.state.get(&Epoch::genesis()).unwrap().clone();
+        self.state.insert(epoch, epoch_committee.clone());
+        self.state.insert(epoch + 1, epoch_committee);
+        self.add_drb_result(epoch, initial_drb_result);
+        self.add_drb_result(epoch + 1, initial_drb_result);
     }
 }
 
 #[cfg(any(test, feature = "testing"))]
-impl StakeTable {
+impl super::v0_3::StakeTable {
     /// Generate a `StakeTable` with `n` members.
     pub fn mock(n: u64) -> Self {
         [..n]
@@ -630,104 +827,196 @@ impl DAMembers {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use contract_bindings_alloy::permissionedstaketable::PermissionedStakeTable::NodeInfo;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing {
+    use contract_bindings_alloy::staketable::{EdOnBN254::EdOnBN254Point, BN254::G2Point};
+    use ethers_conv::ToAlloy as _;
+    use hotshot_contract_adapter::stake_table::{bls_jf_to_alloy2, ParsedEdOnBN254Point};
+    use hotshot_types::light_client::StateKeyPair;
+    use rand::{Rng as _, RngCore as _};
 
     use super::*;
 
-    #[test]
-    fn test_stake_table_from_l1_events() {
-        let mut rng = rand::thread_rng();
+    // TODO: current tests are just sanity checks, we need more.
 
-        // Build a stake table with one DA node and one consensus node.
-        let mut da_node = NodeInfoJf::random(&mut rng);
-        da_node.da = true;
-        let mut consensus_node = NodeInfoJf::random(&mut rng);
-        consensus_node.da = false;
-        let added: Vec<NodeInfo> = vec![da_node.clone().into(), consensus_node.clone().into()];
-        let mut updates = vec![StakersUpdated {
-            removed: vec![],
-            added,
-        }];
-
-        let st = StakeTables::from_l1_events(updates.clone());
-
-        // The DA stake table contains the DA node only
-        assert_eq!(st.da_members.0.len(), 1);
-        assert_eq!(
-            st.da_members.0[0].stake_table_entry.stake_key,
-            da_node.stake_table_key
-        );
-
-        // The consensus stake table contains both nodes
-        assert_eq!(st.stake_table.0.len(), 2);
-        assert_eq!(
-            st.stake_table.0[0].stake_table_entry.stake_key,
-            da_node.stake_table_key
-        );
-        assert_eq!(
-            st.stake_table.0[1].stake_table_entry.stake_key,
-            consensus_node.stake_table_key
-        );
-
-        // Simulate making the consensus node a DA node. This is accomplished by
-        // sending a transaction removes and re-adds the same node with updated
-        // DA status.
-        let mut new_da_node = consensus_node.clone();
-        new_da_node.da = true;
-        updates.push(StakersUpdated {
-            removed: vec![consensus_node.stake_table_key_alloy()],
-            added: vec![new_da_node.clone().into()],
-        });
-        let st = StakeTables::from_l1_events(updates.clone());
-
-        // The DA stake stable now contains both nodes
-        assert_eq!(st.da_members.0.len(), 2);
-        assert_eq!(
-            st.da_members.0[0].stake_table_entry.stake_key,
-            da_node.stake_table_key
-        );
-        assert_eq!(
-            st.da_members.0[1].stake_table_entry.stake_key,
-            new_da_node.stake_table_key
-        );
-
-        // The consensus stake stable (still) contains both nodes
-        assert_eq!(st.stake_table.0.len(), 2);
-        assert_eq!(
-            st.stake_table.0[0].stake_table_entry.stake_key,
-            da_node.stake_table_key
-        );
-        assert_eq!(
-            st.stake_table.0[1].stake_table_entry.stake_key,
-            new_da_node.stake_table_key
-        );
-
-        // Simulate removing the second node
-        updates.push(StakersUpdated {
-            removed: vec![new_da_node.stake_table_key_alloy()],
-            added: vec![],
-        });
-        let st = StakeTables::from_l1_events(updates);
-
-        // The DA stake table contains only the original DA node
-        assert_eq!(st.da_members.0.len(), 1);
-        assert_eq!(
-            st.da_members.0[0].stake_table_entry.stake_key,
-            da_node.stake_table_key
-        );
-
-        // The consensus stake table also contains only the original DA node
-        assert_eq!(st.stake_table.0.len(), 1);
-        assert_eq!(
-            st.stake_table.0[0].stake_table_entry.stake_key,
-            da_node.stake_table_key
-        );
+    pub struct TestValidator {
+        pub account: Address,
+        pub bls_vk: G2Point,
+        pub schnorr_vk: EdOnBN254Point,
+        pub commission: u16,
     }
 
-    // TODO: test that repeatedly removes and adds more nodes
+    impl TestValidator {
+        pub fn random() -> Self {
+            let rng = &mut rand::thread_rng();
+            let mut seed = [0u8; 32];
+            rng.fill_bytes(&mut seed);
 
-    // TODO: the contract prevents removing nodes that aren't stakers and adding
-    //       stakers multiple times, but should the rust code handle it too?
+            let (bls_vk, _) = BLSPubKey::generated_from_seed_indexed(seed, 0);
+            let schnorr_vk: ParsedEdOnBN254Point =
+                StateKeyPair::generate_from_seed_indexed(seed, 0)
+                    .ver_key()
+                    .to_affine()
+                    .into();
+
+            Self {
+                account: Address::random(),
+                bls_vk: bls_jf_to_alloy2(bls_vk),
+                schnorr_vk: EdOnBN254Point {
+                    x: schnorr_vk.x.to_alloy(),
+                    y: schnorr_vk.y.to_alloy(),
+                },
+                commission: rng.gen_range(0..10000),
+            }
+        }
+    }
+
+    impl Validator<BLSPubKey> {
+        pub fn mock() -> Validator<BLSPubKey> {
+            let val = TestValidator::random();
+            let rng = &mut rand::thread_rng();
+            let mut seed = [1u8; 32];
+            rng.fill_bytes(&mut seed);
+            let mut validator_stake = alloy::primitives::U256::from(0);
+            let mut delegators = HashMap::new();
+            for _i in 0..=100 {
+                let stake: u64 = rng.gen_range(0..10000);
+                delegators.insert(Address::random(), alloy::primitives::U256::from(stake));
+                validator_stake += alloy::primitives::U256::from(stake);
+            }
+
+            let stake_table_key = bls_alloy_to_jf2(val.bls_vk.clone());
+            let state_ver_key = edward_bn254point_to_state_ver(val.schnorr_vk.clone());
+
+            Validator {
+                account: val.account,
+                stake_table_key,
+                state_ver_key,
+                stake: validator_stake,
+                commission: val.commission,
+                delegators,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::Address;
+    use sequencer_utils::test_utils::setup_test;
+
+    use super::*;
+    use crate::v0::impls::testing::*;
+
+    #[test]
+    fn test_from_l1_events() -> anyhow::Result<()> {
+        setup_test();
+        // Build a stake table with one DA node and one consensus node.
+        let val = TestValidator::random();
+        let val_new_keys = TestValidator::random();
+        let delegator = Address::random();
+        let mut events: Vec<StakeTableEvent> = [
+            ValidatorRegistered {
+                account: val.account,
+                blsVk: val.bls_vk.clone(),
+                schnorrVk: val.schnorr_vk.clone(),
+                commission: val.commission,
+            }
+            .into(),
+            Delegated {
+                delegator,
+                validator: val.account,
+                amount: U256::from(10),
+            }
+            .into(),
+            ConsensusKeysUpdated {
+                account: val.account,
+                blsVK: val_new_keys.bls_vk.clone(),
+                schnorrVK: val_new_keys.schnorr_vk.clone(),
+            }
+            .into(),
+            Undelegated {
+                delegator,
+                validator: val.account,
+                amount: U256::from(7),
+            }
+            .into(),
+        ]
+        .to_vec();
+
+        let st = from_l1_events(events.iter().cloned())?;
+        let st_val = st.get(&val.account).unwrap();
+        assert_eq!(st_val.stake, U256::from(3));
+        assert_eq!(st_val.commission, val.commission);
+        assert_eq!(st_val.delegators.len(), 1);
+        assert_eq!(*st_val.delegators.get(&delegator).unwrap(), U256::from(3));
+
+        events.push(
+            ValidatorExit {
+                validator: val.account,
+            }
+            .into(),
+        );
+
+        let st = from_l1_events(events.iter().cloned())?;
+        assert_eq!(st.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_l1_events_failures() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+        let delegator = Address::random();
+
+        let register: StakeTableEvent = ValidatorRegistered {
+            account: val.account,
+            blsVk: val.bls_vk.clone(),
+            schnorrVk: val.schnorr_vk.clone(),
+            commission: val.commission,
+        }
+        .into();
+        let delegate: StakeTableEvent = Delegated {
+            delegator,
+            validator: val.account,
+            amount: U256::from(10),
+        }
+        .into();
+        let key_update: StakeTableEvent = ConsensusKeysUpdated {
+            account: val.account,
+            blsVK: val.bls_vk.clone(),
+            schnorrVK: val.schnorr_vk.clone(),
+        }
+        .into();
+        let undelegate: StakeTableEvent = Undelegated {
+            delegator,
+            validator: val.account,
+            amount: U256::from(7),
+        }
+        .into();
+
+        let exit: StakeTableEvent = ValidatorExit {
+            validator: val.account,
+        }
+        .into();
+
+        let cases = [
+            vec![exit],
+            vec![undelegate.clone()],
+            vec![delegate.clone()],
+            vec![key_update],
+            vec![register.clone(), register.clone()],
+            vec![register, delegate, undelegate.clone(), undelegate],
+        ];
+
+        for events in cases.iter() {
+            let res = from_l1_events(events.iter().cloned());
+            assert!(
+                res.is_err(),
+                "events {:?}, not a valid sequencer of events",
+                res
+            );
+        }
+        Ok(())
+    }
 }

@@ -3581,6 +3581,7 @@ dependencies = [
  "anyhow",
  "ark-serialize 0.4.2",
  "async-broadcast",
+ "async-lock 3.4.0",
  "async-trait",
  "base64-bytes",
  "bincode",
@@ -3600,6 +3601,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-query-service",
  "hotshot-types",
+ "indexmap 2.7.1",
  "itertools 0.12.1",
  "jf-merkle-tree 0.1.0",
  "jf-utils",
@@ -9515,6 +9517,7 @@ checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 name = "sequencer"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "ark-ff 0.4.2",
  "ark-serialize 0.4.2",
@@ -9548,6 +9551,7 @@ dependencies = [
  "hotshot-state-prover",
  "hotshot-types",
  "include_dir",
+ "indexmap 2.7.1",
  "itertools 0.12.1",
  "jf-crhf 0.1.0",
  "jf-merkle-tree 0.1.0",

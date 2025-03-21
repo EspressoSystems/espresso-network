@@ -132,7 +132,7 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 primitive-types = { version = "0.12.2", default-features = false, features = [
     "serde",
 ] }
-
+indexmap = { version = "2", features = ["serde"] }
 # Builder imports
 marketplace-builder-core = { path = "marketplace-builder-core" }
 marketplace-builder-shared = { path = "marketplace-builder-shared" }
