@@ -26,7 +26,7 @@ use hotshot_types::{
     network::PeerConfigKeys,
     signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
-    traits::signature_key::SignatureKey as _,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey as _},
     PeerConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -219,7 +219,10 @@ impl From<NodeInfoJf> for StakeTableEntry<BLSPubKey> {
     }
 }
 
-impl From<NodeInfoJf> for PeerConfig<BLSPubKey> {
+impl<TYPES> From<NodeInfoJf> for PeerConfig<TYPES>
+where
+    TYPES: NodeType<SignatureKey = BLSPubKey, StateSignatureKey = StateVerKey>,
+{
     fn from(value: NodeInfoJf) -> Self {
         Self {
             stake_table_entry: StakeTableEntry {
@@ -302,8 +305,11 @@ impl From<NodeInfoAlloy> for NodeInfoJf {
     }
 }
 
-impl From<PeerConfigKeys<BLSPubKey>> for NodeInfoJf {
-    fn from(value: PeerConfigKeys<BLSPubKey>) -> Self {
+impl<TYPES> From<PeerConfigKeys<TYPES>> for NodeInfoJf
+where
+    TYPES: NodeType<SignatureKey = BLSPubKey, StateSignatureKey = StateVerKey>,
+{
+    fn from(value: PeerConfigKeys<TYPES>) -> Self {
         let PeerConfigKeys {
             stake_table_key,
             state_ver_key,

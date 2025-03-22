@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 use vec1::Vec1;
 
-use crate::PubKey;
+use crate::{PubKey, SeqTypes};
 
 /// This struct defines the public Hotshot validator configuration.
 /// Private key and state key pairs are excluded for security reasons.
@@ -25,17 +25,16 @@ pub struct PublicValidatorConfig {
     state_key_pair: String,
 }
 
-impl From<ValidatorConfig<PubKey>> for PublicValidatorConfig {
-    fn from(v: ValidatorConfig<PubKey>) -> Self {
-        let ValidatorConfig::<PubKey> {
+impl From<ValidatorConfig<SeqTypes>> for PublicValidatorConfig {
+    fn from(v: ValidatorConfig<SeqTypes>) -> Self {
+        let ValidatorConfig::<SeqTypes> {
             public_key,
             private_key: _,
             stake_value,
-            state_key_pair,
+            state_public_key,
+            state_private_key: _,
             is_da,
         } = v;
-
-        let state_public_key = state_key_pair.ver_key();
 
         Self {
             public_key,
@@ -55,8 +54,8 @@ impl From<ValidatorConfig<PubKey>> for PublicValidatorConfig {
 pub struct PublicHotShotConfig {
     start_threshold: (u64, u64),
     num_nodes_with_stake: NonZeroUsize,
-    known_nodes_with_stake: Vec<PeerConfig<PubKey>>,
-    known_da_nodes: Vec<PeerConfig<PubKey>>,
+    known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
+    known_da_nodes: Vec<PeerConfig<SeqTypes>>,
     da_staked_committee_size: usize,
     fixed_leader_for_gpuvid: usize,
     next_view_timeout: u64,
@@ -77,12 +76,12 @@ pub struct PublicHotShotConfig {
     epoch_start_block: u64,
 }
 
-impl From<HotShotConfig<PubKey>> for PublicHotShotConfig {
-    fn from(v: HotShotConfig<PubKey>) -> Self {
+impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
+    fn from(v: HotShotConfig<SeqTypes>) -> Self {
         // Destructure all fields from HotShotConfig to return an error
         // if new fields are added to HotShotConfig. This makes sure that we handle
         // all fields appropriately and do not miss any updates.
-        let HotShotConfig::<PubKey> {
+        let HotShotConfig::<SeqTypes> {
             start_threshold,
             num_nodes_with_stake,
             known_nodes_with_stake,
@@ -135,7 +134,7 @@ impl From<HotShotConfig<PubKey>> for PublicHotShotConfig {
 }
 
 impl PublicHotShotConfig {
-    pub fn into_hotshot_config(self) -> HotShotConfig<PubKey> {
+    pub fn into_hotshot_config(self) -> HotShotConfig<SeqTypes> {
         HotShotConfig {
             start_threshold: self.start_threshold,
             num_nodes_with_stake: self.num_nodes_with_stake,
@@ -162,11 +161,11 @@ impl PublicHotShotConfig {
         }
     }
 
-    pub fn known_nodes_with_stake(&self) -> Vec<PeerConfig<PubKey>> {
+    pub fn known_nodes_with_stake(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.known_nodes_with_stake.clone()
     }
 
-    pub fn known_da_nodes(&self) -> Vec<PeerConfig<PubKey>> {
+    pub fn known_da_nodes(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.known_da_nodes.clone()
     }
 }
@@ -195,8 +194,8 @@ pub struct PublicNetworkConfig {
     random_builder: Option<RandomBuilderConfig>,
 }
 
-impl From<NetworkConfig<PubKey>> for PublicNetworkConfig {
-    fn from(cfg: NetworkConfig<PubKey>) -> Self {
+impl From<NetworkConfig<SeqTypes>> for PublicNetworkConfig {
+    fn from(cfg: NetworkConfig<SeqTypes>) -> Self {
         Self {
             rounds: cfg.rounds,
             indexed_da: cfg.indexed_da,
@@ -225,8 +224,8 @@ impl From<NetworkConfig<PubKey>> for PublicNetworkConfig {
 impl PublicNetworkConfig {
     pub fn into_network_config(
         self,
-        my_own_validator_config: ValidatorConfig<PubKey>,
-    ) -> anyhow::Result<NetworkConfig<PubKey>> {
+        my_own_validator_config: ValidatorConfig<SeqTypes>,
+    ) -> anyhow::Result<NetworkConfig<SeqTypes>> {
         let node_index = self
             .config
             .known_nodes_with_stake

@@ -30,73 +30,67 @@ use primitive_types::U256;
 /// The static committee election
 pub struct Committee<T: NodeType> {
     /// The nodes on the committee and their stake
-    stake_table: Vec<PeerConfig<T::SignatureKey>>,
+    stake_table: Vec<PeerConfig<T>>,
 
     /// The nodes on the committee and their stake
-    da_stake_table: Vec<PeerConfig<T::SignatureKey>>,
+    da_stake_table: Vec<PeerConfig<T>>,
 
     /// Stake tables randomized with the DRB, used (only) for leader election
     randomized_committee: RandomizedCommittee<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
 
     /// The nodes on the committee and their stake, indexed by public key
-    indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T::SignatureKey>>,
+    indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
 
     /// The nodes on the committee and their stake, indexed by public key
-    indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T::SignatureKey>>,
+    indexed_da_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
 }
 
 impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     type Error = hotshot_utils::anytrace::Error;
     /// Create a new election
-    fn new(
-        committee_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
-        da_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>>,
-    ) -> Self {
+    fn new(committee_members: Vec<PeerConfig<TYPES>>, da_members: Vec<PeerConfig<TYPES>>) -> Self {
         // For each eligible leader, get the stake table entry
-        let eligible_leaders: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> =
-            committee_members
-                .iter()
-                .filter(|&member| member.stake_table_entry.stake() > U256::zero())
-                .cloned()
-                .collect();
-
-        // For each member, get the stake table entry
-        let members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> = committee_members
+        let eligible_leaders: Vec<PeerConfig<TYPES>> = committee_members
             .iter()
             .filter(|&member| member.stake_table_entry.stake() > U256::zero())
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
-        let da_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> = da_members
+        let members: Vec<PeerConfig<TYPES>> = committee_members
+            .iter()
+            .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+            .cloned()
+            .collect();
+
+        // For each member, get the stake table entry
+        let da_members: Vec<PeerConfig<TYPES>> = da_members
             .iter()
             .filter(|&member| member.stake_table_entry.stake() > U256::zero())
             .cloned()
             .collect();
 
         // Index the stake table by public key
-        let indexed_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES::SignatureKey>> =
-            members
-                .iter()
-                .map(|config| {
-                    (
-                        TYPES::SignatureKey::public_key(&config.stake_table_entry),
-                        config.clone(),
-                    )
-                })
-                .collect();
+        let indexed_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES>> = members
+            .iter()
+            .map(|config| {
+                (
+                    TYPES::SignatureKey::public_key(&config.stake_table_entry),
+                    config.clone(),
+                )
+            })
+            .collect();
 
         // Index the stake table by public key
-        let indexed_da_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES::SignatureKey>> =
-            da_members
-                .iter()
-                .map(|config| {
-                    (
-                        TYPES::SignatureKey::public_key(&config.stake_table_entry),
-                        config.clone(),
-                    )
-                })
-                .collect();
+        let indexed_da_stake_table: BTreeMap<TYPES::SignatureKey, PeerConfig<TYPES>> = da_members
+            .iter()
+            .map(|config| {
+                (
+                    TYPES::SignatureKey::public_key(&config.stake_table_entry),
+                    config.clone(),
+                )
+            })
+            .collect();
 
         // We use a constant value of `[0u8; 32]` for the drb, since this is just meant to be used in tests
         let randomized_committee = generate_stake_cdf(
@@ -118,18 +112,12 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     }
 
     /// Get the stake table for the current view
-    fn stake_table(
-        &self,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    fn stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
         self.stake_table.clone()
     }
 
     /// Get the stake table for the current view
-    fn da_stake_table(
-        &self,
-        _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    fn da_stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
         self.da_stake_table.clone()
     }
 
@@ -162,7 +150,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<PeerConfig<TYPES>> {
         // Only return the stake if it is above zero
         self.indexed_stake_table.get(pub_key).cloned()
     }
@@ -172,7 +160,7 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         &self,
         pub_key: &<TYPES as NodeType>::SignatureKey,
         _epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<PeerConfig<TYPES>> {
         // Only return the stake if it is above zero
         self.indexed_da_stake_table.get(pub_key).cloned()
     }

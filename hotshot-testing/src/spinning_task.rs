@@ -29,7 +29,9 @@ use hotshot_types::{
     data::Leaf2,
     event::Event,
     message::convert_proposal,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2},
+    simple_certificate::{
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+    },
     traits::{
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
@@ -82,6 +84,8 @@ pub struct SpinningTask<
     pub(crate) restart_contexts: HashMap<usize, RestartContext<TYPES, N, I, V>>,
     /// Generate network channel for restart nodes
     pub(crate) channel_generator: AsyncGenerator<Network<TYPES, I>>,
+    /// The light client state update certificate
+    pub(crate) state_cert: LightClientStateUpdateCertificate<TYPES>,
 }
 
 #[async_trait]
@@ -177,6 +181,7 @@ where
                                             BTreeMap::new(),
                                             BTreeMap::new(),
                                             None,
+                                            self.state_cert.clone(),
                                         );
                                         // We assign node's public key and stake value rather than read from config file since it's a test
                                         let validator_config =
@@ -260,6 +265,10 @@ where
                                     )
                                     .await,
                                 );
+                                let state_cert = read_storage
+                                    .state_cert_cloned()
+                                    .await
+                                    .unwrap_or(LightClientStateUpdateCertificate::genesis());
                                 let saved_proposals = read_storage.proposals_cloned().await;
                                 let mut vid_shares = BTreeMap::new();
                                 for (view, hash_map) in read_storage.vids_cloned().await {
@@ -283,6 +292,7 @@ where
                                     saved_proposals,
                                     vid_shares,
                                     decided_upgrade_certificate,
+                                    state_cert,
                                 );
                                 // We assign node's public key and stake value rather than read from config file since it's a test
                                 let validator_config = ValidatorConfig::generated_from_seed_indexed(

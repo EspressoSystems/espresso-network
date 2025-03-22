@@ -29,7 +29,7 @@ use super::{
     network::{
         AsyncGenerator, ConnectedNetwork, NetworkReliability, TestableNetworkingImplementation,
     },
-    signature_key::BuilderSignatureKey,
+    signature_key::{BuilderSignatureKey, StateSignatureKey},
     states::TestableState,
     storage::Storage,
     ValidatedState,
@@ -257,6 +257,9 @@ pub trait NodeType:
 
     /// The type builder uses to sign its messages
     type BuilderSignatureKey: BuilderSignatureKey;
+
+    /// The type replica uses to sign the light client state
+    type StateSignatureKey: StateSignatureKey;
 }
 
 /// Version information for HotShot

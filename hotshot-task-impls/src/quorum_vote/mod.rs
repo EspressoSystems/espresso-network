@@ -27,7 +27,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
     },
     utils::{epoch_from_block_number, option_epoch_from_block_number},
@@ -99,6 +99,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Signature key for light client state
+    pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -294,6 +297,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             vid_share,
             false,
             self.epoch_height,
+            &self.state_private_key,
         )
         .await
         {
@@ -350,6 +354,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Signature key for light client state
+    pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 
     /// Upgrade certificate to enable epochs, staged until we reach the specified block height
     pub staged_epoch_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
@@ -461,6 +468,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 id: self.id,
                 epoch_height: self.epoch_height,
                 consensus_metrics: Arc::clone(&self.consensus_metrics),
+                state_private_key: self.state_private_key.clone(),
             },
         );
         self.vote_dependencies
@@ -807,6 +815,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             updated_vid,
             is_vote_leaf_extended,
             self.epoch_height,
+            &self.state_private_key,
         )
         .await
         .context(|e| debug!("Failed to submit vote; error = {}", e))

@@ -23,7 +23,8 @@ use crate::{
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, UpgradeCertificate,
     },
 };
 
@@ -109,6 +110,20 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
     /// Update the current high QC in storage.
     async fn update_high_qc2(&self, high_qc: QuorumCertificate2<TYPES>) -> Result<()> {
         self.update_high_qc(high_qc.to_qc()).await
+    }
+    /// Update the light client state update certificate in storage.
+    async fn update_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
+    ) -> Result<()>;
+
+    async fn update_high_qc2_and_state_cert(
+        &self,
+        high_qc: QuorumCertificate2<TYPES>,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
+    ) -> Result<()> {
+        self.update_high_qc2(high_qc).await?;
+        self.update_state_cert(state_cert).await
     }
     /// Update the current high QC in storage.
     async fn update_next_epoch_high_qc2(

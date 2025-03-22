@@ -25,6 +25,7 @@ use vbs::version::Version;
 use super::signature_key::BuilderSignatureKey;
 use crate::{
     data::{Leaf2, VidCommitment},
+    light_client::LightClientState,
     traits::{node_implementation::NodeType, states::InstanceState, ValidatedState},
     utils::BuilderCommitment,
 };
@@ -214,4 +215,7 @@ pub trait BlockHeader<TYPES: NodeType>:
 
     /// Get the results of the auction for this Header. Only used in post-marketplace versions
     fn get_auction_results(&self) -> Option<TYPES::AuctionResult>;
+
+    /// Get the light client state
+    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState>;
 }

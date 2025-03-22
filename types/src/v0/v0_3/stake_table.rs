@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::SeqTypes;
 use alloy::primitives::{Address, U256};
 use derive_more::derive::{From, Into};
 use hotshot::types::{BLSPubKey, SignatureKey};
@@ -10,22 +11,20 @@ use hotshot_types::{
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::PubKey;
-
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
 pub struct PermissionedStakeTableEntry(NodeInfoJf);
 
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
-pub struct CombinedStakeTable(Vec<PeerConfigKeys<PubKey>>);
+pub struct CombinedStakeTable(Vec<PeerConfigKeys<SeqTypes>>);
 
 #[derive(Clone, Debug, From, Into, Serialize, Deserialize, PartialEq, Eq)]
 /// NewType to disambiguate DA Membership
-pub struct DAMembers(pub Vec<PeerConfig<PubKey>>);
+pub struct DAMembers(pub Vec<PeerConfig<SeqTypes>>);
 
 #[derive(Clone, Debug, From, Into, Serialize, Deserialize, PartialEq, Eq)]
 /// NewType to disambiguate StakeTable
-pub struct StakeTable(pub Vec<PeerConfig<PubKey>>);
+pub struct StakeTable(pub Vec<PeerConfig<SeqTypes>>);
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(bound(deserialize = ""))]
