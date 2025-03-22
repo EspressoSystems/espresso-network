@@ -263,6 +263,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             latest_proposed_view: handle.cur_view().await,
             cur_epoch: handle.cur_epoch().await,
             proposal_dependencies: BTreeMap::new(),
+            formed_quorum_certificates: BTreeMap::new(),
+            formed_extended_quorum_certificates: BTreeMap::new(),
             consensus: OuterConsensus::new(consensus),
             instance_state: handle.hotshot.instance_state(),
             membership_coordinator: handle.hotshot.membership_coordinator.clone(),
