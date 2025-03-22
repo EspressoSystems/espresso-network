@@ -363,6 +363,7 @@ pub async fn deploy(
     mut contracts: Contracts,
     initial_stake_table: Option<Vec<NodeInfo>>,
     exit_escrow_period: Option<Duration>,
+    initial_token_grant_recipient: Option<Address>,
 ) -> anyhow::Result<Contracts> {
     if should_deploy(ContractGroup::StakeTable, &only) && exit_escrow_period.is_none() {
         anyhow::bail!(
@@ -537,12 +538,11 @@ pub async fn deploy(
             )
             .await?;
         let token = EspToken::new(token_address, l1_alloy.clone());
+        let initial_token_grant_recipient =
+            initial_token_grant_recipient.unwrap_or(deployer).to_alloy();
+        tracing::info!(?initial_token_grant_recipient, "ESP token contract",);
         let data = token
-            .initialize(
-                deployer.to_alloy(),
-                // TODO: token recipient
-                deployer.to_alloy(),
-            )
+            .initialize(deployer.to_alloy(), initial_token_grant_recipient)
             .calldata()
             .clone();
         let token_proxy_address = contracts

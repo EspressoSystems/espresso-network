@@ -107,9 +107,13 @@ pub struct Config {
     account_index: u32,
 
     /// L1 Ethereum RPC.
-    #[clap(long, env = "RPC_URL")]
+    #[clap(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
     rpc_url: Url,
+
+    /// Deployed ESP token contract address.
+    #[clap(long, env = "ESP_TOKEN_ADDRESS")]
+    token_address: Address,
 
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
