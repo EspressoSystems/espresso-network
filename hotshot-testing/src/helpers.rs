@@ -14,7 +14,7 @@ use committable::Committable;
 use hotshot::{
     traits::{BlockPayload, NodeImplementation, TestableNodeImplementation},
     types::{SignatureKey, SystemContextHandle},
-    HotShotInitializer, InitializerEpochInfo, SystemContext,
+    HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
     auction_results_provider_types::TestAuctionResultsProvider,
@@ -27,14 +27,13 @@ use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseShare},
-    drb::INITIAL_DRB_RESULT,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         EncodeBytes,
     },
     utils::{option_epoch_from_block_number, View, ViewInner},
@@ -108,18 +107,7 @@ pub async fn build_system_handle_from_launcher<
         TestInstanceState::new(launcher.metadata.async_delay_config.clone()),
         launcher.metadata.test_config.epoch_height,
         launcher.metadata.test_config.epoch_start_block,
-        vec![
-            InitializerEpochInfo::<TYPES> {
-                epoch: TYPES::Epoch::new(1),
-                drb_result: INITIAL_DRB_RESULT,
-                block_header: None,
-            },
-            InitializerEpochInfo::<TYPES> {
-                epoch: TYPES::Epoch::new(2),
-                drb_result: INITIAL_DRB_RESULT,
-                block_header: None,
-            },
-        ],
+        vec![],
     )
     .await
     .unwrap();

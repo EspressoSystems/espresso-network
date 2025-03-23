@@ -239,16 +239,6 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .collect()
         }
     }
-
-    /// Get all eligible leaders of the committee for the current view
-    fn committee_leaders(
-        &self,
-        view_number: <TYPES as NodeType>::View,
-        epoch: Option<<TYPES as NodeType>::Epoch>,
-    ) -> BTreeSet<<TYPES as NodeType>::SignatureKey> {
-        self.committee_members(view_number, epoch)
-    }
-
     /// Get the stake table entry for a public key
     fn stake(
         &self,

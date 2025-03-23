@@ -10,6 +10,7 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{bail, Context};
+use async_lock::RwLock;
 use contract_bindings_alloy::staketable::StakeTable::{
     ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
 };
@@ -332,13 +333,11 @@ pub struct EpochCommittees {
     /// Peers for catching up the stake table
     #[debug(skip)]
     peers: Arc<dyn StateCatchup>,
-    /// Contains the epoch after which initial_drb_result will not be used (set_first_epoch.epoch + 2)
-    /// And the DrbResult to use before that epoch
-    initial_drb_result: Option<(Epoch, DrbResult)>,
 
     /// Methods for stake table persistence.
     #[debug(skip)]
     persistence: Arc<dyn MembershipPersistence>,
+    first_epoch: Epoch,
 }
 
 /// Holds Stake table and da stake
@@ -376,6 +375,10 @@ pub struct EpochCommittee {
 }
 
 impl EpochCommittees {
+    pub fn first_epoch(&self) -> Epoch {
+        self.first_epoch
+    }
+
     /// Updates `Self.stake_table` with stake_table for
     /// `Self.contract_address` at `l1_block_height`. This is intended
     /// to be called before calling `self.stake()` so that
@@ -540,8 +543,8 @@ impl EpochCommittees {
             contract_address,
             randomized_committees: BTreeMap::new(),
             peers,
-            initial_drb_result: None,
             persistence: Arc::new(persistence),
+            first_epoch: Epoch::genesis(),
         }
     }
     fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<PubKey>>> {
@@ -551,16 +554,6 @@ impl EpochCommittees {
                 .map(|committee| committee.stake_table.clone().into_values().collect())
         } else {
             Some(self.non_epoch_committee.stake_table.clone())
-        }
-    }
-
-    fn leaders(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<PubKey>>> {
-        if let Some(epoch) = epoch {
-            self.state
-                .get(epoch)
-                .map(|committee| committee.eligible_leaders.clone())
-        } else {
-            Some(self.non_epoch_committee.eligible_leaders.clone())
         }
     }
 
@@ -646,19 +639,6 @@ impl Membership<SeqTypes> for EpochCommittees {
             .indexed_da_members
             .clone()
             .into_keys()
-            .collect()
-    }
-
-    /// Get all eligible leaders of the committee for the current view
-    fn committee_leaders(
-        &self,
-        _view_number: <SeqTypes as NodeType>::View,
-        epoch: Option<Epoch>,
-    ) -> BTreeSet<PubKey> {
-        self.leaders(&epoch)
-            .unwrap()
-            .iter()
-            .map(|x| PubKey::public_key(&x.stake_table_entry))
             .collect()
     }
 
@@ -806,20 +786,27 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     async fn get_epoch_root_and_drb(
-        &self,
+        membership: Arc<RwLock<Self>>,
         block_height: u64,
         epoch_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<(Header, DrbResult)> {
-        let peers = self.peers.clone();
+        let peers = membership.read().await.peers.clone();
+        let stake_table = membership.read().await.stake_table(Some(epoch)).clone();
+        let success_threshold = membership.read().await.success_threshold(Some(epoch));
         // Fetch leaves from peers
         let leaf: Leaf2 = peers
-            .fetch_leaf(block_height, self, epoch, epoch_height)
+            .fetch_leaf(
+                block_height,
+                stake_table.clone(),
+                success_threshold,
+                epoch_height,
+            )
             .await?;
         //DRB height is decided in the next epoch's last block
         let drb_height = block_height + epoch_height + 3;
         let drb_leaf = peers
-            .fetch_leaf(drb_height, self, epoch, epoch_height)
+            .fetch_leaf(drb_height, stake_table, success_threshold, epoch_height)
             .await?;
 
         Ok((
@@ -849,10 +836,13 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     fn set_first_epoch(&mut self, epoch: Epoch, initial_drb_result: DrbResult) {
+        self.first_epoch = epoch;
+
         let epoch_committee = self.state.get(&Epoch::genesis()).unwrap().clone();
         self.state.insert(epoch, epoch_committee.clone());
         self.state.insert(epoch + 1, epoch_committee);
-        self.initial_drb_result = Some((epoch + 2, initial_drb_result));
+        self.add_drb_result(epoch, initial_drb_result);
+        self.add_drb_result(epoch + 1, initial_drb_result);
     }
 }
 

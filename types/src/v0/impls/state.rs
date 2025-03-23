@@ -30,13 +30,14 @@ use super::{
     auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
-    reward::{apply_rewards, catchup_missing_accounts},
+    reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
     v0_1::{
         RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
     },
     v0_3::Validator,
     BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
+    MarketplaceVersion,
 };
 use crate::{
     traits::StateCatchup,
@@ -751,7 +752,7 @@ fn validate_builder_fee(
         // TODO Marketplace signatures are placeholders for now. In
         // finished Marketplace signatures will cover the full
         // transaction.
-        if version.minor >= 3 {
+        if version.minor >= MarketplaceVersion::MINOR {
             fee_info
                 .account()
                 .validate_sequencing_fee_signature_marketplace(
@@ -884,7 +885,9 @@ impl ValidatedState {
         // when we deploy the permissionless contract in native demo
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
-        if version == EpochVersion::version() {
+        if version == EpochVersion::version()
+            && !first_two_epochs(parent_leaf.height(), instance).await?
+        {
             let validator =
                 catchup_missing_accounts(instance, &mut validated_state, parent_leaf, parent_view)
                     .await?;

@@ -49,7 +49,10 @@ use crate::{
         states::TestableState,
         BlockPayload,
     },
-    utils::{bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number},
+    utils::{
+        bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number,
+        EpochTransitionIndicator,
+    },
     vid::{
         advz::{advz_scheme, ADVZCommitment, ADVZShare},
         avidm::{init_avidm_param, AvidMCommitment, AvidMScheme, AvidMShare},
@@ -171,6 +174,9 @@ pub struct DaProposal2<TYPES: NodeType> {
     pub view_number: TYPES::View,
     /// Epoch this proposal applies to
     pub epoch: Option<TYPES::Epoch>,
+    /// Indicates whether we are in epoch transition
+    /// In epoch transition the next epoch payload commit should be calculated additionally
+    pub epoch_transition_indicator: EpochTransitionIndicator,
 }
 
 impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
@@ -180,6 +186,7 @@ impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
             metadata: da_proposal.metadata,
             view_number: da_proposal.view_number,
             epoch: None,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         }
     }
 }

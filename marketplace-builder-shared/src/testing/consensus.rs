@@ -26,6 +26,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, Versions},
         EncodeBytes,
     },
+    utils::EpochTransitionIndicator,
 };
 use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;
@@ -92,6 +93,7 @@ impl SimulatedChainState {
             metadata,
             view_number: self.round,
             epoch: self.epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let block_header = TestBlockHeader {

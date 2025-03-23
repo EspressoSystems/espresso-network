@@ -5,8 +5,9 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
-use std::{collections::BTreeSet, fmt::Debug, num::NonZeroU64};
+use std::{collections::BTreeSet, fmt::Debug, num::NonZeroU64, sync::Arc};
 
+use async_lock::RwLock;
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
@@ -39,13 +40,6 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     /// Get all participants in the committee for a specific view for a specific epoch
     fn da_committee_members(
-        &self,
-        view_number: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
-    ) -> BTreeSet<TYPES::SignatureKey>;
-
-    /// Get all leaders in the committee for a specific view for a specific epoch
-    fn committee_leaders(
         &self,
         view_number: TYPES::View,
         epoch: Option<TYPES::Epoch>,
@@ -129,15 +123,13 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height
     fn get_epoch_root_and_drb(
-        &self,
+        _membership: Arc<RwLock<Self>>,
         _block_height: u64,
         _epoch_height: u64,
         _epoch: TYPES::Epoch,
     ) -> impl std::future::Future<Output = anyhow::Result<(TYPES::BlockHeader, DrbResult)>> + Send
     {
-        async {
-            anyhow::bail!("Not implemented");
-        }
+        async move { anyhow::bail!("Not implemented") }
     }
 
     #[allow(clippy::type_complexity)]

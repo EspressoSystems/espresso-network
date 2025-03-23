@@ -40,7 +40,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         BlockPayload,
     },
-    utils::genesis_epoch_from_version,
+    utils::{genesis_epoch_from_version, EpochTransitionIndicator},
 };
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
@@ -200,6 +200,7 @@ impl TestView {
             metadata,
             view_number: genesis_view,
             epoch: genesis_epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let da_proposal = Proposal {
@@ -478,6 +479,7 @@ impl TestView {
             metadata,
             view_number: next_view,
             epoch: old_epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let da_proposal = Proposal {

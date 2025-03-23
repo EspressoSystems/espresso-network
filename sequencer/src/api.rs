@@ -568,7 +568,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .read()
             .await
             .undecided_leaves();
-        leaves.sort_by_key(|l| l.height());
+        leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves
             .iter()
             .find_position(|l| l.height() == height)
@@ -590,7 +590,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
         // Make sure we got one more leaf to confirm the decide
         for leaf in leaves
             .iter()
-            .skip_while(|l| l.height() <= last_leaf.height())
+            .skip_while(|l| l.view_number() <= last_leaf.view_number())
         {
             if leaf.justify_qc().view_number() == last_leaf.view_number() {
                 chain.push(leaf.clone());
@@ -1298,6 +1298,7 @@ mod api_tests {
         message::Proposal,
         simple_certificate::QuorumCertificate2,
         traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
+        utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
     };
     use portpicker::pick_unused_port;
@@ -1549,6 +1550,7 @@ mod api_tests {
                 metadata: payload.ns_table().clone(),
                 view_number: leaf.view_number(),
                 epoch: Some(EpochNumber::new(0)),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             };
             let da_proposal = Proposal {
                 data: da_proposal_inner,
@@ -1749,7 +1751,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
-        BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
+        BackoffParams, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState,
     };
@@ -1759,6 +1761,7 @@ mod test {
         stream::{StreamExt, TryStreamExt},
     };
     use hotshot::types::EventType;
+    use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         types::HeightIndexed,
@@ -2131,11 +2134,7 @@ mod test {
                 )
             }))
             .build();
-        let mut network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
 
         // Wait for replica 0 to decide in the third epoch.
         let mut events = network.peers[0].event_stream().await;
@@ -2144,7 +2143,10 @@ mod test {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
+            tracing::error!("got decide height {}", leaf_chain[0].leaf.height());
+
             if leaf_chain[0].leaf.height() > EPOCH_HEIGHT * 3 {
+                tracing::error!("decided past one epoch");
                 break;
             }
         }
@@ -2166,7 +2168,7 @@ mod test {
             .collect::<Vec<_>>()
             .await;
 
-        tracing::info!("restarting node");
+        tracing::error!("restarting node");
         let node = network
             .cfg
             .init_node(

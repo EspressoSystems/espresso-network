@@ -33,7 +33,7 @@ mod tests {
         signature_key::BuilderKey,
         simple_vote::QuorumData2,
         traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
-        utils::BuilderCommitment,
+        utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use marketplace_builder_shared::{
         block::ParentBlockReferences,
@@ -300,6 +300,7 @@ mod tests {
                         },
                         view_number: ViewNumber::new(round as u64),
                         epoch: None, // TODO: check if this is okay
+                        epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
                     };
                     let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
                     let seed = [round as u8; 32];
