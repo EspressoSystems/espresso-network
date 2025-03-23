@@ -1,6 +1,6 @@
+use alloy::primitives::U256;
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_std::rand::{CryptoRng, RngCore};
-use ethers::types::U256;
 use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::traits::stake_table::StakeTableScheme;
 use jf_signature::{

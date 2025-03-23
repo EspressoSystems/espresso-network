@@ -2854,7 +2854,7 @@ interface LightClientV2Mock {
 
     function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
     function _blocksPerEpoch() external view returns (uint64);
-    function _getVk() external returns (IPlonkVerifier.VerifyingKey memory vk);
+    function _getVk() external pure returns (IPlonkVerifier.VerifyingKey memory vk);
     function _verifier() external view returns (address);
     function currentBlockNumber() external view returns (uint256);
     function currentEpoch() external view returns (uint64);
@@ -3261,7 +3261,7 @@ interface LightClientV2Mock {
         ]
       }
     ],
-    "stateMutability": "nonpayable"
+    "stateMutability": "pure"
   },
   {
     "type": "function",
@@ -7563,7 +7563,7 @@ pub mod LightClientV2Mock {
     };
     /**Function with signature `_getVk()` and selector `0x12173c2c`.
     ```solidity
-    function _getVk() external returns (IPlonkVerifier.VerifyingKey memory vk);
+    function _getVk() external pure returns (IPlonkVerifier.VerifyingKey memory vk);
     ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
