@@ -63,11 +63,7 @@ sol! {
 
 impl From<genesisStateReturn> for LightClientStateSol {
     fn from(v: genesisStateReturn) -> Self {
-        Self {
-            viewNum: v.viewNum,
-            blockHeight: v.blockHeight,
-            blockCommRoot: v.blockCommRoot,
-        }
+        unsafe { std::mem::transmute(v) }
     }
 }
 
@@ -81,29 +77,29 @@ impl PartialEq for LightClientStateSol {
 
 impl From<lightclientmock::LightClient::LightClientState> for LightClientStateSol {
     fn from(v: lightclientmock::LightClient::LightClientState) -> Self {
-        Self {
-            viewNum: v.viewNum,
-            blockHeight: v.blockHeight,
-            blockCommRoot: v.blockCommRoot,
-        }
+        unsafe { std::mem::transmute(v) }
     }
 }
 impl From<lightclientmock::LightClientMock::finalizedStateReturn> for LightClientStateSol {
     fn from(v: lightclientmock::LightClientMock::finalizedStateReturn) -> Self {
-        Self {
-            viewNum: v.viewNum,
-            blockHeight: v.blockHeight,
-            blockCommRoot: v.blockCommRoot,
-        }
+        unsafe { std::mem::transmute(v) }
     }
 }
 
 impl From<LightClientStateSol> for lightclientmock::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
-        Self {
-            viewNum: v.viewNum,
-            blockHeight: v.blockHeight,
-            blockCommRoot: v.blockCommRoot,
-        }
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<PlonkProofSol> for lightclientmock::IPlonkVerifier::PlonkProof {
+    fn from(v: PlonkProofSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<lightclientmock::LightClientMock::genesisStateReturn> for LightClientStateSol {
+    fn from(v: lightclientmock::LightClientMock::genesisStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
     }
 }

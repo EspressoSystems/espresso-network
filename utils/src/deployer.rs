@@ -365,9 +365,8 @@ mod tests {
     use alloy::{providers::ProviderBuilder, sol_types::SolValue};
     use hotshot::rand::{rngs::StdRng, SeedableRng};
 
-    use crate::test_utils::setup_test;
-
     use super::*;
+    use crate::test_utils::setup_test;
 
     #[tokio::test]
     async fn test_is_proxy_contract() -> Result<()> {

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use alloy::primitives::U256;
 use anyhow::Result;
 use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
@@ -8,8 +9,7 @@ use ark_std::{
     rand::{rngs::StdRng, CryptoRng, Rng, RngCore},
     UniformRand,
 };
-use ethers::types::U256;
-use hotshot_contract_adapter::jellyfish::{field_to_u256, open_key};
+use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
 use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
     light_client::{
@@ -178,11 +178,13 @@ impl MockLedger {
         let voting_st_state = self.voting_stake_table_state();
         let next_st_state = self.next_stake_table_state();
 
-        let mut msg = Vec::with_capacity(7);
+        let mut msg = Vec::with_capacity(11);
         let state_msg: [F; 3] = self.state.clone().into();
         msg.extend_from_slice(&state_msg);
-        let st_state_msg: [F; 4] = next_st_state.into();
-        msg.extend_from_slice(&st_state_msg);
+        let voting_stake_msg: [F; 4] = voting_st_state.into();
+        msg.extend_from_slice(&voting_stake_msg);
+        let next_stake_msg: [F; 4] = next_st_state.into();
+        msg.extend_from_slice(&next_stake_msg);
 
         let st: Vec<(BLSVerKey, U256, SchnorrVerKey)> = self
             .st

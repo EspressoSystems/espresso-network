@@ -118,13 +118,13 @@ where
     };
 
     let hash = pending.tx_hash().to_owned();
-    tracing::info!("submitted contract call {:x}", hash);
+    tracing::info!("submitted contract call 0x{:x}", hash);
 
     let receipt = match pending.get_receipt().await {
         Ok(r) => r,
         Err(err) => {
             return Err(anyhow!(
-                "contract call {hash:x}: error getting transaction receipt: {err}"
+                "contract call 0x{hash:x}: error getting transaction receipt: {err}"
             ))
         },
     };
@@ -139,12 +139,12 @@ where
 
 #[cfg(test)]
 mod test {
+    use alloy::{primitives::I256, sol};
+    use anyhow::Result;
     use committable::RawCommitmentBuilder;
     use test_utils::setup_test;
 
     use super::*;
-    use alloy::{primitives::I256, sol};
-    use anyhow::Result;
 
     // contract for tests, credit: <https://alloy.rs/examples/sol-macro/events_errors.html>
     sol! {

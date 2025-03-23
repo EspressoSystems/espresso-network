@@ -2591,7 +2591,7 @@ interface LightClientArbitrum {
     event Upgraded(address indexed implementation);
 
     function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
-    function _getVk() external returns (IPlonkVerifier.VerifyingKey memory vk);
+    function _getVk() external pure returns (IPlonkVerifier.VerifyingKey memory vk);
     function currentBlockNumber() external view returns (uint256);
     function disablePermissionedProverMode() external;
     function finalizedState() external view returns (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot);
@@ -2973,7 +2973,7 @@ interface LightClientArbitrum {
         ]
       }
     ],
-    "stateMutability": "nonpayable"
+    "stateMutability": "pure"
   },
   {
     "type": "function",
@@ -6041,7 +6041,7 @@ pub mod LightClientArbitrum {
     };
     /**Function with signature `_getVk()` and selector `0x12173c2c`.
     ```solidity
-    function _getVk() external returns (IPlonkVerifier.VerifyingKey memory vk);
+    function _getVk() external pure returns (IPlonkVerifier.VerifyingKey memory vk);
     ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]

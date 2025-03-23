@@ -1,10 +1,10 @@
+use alloy::primitives::U256;
 use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_std::{
     borrow::Borrow,
     rand::{CryptoRng, RngCore},
 };
-use ethers::types::U256;
 /// BLS verification key, base field and Schnorr verification key
 pub use hotshot_stake_table::vec_based::config::QCVerKey;
 use hotshot_types::light_client::{
