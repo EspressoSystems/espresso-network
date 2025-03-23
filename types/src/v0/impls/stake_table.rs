@@ -1011,8 +1011,8 @@ mod tests {
             .into(),
         );
 
-        let st = from_l1_events(events.iter().cloned())?;
-        assert_eq!(st.len(), 0);
+        // This should fail because the validator has exited and no longer exists in the stake table.
+        assert!(from_l1_events(events.iter().cloned()).is_err());
 
         Ok(())
     }
