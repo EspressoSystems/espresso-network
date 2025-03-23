@@ -165,9 +165,9 @@ pub(crate) async fn deploy_light_client_contract(
     // when generate alloy's bindings, we supply a placeholder address, now we modify the actual
     // bytecode with deployed address of the library.
     let target_lc_bytecode = if mock {
-        LightClient::BYTECODE.encode_hex()
-    } else {
         LightClientMock::BYTECODE.encode_hex()
+    } else {
+        LightClient::BYTECODE.encode_hex()
     };
     let lc_linked_bytecode = Bytes::from_hex(target_lc_bytecode.replace(
         LIBRARY_PLACEHOLDER_ADDRESS,
@@ -177,10 +177,12 @@ pub(crate) async fn deploy_light_client_contract(
     // Deploy the light client
     let light_client_addr = if mock {
         // for mock, we don't populate the `contracts` since it only track production-ready deployments
-        LightClientMock::deploy_builder(&provider)
+        let addr = LightClientMock::deploy_builder(&provider)
             .map(|req| req.with_deploy_code(lc_linked_bytecode))
             .deploy()
-            .await?
+            .await?;
+        tracing::info!("deployed LightClientMock at {addr:#x}");
+        addr
     } else {
         contracts
             .deploy(
@@ -360,8 +362,10 @@ pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result
 
 #[cfg(test)]
 mod tests {
-    use alloy::providers::ProviderBuilder;
+    use alloy::{providers::ProviderBuilder, sol_types::SolValue};
     use hotshot::rand::{rngs::StdRng, SeedableRng};
+
+    use crate::test_utils::setup_test;
 
     use super::*;
 
@@ -393,6 +397,56 @@ mod tests {
         assert_ne!(mock_lc_addr, lc_addr);
         // check that we didn't redeploy PlonkVerifier again, instead use existing ones
         assert_eq!(contracts.address(Contract::PlonkVerifier).unwrap(), pv_addr);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deploy_mock_light_client_proxy() -> Result<()> {
+        setup_test();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+        let prover = admin;
+
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            true, // is_mock = true
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        // check initialization is correct
+        let lc = LightClientMock::new(lc_proxy_addr, &provider);
+        let finalized_state: LightClientStateSol = lc.finalizedState().call().await?.into();
+        assert_eq!(
+            genesis_state.abi_encode_params(),
+            finalized_state.abi_encode_params()
+        );
+        // mock set the state
+        let new_state = LightClientStateSol {
+            viewNum: 10,
+            blockHeight: 10,
+            blockCommRoot: U256::from(42),
+        };
+        lc.setFinalizedState(new_state.clone().into())
+            .send()
+            .await?
+            .watch()
+            .await?;
+        let finalized_state: LightClientStateSol = lc.finalizedState().call().await?.into();
+        assert_eq!(
+            new_state.abi_encode_params(),
+            finalized_state.abi_encode_params()
+        );
+
         Ok(())
     }
 
