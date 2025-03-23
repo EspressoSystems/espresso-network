@@ -22,12 +22,12 @@ pub use crate::bindings::{
     lightclient::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
-            self, LightClientInstance, LightClientState as LightClientStateSol,
-            StakeTableState as StakeTableStateSol,
+            self, genesisStateReturn, LightClientErrors, LightClientInstance,
+            LightClientState as LightClientStateSol, StakeTableState as StakeTableStateSol,
         },
         BN254::G1Point as G1PointSol,
     },
-    lightclientmock::LightClientMock,
+    lightclientmock::{self, LightClientMock},
     permissionedstaketable::{
         EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
         PermissionedStakeTable::{self, NodeInfo as NodeInfoSol, StakersUpdated},
@@ -59,4 +59,51 @@ sol! {
         uint256 u;
     }
 
+}
+
+impl From<genesisStateReturn> for LightClientStateSol {
+    fn from(v: genesisStateReturn) -> Self {
+        Self {
+            viewNum: v.viewNum,
+            blockHeight: v.blockHeight,
+            blockCommRoot: v.blockCommRoot,
+        }
+    }
+}
+
+impl PartialEq for LightClientStateSol {
+    fn eq(&self, other: &Self) -> bool {
+        self.viewNum == other.viewNum
+            && self.blockHeight == other.blockHeight
+            && self.blockCommRoot == other.blockCommRoot
+    }
+}
+
+impl From<lightclientmock::LightClient::LightClientState> for LightClientStateSol {
+    fn from(v: lightclientmock::LightClient::LightClientState) -> Self {
+        Self {
+            viewNum: v.viewNum,
+            blockHeight: v.blockHeight,
+            blockCommRoot: v.blockCommRoot,
+        }
+    }
+}
+impl From<lightclientmock::LightClientMock::finalizedStateReturn> for LightClientStateSol {
+    fn from(v: lightclientmock::LightClientMock::finalizedStateReturn) -> Self {
+        Self {
+            viewNum: v.viewNum,
+            blockHeight: v.blockHeight,
+            blockCommRoot: v.blockCommRoot,
+        }
+    }
+}
+
+impl From<LightClientStateSol> for lightclientmock::LightClient::LightClientState {
+    fn from(v: LightClientStateSol) -> Self {
+        Self {
+            viewNum: v.viewNum,
+            blockHeight: v.blockHeight,
+            blockCommRoot: v.blockCommRoot,
+        }
+    }
 }

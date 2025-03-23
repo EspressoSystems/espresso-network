@@ -6,9 +6,10 @@ pub mod ethers_serde {
 
     /// for alloy's U256
     pub mod u256 {
-        use super::*;
         use alloy::primitives::U256;
         use ethers_core::types::U256 as EthersU256;
+
+        use super::*;
 
         pub fn serialize<S: Serializer>(v: &U256, serializer: S) -> Result<S::Ok, S::Error> {
             let v_ethers = EthersU256(v.into_limbs());
@@ -43,9 +44,10 @@ pub mod ethers_serde {
 
     /// for alloy's U256
     pub mod u512 {
-        use super::*;
         use alloy::primitives::U512;
         use ethers_core::types::U512 as EthersU512;
+
+        use super::*;
 
         pub fn serialize<S: Serializer>(v: &U512, serializer: S) -> Result<S::Ok, S::Error> {
             let v_ethers = EthersU512(v.into_limbs());
@@ -79,9 +81,10 @@ pub mod ethers_serde {
 
     /// for alloy's Address
     pub mod address {
-        use super::*;
         use alloy::primitives::Address;
         use ethers_core::types::{Address as EthersAddress, H160};
+
+        use super::*;
 
         pub fn serialize<S: Serializer>(v: &Address, serializer: S) -> Result<S::Ok, S::Error> {
             let v_ethers = H160(v.0 .0);
@@ -117,9 +120,10 @@ pub mod ethers_serde {
 
     /// for Option<Address>
     pub mod option_address {
-        use super::*;
         use alloy::primitives::Address;
         use ethers_core::types::{Address as EthersAddress, H160};
+
+        use super::*;
 
         pub fn serialize<S: Serializer>(
             v: &Option<Address>,
@@ -225,8 +229,7 @@ pub mod ethers_serde {
         #[test]
         fn test_signature_serde() {
             use alloy::primitives::b256;
-            use ethers_core::types::Signature as EthersSignature;
-            use ethers_core::types::U256 as EthersU256;
+            use ethers_core::types::{Signature as EthersSignature, U256 as EthersU256};
 
             #[derive(Serialize, Deserialize, Debug, PartialEq)]
             #[serde(transparent)]
@@ -287,8 +290,7 @@ pub mod ethers_serde {
         #[test]
         fn test_option_signature_serde() {
             use alloy::primitives::b256;
-            use ethers_core::types::Signature as EthersSignature;
-            use ethers_core::types::U256 as EthersU256;
+            use ethers_core::types::{Signature as EthersSignature, U256 as EthersU256};
 
             #[derive(Serialize, Deserialize, Debug, PartialEq)]
             #[serde(transparent)]
@@ -327,9 +329,10 @@ pub mod ethers_serde {
 
     /// for B256
     pub mod b256 {
-        use super::*;
         use alloy::primitives::B256;
         use ethers_core::types::H256;
+
+        use super::*;
 
         pub fn serialize<S: Serializer>(v: &B256, serializer: S) -> Result<S::Ok, S::Error> {
             H256(v.0).serialize(serializer)
