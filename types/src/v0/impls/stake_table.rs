@@ -399,7 +399,7 @@ impl EpochCommittees {
                     PeerConfig {
                         stake_table_entry: BLSPubKey::stake_table_entry(
                             &v.stake_table_key,
-                            v.stake.to_ethers().as_u64(),
+                            v.stake.to_ethers(),
                         ),
                         state_ver_key: v.state_ver_key.clone(),
                     },

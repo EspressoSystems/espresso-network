@@ -81,6 +81,7 @@ pub mod testing {
         HotShotConfig, PeerConfig, ValidatorConfig,
     };
     use jf_signature::bls_over_bn254::VerKey;
+    use primitive_types::U256;
     use sequencer::{context::Consensus, network, SequencerApiVersion};
     use surf_disco::Client;
     use vbs::version::StaticVersion;
@@ -174,7 +175,7 @@ pub mod testing {
             .iter()
             .zip(&state_key_pairs)
             .map(|(pub_key, state_key_pair)| PeerConfig::<PubKey> {
-                stake_table_entry: pub_key.stake_table_entry(stake_value),
+                stake_table_entry: pub_key.stake_table_entry(U256::from(stake_value)),
                 state_ver_key: state_key_pair.ver_key(),
             })
             .collect::<Vec<_>>();
