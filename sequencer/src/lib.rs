@@ -502,7 +502,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         node_id: node_index,
         upgrades: genesis.upgrades,
         current_version: V::Base::VERSION,
-        epoch_height: None,
+        epoch_height: Some(epoch_height),
         peers,
         coordinator: coordinator.clone(),
     };
