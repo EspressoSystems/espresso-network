@@ -18,7 +18,7 @@ timestamp = "1970-01-01T00:00:00Z"
 number = 0
 
 [[upgrade]]
-version = "0.99"
+version = "0.3"
 start_proposing_view = 10
 stop_proposing_view = 60
 
