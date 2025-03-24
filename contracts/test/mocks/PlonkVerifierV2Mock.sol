@@ -14,7 +14,7 @@ contract PlonkVerifierV2Mock is PlonkVerifierV2 {
         IPlonkVerifier.VerifyingKey memory vk,
         uint256[11] memory pi,
         IPlonkVerifier.PlonkProof memory proof
-    ) public pure returns (Challenges memory res) {
+    ) public pure returns (Challenges memory) {
         return _computeChallenges(vk, pi, proof);
     }
 }

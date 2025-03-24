@@ -9,12 +9,12 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ed_on_bn254::{EdwardsConfig as EdOnBn254Config, Fq as FqEd254};
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_poly::{domain::radix2::Radix2EvaluationDomain, EvaluationDomain};
-use ark_std::rand::{rngs::StdRng, SeedableRng};
+use ark_std::rand::{rngs::StdRng, Rng, SeedableRng};
 use clap::{Parser, ValueEnum};
 use hotshot_contract_adapter::{field_to_u256, jellyfish::*, sol_types::*, u256_to_field};
-// use hotshot_state_prover::mock_ledger::{
-//     gen_plonk_proof_for_test, MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST,
-// };
+use hotshot_state_prover::mock_ledger::{
+    gen_plonk_proof_for_test, MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST,
+};
 use hotshot_types::utils::epoch_from_block_number;
 use jf_pcs::prelude::Commitment;
 use jf_plonk::{
@@ -81,12 +81,12 @@ enum Action {
     GenBLSSig,
     /// Generate some random point in G2
     GenRandomG2Point,
-    // /// Get mock genesis light client state
-    // MockGenesis,
-    // /// Get a consecutive finalized light client states
-    // MockConsecutiveFinalizedStates,
-    // /// Get a light client state that skipped a few blocks
-    // MockSkipBlocks,
+    /// Get mock genesis light client state
+    MockGenesis,
+    /// Get a consecutive finalized light client states
+    MockConsecutiveFinalizedStates,
+    /// Get a light client state that skipped a few blocks
+    MockSkipBlocks,
     /// Compute the epoch number from block height
     EpochCompute,
 }
@@ -274,8 +274,8 @@ fn main() {
             println!("{}", res.abi_encode_params().encode_hex());
         },
         Action::PlonkComputeChal => {
-            if cli.args.len() != 4 {
-                panic!("Should provide arg1=verifyingKey, arg2=publicInput, arg3=proof, arg4=extraTranscriptInitMsg");
+            if cli.args.len() != 3 {
+                panic!("Should provide arg1=verifyingKey, arg2=publicInput, arg3=proof");
             }
 
             let vk: VerifyingKey<Bn254> =
@@ -291,48 +291,45 @@ fn main() {
                 PlonkProofSol::abi_decode(&hex::decode(&cli.args[2]).unwrap(), true)
                     .unwrap()
                     .into();
-            let msg = Bytes::abi_decode(&hex::decode(&cli.args[3]).unwrap(), true)
-                .unwrap()
-                .to_vec();
 
             let chal: ChallengesSol = Verifier::<Bn254>::compute_challenges::<SolidityTranscript>(
                 &[&vk],
                 &[&pi],
                 &proof.into(),
-                &Some(msg),
+                &None,
             )
             .unwrap()
             .into();
             println!("{}", chal.abi_encode().encode_hex());
         },
         Action::PlonkVerify => {
-            // let (proof, vk, public_input, ..): (
-            //     Proof<Bn254>,
-            //     VerifyingKey<Bn254>,
-            //     Vec<Fr>,
-            //     Option<Vec<u8>>, // won't use extraTranscriptMsg
-            //     usize,           // won't use circuit size
-            // ) = gen_plonk_proof_for_test(1)[0].clone();
+            let (proof, vk, public_input, ..): (
+                Proof<Bn254>,
+                VerifyingKey<Bn254>,
+                Vec<Fr>,
+                Option<Vec<u8>>, // won't use extraTranscriptMsg
+                usize,           // won't use circuit size
+            ) = gen_plonk_proof_for_test(1)[0].clone();
 
-            // // ensure they are correct params
-            // assert!(PlonkKzgSnark::batch_verify::<SolidityTranscript>(
-            //     &[&vk],
-            //     &[&public_input],
-            //     &[&proof],
-            //     &[None]
-            // )
-            // .is_ok());
+            // ensure they are correct params
+            assert!(PlonkKzgSnark::batch_verify::<SolidityTranscript>(
+                &[&vk],
+                &[&public_input],
+                &[&proof],
+                &[None]
+            )
+            .is_ok());
 
-            // let vk_parsed: VerifyingKeySol = vk.into();
-            // let mut pi_parsed = [U256::default(); 11];
-            // assert_eq!(public_input.len(), 11);
-            // for (i, pi) in public_input.into_iter().enumerate() {
-            //     pi_parsed[i] = field_to_u256(pi);
-            // }
-            // let proof_parsed: PlonkProofSol = proof.into();
+            let vk_parsed: VerifyingKeySol = vk.into();
+            let mut pi_parsed = [U256::default(); 11];
+            assert_eq!(public_input.len(), 11);
+            for (i, pi) in public_input.into_iter().enumerate() {
+                pi_parsed[i] = field_to_u256(pi);
+            }
+            let proof_parsed: PlonkProofSol = proof.into();
 
-            // let res = (vk_parsed, pi_parsed, proof_parsed);
-            // println!("{}", res.abi_encode_params().encode_hex());
+            let res = (vk_parsed, pi_parsed, proof_parsed);
+            println!("{}", res.abi_encode_params().encode_hex());
         },
         Action::DummyProof => {
             let mut rng = jf_utils::test_rng();
@@ -356,8 +353,7 @@ fn main() {
             let seed = [seed_value; 32];
             let mut rng = StdRng::from_seed(seed);
 
-            let sender_address =
-                Address::abi_decode(&hex::decode(&cli.args[0]).unwrap(), true).unwrap();
+            let sender_address = Address::from_slice(&hex::decode(&cli.args[0]).unwrap());
             let sender_address_bytes = sender_address.abi_encode();
 
             // Generate the Schnorr key
@@ -380,13 +376,7 @@ fn main() {
             let sig_affine_point = sig.sigma.into_affine();
             let sig_parsed: G1PointSol = sig_affine_point.into();
 
-            let res = (
-                sig_parsed,
-                vk_parsed,
-                schnorr_pk_x,
-                schnorr_pk_y,
-                sender_address,
-            );
+            let res = (sig_parsed, vk_parsed, schnorr_pk_x, schnorr_pk_y);
             println!("{}", res.abi_encode_params().encode_hex());
         },
         Action::GenRandomG2Point => {
@@ -400,88 +390,87 @@ fn main() {
             let point: G2PointSol = point.into();
             println!("{}", point.abi_encode().encode_hex());
         },
-        // Action::MockGenesis => {
-        //     if cli.args.len() != 1 {
-        //         panic!("Should provide arg1=numInitValidators");
-        //     }
-        //     let num_init_validators = cli.args[0].parse::<u64>().unwrap();
+        Action::MockGenesis => {
+            if cli.args.len() != 1 {
+                panic!("Should provide arg1=numInitValidators");
+            }
+            let num_init_validators = cli.args[0].parse::<u64>().unwrap();
 
-        //     let pp = MockSystemParam::init();
-        //     let ledger = MockLedger::init(pp, num_init_validators as usize);
+            let pp = MockSystemParam::init();
+            let ledger = MockLedger::init(pp, num_init_validators as usize);
 
-        //     let res: (ParsedLightClientState, ParsedStakeTableState) = (
-        //         ledger.light_client_state().into(),
-        //         ledger.voting_stake_table_state().into(),
-        //     );
-        //     println!("{}", res.encode_hex());
-        // },
-        // Action::MockConsecutiveFinalizedStates => {
-        //     if cli.args.len() != 1 {
-        //         panic!("Should provide arg1=numInitValidators");
-        //     }
-        //     let num_init_validators = cli.args[0].parse::<u64>().unwrap();
+            let res: (LightClientStateSol, StakeTableStateSol) = (
+                ledger.light_client_state().into(),
+                ledger.voting_stake_table_state().into(),
+            );
+            println!("{}", res.abi_encode_params().encode_hex());
+        },
+        Action::MockConsecutiveFinalizedStates => {
+            if cli.args.len() != 1 {
+                panic!("Should provide arg1=numInitValidators");
+            }
+            let num_init_validators = cli.args[0].parse::<u64>().unwrap();
 
-        //     let pp = MockSystemParam::init();
-        //     let mut ledger = MockLedger::init(pp, num_init_validators as usize);
+            let pp = MockSystemParam::init();
+            let mut ledger = MockLedger::init(pp, num_init_validators as usize);
 
-        //     let mut new_states: Vec<ParsedLightClientState> = vec![];
-        //     let mut proofs: Vec<ParsedPlonkProof> = vec![];
-        //     let mut next_st_states: Vec<ParsedStakeTableState> = vec![];
+            let mut new_states: Vec<LightClientStateSol> = vec![];
+            let mut proofs: Vec<PlonkProofSol> = vec![];
+            let mut next_st_states: Vec<StakeTableStateSol> = vec![];
 
-        //     for _ in 1..4 {
-        //         // random number of notarized but not finalized block
-        //         if ledger.rng.gen_bool(0.5) {
-        //             let num_non_blk = ledger.rng.gen_range(0..5);
-        //             for _ in 0..num_non_blk {
-        //                 ledger.elapse_without_block();
-        //             }
-        //         }
+            for _ in 1..4 {
+                // random number of notarized but not finalized block
+                if ledger.rng.gen_bool(0.5) {
+                    let num_non_blk = ledger.rng.gen_range(0..5);
+                    for _ in 0..num_non_blk {
+                        ledger.elapse_without_block();
+                    }
+                }
 
-        //         ledger.elapse_with_block();
+                ledger.elapse_with_block();
 
-        //         let (pi, proof) = ledger.gen_state_proof();
-        //         next_st_states.push(pi.next_st_state.into());
-        //         new_states.push(pi.lc_state.into());
-        //         proofs.push(proof.into());
-        //     }
+                let (pi, proof) = ledger.gen_state_proof();
+                next_st_states.push(pi.next_st_state.into());
+                new_states.push(pi.lc_state.into());
+                proofs.push(proof.into());
+            }
 
-        //     let res = (new_states, next_st_states, proofs);
-        //     println!("{}", res.encode_hex());
-        // },
-        // Action::MockSkipBlocks => {
-        //     if cli.args.is_empty() || cli.args.len() > 2 {
-        //         panic!("Should provide arg1=numBlockSkipped,arg2(opt)=requireValidProof");
-        //     }
+            let res = (new_states, next_st_states, proofs);
+            println!("{}", res.abi_encode_params().encode_hex());
+        },
+        Action::MockSkipBlocks => {
+            if cli.args.is_empty() || cli.args.len() > 2 {
+                panic!("Should provide arg1=numBlockSkipped,arg2(opt)=requireValidProof");
+            }
 
-        //     let num_block_skipped = cli.args[0].parse::<u32>().unwrap();
-        //     let require_valid_proof: bool = if cli.args.len() == 2 {
-        //         cli.args[1].parse::<bool>().unwrap()
-        //     } else {
-        //         true
-        //     };
+            let num_block_skipped = cli.args[0].parse::<u32>().unwrap();
+            let require_valid_proof: bool = if cli.args.len() == 2 {
+                cli.args[1].parse::<bool>().unwrap()
+            } else {
+                true
+            };
 
-        //     let pp = MockSystemParam::init();
-        //     let mut ledger = MockLedger::init(pp, STAKE_TABLE_CAPACITY_FOR_TEST / 2);
+            let pp = MockSystemParam::init();
+            let mut ledger = MockLedger::init(pp, STAKE_TABLE_CAPACITY_FOR_TEST / 2);
 
-        //     for _ in 0..num_block_skipped {
-        //         ledger.elapse_with_block();
-        //     }
+            for _ in 0..num_block_skipped {
+                ledger.elapse_with_block();
+            }
 
-        //     let res = if require_valid_proof {
-        //         let (pi, proof) = ledger.gen_state_proof();
-        //         let state_parsed: ParsedLightClientState = pi.lc_state.into();
-        //         let proof_parsed: ParsedPlonkProof = proof.into();
-        //         let next_stake_table: ParsedStakeTableState = pi.next_st_state.into();
-        //         (state_parsed, next_stake_table, proof_parsed)
-        //     } else {
-        //         let state_parsed = ledger.light_client_state().into();
-        //         let proof_parsed = ParsedPlonkProof::dummy(&mut ledger.rng);
-        //         let next_stake_table: ParsedStakeTableState =
-        //             ledger.next_stake_table_state().into();
-        //         (state_parsed, next_stake_table, proof_parsed)
-        //     };
-        //     println!("{}", res.encode_hex());
-        // },
+            let res = if require_valid_proof {
+                let (pi, proof) = ledger.gen_state_proof();
+                let state_parsed: LightClientStateSol = pi.lc_state.into();
+                let proof_parsed: PlonkProofSol = proof.into();
+                let next_stake_table: StakeTableStateSol = pi.next_st_state.into();
+                (state_parsed, next_stake_table, proof_parsed)
+            } else {
+                let state_parsed = ledger.light_client_state().into();
+                let proof_parsed = PlonkProofSol::dummy(&mut ledger.rng);
+                let next_stake_table: StakeTableStateSol = ledger.next_stake_table_state().into();
+                (state_parsed, next_stake_table, proof_parsed)
+            };
+            println!("{}", res.abi_encode_params().encode_hex());
+        },
         Action::GenBLSHashes => {
             if cli.args.len() != 1 {
                 panic!("Should provide arg1=message");

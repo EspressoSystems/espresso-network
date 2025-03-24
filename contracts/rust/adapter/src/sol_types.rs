@@ -50,7 +50,7 @@ sol! {
         bytes transcript;
     }
 
-    /// types in src/libraries/PlonkVerifier.sol
+    /// types in src/libraries/PlonkVerifierV2.sol
     struct ChallengesSol {
         uint256 alpha;
         uint256 alpha2;
