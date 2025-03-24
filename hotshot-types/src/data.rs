@@ -1121,10 +1121,16 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             metadata,
         );
 
+        let block_number = if V::Base::VERSION < V::Epochs::VERSION {
+            None
+        } else {
+            Some(0u64)
+        };
+
         let null_quorum_data = QuorumData2 {
             leaf_commit: Commitment::<Leaf2<TYPES>>::default_commitment_no_preimage(),
             epoch,
-            block_number: Some(0u64),
+            block_number,
         };
 
         let justify_qc = QuorumCertificate2::new(

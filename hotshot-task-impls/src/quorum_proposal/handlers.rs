@@ -192,7 +192,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             let Ok(maybe_qc) =
                 tokio::time::timeout(time_left, self.wait_for_qc_event(rx.clone())).await
             else {
-                tracing::info!("Some nodes did not respond with their HighQc in time. Continuing with the highest QC that we received: {highest_qc}");
+                tracing::info!("Some nodes did not respond with their HighQc in time. Continuing with the highest QC that we received: {highest_qc:?}");
                 return Ok(highest_qc);
             };
             let Some(qc) = maybe_qc else {

@@ -1038,11 +1038,18 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
         })?;
     }
 
+    if upgrade_lock.epochs_enabled(qc.view_number()).await {
+        ensure!(
+            qc.data.block_number.is_some(),
+            "QC for epoch {:?} has no block number",
+            qc.data.epoch
+        );
+    }
+
     if qc
         .data
         .block_number
         .is_some_and(|b| is_last_block_in_epoch(b, epoch_height))
-        && upgrade_lock.epochs_enabled(qc.view_number()).await
     {
         ensure!(
             maybe_next_epoch_qc.is_some(),
