@@ -437,9 +437,9 @@ mod test {
 
     #[test]
     fn test_epoch_from_block_number() {
-        // block 0 is always epoch 0
+        // block 0 is always epoch 1
         let epoch = epoch_from_block_number(0, 10);
-        assert_eq!(0, epoch);
+        assert_eq!(1, epoch);
 
         let epoch = epoch_from_block_number(1, 10);
         assert_eq!(1, epoch);
