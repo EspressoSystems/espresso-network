@@ -185,8 +185,12 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership: &Arc<RwLock<TYPES::Membership>>,
     epoch: TYPES::Epoch,
     storage: &Arc<RwLock<I::Storage>>,
+    consensus: &OuterConsensus<TYPES>,
     drb_result: DrbResult,
 ) {
+    let mut consensus_writer = consensus.write().await;
+    consensus_writer.drb_results.store_result(epoch, drb_result);
+    drop(consensus_writer);
     tracing::debug!("Calling add_drb_result for epoch {:?}", epoch);
     if let Err(e) = storage
         .write()
@@ -200,8 +204,6 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership.write().await.add_drb_result(epoch, drb_result)
 }
 /// Start the DRB computation task for the next epoch.
-///
-/// Uses the seed previously stored in `store_drb_seed_and_result`.
 fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     seed: DrbSeedInput,
     epoch: TYPES::Epoch,
@@ -218,10 +220,8 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         })
         .await
         .unwrap();
-        let mut consensus_writer = consensus.write().await;
-        consensus_writer.drb_results.store_result(epoch, drb_result);
-        drop(consensus_writer);
-        handle_drb_result::<TYPES, I>(&membership, epoch, &storage, drb_result).await;
+
+        handle_drb_result::<TYPES, I>(&membership, epoch, &storage, &consensus, drb_result).await;
         drb_result
     });
 }
@@ -264,14 +264,13 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             let mut membership_writer = membership.write().await;
             write_callback(&mut *membership_writer);
         }
-        // Cancel old DRB computation tasks.
+
         let mut consensus_writer = consensus.write().await;
         consensus_writer
             .drb_results
             .garbage_collect(next_epoch_number);
         drop(consensus_writer);
 
-        // Store the DRB seed input for the epoch after the next one.
         let Ok(drb_seed_input_vec) = bincode::serialize(&decided_leaf.justify_qc().signatures)
         else {
             tracing::error!("Failed to serialize the QC signature.");

@@ -305,11 +305,6 @@ impl StakeTableEvent {
         }
         Ok(map)
     }
-
-    // #[cfg(any(test, feature = "testing"))]
-    // pub fn mock() -> Self {
-    //     StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
-    // }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -399,7 +394,7 @@ impl EpochCommittees {
                     PeerConfig {
                         stake_table_entry: BLSPubKey::stake_table_entry(
                             &v.stake_table_key,
-                            v.stake.to_ethers().as_u64(),
+                            v.stake.to_ethers(),
                         ),
                         state_ver_key: v.state_ver_key.clone(),
                     },

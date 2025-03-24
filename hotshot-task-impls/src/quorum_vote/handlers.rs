@@ -121,24 +121,8 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     }
 }
 
-/// Store the DRB seed two epochs in advance and the computed or received DRB result for next
-/// epoch.
-///
-/// We store a combination of the following data.
-/// * The DRB seed two epochs in advance, if the third from the last block, i.e., the epoch root,
-///     is decided and we are in the quorum committee of the next epoch.
-/// * The computed result for the next epoch, if the third from the last block is decided.
-/// * The received result for the next epoch, if the last block of the epoch is decided and we are
-///     in the quorum committee of the committee of the next epoch.
-///
-/// Special cases:
-/// * Epoch 0: No DRB computation since we'll transition to epoch 1 immediately.
-/// * Epoch 1 and 2: No computed DRB result since when we first start the computation in epoch 1,
-///     the result is for epoch 3.
-///
-/// We don't need to handle the special cases explicitly here, because the first leaf with which
-/// we'll start the DRB computation is for epoch 3.
-async fn store_drb_seed_and_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+/// Store the DRB result for the next epoch if we received it in a decided leaf.
+async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
     decided_leaf: &Leaf2<TYPES>,
 ) -> Result<()> {
@@ -157,16 +141,11 @@ async fn store_drb_seed_and_result<TYPES: NodeType, I: NodeImplementation<TYPES>
         if let Some(result) = decided_leaf.next_drb_result {
             // We don't need to check value existence and consistency because it should be
             // impossible to decide on a block with different DRB results.
-            task_state
-                .consensus
-                .write()
-                .await
-                .drb_results
-                .store_result(current_epoch_number + 1, result);
             handle_drb_result::<TYPES, I>(
                 task_state.membership.membership(),
                 current_epoch_number + 1,
                 &task_state.storage,
+                &task_state.consensus,
                 result,
             )
             .await;
@@ -340,7 +319,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
 
         if version >= V::Epochs::VERSION {
             for leaf_view in leaf_views {
-                store_drb_seed_and_result(task_state, &leaf_view.leaf).await?;
+                store_drb_result(task_state, &leaf_view.leaf).await?;
             }
         }
     }

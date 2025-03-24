@@ -50,6 +50,7 @@ use hotshot_types::{
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
+use primitive_types::U256;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -164,7 +165,7 @@ async fn init_consensus(
         .iter()
         .zip(&state_key_pairs)
         .map(|(pub_key, state_key_pair)| PeerConfig::<BLSPubKey> {
-            stake_table_entry: pub_key.stake_table_entry(1u64),
+            stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
         })
         .collect::<Vec<_>>();

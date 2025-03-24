@@ -53,6 +53,7 @@ pub struct Genesis {
     pub base_version: Version,
     #[serde(with = "version_ser")]
     pub upgrade_version: Version,
+    pub epoch_height: Option<u64>,
     pub chain_config: ChainConfig,
     pub stake_table: StakeTableConfig,
     #[serde(default)]
