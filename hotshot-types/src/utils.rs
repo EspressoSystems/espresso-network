@@ -332,6 +332,8 @@ pub fn bincode_opts() -> WithOtherTrailing<
 pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
     if epoch_height == 0 {
         0
+    } else if block_number == 0 {
+        1
     } else if block_number % epoch_height == 0 {
         block_number / epoch_height
     } else {

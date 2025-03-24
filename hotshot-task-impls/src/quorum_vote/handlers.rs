@@ -414,12 +414,11 @@ pub(crate) async fn update_shared_state<
 
     let (state, delta) = if is_last_block_in_epoch(proposed_leaf.height(), epoch_height)
         && proposed_leaf.height() == parent.height()
-        && maybe_parent_delta.is_some()
     {
         // This is an epoch transition. We do not want to call `validate_and_apply_header` second
         // time for the same block. Just grab the state and delta from the parent and update the shared
         // state with those.
-        (parent_state, maybe_parent_delta.unwrap())
+        (parent_state, maybe_parent_delta)
     } else {
         let version = upgrade_lock.version(view_number).await?;
 
@@ -436,17 +435,13 @@ pub(crate) async fn update_shared_state<
             .wrap()
             .context(warn!("Block header doesn't extend the proposal!"))?;
 
-        (Arc::new(validated_state), Arc::new(state_delta))
+        (Arc::new(validated_state), Some(Arc::new(state_delta)))
     };
 
     // Now that we've rounded everyone up, we need to update the shared state
     let mut consensus_writer = consensus.write().await;
 
-    if let Err(e) = consensus_writer.update_leaf(
-        proposed_leaf.clone(),
-        Arc::clone(&state),
-        Some(Arc::clone(&delta)),
-    ) {
+    if let Err(e) = consensus_writer.update_leaf(proposed_leaf.clone(), Arc::clone(&state), delta) {
         tracing::trace!("{e:?}");
     }
 
