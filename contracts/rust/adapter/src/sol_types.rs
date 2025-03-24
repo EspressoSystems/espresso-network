@@ -28,12 +28,15 @@ pub use crate::bindings::{
         BN254::G1Point as G1PointSol,
     },
     lightclientmock::{self, LightClientMock},
+    lightclientv2::LightClientV2,
+    lightclientv2mock::LightClientV2Mock,
     permissionedstaketable::{
         EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
         PermissionedStakeTable::{self, NodeInfo as NodeInfoSol, StakersUpdated},
         BN254::G2Point as G2PointSol,
     },
-    plonkverifier::PlonkVerifier::{self},
+    plonkverifier::PlonkVerifier,
+    plonkverifierv2::PlonkVerifierV2,
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
@@ -100,6 +103,18 @@ impl From<PlonkProofSol> for lightclientmock::IPlonkVerifier::PlonkProof {
 
 impl From<lightclientmock::LightClientMock::genesisStateReturn> for LightClientStateSol {
     fn from(v: lightclientmock::LightClientMock::genesisStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV2::finalizedStateReturn> for LightClientStateSol {
+    fn from(v: LightClientV2::finalizedStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV2::votingStakeTableStateReturn> for StakeTableStateSol {
+    fn from(v: LightClientV2::votingStakeTableStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
