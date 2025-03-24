@@ -231,7 +231,7 @@ pub struct HotShotConfig<KEY: SignatureKey> {
 }
 
 fn default_epoch_start_block() -> u64 {
-    0
+    1
 }
 
 impl<KEY: SignatureKey> HotShotConfig<KEY> {
