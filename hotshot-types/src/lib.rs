@@ -225,8 +225,13 @@ pub struct HotShotConfig<KEY: SignatureKey> {
     pub stop_voting_time: u64,
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
-    /// Epoch start block
+    /// Epoch start block   
+    #[serde(default = "default_epoch_start_block")]
     pub epoch_start_block: u64,
+}
+
+fn default_epoch_start_block() -> u64 {
+    0
 }
 
 impl<KEY: SignatureKey> HotShotConfig<KEY> {
