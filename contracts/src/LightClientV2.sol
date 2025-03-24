@@ -120,6 +120,10 @@ contract LightClientV2 is LightClient {
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
     }
 
+    function _getVk() public pure virtual override returns (IPlonkVerifier.VerifyingKey memory vk) {
+        vk = VkLib.getVk();
+    }
+
     /// @dev compare to V1, we extend public input length from 7 to 11, use a newly generated VK,
     /// and enforce correct usage of the nextStakeTable outside the epoch change period.
     function verifyProof(
@@ -127,7 +131,7 @@ contract LightClientV2 is LightClient {
         StakeTableState memory nextStakeTable,
         IPlonkVerifier.PlonkProof memory proof
     ) internal virtual {
-        IPlonkVerifier.VerifyingKey memory vk = VkLib.getVk();
+        IPlonkVerifier.VerifyingKey memory vk = _getVk();
 
         // Prepare the public input
         uint256[11] memory publicInput;

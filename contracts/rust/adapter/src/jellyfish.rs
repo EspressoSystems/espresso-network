@@ -341,6 +341,7 @@ impl From<Proof<Bn254>> for PlonkProofSol {
 impl From<PlonkProofSol> for Proof<Bn254> {
     fn from(proof: PlonkProofSol) -> Self {
         let wires_poly_comms = vec![
+            Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire0)),
             Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire1)),
             Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire2)),
             Commitment::from(<G1PointSol as Into<G1Affine>>::into(proof.wire3)),

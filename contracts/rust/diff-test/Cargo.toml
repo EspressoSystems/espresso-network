@@ -15,7 +15,7 @@ ark-poly = { workspace = true }
 ark-std = { workspace = true }
 clap = { version = "^4.4", features = ["derive"] }
 hotshot-contract-adapter = { workspace = true }
-# hotshot-state-prover = { workspace = true }
+hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }

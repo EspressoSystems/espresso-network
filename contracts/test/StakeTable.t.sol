@@ -52,8 +52,8 @@ contract StakeTable_register_Test is LightClientCommonTest {
             BN254.G1Point memory blsSig,
             BN254.G2Point memory blsVK,
             uint256 schnorrVKx,
-            uint256 schnorrVKy,
-        ) = abi.decode(result, (BN254.G1Point, BN254.G2Point, uint256, uint256, address));
+            uint256 schnorrVKy
+        ) = abi.decode(result, (BN254.G1Point, BN254.G2Point, uint256, uint256));
 
         return (
             blsVK, // blsVK

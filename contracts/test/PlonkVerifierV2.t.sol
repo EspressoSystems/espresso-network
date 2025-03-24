@@ -51,13 +51,6 @@ contract PlonkVerifierCommonTest is Test {
         return a;
     }
 
-    function sanitizeScalarFields(uint256[30] memory a) public pure returns (uint256[30] memory) {
-        for (uint256 i = 0; i < a.length; i++) {
-            a[i] = sanitizeScalarField(a[i]);
-        }
-        return a;
-    }
-
     /// @dev Generate a random valid (format-wise) proof from a random seed
     function dummyProof(uint64 seed) public returns (IPlonkVerifier.PlonkProof memory) {
         string[] memory cmds = new string[](3);
@@ -282,27 +275,21 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
 
 contract PlonkVerifier_computeChallenges_Test is PlonkVerifierCommonTest {
     /// @dev Test `computeChallenges` matches that of Jellyfish
-    function testFuzz_computeChallenges_matches(uint64 seed, uint256[11] memory _publicInput)
+    function testFuzz_computeChallenges_matches(uint64 seed, uint256[11] memory publicInput)
         external
     {
-        uint256[11] memory publicInput;
-        for (uint256 i = 0; i < 11; i++) {
-            publicInput[i] = _publicInput[i];
-        }
-
         IPlonkVerifier.PlonkProof memory proof = dummyProof(seed);
         publicInput = sanitizeScalarFields(publicInput);
 
-        string[] memory cmds = new string[](6);
+        string[] memory cmds = new string[](5);
         cmds[0] = "diff-test";
         cmds[1] = "plonk-compute-chal";
         cmds[2] = vm.toString(abi.encode(vk));
         cmds[3] = vm.toString(abi.encode(publicInput));
         cmds[4] = vm.toString(abi.encode(proof));
-        cmds[5] = vm.toString(abi.encode(""));
 
         bytes memory result = vm.ffi(cmds);
-        (V.Challenges memory chal) = abi.decode(result, (V.Challenges));
+        V.Challenges memory chal = abi.decode(result, (V.Challenges));
 
         V.Challenges memory c = verifier.computeChallenges(vk, publicInput, proof);
         assertEq(chal.alpha, c.alpha);
