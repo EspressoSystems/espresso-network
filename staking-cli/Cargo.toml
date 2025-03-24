@@ -34,7 +34,7 @@ hotshot-types = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 portpicker = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
-rust_decimal = "1.36.0"
+rust_decimal = "1.37.1"
 serde = { workspace = true }
 sysinfo = "0.33.1"
 tagged-base64 = { workspace = true }
