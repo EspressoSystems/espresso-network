@@ -237,11 +237,6 @@ impl NodeState {
         self
     }
 
-    pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
-        self.epoch_height = Some(epoch_height);
-        self
-    }
-
     pub fn with_chain_config(mut self, cfg: ChainConfig) -> Self {
         self.chain_config = cfg;
         self
