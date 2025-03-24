@@ -305,11 +305,6 @@ impl StakeTableEvent {
         }
         Ok(map)
     }
-
-    // #[cfg(any(test, feature = "testing"))]
-    // pub fn mock() -> Self {
-    //     StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
-    // }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
