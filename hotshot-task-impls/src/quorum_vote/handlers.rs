@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::btree_map::Entry, sync::Arc};
+use std::sync::Arc;
 
 use async_broadcast::{InactiveReceiver, Sender};
 use async_lock::RwLock;
@@ -13,11 +13,11 @@ use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, VidDisperseShare},
-    drb::{compute_drb_result, DrbResult, INITIAL_DRB_RESULT},
+    drb::{DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    simple_vote::{HasEpoch, QuorumData2, QuorumVote2},
+    simple_vote::{QuorumData2, QuorumVote2},
     traits::{
         block_contents::BlockHeader,
         election::Membership,
@@ -26,14 +26,10 @@ use hotshot_types::{
         storage::Storage,
         ValidatedState,
     },
-    utils::{
-        epoch_from_block_number, is_epoch_root, is_last_block_in_epoch,
-        option_epoch_from_block_number,
-    },
+    utils::{epoch_from_block_number, is_last_block_in_epoch, option_epoch_from_block_number},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
-use tokio::spawn;
 use tracing::instrument;
 use vbs::version::StaticVersionType;
 
@@ -42,91 +38,27 @@ use crate::{
     events::HotShotEvent,
     helpers::{
         broadcast_event, decide_from_proposal, decide_from_proposal_2, fetch_proposal,
-        LeafChainTraversalOutcome,
+        handle_drb_result, LeafChainTraversalOutcome,
     },
     quorum_vote::Versions,
 };
 
-async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    membership: &EpochMembership<TYPES>,
-    storage: &Arc<RwLock<I::Storage>>,
-    drb_result: DrbResult,
-) {
-    tracing::debug!("Calling add_drb_result for epoch {:?}", membership.epoch());
-    // membership.epoch should always be Some
-    if let Some(epoch) = membership.epoch() {
-        if let Err(e) = storage
-            .write()
-            .await
-            .add_drb_result(epoch, drb_result)
-            .await
-        {
-            tracing::error!("Failed to store drb result for epoch {:?}: {}", epoch, e);
-        }
-    }
-
-    membership.add_drb_result(drb_result).await;
-}
-
 /// Store the DRB result from the computation task to the shared `results` table.
 ///
 /// Returns the result if it exists.
-async fn store_and_get_computed_drb_result<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+async fn get_computed_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     epoch_number: TYPES::Epoch,
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
-) -> Result<DrbResult> {
+) -> Option<DrbResult> {
     // Return the result if it's already in the table.
-    if let Some(computed_result) = task_state
+    task_state
         .consensus
         .read()
         .await
-        .drb_seeds_and_results
+        .drb_results
         .results
         .get(&epoch_number)
-    {
-        return Ok(*computed_result);
-    }
-
-    let (task_epoch, computation) =
-        (&mut task_state.drb_computation).context(warn!("DRB computation task doesn't exist."))?;
-
-    ensure!(
-        *task_epoch == epoch_number,
-        info!("DRB computation is not for the next epoch.")
-    );
-
-    ensure!(
-        computation.is_finished(),
-        info!("DRB computation has not yet finished.")
-    );
-
-    match computation.await {
-        Ok(result) => {
-            let mut consensus_writer = task_state.consensus.write().await;
-            consensus_writer
-                .drb_seeds_and_results
-                .results
-                .insert(epoch_number, result);
-            drop(consensus_writer);
-
-            handle_drb_result::<TYPES, I>(
-                &task_state
-                    .membership
-                    .membership_for_epoch(Some(epoch_number))
-                    .await?,
-                &task_state.storage,
-                result,
-            )
-            .await;
-            task_state.drb_computation = None;
-            Ok(result)
-        },
-        Err(e) => Err(warn!("Error in DRB calculation: {:?}.", e)),
-    }
+        .cloned()
 }
 
 /// Verify the DRB result from the proposal for the next epoch if this is the last block of the
@@ -176,8 +108,9 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
             .await;
 
         if has_stake_current_epoch {
-            let computed_result =
-                store_and_get_computed_drb_result(epoch_val + 1, task_state).await?;
+            let computed_result = get_computed_drb_result(epoch_val + 1, task_state)
+                .await
+                .context(warn!("DRB result not found"))?;
 
             ensure!(proposal_result == computed_result, warn!("Our calculated DRB result is {:?}, which does not match the proposed DRB result of {:?}", computed_result, proposal_result));
         }
@@ -188,113 +121,8 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     }
 }
 
-/// Start the DRB computation task for the next epoch.
-///
-/// Uses the seed previously stored in `store_drb_seed_and_result`.
-async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    proposal: &QuorumProposalWrapper<TYPES>,
-    task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
-) {
-    // #3967 REVIEW NOTE: Should we just exit early if we aren't doing epochs?
-    if proposal.epoch().is_none() {
-        return;
-    }
-
-    let current_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
-        proposal.block_header().block_number(),
-        task_state.epoch_height,
-    ));
-
-    let Ok(epoch_membership) = task_state
-        .membership
-        .membership_for_epoch(Some(current_epoch_number))
-        .await
-    else {
-        tracing::warn!("No Stake Table for Epoch = {:?}", current_epoch_number);
-        return;
-    };
-
-    // Start the new task if we're in the committee for this epoch
-    if epoch_membership.has_stake(&task_state.public_key).await {
-        let new_epoch_number = current_epoch_number + 1;
-
-        // If a task is currently live AND has finished, join it and save the result.
-        // If the epoch for the calculation was the same as the provided epoch, return.
-        // If a task is currently live and NOT finished, abort it UNLESS the task epoch is the
-        // same as cur_epoch, in which case keep letting it run and return.
-        // Continue the function if a task should be spawned for the given epoch.
-        if let Some((task_epoch, join_handle)) = &mut task_state.drb_computation {
-            if join_handle.is_finished() {
-                match join_handle.await {
-                    Ok(result) => {
-                        task_state
-                            .consensus
-                            .write()
-                            .await
-                            .drb_seeds_and_results
-                            .results
-                            .insert(*task_epoch, result);
-                        handle_drb_result::<TYPES, I>(
-                            &epoch_membership,
-                            &task_state.storage,
-                            result,
-                        )
-                        .await;
-                        task_state.drb_computation = None;
-                    },
-                    Err(e) => {
-                        tracing::error!("error joining DRB computation task: {e:?}");
-                    },
-                }
-            } else if *task_epoch == new_epoch_number {
-                return;
-            } else {
-                join_handle.abort();
-                task_state.drb_computation = None;
-            }
-        }
-
-        // In case we somehow ended up processing this epoch already, don't start it again
-        let mut consensus_writer = task_state.consensus.write().await;
-        if consensus_writer
-            .drb_seeds_and_results
-            .results
-            .contains_key(&new_epoch_number)
-        {
-            return;
-        }
-
-        if let Entry::Occupied(entry) = consensus_writer
-            .drb_seeds_and_results
-            .seeds
-            .entry(new_epoch_number)
-        {
-            let drb_seed_input = *entry.get();
-            let new_drb_task = spawn(async move { compute_drb_result::<TYPES>(drb_seed_input) });
-            task_state.drb_computation = Some((new_epoch_number, new_drb_task));
-            entry.remove();
-        }
-    }
-}
-
-/// Store the DRB seed two epochs in advance and the computed or received DRB result for next
-/// epoch.
-///
-/// We store a combination of the following data.
-/// * The DRB seed two epochs in advance, if the third from the last block, i.e., the epoch root,
-///     is decided and we are in the quorum committee of the next epoch.
-/// * The computed result for the next epoch, if the third from the last block is decided.
-/// * The received result for the next epoch, if the last block of the epoch is decided and we are
-///     in the quorum committee of the committee of the next epoch.
-///
-/// Special cases:
-/// * Epoch 0: No DRB computation since we'll transition to epoch 1 immediately.
-/// * Epoch 1 and 2: No computed DRB result since when we first start the computation in epoch 1,
-///     the result is for epoch 3.
-///
-/// We don't need to handle the special cases explicitly here, because the first leaf with which
-/// we'll start the DRB computation is for epoch 3.
-async fn store_drb_seed_and_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+/// Store the DRB result for the next epoch if we received it in a decided leaf.
+async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
     decided_leaf: &Leaf2<TYPES>,
 ) -> Result<()> {
@@ -308,57 +136,16 @@ async fn store_drb_seed_and_result<TYPES: NodeType, I: NodeImplementation<TYPES>
         decided_block_number,
         task_state.epoch_height,
     ));
-
-    // Skip storing the seed and computed result if this is not the epoch root.
-    if is_epoch_root(decided_block_number, task_state.epoch_height) {
-        // Cancel old DRB computation tasks.
-        let mut consensus_writer = task_state.consensus.write().await;
-        consensus_writer
-            .drb_seeds_and_results
-            .garbage_collect(current_epoch_number);
-        drop(consensus_writer);
-
-        // Store the DRB result for the next epoch, which will be used by the proposal task to
-        // include in the proposal in the last block of this epoch.
-        store_and_get_computed_drb_result(current_epoch_number + 1, task_state).await?;
-
-        // Store the DRB seed input for the epoch after the next one.
-        let Ok(drb_seed_input_vec) = bincode::serialize(&decided_leaf.justify_qc().signatures)
-        else {
-            bail!("Failed to serialize the QC signature.");
-        };
-
-        // TODO: Replace the leader election with a weighted version.
-        // <https://github.com/EspressoSystems/HotShot/issues/3898>
-        let mut drb_seed_input = [0u8; 32];
-        let len = drb_seed_input_vec.len().min(32);
-        drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
-
-        task_state
-            .consensus
-            .write()
-            .await
-            .drb_seeds_and_results
-            .store_seed(current_epoch_number + 2, drb_seed_input);
-    }
     // Skip storing the received result if this is not the last block.
-    else if is_last_block_in_epoch(decided_block_number, task_state.epoch_height) {
+    if is_last_block_in_epoch(decided_block_number, task_state.epoch_height) {
         if let Some(result) = decided_leaf.next_drb_result {
             // We don't need to check value existence and consistency because it should be
             // impossible to decide on a block with different DRB results.
-            task_state
-                .consensus
-                .write()
-                .await
-                .drb_seeds_and_results
-                .results
-                .insert(current_epoch_number + 1, result);
             handle_drb_result::<TYPES, I>(
-                &task_state
-                    .membership
-                    .membership_for_epoch(Some(current_epoch_number + 1))
-                    .await?,
+                task_state.membership.membership(),
+                current_epoch_number + 1,
                 &task_state.storage,
+                &task_state.consensus,
                 result,
             )
             .await;
@@ -387,7 +174,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
     if version >= V::Epochs::VERSION {
         // Don't vote if the DRB result verification fails.
         verify_drb_result(proposal, task_state).await?;
-        start_drb_task(proposal, task_state).await;
     }
 
     let LeafChainTraversalOutcome {
@@ -398,7 +184,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
         included_txns,
         decided_upgrade_cert,
     } = if version >= V::Epochs::VERSION {
-        decide_from_proposal_2::<TYPES, I>(
+        decide_from_proposal_2::<TYPES, I, V>(
             proposal,
             OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
             Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
@@ -532,9 +318,9 @@ pub(crate) async fn handle_quorum_proposal_validated<
         tracing::debug!("Successfully sent decide event");
 
         if version >= V::Epochs::VERSION {
-            // `leaf_views.last()` is never none if we've reached a new decide, so this is safe to
-            // unwrap.
-            store_drb_seed_and_result(task_state, &leaf_views.last().unwrap().leaf).await?;
+            for leaf_view in leaf_views {
+                store_drb_result(task_state, &leaf_view.leaf).await?;
+            }
         }
     }
 
@@ -628,12 +414,11 @@ pub(crate) async fn update_shared_state<
 
     let (state, delta) = if is_last_block_in_epoch(proposed_leaf.height(), epoch_height)
         && proposed_leaf.height() == parent.height()
-        && maybe_parent_delta.is_some()
     {
         // This is an epoch transition. We do not want to call `validate_and_apply_header` second
         // time for the same block. Just grab the state and delta from the parent and update the shared
         // state with those.
-        (parent_state, maybe_parent_delta.unwrap())
+        (parent_state, maybe_parent_delta)
     } else {
         let version = upgrade_lock.version(view_number).await?;
 
@@ -650,17 +435,13 @@ pub(crate) async fn update_shared_state<
             .wrap()
             .context(warn!("Block header doesn't extend the proposal!"))?;
 
-        (Arc::new(validated_state), Arc::new(state_delta))
+        (Arc::new(validated_state), Some(Arc::new(state_delta)))
     };
 
     // Now that we've rounded everyone up, we need to update the shared state
     let mut consensus_writer = consensus.write().await;
 
-    if let Err(e) = consensus_writer.update_leaf(
-        proposed_leaf.clone(),
-        Arc::clone(&state),
-        Some(Arc::clone(&delta)),
-    ) {
+    if let Err(e) = consensus_writer.update_leaf(proposed_leaf.clone(), Arc::clone(&state), delta) {
         tracing::trace!("{e:?}");
     }
 
@@ -700,11 +481,18 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
     );
 
+    let height = if membership.epoch().is_some() {
+        Some(leaf.height())
+    } else {
+        None
+    };
+
     // Create and send the vote.
     let vote = QuorumVote2::<TYPES>::create_signed_vote(
         QuorumData2 {
             leaf_commit: leaf.commit(),
             epoch: membership.epoch(),
+            block_number: height,
         },
         view_number,
         &public_key,

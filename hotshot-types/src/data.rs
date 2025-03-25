@@ -49,7 +49,10 @@ use crate::{
         states::TestableState,
         BlockPayload,
     },
-    utils::{bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number},
+    utils::{
+        bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number,
+        EpochTransitionIndicator,
+    },
     vid::{
         advz::{advz_scheme, ADVZCommitment, ADVZShare},
         avidm::{init_avidm_param, AvidMCommitment, AvidMScheme, AvidMShare},
@@ -171,6 +174,9 @@ pub struct DaProposal2<TYPES: NodeType> {
     pub view_number: TYPES::View,
     /// Epoch this proposal applies to
     pub epoch: Option<TYPES::Epoch>,
+    /// Indicates whether we are in epoch transition
+    /// In epoch transition the next epoch payload commit should be calculated additionally
+    pub epoch_transition_indicator: EpochTransitionIndicator,
 }
 
 impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
@@ -180,6 +186,7 @@ impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
             metadata: da_proposal.metadata,
             view_number: da_proposal.view_number,
             epoch: None,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         }
     }
 }
@@ -1114,9 +1121,16 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             metadata,
         );
 
+        let block_number = if V::Base::VERSION < V::Epochs::VERSION {
+            None
+        } else {
+            Some(0u64)
+        };
+
         let null_quorum_data = QuorumData2 {
             leaf_commit: Commitment::<Leaf2<TYPES>>::default_commitment_no_preimage(),
             epoch,
+            block_number,
         };
 
         let justify_qc = QuorumCertificate2::new(
@@ -1446,11 +1460,16 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
 
         let genesis_view = <TYPES::View as ConsensusTime>::genesis();
 
+        let genesis_leaf = Leaf2::genesis::<V>(validated_state, instance_state).await;
+        let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
+            Some(genesis_leaf.height())
+        } else {
+            None
+        };
         let data = QuorumData2 {
-            leaf_commit: Leaf2::genesis::<V>(validated_state, instance_state)
-                .await
-                .commit(),
+            leaf_commit: genesis_leaf.commit(),
             epoch: genesis_epoch_from_version::<V, TYPES>(), // #3967 make sure this is enough of a gate for epochs
+            block_number,
         };
 
         let versioned_data =

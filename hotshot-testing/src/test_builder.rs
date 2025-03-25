@@ -11,7 +11,7 @@ use hotshot::{
     tasks::EventTransformerState,
     traits::{NetworkReliability, NodeImplementation, TestableNodeImplementation},
     types::SystemContextHandle,
-    HotShotInitializer, InitializerEpochInfo, MarketplaceConfig, SystemContext, TwinsHandlerState,
+    HotShotInitializer, MarketplaceConfig, SystemContext, TwinsHandlerState,
 };
 use hotshot_example_types::{
     auction_results_provider_types::TestAuctionResultsProvider, node_types::TestTypes,
@@ -19,9 +19,8 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::{ConsensusTime, NodeType, Versions},
+    traits::node_implementation::{NodeType, Versions},
     HotShotConfig, PeerConfig, ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
@@ -243,11 +242,7 @@ pub async fn create_test_handle<
         TestInstanceState::new(metadata.async_delay_config),
         metadata.test_config.epoch_height,
         metadata.test_config.epoch_start_block,
-        vec![InitializerEpochInfo::<TYPES> {
-            epoch: TYPES::Epoch::new(1),
-            drb_result: INITIAL_DRB_RESULT,
-            block_header: None,
-        }],
+        vec![],
     )
     .await
     .unwrap();
@@ -404,7 +399,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TestDescription
         let num_nodes_with_stake = 20;
         let num_da_nodes = 14;
         let epoch_height = 10;
-        let epoch_start_block = 0;
+        let epoch_start_block = 1;
 
         let (staked_nodes, da_nodes) = gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes);
 
@@ -477,7 +472,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Default
         let num_nodes_with_stake = 7;
         let num_da_nodes = num_nodes_with_stake;
         let epoch_height = 10;
-        let epoch_start_block = 0;
+        let epoch_start_block = 1;
 
         let (staked_nodes, da_nodes) = gen_node_lists::<TYPES>(num_nodes_with_stake, num_da_nodes);
 

@@ -332,6 +332,8 @@ pub fn bincode_opts() -> WithOtherTrailing<
 pub fn epoch_from_block_number(block_number: u64, epoch_height: u64) -> u64 {
     if epoch_height == 0 {
         0
+    } else if block_number == 0 {
+        1
     } else if block_number % epoch_height == 0 {
         block_number / epoch_height
     } else {
@@ -390,7 +392,7 @@ pub fn mnemonic<H: Hash>(bytes: H) -> String {
 
 /// A helper enum to indicate whether a node is in the epoch transition
 /// A node is in epoch transition when its high QC is for the last block in an epoch
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum EpochTransitionIndicator {
     /// A node is currently in the epoch transition
     InTransition,
@@ -419,15 +421,25 @@ pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     }
 }
 
+/// Returns true if the given block number is equal or greater than the epoch root block
+#[must_use]
+pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
+    if block_number == 0 || epoch_height == 0 {
+        false
+    } else {
+        block_number % epoch_height >= epoch_height - 2
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
     fn test_epoch_from_block_number() {
-        // block 0 is always epoch 0
+        // block 0 is always epoch 1
         let epoch = epoch_from_block_number(0, 10);
-        assert_eq!(0, epoch);
+        assert_eq!(1, epoch);
 
         let epoch = epoch_from_block_number(1, 10);
         assert_eq!(1, epoch);

@@ -32,7 +32,7 @@ use super::{
 use crate::{
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{apply_rewards, catchup_missing_accounts},
+        impls::reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
         MarketplaceVersion,
     },
     v0_1, v0_2, v0_3,
@@ -335,7 +335,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
             }),
             3 => Self::V3(v0_3::Header {
-                chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
+                chain_config: v0_3::ResolvableChainConfig::from(v0_3::ChainConfig::from(
                     chain_config,
                 )),
                 height,
@@ -524,8 +524,7 @@ impl Header {
         // when we deploy the permissionless contract in native demo
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
-        if version == EpochVersion::version() {
-            let validator = validator.ok_or_else(|| anyhow::anyhow!("Missing validator"))?;
+        if let Some(validator) = validator {
             let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
             state.reward_merkle_tree = reward_state;
         }
@@ -564,7 +563,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
             }),
             3 => Self::V3(v0_3::Header {
-                chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
+                chain_config: v0_3::ResolvableChainConfig::from(v0_3::ChainConfig::from(
                     chain_config,
                 )),
                 height,
@@ -1000,6 +999,7 @@ impl BlockHeader<SeqTypes> for Header {
             match instance_state.upgrades.get(&version) {
                 Some(upgrade) => match upgrade.upgrade_type {
                     UpgradeType::Fee { chain_config } => chain_config,
+                    UpgradeType::Epoch { chain_config } => chain_config,
                     _ => Header::get_chain_config(&validated_state, instance_state).await?,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
@@ -1087,13 +1087,16 @@ impl BlockHeader<SeqTypes> for Header {
         // when we deploy the permissionless contract in native demo
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
-        let leader_config = if version == EpochVersion::version() {
-            Some(
+        let mut leader_config = None;
+        // Rewards are distributed only if the current epoch is not the first or second epoch
+        // this is because we don't have stake table from the contract for the first two epochs
+        if version == EpochVersion::version()
+            && !first_two_epochs(parent_leaf.height(), instance_state).await?
+        {
+            leader_config = Some(
                 catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)
                     .await?,
-            )
-        } else {
-            None
+            );
         };
 
         Ok(Self::from_info(

@@ -12,7 +12,7 @@ use hotshot_types::{
     event::{Event, EventType},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-    utils::EpochTransitionIndicator,
+    utils::{is_last_block_in_epoch, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
@@ -24,7 +24,7 @@ use super::ConsensusTaskState;
 use crate::{
     consensus::Versions,
     events::HotShotEvent,
-    helpers::{broadcast_event, wait_for_next_epoch_qc},
+    helpers::{broadcast_event, validate_qc_and_next_epoch_qc, wait_for_next_epoch_qc},
     vote_collection::handle_vote,
 };
 
@@ -205,9 +205,38 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             .await?
             .leader(new_view_number)
             .await?;
+        let maybe_next_epoch_qc = if high_qc
+            .data
+            .block_number
+            .is_some_and(|b| is_last_block_in_epoch(b, task_state.epoch_height))
+        {
+            Some(
+                task_state
+                    .consensus
+                    .read()
+                    .await
+                    .next_epoch_high_qc()
+                    .ok_or(warn!(
+                        "High QC is for the last block but we don't have next epoch QC."
+                    ))?
+                    .clone(),
+            )
+        } else {
+            None
+        };
+        validate_qc_and_next_epoch_qc(
+            &high_qc,
+            maybe_next_epoch_qc.as_ref(),
+            &task_state.consensus,
+            &task_state.membership_coordinator,
+            &task_state.upgrade_lock,
+            task_state.epoch_height,
+        )
+        .await?;
         broadcast_event(
             Arc::new(HotShotEvent::HighQcSend(
                 high_qc,
+                maybe_next_epoch_qc,
                 leader,
                 task_state.public_key.clone(),
             )),

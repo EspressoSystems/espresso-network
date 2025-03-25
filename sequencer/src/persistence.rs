@@ -75,6 +75,7 @@ mod persistence_tests {
             node_implementation::{ConsensusTime, Versions},
             EncodeBytes,
         },
+        utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
     };
@@ -348,6 +349,7 @@ mod persistence_tests {
             metadata: leaf_payload.ns_table().clone(),
             view_number: ViewNumber::new(0),
             epoch: None,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let da_proposal = Proposal {
@@ -685,14 +687,12 @@ mod persistence_tests {
 
         let genesis_view = ViewNumber::genesis();
 
+        let leaf =
+            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::default()).await;
         let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
-            leaf_commit: Leaf2::genesis::<TestVersions>(
-                &ValidatedState::default(),
-                &NodeState::default(),
-            )
-            .await
-            .commit(),
+            leaf_commit: leaf.commit(),
             epoch: Some(EpochNumber::new(1)),
+            block_number: Some(leaf.height()),
         }
         .into();
 
@@ -812,6 +812,7 @@ mod persistence_tests {
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
                 epoch: Some(EpochNumber::new(0)),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
             _pd: Default::default(),
@@ -1023,6 +1024,7 @@ mod persistence_tests {
                 metadata: leaf_payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
                 epoch: None,
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             },
             signature: block_payload_signature,
             _pd: Default::default(),

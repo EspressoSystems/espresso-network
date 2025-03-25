@@ -24,7 +24,7 @@ impl<TYPES: NodeType> DummyCatchupCommittee<TYPES> {
         let pass = self.epochs.contains(&epoch);
         //&& self.drbs.contains(&epoch);
         if !pass {
-            tracing::error!("FAILEAD EPOCH CHECK {epoch}");
+            tracing::error!("FAILED EPOCH CHECK {epoch}");
         }
         assert!(pass);
     }

@@ -1560,7 +1560,7 @@ mod test {
             node_implementation::{ConsensusTime, Versions},
             signature_key::BuilderSignatureKey,
         },
-        utils::BuilderCommitment,
+        utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use marketplace_builder_shared::{
         block::{BlockId, BuilderStateId, ParentBlockReferences},
@@ -3921,6 +3921,7 @@ mod test {
             }, // arbitrary
             view_number,
             epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let encoded_txns_hash = Sha256::digest(&da_proposal.encoded_transactions);
@@ -3979,6 +3980,7 @@ mod test {
             }, // arbitrary
             view_number,
             epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let encoded_txns_hash = Sha256::digest(&da_proposal.encoded_transactions);
@@ -4028,6 +4030,7 @@ mod test {
             }, // arbitrary
             view_number,
             epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let encoded_txns_hash = Sha256::digest(&da_proposal.encoded_transactions);

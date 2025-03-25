@@ -18,7 +18,7 @@ use ethers_conv::ToEthers;
 use hotshot::types::{BLSPubKey, SignatureKey as _};
 use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
 use hotshot_types::{
-    data::EpochNumber,
+    data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
     drb::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
@@ -167,27 +167,62 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
         }
     }
 
-    validate_validators(&mut validators)?;
+    select_validators(&mut validators)?;
 
     Ok(validators)
 }
 
-fn validate_validators(
+fn select_validators(
     validators: &mut IndexMap<Address, Validator<BLSPubKey>>,
 ) -> anyhow::Result<()> {
-    for (address, validator) in validators.clone() {
-        // Ensure validator has at least one delegator
+    // Remove invalid validators first
+    validators.retain(|address, validator| {
         if validator.delegators.is_empty() {
             tracing::info!("Validator {address:?} does not have any delegator");
-            validators.shift_remove(&address);
+            return false;
         }
 
-        // Ensure total stake is not zero
         if validator.stake.is_zero() {
             tracing::info!("Validator {address:?} does not have any stake");
-            validators.shift_remove(&address);
+            return false;
         }
+
+        true
+    });
+
+    if validators.is_empty() {
+        bail!("No valid validators found");
     }
+
+    // Find the maximum stake
+    let maximum_stake = validators
+        .values()
+        .map(|v| v.stake)
+        .max()
+        .context("Failed to determine max stake")?;
+
+    let minimum_stake = maximum_stake
+        .checked_div(U256::from(VID_TARGET_TOTAL_STAKE))
+        .context("div err")?;
+
+    // Collect validators that meet the minimum stake criteria
+    let mut valid_stakers: Vec<_> = validators
+        .iter()
+        .filter(|(_, v)| v.stake >= minimum_stake)
+        .map(|(addr, v)| (*addr, v.stake))
+        .collect();
+
+    // Sort by stake (descending order)
+    valid_stakers.sort_by_key(|(_, stake)| std::cmp::Reverse(*stake));
+
+    // Keep only the top 100 stakers
+    if valid_stakers.len() > 100 {
+        valid_stakers.truncate(100);
+    }
+
+    // Retain only the selected validators
+    let selected_addresses: HashSet<_> = valid_stakers.iter().map(|(addr, _)| *addr).collect();
+    validators.retain(|address, _| selected_addresses.contains(address));
 
     Ok(())
 }
@@ -270,11 +305,6 @@ impl StakeTableEvent {
         }
         Ok(map)
     }
-
-    // #[cfg(any(test, feature = "testing"))]
-    // pub fn mock() -> Self {
-    //     StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
-    // }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -302,6 +332,7 @@ pub struct EpochCommittees {
     /// Methods for stake table persistence.
     #[debug(skip)]
     persistence: Arc<dyn MembershipPersistence>,
+    first_epoch: Epoch,
 }
 
 /// Holds Stake table and da stake
@@ -339,6 +370,10 @@ pub struct EpochCommittee {
 }
 
 impl EpochCommittees {
+    pub fn first_epoch(&self) -> Epoch {
+        self.first_epoch
+    }
+
     /// Updates `Self.stake_table` with stake_table for
     /// `Self.contract_address` at `l1_block_height`. This is intended
     /// to be called before calling `self.stake()` so that
@@ -359,7 +394,7 @@ impl EpochCommittees {
                     PeerConfig {
                         stake_table_entry: BLSPubKey::stake_table_entry(
                             &v.stake_table_key,
-                            v.stake.to_ethers().as_u64(),
+                            v.stake.to_ethers(),
                         ),
                         state_ver_key: v.state_ver_key.clone(),
                     },
@@ -504,6 +539,7 @@ impl EpochCommittees {
             randomized_committees: BTreeMap::new(),
             peers,
             persistence: Arc::new(persistence),
+            first_epoch: Epoch::genesis(),
         }
     }
     fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<PubKey>>> {
@@ -795,6 +831,8 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     fn set_first_epoch(&mut self, epoch: Epoch, initial_drb_result: DrbResult) {
+        self.first_epoch = epoch;
+
         let epoch_committee = self.state.get(&Epoch::genesis()).unwrap().clone();
         self.state.insert(epoch, epoch_committee.clone());
         self.state.insert(epoch + 1, epoch_committee);
@@ -879,7 +917,7 @@ pub mod testing {
             rng.fill_bytes(&mut seed);
             let mut validator_stake = alloy::primitives::U256::from(0);
             let mut delegators = HashMap::new();
-            for _i in 0..=100 {
+            for _i in 0..=5000 {
                 let stake: u64 = rng.gen_range(0..10000);
                 delegators.insert(Address::random(), alloy::primitives::U256::from(stake));
                 validator_stake += alloy::primitives::U256::from(stake);
@@ -958,8 +996,8 @@ mod tests {
             .into(),
         );
 
-        let st = from_l1_events(events.iter().cloned())?;
-        assert_eq!(st.len(), 0);
+        // This should fail because the validator has exited and no longer exists in the stake table.
+        assert!(from_l1_events(events.iter().cloned()).is_err());
 
         Ok(())
     }
@@ -1018,5 +1056,44 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_validators_selection() {
+        let mut validators = IndexMap::new();
+        let mut highest_stake = alloy::primitives::U256::ZERO;
+
+        for _i in 0..3000 {
+            let validator = Validator::mock();
+            validators.insert(validator.account, validator.clone());
+
+            if validator.stake > highest_stake {
+                highest_stake = validator.stake;
+            }
+        }
+
+        let minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
+
+        select_validators(&mut validators).expect("Failed to select validators");
+        assert!(
+            validators.len() <= 100,
+            "validators len is {}, expected at most 100",
+            validators.len()
+        );
+
+        let mut selected_validators_highest_stake = alloy::primitives::U256::ZERO;
+        // Ensure every validator in the final selection is above or equal to minimum stake
+        for (address, validator) in &validators {
+            assert!(
+                validator.stake >= minimum_stake,
+                "Validator {:?} has stake below minimum: {}",
+                address,
+                validator.stake
+            );
+
+            if validator.stake > selected_validators_highest_stake {
+                selected_validators_highest_stake = validator.stake;
+            }
+        }
     }
 }

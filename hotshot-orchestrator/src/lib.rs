@@ -853,7 +853,7 @@ where
         .public_keys
         .iter()
         .map(|keys| PeerConfig {
-            stake_table_entry: keys.stake_table_key.stake_table_entry(keys.stake),
+            stake_table_entry: keys.stake_table_key.stake_table_entry(keys.stake.into()),
             state_ver_key: keys.state_ver_key.clone(),
         })
         .collect();
@@ -863,7 +863,7 @@ where
         .iter()
         .filter(|keys| keys.da)
         .map(|keys| PeerConfig {
-            stake_table_entry: keys.stake_table_key.stake_table_entry(keys.stake),
+            stake_table_entry: keys.stake_table_key.stake_table_entry(keys.stake.into()),
             state_ver_key: keys.state_ver_key.clone(),
         })
         .collect();

@@ -22,7 +22,7 @@ use vec1::Vec1;
 pub use crate::utils::{View, ViewInner};
 use crate::{
     data::{Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseShare},
-    drb::DrbSeedsAndResults,
+    drb::DrbResults,
     epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
     event::{HotShotAction, LeafInfo},
@@ -36,8 +36,9 @@ use crate::{
         BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_last_block_in_epoch, option_epoch_from_block_number,
-        BuilderCommitment, LeafCommitment, StateAndDelta, Terminator,
+        epoch_from_block_number, is_ge_epoch_root, is_last_block_in_epoch,
+        option_epoch_from_block_number, BuilderCommitment, LeafCommitment, StateAndDelta,
+        Terminator,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -329,7 +330,7 @@ pub struct Consensus<TYPES: NodeType> {
     pub epoch_height: u64,
 
     /// Tables for the DRB seeds and results.
-    pub drb_seeds_and_results: DrbSeedsAndResults<TYPES>,
+    pub drb_results: DrbResults<TYPES>,
 }
 
 /// This struct holds a payload and its metadata
@@ -448,7 +449,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             next_epoch_high_qc,
             metrics,
             epoch_height,
-            drb_seeds_and_results: DrbSeedsAndResults::new(),
+            drb_results: DrbResults::new(),
         }
     }
 
@@ -1108,6 +1109,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let old_epoch = epoch_from_block_number(parent_leaf.height(), self.epoch_height);
 
         new_epoch - 1 == old_epoch && self.is_leaf_extended(parent_leaf.commit())
+    }
+
+    /// Returns true if our high QC is for the block equal or greater than the root epoch block
+    pub fn is_high_qc_ge_root_block(&self) -> bool {
+        let Some(leaf) = self.saved_leaves.get(&self.high_qc().data.leaf_commit) else {
+            tracing::trace!("We don't have a leaf corresponding to the high QC");
+            return false;
+        };
+        let block_height = leaf.height();
+        is_ge_epoch_root(block_height, self.epoch_height)
     }
 }
 
