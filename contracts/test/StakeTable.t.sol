@@ -19,7 +19,8 @@ import { LightClientMock } from "../test/mocks/LightClientMock.sol";
 import { InitializedAt } from "../src/InitializedAt.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
-
+import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
 
@@ -627,7 +628,9 @@ contract StakeTableTimelockTest is Test {
         vm.assertTrue(timelock.isOperationDone(txId));
     }
 
-    function test_timelock_upgrade_proposal_and_execution_fails_before_delay() public {
+    function test_expect_revert_when_timelock_upgrade_proposal_and_execution_before_delay()
+        public
+    {
         vm.startPrank(proposers[0]);
 
         // Encode upgrade call
@@ -641,15 +644,20 @@ contract StakeTableTimelockTest is Test {
         vm.stopPrank();
 
         vm.startPrank(executors[0]);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TimelockController.TimelockUnexpectedOperationState.selector,
+                txId,
+                bytes32(1 << uint8(TimelockController.OperationState.Ready))
+            )
+        );
         timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
         vm.stopPrank();
         vm.assertFalse(timelock.isOperationDone(txId));
     }
 
-    function test_timelock_upgrade_proposal_and_execution_fails_without_correct_permission()
-        public
-    {
+    function test_expect_revert_when_timelock_upgrade_proposal_and_execution_without_correct_permission(
+    ) public {
         vm.startPrank(makeAddr("notProposer"));
 
         // Encode upgrade call
@@ -657,7 +665,13 @@ contract StakeTableTimelockTest is Test {
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
 
         bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(makeAddr("notProposer")),
+                timelock.PROPOSER_ROLE()
+            )
+        );
         timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
         vm.stopPrank();
 
@@ -668,10 +682,44 @@ contract StakeTableTimelockTest is Test {
         vm.warp(block.timestamp + DELAY + 1);
 
         vm.startPrank(makeAddr("notExecutor"));
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(makeAddr("notExecutor")),
+                timelock.EXECUTOR_ROLE()
+            )
+        );
         timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
         vm.stopPrank();
         vm.assertFalse(timelock.isOperationDone(txId));
+    }
+
+    function test_expect_revert_when_execute_with_wrong_salt() public {
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 correctSalt = keccak256("salt-A");
+        bytes32 wrongSalt = keccak256("salt-B");
+
+        bytes32 wrongTxId =
+            timelock.hashOperation(address(stakeTable), 0, data, wrongSalt, bytes32(0));
+        vm.startPrank(proposers[0]);
+        timelock.schedule(address(stakeTable), 0, data, correctSalt, bytes32(0), DELAY);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.startPrank(executors[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TimelockController.TimelockUnexpectedOperationState.selector,
+                wrongTxId,
+                bytes32(1 << uint8(TimelockController.OperationState.Ready))
+            )
+        );
+        timelock.execute(address(stakeTable), 0, data, wrongSalt, bytes32(0));
+        vm.stopPrank();
     }
 
     function test_unauthorized_cannot_upgrade() public {
