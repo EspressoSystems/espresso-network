@@ -20,7 +20,6 @@ impl AssertSuccess for Output {
         self
     }
 }
-
 fn cmd() -> Command {
     escargot::CargoBuild::new()
         .bin("staking-cli")
@@ -69,11 +68,8 @@ fn test_cli_created_and_remove_config_file() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_cli_register_validator() -> Result<()> {
     let system = TestSystem::deploy().await?;
-    cmd()
-        .arg("--mnemonic")
-        .arg(DEV_MNEMONIC)
-        .arg("--rpc-url")
-        .arg(system.rpc_url.to_string())
+    system
+        .cmd()
         .arg("register-validator")
         .arg("--consensus-private-key")
         .arg(
@@ -103,11 +99,8 @@ async fn test_cli_delegate() -> Result<()> {
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
-    cmd()
-        .arg("--mnemonic")
-        .arg(DEV_MNEMONIC)
-        .arg("--rpc-url")
-        .arg(system.rpc_url.to_string())
+    system
+        .cmd()
         .arg("delegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -123,11 +116,8 @@ async fn test_cli_deregister_validator() -> Result<()> {
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
-    cmd()
-        .arg("--mnemonic")
-        .arg(DEV_MNEMONIC)
-        .arg("--rpc-url")
-        .arg(system.rpc_url.to_string())
+    system
+        .cmd()
         .arg("deregister-validator")
         .output()?
         .assert_success();
@@ -141,11 +131,8 @@ async fn test_cli_undelegate() -> Result<()> {
     let amount = U256::from(123);
     system.delegate(amount).await?;
 
-    cmd()
-        .arg("--mnemonic")
-        .arg(DEV_MNEMONIC)
-        .arg("--rpc-url")
-        .arg(system.rpc_url.to_string())
+    system
+        .cmd()
         .arg("undelegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -165,11 +152,8 @@ async fn test_cli_claim_withdrawal() -> Result<()> {
     system.undelegate(amount).await?;
     system.warp_to_unlock_time().await?;
 
-    cmd()
-        .arg("--mnemonic")
-        .arg(DEV_MNEMONIC)
-        .arg("--rpc-url")
-        .arg(system.rpc_url.to_string())
+    system
+        .cmd()
         .arg("claim-withdrawal")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -187,14 +171,23 @@ async fn test_cli_claim_validator_exit() -> Result<()> {
     system.deregister_validator().await?;
     system.warp_to_unlock_time().await?;
 
-    cmd()
-        .arg("--mnemonic")
-        .arg(DEV_MNEMONIC)
-        .arg("--rpc-url")
-        .arg(system.rpc_url.to_string())
+    system
+        .cmd()
         .arg("claim-validator-exit")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
+        .output()?
+        .assert_success();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cli_stake_for_demo() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    system
+        .cmd()
+        .arg("stake-for-demo")
         .output()?
         .assert_success();
     Ok(())

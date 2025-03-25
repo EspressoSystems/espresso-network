@@ -307,7 +307,9 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                             tracing::error!("Received upgrade vote!");
                             HotShotEvent::UpgradeVoteRecv(message)
                         },
-                        GeneralConsensusMessage::HighQc(qc) => HotShotEvent::HighQcRecv(qc, sender),
+                        GeneralConsensusMessage::HighQc(qc, next_qc) => {
+                            HotShotEvent::HighQcRecv(qc, next_qc, sender)
+                        },
                         GeneralConsensusMessage::ExtendedQc(qc, next_epoch_qc) => {
                             HotShotEvent::ExtendedQcRecv(qc, next_epoch_qc, sender)
                         },
@@ -1149,10 +1151,10 @@ impl<
                 };
                 Some((sender, message, TransmitType::Direct(to)))
             },
-            HotShotEvent::HighQcSend(quorum_cert, leader, sender) => Some((
+            HotShotEvent::HighQcSend(quorum_cert, next_epoch_qc, leader, sender) => Some((
                 sender,
                 MessageKind::Consensus(SequencingMessage::General(
-                    GeneralConsensusMessage::HighQc(quorum_cert),
+                    GeneralConsensusMessage::HighQc(quorum_cert, next_epoch_qc),
                 )),
                 TransmitType::Direct(leader),
             )),

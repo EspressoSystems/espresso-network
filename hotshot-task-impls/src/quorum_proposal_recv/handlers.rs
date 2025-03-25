@@ -163,6 +163,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
         &validation_info.consensus,
         &validation_info.membership.coordinator,
         &validation_info.upgrade_lock,
+        validation_info.epoch_height,
     )
     .await?;
 

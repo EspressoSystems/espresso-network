@@ -18,7 +18,6 @@ use hotshot_task::{
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
     data::{vid_disperse::vid_total_weight, Leaf2, QuorumProposalWrapper},
-    drb::DrbComputation,
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::{Proposal, UpgradeLock},
@@ -329,9 +328,6 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Membership for Quorum certs/votes and DA committee certs/votes.
     pub membership: EpochMembershipCoordinator<TYPES>,
-
-    /// In-progress DRB computation task.
-    pub drb_computation: DrbComputation<TYPES>,
 
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,

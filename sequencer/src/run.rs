@@ -301,6 +301,7 @@ mod test {
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
+            epoch_height: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

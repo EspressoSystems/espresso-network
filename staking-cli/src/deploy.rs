@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{process::Command, time::Duration};
 
 use alloy::{
     network::{Ethereum, EthereumWallet},
@@ -22,7 +22,7 @@ use contract_bindings_alloy::{
 };
 use url::Url;
 
-use crate::{parse::Commission, registration::register_validator, BLSKeyPair};
+use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
 
 type TestProvider = FillProvider<
     JoinFill<
@@ -59,23 +59,23 @@ impl TestSystem {
         // Spawn anvil
         let provider = ProviderBuilder::new()
             .with_recommended_fillers()
-            .on_anvil_with_wallet_and_config(|anvil| anvil.port(port));
+            .on_anvil_with_wallet_and_config(|anvil| anvil.port(port).arg("--accounts").arg("20"));
         let rpc_url = format!("http://localhost:{}", port).parse()?;
         let deployer_address = provider.default_signer_address();
 
         // `EspToken.sol`
-        let token = EspToken::deploy(provider.clone()).await?;
-        let data = token
+        let token_impl = EspToken::deploy(provider.clone()).await?;
+        let data = token_impl
             .initialize(deployer_address, deployer_address)
             .calldata()
             .clone();
 
-        let proxy = ERC1967Proxy::deploy(provider.clone(), *token.address(), data).await?;
+        let proxy = ERC1967Proxy::deploy(provider.clone(), *token_impl.address(), data).await?;
         let token = EspToken::new(*proxy.address(), provider.clone());
 
         // `StakeTable.sol`
-        let stake_table = StakeTable::deploy(provider.clone()).await?;
-        let data = stake_table
+        let stake_table_impl = StakeTable::deploy(provider.clone()).await?;
+        let data = stake_table_impl
             .initialize(
                 *token.address(),
                 "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".parse()?, // fake LC address
@@ -85,7 +85,8 @@ impl TestSystem {
             .calldata()
             .clone();
 
-        let proxy = ERC1967Proxy::deploy(provider.clone(), *stake_table.address(), data).await?;
+        let proxy =
+            ERC1967Proxy::deploy(provider.clone(), *stake_table_impl.address(), data).await?;
         let stake_table = StakeTable::new(*proxy.address(), provider.clone());
 
         // Approve the stake table contract so it can transfer tokens to itself
@@ -180,6 +181,25 @@ impl TestSystem {
 
     pub async fn balance(&self, address: Address) -> Result<U256> {
         Ok(self.token.balanceOf(address).call().await?._0)
+    }
+
+    pub fn cmd(&self) -> Command {
+        let mut cmd = escargot::CargoBuild::new()
+            .bin("staking-cli")
+            .current_release()
+            .current_target()
+            .run()
+            .unwrap()
+            .command();
+        cmd.arg("--rpc-url")
+            .arg(self.rpc_url.to_string())
+            .arg("--mnemonic")
+            .arg(DEV_MNEMONIC)
+            .arg("--token-address")
+            .arg(self.token.address().to_string())
+            .arg("--stake-table-address")
+            .arg(self.stake_table.address().to_string());
+        cmd
     }
 }
 

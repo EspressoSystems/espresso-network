@@ -140,7 +140,7 @@ pub trait SignatureKey:
     fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::PrivateKey);
 
     /// get the stake table entry from the public key and stake value
-    fn stake_table_entry(&self, stake: u64) -> Self::StakeTableEntry;
+    fn stake_table_entry(&self, stake: U256) -> Self::StakeTableEntry;
 
     /// only get the public key from the stake table entry
     fn public_key(entry: &Self::StakeTableEntry) -> Self;

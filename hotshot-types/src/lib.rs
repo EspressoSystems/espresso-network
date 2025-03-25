@@ -10,6 +10,7 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duratio
 use bincode::Options;
 use displaydoc::Display;
 use light_client::StateVerKey;
+use primitive_types::U256;
 use tracing::error;
 use traits::{node_implementation::NodeType, signature_key::SignatureKey};
 use url::Url;
@@ -103,7 +104,9 @@ impl<KEY: SignatureKey> ValidatorConfig<KEY> {
     /// get the public config of the validator
     pub fn public_config(&self) -> PeerConfig<KEY> {
         PeerConfig {
-            stake_table_entry: self.public_key.stake_table_entry(self.stake_value),
+            stake_table_entry: self
+                .public_key
+                .stake_table_entry(U256::from(self.stake_value)),
             state_ver_key: self.state_key_pair.0.ver_key(),
         }
     }
@@ -225,8 +228,13 @@ pub struct HotShotConfig<KEY: SignatureKey> {
     pub stop_voting_time: u64,
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
-    /// Epoch start block
+    /// Epoch start block   
+    #[serde(default = "default_epoch_start_block")]
     pub epoch_start_block: u64,
+}
+
+fn default_epoch_start_block() -> u64 {
+    1
 }
 
 impl<KEY: SignatureKey> HotShotConfig<KEY> {

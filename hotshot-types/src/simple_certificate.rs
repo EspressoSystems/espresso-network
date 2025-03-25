@@ -467,6 +467,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         let data = QuorumData2 {
             leaf_commit: Commitment::from_raw(bytes),
             epoch: None,
+            block_number: None,
         };
 
         let bytes: [u8; 32] = self.vote_commitment.into();

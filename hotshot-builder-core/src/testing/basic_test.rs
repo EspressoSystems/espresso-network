@@ -373,6 +373,7 @@ mod tests {
                         let q_data = QuorumData2::<TestTypes> {
                             leaf_commit: leaf.commit(),
                             epoch: None, // TODO: check if this is okay
+                            block_number: Some(leaf.height()),
                         };
 
                         let previous_quorum_view_number =

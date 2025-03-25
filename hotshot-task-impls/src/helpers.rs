@@ -18,6 +18,7 @@ use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, ViewChangeEvidence2},
+    drb::{DrbResult, DrbSeedInput},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
     message::{Proposal, UpgradeLock},
@@ -180,13 +181,57 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     };
     Ok((leaf, view))
 }
+pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    membership: &Arc<RwLock<TYPES::Membership>>,
+    epoch: TYPES::Epoch,
+    storage: &Arc<RwLock<I::Storage>>,
+    consensus: &OuterConsensus<TYPES>,
+    drb_result: DrbResult,
+) {
+    let mut consensus_writer = consensus.write().await;
+    consensus_writer.drb_results.store_result(epoch, drb_result);
+    drop(consensus_writer);
+    tracing::debug!("Calling add_drb_result for epoch {:?}", epoch);
+    if let Err(e) = storage
+        .write()
+        .await
+        .add_drb_result(epoch, drb_result)
+        .await
+    {
+        tracing::error!("Failed to store drb result for epoch {:?}: {}", epoch, e);
+    }
 
+    membership.write().await.add_drb_result(epoch, drb_result)
+}
+/// Start the DRB computation task for the next epoch.
+fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    seed: DrbSeedInput,
+    epoch: TYPES::Epoch,
+    membership: &Arc<RwLock<TYPES::Membership>>,
+    storage: &Arc<RwLock<I::Storage>>,
+    consensus: &OuterConsensus<TYPES>,
+) {
+    let membership = membership.clone();
+    let storage = storage.clone();
+    let consensus = consensus.clone();
+    tokio::spawn(async move {
+        let drb_result = tokio::task::spawn_blocking(move || {
+            hotshot_types::drb::compute_drb_result::<TYPES>(seed)
+        })
+        .await
+        .unwrap();
+
+        handle_drb_result::<TYPES, I>(&membership, epoch, &storage, &consensus, drb_result).await;
+        drb_result
+    });
+}
 /// Handles calling add_epoch_root and sync_l1 on Membership if necessary.
 async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     decided_leaf: &Leaf2<TYPES>,
     epoch_height: u64,
     membership: &Arc<RwLock<TYPES::Membership>>,
     storage: &Arc<RwLock<I::Storage>>,
+    consensus: &OuterConsensus<TYPES>,
 ) {
     let decided_block_number = decided_leaf.block_header().block_number();
 
@@ -219,6 +264,30 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             let mut membership_writer = membership.write().await;
             write_callback(&mut *membership_writer);
         }
+
+        let mut consensus_writer = consensus.write().await;
+        consensus_writer
+            .drb_results
+            .garbage_collect(next_epoch_number);
+        drop(consensus_writer);
+
+        let Ok(drb_seed_input_vec) = bincode::serialize(&decided_leaf.justify_qc().signatures)
+        else {
+            tracing::error!("Failed to serialize the QC signature.");
+            return;
+        };
+
+        let mut drb_seed_input = [0u8; 32];
+        let len = drb_seed_input_vec.len().min(32);
+        drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+
+        start_drb_task::<TYPES, I>(
+            drb_seed_input,
+            next_epoch_number,
+            membership,
+            storage,
+            consensus,
+        );
     }
 }
 
@@ -266,7 +335,7 @@ impl<TYPES: NodeType + Default> Default for LeafChainTraversalOutcome<TYPES> {
 /// # Panics
 /// If the leaf chain contains no decided leaf while reaching a decided view, which should be
 /// impossible.
-pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     proposal: &QuorumProposalWrapper<TYPES>,
     consensus: OuterConsensus<TYPES>,
     existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
@@ -353,6 +422,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
                 epoch_height,
                 membership,
                 storage,
+                &consensus,
             )
             .await;
         }
@@ -516,6 +586,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
                 epoch_height,
                 membership,
                 storage,
+                &consensus,
             )
             .await;
         }
@@ -943,6 +1014,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
     consensus: &OuterConsensus<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
     upgrade_lock: &UpgradeLock<TYPES, V>,
+    epoch_height: u64,
 ) -> Result<()> {
     let mut epoch_membership = membership_coordinator
         .membership_for_epoch(qc.data.epoch)
@@ -964,6 +1036,25 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 
             warn!("Invalid certificate: {}", e)
         })?;
+    }
+
+    if upgrade_lock.epochs_enabled(qc.view_number()).await {
+        ensure!(
+            qc.data.block_number.is_some(),
+            "QC for epoch {:?} has no block number",
+            qc.data.epoch
+        );
+    }
+
+    if qc
+        .data
+        .block_number
+        .is_some_and(|b| is_last_block_in_epoch(b, epoch_height))
+    {
+        ensure!(
+            maybe_next_epoch_qc.is_some(),
+            error!("Received High QC for the last block but not the next epoch QC")
+        );
     }
 
     if let Some(next_epoch_qc) = maybe_next_epoch_qc {

@@ -135,7 +135,7 @@ where
 
                         // Compare calculated commitment with requested commitment
                         if commit != req.0 {
-                            tracing::error!("commitment type mismatch for AVIDM check");
+                            tracing::warn!("commitment type mismatch for AVIDM check");
                             return None;
                         }
                     },
