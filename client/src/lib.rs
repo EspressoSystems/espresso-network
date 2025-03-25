@@ -82,6 +82,40 @@ impl SequencerClient {
             Some(block) => block,
             None => self.get_height().await?,
         };
+
+        // As of block zero the state is empty, and the balance will be zero.
+        if block == 0 {
+            return Ok(0.into());
+        }
+
+        // Block is non-zero, we can safely decrement to query the state as of the previous block.
+        block -= 1;
+
+        tracing::debug!(%address, block, "fetching Espresso balance");
+        dbg!(&address, &block);
+
+        let balance = self
+            .0
+            .get::<Option<FeeAmount>>(&format!("fee-state/fee-balance/{block}/{address:#x}"))
+            .send()
+            .await
+            .unwrap()
+            .unwrap();
+
+        Ok(balance)
+    }
+
+    /// Get the balance for a given account at a given block height, defaulting to current balance.
+    pub async fn get_espresso_balance_legacy(
+        &self,
+        address: Address,
+        block: Option<u64>,
+    ) -> anyhow::Result<FeeAmount> {
+        // Get the block height to query at, defaulting to the latest block.
+        let mut block = match block {
+            Some(block) => block,
+            None => self.get_height().await?,
+        };
         // As of block zero the state is empty, and the balance will be zero.
         if block == 0 {
             return Ok(0.into());
