@@ -23,8 +23,62 @@ env:
   RUST_LOG: info,libp2p=off,node=error
 
 jobs:
+  build-test-artifacts-postgres:
+    name: Build test artifacts (postgres)
+    runs-on: buildjet-8vcpu-ubuntu-2204
+    steps:
+      - uses: rui314/setup-mold@v1
+
+      - uses: actions/checkout@v4
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          cache-provider: buildjet
+
+      - name: Build and archive tests
+        run: cargo nextest archive --locked --release --workspace --archive-file nextest-archive-postgres.tar.zst
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-postgres
+          path: nextest-archive-postgres.tar.zst
+
+  build-test-artifacts-sqlite:
+    name: Build test artifacts (sqlite)
+    runs-on: buildjet-8vcpu-ubuntu-2204
+    steps:
+      - uses: rui314/setup-mold@v1
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+          cache-provider: buildjet
+
+      - name: Build and archive tests
+        run: cargo nextest archive --locked --release --features "embedded-db testing" --workspace --archive-file nextest-archive-sqlite.tar.zst
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-sqlite
+          path: nextest-archive-sqlite.tar.zst
+
   slow-tests-sqlite:
     runs-on: ubuntu-latest
+    needs: build-test-artifacts-sqlite
     steps:
       # These tests need the `anvil` binary provided by foundry
       - name: Install Foundry
@@ -35,60 +89,40 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Configure Environment
-        run: PATH="$PWD/target/release:$PATH"
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
+      - name: Download archive
+        uses: actions/download-artifact@v4
         with:
-          cache-all-crates: true
-
-      - name: Build
-        run: |
-          cargo build --locked --bin diff-test --release
-          cargo nextest run --locked --release --workspace --features embedded-db --no-run
-        timeout-minutes: 90
+          name: nextest-archive-sqlite
 
       - name: Slow Test
         env:
           NEXTEST_PROFILE: slow
-        run: cargo nextest run --locked --release --workspace --features embedded-db --verbose --no-fail-fast --nocapture
+        run: |
+          cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
+          --workspace-remap $PWD
         timeout-minutes: 40
+
   slow-tests-postgres:
     runs-on: ubuntu-latest
+    needs: build-test-artifacts-postgres
     steps:
-      - name: Fix submodule permissions check
-        run: |
-          git config --global --add safe.directory '*'
-
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+
+      - uses: actions/checkout@v4
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Download archive
+        uses: actions/download-artifact@v4
         with:
-          version: nightly
-
-      - uses: taiki-e/install-action@nextest
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Configure Environment
-        run: PATH="$PWD/target/release:$PATH"
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-all-crates: true
-
-      - name: Build
-        run: |
-          cargo build --locked --bin diff-test --release
-          cargo nextest run --locked --release --workspace --no-run
-        timeout-minutes: 90
+          name: nextest-archive-postgres
 
       - name: Slow Test
         env:
           NEXTEST_PROFILE: slow
-        run: cargo nextest run --locked --release --workspace --verbose --no-fail-fast --nocapture
+        run: |
+          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast \
+          --workspace-remap $PWD
         timeout-minutes: 40
+
