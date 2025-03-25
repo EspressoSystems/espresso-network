@@ -138,10 +138,6 @@ struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH")]
     initial_stake_table_path: Option<PathBuf>,
 
-    /// Number of HotShot blocks in an epoch within which the same stake table snapshot will be used.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_BLOCKS_PER_EPOCH")]
-    blocks_per_epoch: u64,
-
     #[clap(flatten)]
     logging: logging::Config,
 }

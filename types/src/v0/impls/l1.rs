@@ -922,16 +922,18 @@ async fn get_finalized_block(provider: impl Provider) -> anyhow::Result<Option<L
 mod test {
     use std::{ops::Add, time::Duration};
 
-    use alloy::eips::BlockNumberOrTag;
-    use alloy::node_bindings::{Anvil, AnvilInstance};
-    use alloy::primitives::utils::parse_ether;
-    use alloy::providers::layers::AnvilProvider;
+    use alloy::{
+        eips::BlockNumberOrTag,
+        node_bindings::{Anvil, AnvilInstance},
+        primitives::utils::parse_ether,
+        providers::layers::AnvilProvider,
+    };
     use hotshot_contract_adapter::sol_types::NodeInfoSol;
     use portpicker::pick_unused_port;
-    use sequencer_utils::deployer::{
-        deploy_fee_contract_proxy, deploy_permissioned_stake_table, Contracts,
+    use sequencer_utils::{
+        deployer::{deploy_fee_contract_proxy, deploy_permissioned_stake_table, Contracts},
+        test_utils::setup_test,
     };
-    use sequencer_utils::test_utils::setup_test;
     use time::OffsetDateTime;
 
     use super::*;

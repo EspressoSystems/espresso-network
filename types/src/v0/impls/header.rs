@@ -1170,6 +1170,8 @@ impl ExplorerHeader<SeqTypes> for Header {
 
 #[cfg(test)]
 mod test_headers {
+    use std::sync::Arc;
+
     use alloy::{
         node_bindings::Anvil,
         primitives::{Address, U256},
@@ -1177,7 +1179,6 @@ mod test_headers {
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::test_utils::setup_test;
-    use std::sync::Arc;
     use v0_1::{BlockMerkleTree, FeeMerkleTree, L1Client};
     use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
 

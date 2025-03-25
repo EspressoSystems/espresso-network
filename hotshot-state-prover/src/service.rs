@@ -6,7 +6,7 @@ use std::{
 };
 
 use alloy::{
-    network::{Ethereum, IntoWallet},
+    network::EthereumWallet,
     primitives::{Address, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
@@ -14,6 +14,7 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use displaydoc::Display;
+use espresso_types::config::PublicNetworkConfig;
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
@@ -33,20 +34,19 @@ use hotshot_types::{
         signature_key::StakeTableEntryType,
         stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme as _},
     },
-    PeerConfig,
+    utils::is_last_block_in_epoch,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
 use jf_signature::constants::CS_ID_SCHNORR;
 use sequencer_utils::deployer::is_proxy_contract;
-use serde::Deserialize;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
 use time::ext::InstantExt;
 use tokio::{io, spawn, task::spawn_blocking, time::sleep};
 use url::Url;
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersion, StaticVersionType};
 
 use crate::snark::{generate_state_update_proof, Proof, ProvingKey};
 
@@ -61,10 +61,10 @@ pub struct StateProverConfig {
     pub retry_interval: Duration,
     /// URL of the chain (layer 1  or any layer 2) JSON-RPC provider.
     pub provider_endpoint: Url,
-    /// Address of LightClient contract
+    /// Address of LightClient proxy contract
     pub light_client_address: Address,
     /// Transaction signing key for Ethereum or any other layer 2
-    pub signing_key: SigningKey,
+    pub signer: LocalSigner<SigningKey>,
     /// URL of a node that is currently providing the HotShot config.
     /// This is used to initialize the stake table.
     pub sequencer_url: Url,
@@ -89,18 +89,32 @@ impl StateProverConfig {
 
         Ok(())
     }
-}
 
-#[derive(Debug, Deserialize)]
-/// Part of the full `PublicHotShotConfig` needed for our state-prover purposes
-struct PublicHotShotConfig {
-    known_nodes_with_stake: Vec<PeerConfig<BLSPubKey>>,
-}
+    /// Get the BLOCKS_PER_EPOCH / EPOCH_HEIGHT from the sequencer's `PublicHotShotConfig` struct
+    pub async fn blocks_per_epoch(&self) -> anyhow::Result<u64> {
+        let config_url = self
+            .sequencer_url
+            .join("/config/hotshot")
+            .with_context(|| "Invalid URL")?;
 
-#[derive(Debug, Deserialize)]
-/// Part of the full `PublicNetworkConfig` needed for our state-prover purposes
-struct PublicNetworkConfig {
-    config: PublicHotShotConfig,
+        // Request the configuration until it is successful
+        let blocks_per_epoch = loop {
+            match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+                config_url.clone(),
+            )
+            .get::<PublicNetworkConfig>(config_url.as_str())
+            .send()
+            .await
+            {
+                Ok(resp) => break resp.hotshot_config().blocks_per_epoch(),
+                Err(e) => {
+                    tracing::error!("Failed to fetch the network config: {e}");
+                    sleep(Duration::from_secs(5)).await;
+                },
+            }
+        };
+        Ok(blocks_per_epoch)
+    }
 }
 
 /// Initialize the stake table from a sequencer node that
@@ -115,19 +129,19 @@ async fn init_stake_table_from_sequencer(
 
     // Construct the URL to fetch the network config
     let config_url = sequencer_url
-        .join("/v0/config/hotshot")
+        .join("/config/hotshot")
         .with_context(|| "Invalid URL")?;
 
     // Request the configuration until it is successful
-    let network_config: PublicHotShotConfig = loop {
-        match reqwest::get(config_url.clone()).await {
-            Ok(resp) => match resp.json::<PublicNetworkConfig>().await {
-                Ok(config) => break config.config,
-                Err(e) => {
-                    tracing::error!("Failed to parse the network config: {e}");
-                    sleep(Duration::from_secs(5)).await;
-                },
-            },
+    let hotshot_config = loop {
+        match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+            config_url.clone(),
+        )
+        .get::<PublicNetworkConfig>(config_url.as_str())
+        .send()
+        .await
+        {
+            Ok(resp) => break resp.hotshot_config(),
             Err(e) => {
                 tracing::error!("Failed to fetch the network config: {e}");
                 sleep(Duration::from_secs(5)).await;
@@ -139,7 +153,7 @@ async fn init_stake_table_from_sequencer(
     let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(stake_table_capacity);
 
     // Populate the stake table
-    for node in network_config.known_nodes_with_stake.into_iter() {
+    for node in hotshot_config.known_nodes_with_stake().into_iter() {
         st.register(
             *node.stake_table_entry.key(),
             node.stake_table_entry.stake(),
@@ -225,6 +239,8 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
     pk
 }
 
+#[inline(always)]
+/// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_state<ApiVer: StaticVersionType>(
     client: &Client<ServerError, ApiVer>,
 ) -> Result<StateSignaturesBundle, ServerError> {
@@ -304,10 +320,9 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     config: &StateProverConfig,
 ) -> Result<(), ProverError> {
     let light_client_address = config.light_client_address;
+    let wallet = EthereumWallet::from(config.signer.clone());
     let provider = ProviderBuilder::new()
-        .wallet(IntoWallet::<Ethereum>::into_wallet(
-            LocalSigner::from_signing_key(config.signing_key.clone()),
-        ))
+        .wallet(wallet)
         .on_http(config.provider_endpoint.clone());
 
     tracing::info!(
@@ -332,6 +347,16 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     tracing::debug!("Old state: {old_state:?}");
     tracing::debug!("New state: {:?}", bundle.state);
 
+    let blocks_per_epoch = config
+        .blocks_per_epoch()
+        .await
+        .map_err(ProverError::NetworkError)?;
+    let next_stake = if is_last_block_in_epoch(bundle.state.block_height as u64, blocks_per_epoch) {
+        st.next_voting_state()?
+    } else {
+        st_state
+    };
+
     let entries = st
         .try_iter(SnapshotVersion::LastEpochStart)
         .unwrap()
@@ -343,7 +368,12 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = bundle.signatures.get(key) {
             // Check if the signature is valid
+            let mut msg = Vec::with_capacity(7);
             let state_msg: [FieldType; 3] = (&bundle.state).into();
+            msg.extend_from_slice(&state_msg);
+            let next_stake_msg: [FieldType; 4] = next_stake.into();
+            msg.extend_from_slice(&next_stake_msg);
+
             if key.verify(&state_msg, sig, CS_ID_SCHNORR).is_ok() {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
@@ -363,7 +393,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let proving_key_clone = proving_key.clone();
     let stake_table_capacity = config.stake_table_capacity;
     let (proof, public_input) = spawn_blocking(move || {
-        generate_state_update_proof::<_, _, _, _>(
+        generate_state_update_proof(
             &mut ark_std::rand::thread_rng(),
             &proving_key_clone,
             &entries,
@@ -372,7 +402,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             &bundle.state,
             &st_state,
             stake_table_capacity,
-            &st_state, // FIXME: use next_st_state later!
+            &next_stake,
         )
     })
     .await
@@ -417,6 +447,7 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     let stake_table_capacity = config.stake_table_capacity;
     tracing::info!("Stake table capacity: {}", stake_table_capacity);
     // TODO(#1022): maintain the following stake table
+    // TODO: (alex) use `/node/stake-table/:epoch` to reconstruct the `st: StakeTable` locally before passing in.
     let st = Arc::new(
         init_stake_table_from_sequencer(&config.sequencer_url, stake_table_capacity)
             .await
@@ -465,6 +496,7 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     config: StateProverConfig,
     _: ApiVer,
 ) -> Result<()> {
+    // TODO: (alex) use `/node/stake-table/:epoch` to reconstruct the `st: StakeTable` locally before passing in.
     let st = init_stake_table_from_sequencer(&config.sequencer_url, config.stake_table_capacity)
         .await
         .with_context(|| "Failed to initialize stake table")?;
