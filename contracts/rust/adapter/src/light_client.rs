@@ -3,6 +3,7 @@
 use alloy::primitives::U256;
 use ark_ff::PrimeField;
 use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState};
+use rand::Rng;
 
 use crate::{
     field_to_u256,
@@ -20,7 +21,16 @@ impl LightClientStateSol {
         Self {
             viewNum: 0,
             blockHeight: 0,
-            blockCommRoot: U256::from(0),
+            blockCommRoot: U256::from(42),
+        }
+    }
+
+    /// Return a random value
+    pub fn rand<R: Rng>(rng: &mut R) -> Self {
+        Self {
+            viewNum: rng.gen::<u64>(),
+            blockHeight: rng.gen::<u64>(),
+            blockCommRoot: U256::from_limbs(rng.gen::<[u64; 4]>()),
         }
     }
 }
@@ -64,6 +74,16 @@ impl StakeTableStateSol {
             blsKeyComm: U256::from(123),
             schnorrKeyComm: U256::from(123),
             amountComm: U256::from(20),
+        }
+    }
+
+    /// Returns a random value
+    pub fn rand<R: Rng>(rng: &mut R) -> Self {
+        Self {
+            threshold: U256::from_limbs(rng.gen::<[u64; 4]>()),
+            blsKeyComm: U256::from_limbs(rng.gen::<[u64; 4]>()),
+            schnorrKeyComm: U256::from_limbs(rng.gen::<[u64; 4]>()),
+            amountComm: U256::from_limbs(rng.gen::<[u64; 4]>()),
         }
     }
 }

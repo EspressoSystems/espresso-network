@@ -16,20 +16,26 @@
 
 use alloy::sol;
 
+/// # What to re-export, what to hide?
+/// - export contract struct itself, but try to avoid export instance type (instead, use ::new() to get a handle)
+/// - avoid exporting `xxCall` and `xxReturn` types, they usually can be converted/transmuted from existing struct
+/// - Event types should be exported
+/// - structs should be exported and renamed with `xxSol` suffix to avoid confusion with other rust types
+///   - see module doc for more explanation on types duplication issue in alloy
 pub use crate::bindings::{
     erc1967proxy::ERC1967Proxy,
     feecontract::FeeContract::{self, Deposit},
     lightclient::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
-            self, genesisStateReturn, LightClientErrors, LightClientInstance,
-            LightClientState as LightClientStateSol, StakeTableState as StakeTableStateSol,
+            self, LightClientErrors, LightClientInstance, LightClientState as LightClientStateSol,
+            StakeTableState as StakeTableStateSol,
         },
         BN254::G1Point as G1PointSol,
     },
     lightclientmock::{self, LightClientMock},
-    lightclientv2::LightClientV2,
-    lightclientv2mock::LightClientV2Mock,
+    lightclientv2::{self, LightClientV2},
+    lightclientv2mock::{self, LightClientV2Mock},
     permissionedstaketable::{
         EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
         PermissionedStakeTable::{self, NodeInfo as NodeInfoSol, StakersUpdated},
@@ -64,8 +70,8 @@ sol! {
 
 }
 
-impl From<genesisStateReturn> for LightClientStateSol {
-    fn from(v: genesisStateReturn) -> Self {
+impl From<LightClient::genesisStateReturn> for LightClientStateSol {
+    fn from(v: LightClient::genesisStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
@@ -115,6 +121,57 @@ impl From<LightClientV2::finalizedStateReturn> for LightClientStateSol {
 
 impl From<LightClientV2::votingStakeTableStateReturn> for StakeTableStateSol {
     fn from(v: LightClientV2::votingStakeTableStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<lightclientv2mock::LightClient::LightClientState> for LightClientStateSol {
+    fn from(v: lightclientv2mock::LightClient::LightClientState) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+impl From<LightClientStateSol> for lightclientv2mock::LightClient::LightClientState {
+    fn from(v: LightClientStateSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+impl From<LightClientStateSol> for lightclientv2::LightClient::LightClientState {
+    fn from(v: LightClientStateSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<StakeTableStateSol> for lightclientv2::LightClient::StakeTableState {
+    fn from(v: StakeTableStateSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+impl From<StakeTableStateSol> for lightclientv2mock::LightClient::StakeTableState {
+    fn from(v: StakeTableStateSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV2Mock::genesisStateReturn> for LightClientStateSol {
+    fn from(v: LightClientV2Mock::genesisStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV2Mock::finalizedStateReturn> for LightClientStateSol {
+    fn from(v: LightClientV2Mock::finalizedStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<PlonkProofSol> for lightclientv2::IPlonkVerifier::PlonkProof {
+    fn from(v: PlonkProofSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<LightClientV2Mock::votingStakeTableStateReturn> for StakeTableStateSol {
+    fn from(v: LightClientV2Mock::votingStakeTableStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
