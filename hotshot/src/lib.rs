@@ -1218,14 +1218,8 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     }
 
     for epoch_info in start_epoch_info {
-        tracing::debug!("Calling add_drb_result for epoch {:?}", epoch_info.epoch);
-        membership
-            .write()
-            .await
-            .add_drb_result(epoch_info.epoch, epoch_info.drb_result);
-
         if let Some(block_header) = &epoch_info.block_header {
-            tracing::debug!("Calling add_epoch_root for epoch {:?}", epoch_info.epoch);
+            tracing::info!("Calling add_epoch_root for epoch {:?}", epoch_info.epoch);
             let write_callback = {
                 let membership_reader = membership.read().await;
                 membership_reader
@@ -1238,5 +1232,13 @@ async fn load_start_epoch_info<TYPES: NodeType>(
                 write_callback(&mut *membership_writer);
             }
         }
+    }
+
+    for epoch_info in start_epoch_info {
+        tracing::info!("Calling add_drb_result for epoch {:?}", epoch_info.epoch);
+        membership
+            .write()
+            .await
+            .add_drb_result(epoch_info.epoch, epoch_info.drb_result);
     }
 }
