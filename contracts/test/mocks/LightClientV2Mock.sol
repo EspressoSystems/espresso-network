@@ -14,8 +14,13 @@ contract LightClientV2Mock is LCV2 {
         finalizedState = state;
         updateStateHistory(uint64(block.number), uint64(block.timestamp), state);
     }
-    /// @dev same as LCV1Mock
 
+    /// @dev Directly mutate votingStakeTableState variable for test
+    function setVotingStakeTableState(LC.StakeTableState memory stake) public {
+        votingStakeTableState = stake;
+    }
+
+    /// @dev same as LCV1Mock
     function setStateHistory(StateHistoryCommitment[] memory _stateHistoryCommitments) public {
         // delete the previous stateHistoryCommitments
         delete stateHistoryCommitments;

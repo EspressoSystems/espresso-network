@@ -1,7 +1,6 @@
 //! A light client prover service
 
 use std::{
-    iter,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -18,9 +17,7 @@ use displaydoc::Display;
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
-    sol_types::{
-        LightClient, LightClientMock, LightClientStateSol, PlonkProofSol, StakeTableStateSol,
-    },
+    sol_types::{LightClientStateSol, LightClientV2, PlonkProofSol, StakeTableStateSol},
 };
 use hotshot_stake_table::{
     utils::one_honest_threshold,
@@ -92,24 +89,6 @@ impl StateProverConfig {
 
         Ok(())
     }
-}
-
-pub fn init_stake_table(
-    bls_keys: &[BLSPubKey],
-    state_keys: &[StateVerKey],
-    stake_table_capacity: usize,
-) -> Result<StakeTable<BLSPubKey, StateVerKey, CircuitField>, StakeTableError> {
-    // We now initialize a static stake table as what hotshot orchestrator does.
-    // In the future we should get the stake table from the contract.
-    let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(stake_table_capacity);
-    st.batch_register(
-        bls_keys.iter().cloned(),
-        iter::repeat(U256::from(1)).take(bls_keys.len()),
-        state_keys.iter().cloned(),
-    )?;
-    st.advance();
-    st.advance();
-    Ok(st)
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,12 +235,16 @@ pub async fn fetch_latest_state<ApiVer: StaticVersionType>(
         .await
 }
 
-/// get the `finalizedState` from the LightClient contract storage on L1
+/// Read the following info from the LightClient contract storage on chain
+/// - latest finalized light client state
+/// - stake table commitment used in currently active epoch
+///
+/// Returned types are of Rust struct defined in `hotshot-types`.
 pub async fn read_contract_state(
     provider: impl Provider,
     address: Address,
 ) -> Result<(LightClientState, StakeTableState), ProverError> {
-    let contract = LightClient::new(address, &provider);
+    let contract = LightClientV2::new(address, &provider);
     let state: LightClientStateSol = match contract.finalizedState().call().await {
         Ok(s) => s.into(),
         Err(e) => {
@@ -269,7 +252,7 @@ pub async fn read_contract_state(
             return Err(ProverError::ContractError(e.into()));
         },
     };
-    let st_state: StakeTableStateSol = match contract.genesisStakeTableState().call().await {
+    let st_state: StakeTableStateSol = match contract.votingStakeTableState().call().await {
         Ok(s) => s.into(),
         Err(e) => {
             tracing::error!(
@@ -290,13 +273,13 @@ pub async fn submit_state_and_proof(
     proof: Proof,
     public_input: PublicInput,
 ) -> Result<TransactionReceipt, ProverError> {
-    let contract = LightClient::new(address, &provider);
+    let contract = LightClientV2::new(address, &provider);
     // prepare the input the contract call and the tx itself
     let proof: PlonkProofSol = proof.into();
     let new_state: LightClientStateSol = public_input.lc_state.into();
-    let _next_stake_table: StakeTableStateSol = public_input.next_st_state.into();
+    let next_stake_table: StakeTableStateSol = public_input.next_st_state.into();
 
-    let tx = contract.newFinalizedState(new_state, proof);
+    let tx = contract.newFinalizedState_1(new_state.into(), next_stake_table.into(), proof.into());
     // send the tx
     let (receipt, included_block) = sequencer_utils::contract_send(&tx)
         .await
@@ -538,16 +521,12 @@ impl std::error::Error for ProverError {}
 #[cfg(test)]
 mod test {
 
-    use alloy::{
-        node_bindings::{Anvil, AnvilInstance},
-        providers::layers::AnvilProvider,
-        sol_types::SolValue,
-    };
+    use alloy::{node_bindings::Anvil, providers::layers::AnvilProvider, sol_types::SolValue};
     use anyhow::Result;
-    use hotshot_contract_adapter::sol_types::LightClientMock;
+    use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use jf_utils::test_rng;
     use sequencer_utils::{
-        deployer::{deploy_light_client_proxy, Contracts},
+        deployer::{deploy_light_client_proxy, upgrade_light_client_v2, Contracts},
         test_utils::setup_test,
     };
 
@@ -559,34 +538,88 @@ mod test {
     // const MAX_HISTORY_SECONDS: u32 = 864000;
     const NUM_INIT_VALIDATORS: usize = STAKE_TABLE_CAPACITY_FOR_TEST / 2;
 
+    /// This helper function deploy LightClient V1, and its Proxy, then deploy V2 and upgrade the proxy.
+    /// Returns the address of the proxy, caller can cast the address to be `LightClientV2` or `LightClientV2Mock`
+    async fn deploy_and_upgrade(
+        provider: impl Provider,
+        contracts: &mut Contracts,
+        is_mock_v2: bool,
+        genesis_state: LightClientStateSol,
+        genesis_stake: StakeTableStateSol,
+    ) -> Result<Address> {
+        // prepare for V1 deployment
+        let admin = provider.get_accounts().await?[0];
+        let prover = admin;
+
+        // deploy V1 and proxy (and initalize V1)
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            contracts,
+            false,
+            genesis_state,
+            genesis_stake,
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        // upgrade to V2
+        upgrade_light_client_v2(
+            &provider,
+            contracts,
+            is_mock_v2,
+            EPOCH_HEIGHT_FOR_TEST as u64,
+        )
+        .await?;
+
+        Ok(lc_proxy_addr)
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_read_contract_state() -> Result<()> {
         setup_test();
 
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
-        let admin = provider.get_accounts().await?[0];
-        let prover = admin;
-        let is_mock = true;
-
+        let rng = &mut test_rng();
         let genesis_state = LightClientStateSol::dummy_genesis();
         let genesis_stake = StakeTableStateSol::dummy_genesis();
 
-        let lc_proxy_addr = deploy_light_client_proxy(
+        let lc_proxy_addr = deploy_and_upgrade(
             &provider,
             &mut contracts,
-            is_mock,
+            true,
             genesis_state.clone(),
             genesis_stake.clone(),
-            admin,
-            Some(prover),
         )
         .await?;
-
         let (state, st_state) = super::read_contract_state(&provider, lc_proxy_addr).await?;
 
+        // first test the default storage
         assert_eq!(state, genesis_state.into());
         assert_eq!(st_state, genesis_stake.into());
+
+        // then manually set the `finalizedState` and `votingStakeTableState` (via mocked methods)
+        let lc_v2 = LightClientV2Mock::new(lc_proxy_addr, &provider);
+        let new_state = LightClientStateSol::rand(rng);
+        let new_stake = StakeTableStateSol::rand(rng);
+        lc_v2
+            .setFinalizedState(new_state.clone().into())
+            .send()
+            .await?
+            .watch()
+            .await?;
+        lc_v2
+            .setVotingStakeTableState(new_stake.clone().into())
+            .send()
+            .await?
+            .watch()
+            .await?;
+
+        // now query again, the states read should reflect the changes
+        let (state, st_state) = super::read_contract_state(&provider, lc_proxy_addr).await?;
+        assert_eq!(state, new_state.into());
+        assert_eq!(st_state, new_stake.into());
 
         Ok(())
     }
@@ -600,12 +633,9 @@ mod test {
         let mut ledger = MockLedger::init(pp, NUM_INIT_VALIDATORS);
         let genesis_state: LightClientStateSol = ledger.light_client_state().into();
         let genesis_stake: StakeTableStateSol = ledger.voting_stake_table_state().into();
-        let is_mock = true;
 
         let anvil = Anvil::new().spawn();
         let wallet = anvil.wallet().unwrap();
-        let admin = wallet.default_signer().address();
-        let prover = admin;
         let inner_provider = ProviderBuilder::new()
             .wallet(wallet)
             .on_http(anvil.endpoint_url());
@@ -613,29 +643,23 @@ mod test {
         let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
         let mut contracts = Contracts::new();
 
-        let lc_proxy_addr = deploy_light_client_proxy(
+        let lc_proxy_addr = deploy_and_upgrade(
             &provider,
             &mut contracts,
-            is_mock,
-            genesis_state.clone(),
+            true,
+            genesis_state,
             genesis_stake.clone(),
-            admin,
-            Some(prover),
         )
         .await?;
-        let contract = LightClientMock::new(lc_proxy_addr, &provider);
-
-        let genesis_l1: LightClientStateSol = contract.genesisState().call().await?.into();
-        assert_eq!(
-            genesis_l1.abi_encode_params(),
-            genesis_state.abi_encode_params(),
-            "mismatched genesis, aborting tests"
-        );
+        let lc_v2 = LightClientV2Mock::new(lc_proxy_addr, &provider);
 
         // simulate some block elapsing
         for _ in 0..EPOCH_HEIGHT_FOR_TEST - 1 {
             ledger.elapse_with_block();
         }
+        ledger.sync_stake_table(5, 2); // update the stake table, some register, some exit
+        ledger.elapse_with_block(); // the last block in the first epoch, thus updating the `next_stake_table`
+        assert_eq!(ledger.state.block_height, EPOCH_HEIGHT_FOR_TEST);
 
         let (pi, proof) = ledger.gen_state_proof();
         tracing::info!("Successfully generated proof for new state.");
@@ -644,12 +668,26 @@ mod test {
         tracing::info!("Successfully submitted new finalized state to L1.");
 
         // test if new state is updated in l1
-        let finalized_l1: LightClientStateSol = contract.finalizedState().call().await?.into();
+        let finalized_l1: LightClientStateSol = lc_v2.finalizedState().call().await?.into();
         let expected: LightClientStateSol = ledger.light_client_state().into();
         assert_eq!(
             finalized_l1.abi_encode_params(),
             expected.abi_encode_params(),
             "finalizedState not updated"
+        );
+
+        let expected_new_stake: StakeTableStateSol = ledger.next_stake_table_state().into();
+        // make sure it's different from the genesis, i.e. use a new stake table for the next epoch
+        assert_ne!(
+            expected_new_stake.abi_encode_params(),
+            genesis_stake.abi_encode_params()
+        );
+        let voting_stake_l1: StakeTableStateSol =
+            lc_v2.votingStakeTableState().call().await?.into();
+        assert_eq!(
+            voting_stake_l1.abi_encode_params(),
+            expected_new_stake.abi_encode_params(),
+            "votingStakeTableState not updated"
         );
 
         Ok(())
