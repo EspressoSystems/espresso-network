@@ -1086,7 +1086,7 @@ impl BlockHeader<SeqTypes> for Header {
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
         if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height(), instance_state).await?
+            && !first_two_epochs(parent_leaf.height(), instance_state).await
         {
             leader_config = Some(
                 catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)

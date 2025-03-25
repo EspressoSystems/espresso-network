@@ -792,6 +792,7 @@ impl ValidatedState {
         proposed_header: &Header,
         version: Version,
     ) -> anyhow::Result<(Self, Delta)> {
+        assert!(parent_leaf.block_header().block_number() != proposed_header.block_number());
         // Clone state to avoid mutation. Consumer can take update
         // through returned value.
         let mut validated_state = self.clone();
@@ -886,7 +887,7 @@ impl ValidatedState {
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
         if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height(), instance).await?
+            && !first_two_epochs(parent_leaf.height(), instance).await
         {
             let validator =
                 catchup_missing_accounts(instance, &mut validated_state, parent_leaf, parent_view)
@@ -1010,6 +1011,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
+        assert!(parent_leaf.block_header().block_number() != proposed_header.block_number());
         // Unwrapping here is okay as we retry in a loop
         //so we should either get a validated state or until hotshot cancels the task
         let (validated_state, delta) = self

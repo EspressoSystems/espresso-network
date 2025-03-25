@@ -307,6 +307,11 @@ impl StakeTableEvent {
         }
         Ok(map)
     }
+
+    // #[cfg(any(test, feature = "testing"))]
+    // pub fn mock() -> Self {
+    //     StakeTables::new(StakeTable::mock(3), DAMembers::mock(3))
+    // }
 }
 
 #[derive(Clone, derive_more::derive::Debug)]
@@ -754,6 +759,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
+        tracing::error!(
+            "add_epoch_root for epoch: {:?} and height: {}",
+            epoch,
+            block_header.height()
+        );
         let chain_config = get_chain_config(self.chain_config, &self.peers, &block_header)
             .await
             .ok()?;
@@ -824,6 +834,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     fn add_drb_result(&mut self, epoch: Epoch, drb: DrbResult) {
+        tracing::error!("add_drb_result({}, {:?})", epoch, drb);
         let Some(raw_stake_table) = self.state.get(&epoch) else {
             tracing::error!("add_drb_result({}, {:?}) was called, but we do not yet have the stake table for epoch {}", epoch, drb, epoch);
             return;

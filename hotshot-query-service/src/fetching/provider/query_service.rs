@@ -144,7 +144,7 @@ where
                 Some(payload.data)
             },
             Err(err) => {
-                tracing::error!("failed to fetch payload {req:?}: {err}");
+                tracing::warn!("failed to fetch payload {req:?}: {err}");
                 None
             },
         }
@@ -187,7 +187,7 @@ where
                 Some(leaf)
             },
             Err(err) => {
-                tracing::error!("failed to fetch leaf {req:?}: {err}");
+                tracing::warn!("failed to fetch leaf {req:?}: {err}");
                 None
             },
         }
@@ -233,7 +233,7 @@ where
                 },
             },
             Err(err) => {
-                tracing::error!("failed to fetch VID common {req:?}: {err}");
+                tracing::warn!("failed to fetch VID common {req:?}: {err}");
                 None
             },
         }

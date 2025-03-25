@@ -20,12 +20,13 @@ use super::{
     v0_3::{IndexedStake, Validator},
     SeqTypes, UpgradeType,
 };
-use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
-    Timestamp, Upgrade, UpgradeMode,
+use crate::{
+    v0::{
+        traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
+        Timestamp, Upgrade, UpgradeMode,
+    },
+    EpochCommittees,
 };
-#[cfg(any(test, feature = "testing"))]
-use crate::EpochCommittees;
 
 /// Represents the immutable state of a node.
 ///
@@ -115,6 +116,8 @@ impl NodeState {
     pub fn mock() -> Self {
         use async_lock::RwLock;
         use vbs::version::StaticVersion;
+
+        use crate::EpochCommittees;
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -142,6 +145,8 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
         use vbs::version::StaticVersion;
+
+        use crate::EpochCommittees;
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -171,6 +176,8 @@ impl NodeState {
     pub fn mock_v3() -> Self {
         use vbs::version::StaticVersion;
 
+        use crate::EpochCommittees;
+
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -199,6 +206,8 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v99() -> Self {
         use vbs::version::StaticVersion;
+
+        use crate::EpochCommittees;
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -243,8 +252,8 @@ impl NodeState {
         self
     }
 
-    pub fn with_current_version(mut self, version: Version) -> Self {
-        self.current_version = version;
+    pub fn with_current_version(mut self, ver: Version) -> Self {
+        self.current_version = ver;
         self
     }
 

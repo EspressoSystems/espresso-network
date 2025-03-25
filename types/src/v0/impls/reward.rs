@@ -324,7 +324,10 @@ pub fn apply_rewards(
         reward_state = reward_state.persistent_update_with(account, |balance| {
             let balance = balance.copied();
             match balance.unwrap_or_default().0.checked_add(amount.0) {
-                Some(updated) => Some(updated.into()),
+                Some(updated) => {
+                    tracing::error!("updated balance for account {:?}: {:?}", account, updated);
+                    Some(updated.into())
+                },
                 None => {
                     err = Some(format!("overflowed reward balance for account {}", account));
                     balance
@@ -333,7 +336,7 @@ pub fn apply_rewards(
         })?;
 
         if let Some(error) = err {
-            tracing::warn!(error);
+            tracing::error!(error);
             bail!(error)
         }
         Ok::<(), anyhow::Error>(())
@@ -396,14 +399,14 @@ pub fn compute_rewards(
 /// Rewards are not distributed for these epochs because the stake table
 /// is built from the contract only when `add_epoch_root()` is called
 /// by HotShot, which happens starting from the third epoch.
-pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow::Result<bool> {
+pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> bool {
     let epoch_height = instance_state.epoch_height;
     let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
     let coordinator = instance_state.coordinator.clone();
 
     let first_epoch = coordinator.membership().read().await.first_epoch();
 
-    Ok(epoch == first_epoch || epoch == first_epoch + 1 || true)
+    epoch == first_epoch || epoch == first_epoch + 1
 }
 
 pub async fn catchup_missing_accounts(

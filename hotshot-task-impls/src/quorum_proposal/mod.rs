@@ -531,7 +531,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 
                     self.formed_quorum_certificates
                         .insert(qc.view_number(), qc.clone());
-
                     self.check_eqc_and_store(qc.view_number(), Either::Left(qc.clone()))
                         .await?;
 

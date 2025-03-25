@@ -163,7 +163,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 );
                 // Transition to the new epoch by sending ViewChange
                 let next_epoch = cert_epoch.map(|x| x + 1);
-                tracing::info!("Entering new epoch: {:?}", next_epoch);
+                tracing::error!("Entering new epoch: {:?}", next_epoch);
                 broadcast_event(
                     Arc::new(HotShotEvent::ViewChange(cert_view + 1, next_epoch)),
                     &sender,
