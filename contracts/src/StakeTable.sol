@@ -1,8 +1,6 @@
 pragma solidity ^0.8.0;
 
 import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -17,7 +15,7 @@ using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 /// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
 ///
 /// @dev All functions are marked as virtual so that future upgrades can override them.
-contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
+contract StakeTable is Initializable, InitializedAt, UUPSUpgradeable {
     // === Events ===
 
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
@@ -116,6 +114,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// Contract dependencies initialized with zero address.
     error ZeroAddress();
 
+    /// The caller is not the timelock
+    error NotTimelock();
+
     // === Structs ===
 
     /// @notice Represents an Espresso validator and tracks funds currently delegated to them.
@@ -183,6 +184,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// evidence to be submitted.
     uint256 public exitEscrowPeriod;
 
+    /// address of the timelock controller contract which will administer this contract
+    address public timelock;
+
     /// @notice since the constructor initializes storage on this contract we disable it
     /// @dev storage is on the proxy contract since it calls this contract via delegatecall
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -196,9 +200,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         uint256 _exitEscrowPeriod,
         address _initialOwner
     ) public initializer {
-        __Ownable_init(_initialOwner);
         __UUPSUpgradeable_init();
         initializeAtBlock();
+        timelock = _initialOwner;
 
         initializeState(_tokenAddress, _lightClientAddress, _exitEscrowPeriod);
     }
@@ -232,9 +236,16 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         return (1, 0, 0);
     }
 
-    /// @notice only the owner can authorize an upgrade
-    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
+    /// @notice only the timelock can authorize an upgrade
+    function _authorizeUpgrade(address newImplementation) internal virtual override onlyTimelock {
         emit Upgrade(newImplementation);
+    }
+
+    modifier onlyTimelock() {
+        if (msg.sender != timelock) {
+            revert NotTimelock();
+        }
+        _;
     }
 
     /// @dev Computes a hash value of some G2 point.

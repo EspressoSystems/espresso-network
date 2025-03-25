@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Unlicensed
+    // SPDX-License-Identifier: Unlicensed
 
 /* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file */
 
@@ -28,7 +28,7 @@ import { StakeTable as S } from "../src/StakeTable.sol";
 import { StakeTableMock } from "../test/mocks/StakeTableMock.sol";
 import { DeployStakeTableScript } from "./script/StakeTable.s.sol";
 import { DeployEspTokenScript } from "./script/EspToken.s.sol";
-
+import { Timelock } from "../src/Timelock.sol";
 // TODO: currently missing several tests
 // TODO: test only owner methods access control
 
@@ -101,7 +101,7 @@ contract StakeTable_register_Test is Test {
         token.transfer(address(validator), INITIAL_BALANCE);
 
         DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
-        (proxy, admin) = stakeTableDeployer.run(tokenAddress, address(lcMock), ESCROW_PERIOD);
+        (proxy, admin) = stakeTableDeployer.run(tokenAddress, address(lcMock), admin, ESCROW_PERIOD);
         stakeTable = StakeTableMock(proxy);
     }
 
@@ -543,5 +543,147 @@ contract StakeTable_register_Test is Test {
     // solhint-disable-next-line no-empty-blocks
     function test_revertIf_undelegate_AfterValidatorExit() public {
         // TODO
+    }
+}
+
+contract StakeTableTimelockTest is Test {
+    address impl;
+    address proxy;
+    address tokenGrantRecipient;
+    address validator;
+    address delegator;
+    address[] proposers = [makeAddr("proposer")];
+    address[] executors = [makeAddr("executor")];
+    LightClientMock lcMock;
+    EspToken token;
+    StakeTableMock stakeTable;
+    Timelock timelock;
+    uint256 public constant INITIAL_BALANCE = 5 ether;
+    uint256 public constant ESCROW_PERIOD = 1 weeks;
+    uint256 public constant DELAY = 15 seconds;
+
+    function setUp() public {
+        tokenGrantRecipient = makeAddr("tokenGrantRecipient");
+        validator = makeAddr("validator");
+        delegator = makeAddr("delegator");
+
+        string[] memory cmds = new string[](3);
+        cmds[0] = "diff-test";
+        cmds[1] = "mock-genesis";
+        cmds[2] = "5";
+
+        bytes memory result = vm.ffi(cmds);
+        (
+            LightClientMock.LightClientState memory state,
+            LightClientMock.StakeTableState memory stakeState
+        ) = abi.decode(result, (LightClient.LightClientState, LightClient.StakeTableState));
+        LightClientMock.LightClientState memory genesis = state;
+        LightClientMock.StakeTableState memory genesisStakeTableState = stakeState;
+
+        lcMock = new LightClientMock(genesis, genesisStakeTableState, 864000);
+
+        DeployEspTokenScript tokenDeployer = new DeployEspTokenScript();
+        (address tokenAddress, address admin) = tokenDeployer.run(tokenGrantRecipient);
+        token = EspToken(tokenAddress);
+
+        vm.prank(tokenGrantRecipient);
+        token.transfer(address(validator), INITIAL_BALANCE);
+
+        //deploy timelock
+        timelock = new Timelock(DELAY, proposers, executors, admin);
+
+        DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
+        (proxy, admin) =
+            stakeTableDeployer.run(tokenAddress, address(lcMock), address(timelock), ESCROW_PERIOD);
+        stakeTable = StakeTableMock(proxy);
+    }
+
+    function test_initialize_sets_timelock() public {
+        assertEq(stakeTable.timelock(), address(timelock));
+    }
+
+    function test_timelock_upgrade_proposal_and_execution_succeeds() public {
+        vm.startPrank(proposers[0]);
+
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+
+        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        vm.assertFalse(timelock.isOperationReady(txId));
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.assertTrue(timelock.isOperationReady(txId));
+
+        vm.startPrank(executors[0]);
+        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        vm.assertTrue(timelock.isOperationDone(txId));
+    }
+
+    function test_timelock_upgrade_proposal_and_execution_fails_before_delay() public {
+        vm.startPrank(proposers[0]);
+
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+
+        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        vm.startPrank(executors[0]);
+        vm.expectRevert();
+        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        vm.assertFalse(timelock.isOperationDone(txId));
+    }
+
+    function test_timelock_upgrade_proposal_and_execution_fails_without_correct_permission()
+        public
+    {
+        vm.startPrank(makeAddr("notProposer"));
+
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        vm.expectRevert();
+        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        vm.stopPrank();
+
+        vm.startPrank(proposers[0]);
+        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.startPrank(makeAddr("notExecutor"));
+        vm.expectRevert();
+        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        vm.assertFalse(timelock.isOperationDone(txId));
+    }
+
+    function test_unauthorized_cannot_upgrade() public {
+        try stakeTable.upgradeToAndCall(address(new S()), "") {
+            fail();
+        } catch (bytes memory lowLevelData) {
+            // Handle custom error
+            bytes4 selector;
+            assembly {
+                selector := mload(add(lowLevelData, 32))
+            }
+            assertEq(selector, S.NotTimelock.selector);
+        }
     }
 }

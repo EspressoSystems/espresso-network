@@ -10,10 +10,12 @@ contract DeployStakeTableScript is Script {
     /// @notice deploys the impl, proxy & initializes the impl
     /// @return proxyAddress The address of the proxy
     /// @return admin The address of the admin
-    function run(address tokenAddress, address lightClientAddress, uint256 escrowPeriod)
-        external
-        returns (address payable proxyAddress, address admin)
-    {
+    function run(
+        address tokenAddress,
+        address lightClientAddress,
+        address timelockAddress,
+        uint256 escrowPeriod
+    ) external returns (address payable proxyAddress, address admin) {
         string memory seedPhrase = vm.envString("MNEMONIC");
         (admin,) = deriveRememberKey(seedPhrase, 0);
         vm.startBroadcast(admin);
@@ -23,7 +25,11 @@ contract DeployStakeTableScript is Script {
 
         // Encode the initializer function call
         bytes memory data = abi.encodeWithSelector(
-            StakeTable.initialize.selector, tokenAddress, lightClientAddress, escrowPeriod, admin
+            StakeTable.initialize.selector,
+            tokenAddress,
+            lightClientAddress,
+            escrowPeriod,
+            timelockAddress
         );
 
         // our proxy
