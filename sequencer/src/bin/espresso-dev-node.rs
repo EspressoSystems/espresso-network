@@ -153,10 +153,6 @@ struct Args {
     )]
     max_block_size: u64,
 
-    /// Number of HotShot blocks in an epoch within which the same stake table snapshot will be used.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_BLOCKS_PER_EPOCH")]
-    blocks_per_epoch: u64,
-
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
