@@ -8,7 +8,7 @@ edition = { workspace = true }
 [dependencies]
 ark-srs = { workspace = true }
 clap = { workspace = true }
-ethers = { version = "2.0.4" }
+alloy = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }
