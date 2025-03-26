@@ -1474,10 +1474,7 @@ mod test_headers {
 
         let anvil = Anvil::new().block_time(1u64).spawn();
         let mut genesis_state = NodeState::mock()
-            .with_l1(
-                L1Client::new(vec![anvil.endpoint().parse().unwrap()])
-                    .expect("Failed to create L1 client"),
-            )
+            .with_l1(L1Client::new(vec![anvil.endpoint_url()]).expect("Failed to create L1 client"))
             .with_current_version(StaticVersion::<0, 1>::version());
 
         let genesis = GenesisForTest::default().await;

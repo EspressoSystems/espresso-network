@@ -111,7 +111,6 @@ impl PermissionedStakeTableUpdate {
 
 pub async fn update_stake_table(
     l1url: Url,
-    // l1_interval: Duration,
     mnemonic: String,
     account_index: u32,
     address: Address,
