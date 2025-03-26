@@ -28,10 +28,10 @@ use crate::{
 /// being distributed by the malicious disperser.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct MalEncodingProof {
-    /// The witness vector
+    /// The recovered polynomial from VID shares.
     #[serde(with = "canonical")]
     recovered_poly: Vec<F>,
-    /// Proof content.
+    /// The Merkle proofs against the original commitment.
     #[serde(with = "canonical")]
     raw_shares: Vec<(usize, MerkleProof)>,
 }
