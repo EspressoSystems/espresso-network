@@ -182,12 +182,26 @@ async fn test_cli_claim_validator_exit() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_cli_stake_for_demo() -> Result<()> {
+async fn test_cli_stake_for_demo_default_num_validators() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
     system
         .cmd()
         .arg("stake-for-demo")
+        .output()?
+        .assert_success();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    system
+        .cmd()
+        .arg("stake-for-demo")
+        .arg("--num-validators")
+        .arg("3")
         .output()?
         .assert_success();
     Ok(())

@@ -1,10 +1,11 @@
 use alloy::{
-    network::EthereumWallet,
+    network::{EthereumWallet, TransactionBuilder as _},
     primitives::{
         utils::{format_ether, parse_ether},
         U256,
     },
     providers::{Provider, ProviderBuilder, WalletProvider},
+    rpc::types::TransactionRequest,
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::Result;
@@ -25,7 +26,7 @@ use crate::{
 /// loaded directly from the environment.
 ///
 /// Account indexes 10 to 14 of the dev mnemonic are used for the validator accounts.
-pub async fn stake_for_demo(config: &Config) -> Result<()> {
+pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> {
     tracing::info!("staking to stake table contract for demo");
 
     let mk_provider = async |account_index| -> Result<_> {
@@ -41,6 +42,7 @@ pub async fn stake_for_demo(config: &Config) -> Result<()> {
     };
 
     let grant_recipient = mk_provider(config.account_index).await?;
+    let chain_id = grant_recipient.get_chain_id().await?;
     tracing::info!(
         "grant recipient account for token funding: {}",
         grant_recipient.default_signer_address()
@@ -55,18 +57,32 @@ pub async fn stake_for_demo(config: &Config) -> Result<()> {
     let fund_amount_eth = "1000";
     let fund_amount = parse_ether(fund_amount_eth)?;
 
-    for val_index in 0..=4 {
-        // 10 to 14 % commission
-        let commission = Commission::try_from(1000u16 + 100u16 * val_index)?;
+    for val_index in 0..num_validators {
+        // use accounts 10 to 14 of the default mnemonics, hopefully not used for anything else
+        let validator_provider = mk_provider(20u32 + val_index as u32).await?;
+        let validator_address = validator_provider.default_signer_address();
+
+        tracing::info!("fund val {val_index} address: {validator_address}, {fund_amount_eth} ETH");
+        let tx = TransactionRequest::default()
+            .with_to(validator_address)
+            .with_chain_id(chain_id)
+            .with_value(fund_amount);
+        let receipt = grant_recipient
+            .send_transaction(tx)
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        let bal = validator_provider.get_balance(validator_address).await?;
+
+        // 1% commission and more
+        let commission = Commission::try_from(100u16 + 10u16 * val_index)?;
 
         // delegate 100 to 500 ESP
-        let delegate_amount = parse_ether("100")? * U256::from(val_index + 1);
+        let delegate_amount = parse_ether("100")? * U256::from(val_index % 5 + 1);
         let delegate_amount_esp = format_ether(delegate_amount);
 
-        // use accounts 10 to 14 of the default mnemonics, hopefully not used for anything else
-        let validator_provider = mk_provider(10u32 + val_index as u32).await?;
-        let validator_address = validator_provider.default_signer_address();
-        let bal = validator_provider.get_balance(validator_address).await?;
         tracing::info!("validator {val_index} address: {validator_address}, balance: {bal}");
         let consensus_private_key = parse_bls_priv_key(&dotenvy::var(format!(
             "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_{val_index}"
