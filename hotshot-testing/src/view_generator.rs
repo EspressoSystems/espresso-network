@@ -263,6 +263,7 @@ impl TestView {
         let quorum_data = QuorumData2 {
             leaf_commit: old.leaf.commit(),
             epoch: old_epoch,
+            block_number: Some(old.leaf.height()),
         };
 
         //let (old_private_key, old_public_key) = key_pair_for_id::<TestTypes>(*old_view);
@@ -527,6 +528,7 @@ impl TestView {
             QuorumData2 {
                 leaf_commit: self.leaf.commit(),
                 epoch: self.epoch_number,
+                block_number: Some(self.leaf.height()),
             },
             self.view_number,
             &handle.public_key(),

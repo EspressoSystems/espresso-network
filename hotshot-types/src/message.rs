@@ -239,7 +239,10 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
 
     /// Message for the next leader containing our highest QC
-    HighQc(QuorumCertificate2<TYPES>),
+    HighQc(
+        QuorumCertificate2<TYPES>,
+        Option<NextEpochQuorumCertificate2<TYPES>>,
+    ),
 
     /// Message for the next leader containing our highest QC
     ExtendedQc(
@@ -372,7 +375,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::UpgradeProposal(message) => message.data.view_number(),
                     GeneralConsensusMessage::UpgradeVote(message) => message.view_number(),
-                    GeneralConsensusMessage::HighQc(qc)
+                    GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
                 }
             },
@@ -443,7 +446,7 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     },
                     GeneralConsensusMessage::UpgradeProposal(message) => message.data.epoch(),
                     GeneralConsensusMessage::UpgradeVote(message) => message.epoch(),
-                    GeneralConsensusMessage::HighQc(qc)
+                    GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
                 }
             },

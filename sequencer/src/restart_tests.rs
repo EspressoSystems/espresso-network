@@ -544,6 +544,7 @@ impl TestNetwork {
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
+            epoch_height: None,
 
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]

@@ -687,14 +687,12 @@ mod persistence_tests {
 
         let genesis_view = ViewNumber::genesis();
 
+        let leaf =
+            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::default()).await;
         let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
-            leaf_commit: Leaf2::genesis::<TestVersions>(
-                &ValidatedState::default(),
-                &NodeState::default(),
-            )
-            .await
-            .commit(),
+            leaf_commit: leaf.commit(),
             epoch: Some(EpochNumber::new(1)),
+            block_number: Some(leaf.height()),
         }
         .into();
 

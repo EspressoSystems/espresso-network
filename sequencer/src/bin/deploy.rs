@@ -147,6 +147,12 @@ struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD", value_parser = parse_duration)]
     exit_escrow_period: Option<Duration>,
 
+    /// The address that the tokens will be minted to.
+    ///
+    /// If unset the tokens will be minted to the deployer account.
+    #[clap(long, env = "ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
+    initial_token_grant_recipient: Option<Address>,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -182,6 +188,7 @@ async fn main() -> anyhow::Result<()> {
         contracts,
         initial_stake_table,
         opt.exit_escrow_period,
+        opt.initial_token_grant_recipient,
     )
     .await?;
 

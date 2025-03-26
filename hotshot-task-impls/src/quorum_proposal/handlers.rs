@@ -30,8 +30,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
     },
     utils::{is_last_block_in_epoch, option_epoch_from_block_number},
-    vote::{Certificate, HasViewNumber},
-    StakeTableEntries,
+    vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
@@ -39,7 +38,10 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, parent_leaf_and_state, wait_for_next_epoch_qc},
+    helpers::{
+        broadcast_event, parent_leaf_and_state, validate_qc_and_next_epoch_qc,
+        wait_for_next_epoch_qc,
+    },
     quorum_proposal::{QuorumProposalTaskState, UpgradeLock, Versions},
 };
 
@@ -114,9 +116,6 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
     /// The time this view started
     pub view_start_time: Instant,
 
-    /// The highest_qc we've seen at the start of this task
-    pub highest_qc: QuorumCertificate2<TYPES>,
-
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 }
@@ -125,23 +124,20 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
     /// Return the next HighQc we get from the event stream
     async fn wait_for_qc_event(
         &self,
-        rx: &mut Receiver<Arc<HotShotEvent<TYPES>>>,
+        mut rx: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<QuorumCertificate2<TYPES>> {
         while let Ok(event) = rx.recv_direct().await {
-            if let HotShotEvent::HighQcRecv(qc, _sender) = event.as_ref() {
-                let prev_epoch = qc.data.epoch;
-                let epoch_membership = self.membership.get_new_epoch(prev_epoch).await.ok()?;
-                let membership_stake_table = epoch_membership.stake_table().await;
-                let membership_success_threshold = epoch_membership.success_threshold().await;
-
-                if qc
-                    .is_valid_cert(
-                        StakeTableEntries::<TYPES>::from(membership_stake_table).0,
-                        membership_success_threshold,
-                        &self.upgrade_lock,
-                    )
-                    .await
-                    .is_ok()
+            if let HotShotEvent::HighQcRecv(qc, maybe_next_epoch_qc, _sender) = event.as_ref() {
+                if validate_qc_and_next_epoch_qc(
+                    qc,
+                    maybe_next_epoch_qc.as_ref(),
+                    &self.consensus,
+                    &self.membership.coordinator,
+                    &self.upgrade_lock,
+                    self.epoch_height,
+                )
+                .await
+                .is_ok()
                 {
                     return Some(qc.clone());
                 }
@@ -151,46 +147,62 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
     }
     /// Waits for the configured timeout for nodes to send HighQc messages to us.  We'll
     /// then propose with the highest QC from among these proposals.
-    async fn wait_for_highest_qc(&mut self) {
-        tracing::error!("waiting for QC");
+    async fn wait_for_highest_qc(&self) -> Result<QuorumCertificate2<TYPES>> {
+        tracing::debug!("waiting for QC");
         // If we haven't upgraded to Hotstuff 2 just return the high qc right away
-        if self
-            .upgrade_lock
-            .version(self.view_number)
-            .await
-            .is_ok_and(|version| version < V::Epochs::VERSION)
-        {
-            return;
-        }
+        ensure!(
+            self.upgrade_lock.epochs_enabled(self.view_number).await,
+            error!("Epochs are not enabled yet we tried to wait for Highest QC.")
+        );
+
+        let mut highest_qc = self.consensus.read().await.high_qc().clone();
+
         let wait_duration = Duration::from_millis(self.timeout / 2);
+
+        let mut rx = self.receiver.clone();
+
+        // drain any qc off the queue
+        while let Ok(event) = rx.try_recv() {
+            if let HotShotEvent::HighQcRecv(qc, maybe_next_epoch_qc, _sender) = event.as_ref() {
+                if validate_qc_and_next_epoch_qc(
+                    qc,
+                    maybe_next_epoch_qc.as_ref(),
+                    &self.consensus,
+                    &self.membership.coordinator,
+                    &self.upgrade_lock,
+                    self.epoch_height,
+                )
+                .await
+                .is_ok()
+                    && qc.view_number() > highest_qc.view_number()
+                {
+                    highest_qc = qc.clone();
+                }
+            }
+        }
 
         // TODO configure timeout
         while self.view_start_time.elapsed() < wait_duration {
-            let Some(time_spent) = Instant::now().checked_duration_since(self.view_start_time)
+            let time_spent = Instant::now()
+                .checked_duration_since(self.view_start_time)
+                .ok_or(error!("Time elapsed since the start of the task is negative. This should never happen."))?;
+            let time_left = wait_duration
+                .checked_sub(time_spent)
+                .ok_or(info!("No time left"))?;
+            let Ok(maybe_qc) =
+                tokio::time::timeout(time_left, self.wait_for_qc_event(rx.clone())).await
             else {
-                // Shouldn't be possible, now must be after the start
-                return;
-            };
-            let Some(time_left) = wait_duration.checked_sub(time_spent) else {
-                // No time left
-                return;
-            };
-            let Ok(maybe_qc) = tokio::time::timeout(
-                time_left,
-                self.wait_for_qc_event(&mut self.receiver.clone()),
-            )
-            .await
-            else {
-                // we timeout out, don't wait any longer
-                return;
+                tracing::info!("Some nodes did not respond with their HighQc in time. Continuing with the highest QC that we received: {highest_qc:?}");
+                return Ok(highest_qc);
             };
             let Some(qc) = maybe_qc else {
                 continue;
             };
-            if qc.view_number() > self.highest_qc.view_number() {
-                self.highest_qc = qc;
+            if qc.view_number() > highest_qc.view_number() {
+                highest_qc = qc;
             }
         }
+        Ok(highest_qc.clone())
     }
     /// Publishes a proposal given the [`CommitmentAndMetadata`], [`VidDisperse`]
     /// and high qc [`hotshot_types::simple_certificate::QuorumCertificate`],
@@ -322,11 +334,11 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             );
             return Ok(());
         }
-        let is_high_qc_for_last_block = self
-            .consensus
-            .read()
-            .await
-            .is_leaf_for_last_block(parent_qc.data.leaf_commit);
+        let is_high_qc_for_last_block = if let Some(block_number) = parent_qc.data.block_number {
+            is_last_block_in_epoch(block_number, self.epoch_height)
+        } else {
+            false
+        };
         let next_epoch_qc = if self.upgrade_lock.epochs_enabled(self.view_number).await
             && is_high_qc_for_last_block
         {
@@ -347,7 +359,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     self.consensus
                         .read()
                         .await
-                        .drb_seeds_and_results
+                        .drb_results
                         .results
                         .get(&(*epoch_val + 1))
                         .copied()
@@ -408,7 +420,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
     type Output = Vec<Vec<Vec<Arc<HotShotEvent<TYPES>>>>>;
 
     #[allow(clippy::no_effect_underscore_binding, clippy::too_many_lines)]
-    async fn handle_dep_result(mut self, res: Self::Output) {
+    async fn handle_dep_result(self, res: Self::Output) {
         let mut commit_and_metadata: Option<CommitmentAndMetadata<TYPES>> = None;
         let mut timeout_certificate = None;
         let mut view_sync_finalize_cert = None;
@@ -463,8 +475,13 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
         } else if version < V::Epochs::VERSION {
             self.consensus.read().await.high_qc().clone()
         } else {
-            self.wait_for_highest_qc().await;
-            self.highest_qc.clone()
+            match self.wait_for_highest_qc().await {
+                Ok(qc) => qc,
+                Err(e) => {
+                    tracing::error!("Error while waiting for highest QC: {:?}", e);
+                    return;
+                },
+            }
         };
 
         if commit_and_metadata.is_none() {

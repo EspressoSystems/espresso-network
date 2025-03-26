@@ -294,6 +294,7 @@ async fn main() -> anyhow::Result<()> {
             contracts.clone(),
             None,                           // initial stake table
             Some(Duration::from_secs(300)), // exit escrow period
+            None,                           // use deployer as initial token grant recipient
         )
         .await?;
 

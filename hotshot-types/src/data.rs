@@ -1121,9 +1121,16 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             metadata,
         );
 
+        let block_number = if V::Base::VERSION < V::Epochs::VERSION {
+            None
+        } else {
+            Some(0u64)
+        };
+
         let null_quorum_data = QuorumData2 {
             leaf_commit: Commitment::<Leaf2<TYPES>>::default_commitment_no_preimage(),
             epoch,
+            block_number,
         };
 
         let justify_qc = QuorumCertificate2::new(
@@ -1453,11 +1460,16 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
 
         let genesis_view = <TYPES::View as ConsensusTime>::genesis();
 
+        let genesis_leaf = Leaf2::genesis::<V>(validated_state, instance_state).await;
+        let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
+            Some(genesis_leaf.height())
+        } else {
+            None
+        };
         let data = QuorumData2 {
-            leaf_commit: Leaf2::genesis::<V>(validated_state, instance_state)
-                .await
-                .commit(),
+            leaf_commit: genesis_leaf.commit(),
             epoch: genesis_epoch_from_version::<V, TYPES>(), // #3967 make sure this is enough of a gate for epochs
+            block_number,
         };
 
         let versioned_data =

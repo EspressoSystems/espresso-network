@@ -115,9 +115,11 @@ impl SimulatedChainState {
             },
             Some(prev_proposal) => {
                 let prev_justify_qc = &prev_proposal.justify_qc();
+                let prev_leaf = Leaf2::from_quorum_proposal(prev_proposal);
                 let quorum_data = QuorumData2::<TestTypes> {
-                    leaf_commit: Committable::commit(&Leaf2::from_quorum_proposal(prev_proposal)),
+                    leaf_commit: Committable::commit(&prev_leaf),
                     epoch: self.epoch,
+                    block_number: Some(prev_leaf.height()),
                 };
 
                 // form a justify qc

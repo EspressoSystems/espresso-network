@@ -18,7 +18,8 @@
                         "chain_id": "35353",
                         "fee_contract": null,
                         "fee_recipient": "0x0000000000000000000000000000000000000000",
-                        "max_block_size": "30720"
+                        "max_block_size": "30720",
+                        "stake_table_contract": null
                       }
                     }
                   },

@@ -22,7 +22,7 @@ use vec1::Vec1;
 pub use crate::utils::{View, ViewInner};
 use crate::{
     data::{Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperse, VidDisperseShare},
-    drb::DrbSeedsAndResults,
+    drb::DrbResults,
     epoch_membership::EpochMembershipCoordinator,
     error::HotShotError,
     event::{HotShotAction, LeafInfo},
@@ -333,7 +333,7 @@ pub struct Consensus<TYPES: NodeType> {
     pub epoch_height: u64,
 
     /// Tables for the DRB seeds and results.
-    pub drb_seeds_and_results: DrbSeedsAndResults<TYPES>,
+    pub drb_results: DrbResults<TYPES>,
 
     /// The light client state update certificate
     pub state_cert: LightClientStateUpdateCertificate<TYPES>,
@@ -456,7 +456,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             next_epoch_high_qc,
             metrics,
             epoch_height,
-            drb_seeds_and_results: DrbSeedsAndResults::new(),
+            drb_results: DrbResults::new(),
             state_cert,
         }
     }

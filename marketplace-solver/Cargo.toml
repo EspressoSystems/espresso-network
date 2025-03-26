@@ -22,6 +22,7 @@ hotshot-events-service = { workspace = true }
 hotshot-query-service = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 portpicker = { workspace = true, optional = true } 
+primitive-types = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true, features = [ "postgres", "macros" ] }

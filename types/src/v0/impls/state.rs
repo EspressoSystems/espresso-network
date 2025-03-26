@@ -1062,13 +1062,12 @@ impl HotShotState<SeqTypes> for ValidatedState {
             BlockMerkleTree::from_commitment(block_header.block_merkle_tree_root())
         };
 
-        let reward_merkle_tree = if block_header.block_merkle_tree_root().size() == 0 {
-            // If the commitment tells us that the tree is supposed to be empty, it is convenient to
-            // just create an empty tree, rather than a commitment-only tree.
-            RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT)
-        } else {
-            RewardMerkleTree::from_commitment(block_header.block_merkle_tree_root())
-        };
+        let mut reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
+        if let Some(root) = block_header.reward_merkle_tree_root() {
+            if !root.size() == 0 {
+                reward_merkle_tree = RewardMerkleTree::from_commitment(root);
+            }
+        }
 
         Self {
             fee_merkle_tree,
