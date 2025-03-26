@@ -1,4 +1,4 @@
-use crate::{v0_1, BlockSize, ChainId, FeeAccount, FeeAmount};
+use crate::{v0_1, v0_99, BlockSize, ChainId, FeeAccount, FeeAmount};
 use committable::{Commitment, Committable};
 use ethers::types::{Address, U256};
 use itertools::Either;
@@ -74,13 +74,13 @@ impl Committable for ChainConfig {
 }
 
 impl ResolvableChainConfig {
-    pub fn _commit(&self) -> Commitment<ChainConfig> {
+    pub fn commit(&self) -> Commitment<ChainConfig> {
         match self.chain_config {
             Either::Left(config) => config.commit(),
             Either::Right(commitment) => commitment,
         }
     }
-    pub fn _resolve(self) -> Option<ChainConfig> {
+    pub fn resolve(self) -> Option<ChainConfig> {
         match self.chain_config {
             Either::Left(config) => Some(config),
             Either::Right(_) => None,
@@ -141,23 +141,25 @@ impl From<v0_1::ChainConfig> for ChainConfig {
     }
 }
 
-impl From<ChainConfig> for v0_1::ChainConfig {
-    fn from(chain_config: ChainConfig) -> v0_1::ChainConfig {
-        let ChainConfig {
+impl From<v0_99::ChainConfig> for ChainConfig {
+    fn from(chain_config: v0_99::ChainConfig) -> ChainConfig {
+        let v0_99::ChainConfig {
             chain_id,
             max_block_size,
             base_fee,
             fee_contract,
             fee_recipient,
+            stake_table_contract,
             ..
         } = chain_config;
 
-        v0_1::ChainConfig {
+        ChainConfig {
             chain_id,
             max_block_size,
             base_fee,
             fee_contract,
             fee_recipient,
+            stake_table_contract,
         }
     }
 }

@@ -13,6 +13,7 @@ clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types" }
 ethers = { workspace = true }
+ethers-conv = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
@@ -22,6 +23,7 @@ hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 marketplace-builder-shared = { workspace = true }
 portpicker = { workspace = true }
+primitive-types = { workspace = true }
 rand = "0.8.5"
 sequencer = { path = "../sequencer" }
 sequencer-utils = { path = "../utils" }

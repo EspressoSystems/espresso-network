@@ -23,7 +23,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, Versions},
         EncodeBytes,
     },
-    utils::BuilderCommitment,
+    utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use marketplace_builder_shared::{
     block::{BuilderStateId, ParentBlockReferences},
@@ -152,6 +152,7 @@ pub async fn calc_proposal_msg<V: Versions>(
             },
             view_number: ViewNumber::new(round as u64),
             epoch: None,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
         let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
         let da_signature =
@@ -190,9 +191,11 @@ pub async fn calc_proposal_msg<V: Versions>(
         },
         Some(prev_proposal) => {
             let prev_justify_qc = prev_proposal.justify_qc();
+            let prev_leaf = Leaf2::from_quorum_proposal(prev_proposal);
             let quorum_data = QuorumData2::<TestTypes> {
-                leaf_commit: Leaf2::from_quorum_proposal(prev_proposal).commit(),
+                leaf_commit: prev_leaf.commit(),
                 epoch: None,
+                block_number: Some(prev_leaf.height()),
             };
 
             // form a justify qc

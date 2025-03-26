@@ -21,6 +21,7 @@ use hotshot_types::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
         node_implementation::Versions,
     },
+    utils::epoch_from_block_number,
 };
 use rand::Rng;
 use url::Url;
@@ -298,11 +299,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             config.epoch_height,
         );
 
-        load_start_epoch_info(
-            membership_coordinator.membership(),
-            &initializer.start_epoch_info,
-        )
-        .await;
+        if epoch.is_some() {
+            load_start_epoch_info(
+                membership_coordinator.membership(),
+                &initializer.start_epoch_info,
+                config.epoch_height,
+                config.epoch_start_block,
+            )
+            .await;
+        } else {
+            tracing::error!("SKIPPING LOAD_START_EPOCH_INFO");
+        }
 
         // Insert the validated state to state map.
         let mut validated_state_map = BTreeMap::default();
@@ -1186,16 +1193,33 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
 async fn load_start_epoch_info<TYPES: NodeType>(
     membership: &Arc<RwLock<TYPES::Membership>>,
     start_epoch_info: &Vec<InitializerEpochInfo<TYPES>>,
+    epoch_height: u64,
+    epoch_start_block: u64,
 ) {
-    for epoch_info in start_epoch_info {
-        tracing::debug!("Calling add_drb_result for epoch {:?}", epoch_info.epoch);
+    let set_first_epoch = if let Some(epoch_info) = start_epoch_info.first() {
+        epoch_info.block_header.is_none()
+    } else {
+        true
+    };
+
+    // The logic here is that if we're starting up in epochs, but we don't have a block header for the lowest epoch
+    // in start_epoch_info (or start_epoch_info is empty), then we must have restarted between the epoch upgrade
+    // and when add_epoch_root was called for the first time. To get us back to where we were, call set_first_epoch
+    // to pre-seed the state table and initial DRB results.
+    if set_first_epoch {
+        let first_epoch_number =
+            TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
+
+        tracing::debug!("Calling set_first_epoch for epoch {:?}", first_epoch_number);
         membership
             .write()
             .await
-            .add_drb_result(epoch_info.epoch, epoch_info.drb_result);
+            .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
+    }
 
+    for epoch_info in start_epoch_info {
         if let Some(block_header) = &epoch_info.block_header {
-            tracing::debug!("Calling add_epoch_root for epoch {:?}", epoch_info.epoch);
+            tracing::info!("Calling add_epoch_root for epoch {:?}", epoch_info.epoch);
             let write_callback = {
                 let membership_reader = membership.read().await;
                 membership_reader
@@ -1207,12 +1231,14 @@ async fn load_start_epoch_info<TYPES: NodeType>(
                 let mut membership_writer = membership.write().await;
                 write_callback(&mut *membership_writer);
             }
-        } else {
-            tracing::debug!("Calling set_first_epoch for epoch {:?}", epoch_info.epoch);
-            membership
-                .write()
-                .await
-                .set_first_epoch(epoch_info.epoch, INITIAL_DRB_RESULT);
         }
+    }
+
+    for epoch_info in start_epoch_info {
+        tracing::info!("Calling add_drb_result for epoch {:?}", epoch_info.epoch);
+        membership
+            .write()
+            .await
+            .add_drb_result(epoch_info.epoch, epoch_info.drb_result);
     }
 }

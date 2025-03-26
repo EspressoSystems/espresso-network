@@ -145,6 +145,7 @@ async fn reference_header(version: Version) -> Header {
         ns_table,
         state.fee_merkle_tree.commitment(),
         state.block_merkle_tree.commitment(),
+        Some(state.reward_merkle_tree.commitment()),
         vec![fee_info],
         vec![builder_signature],
         version,
@@ -153,7 +154,7 @@ async fn reference_header(version: Version) -> Header {
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
-const REFERENCE_V99_HEADER_COMMITMENT: &str = "BLOCK~2FW3kAbMvo3UVx3sFbv5nG-xz76LBzMDGnzTGpuITRt6";
+const REFERENCE_V99_HEADER_COMMITMENT: &str = "BLOCK~h9jWCyN6A6vRqxEhxejJbTbORMxUqXYQxXBdpfdBQ8x5";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where

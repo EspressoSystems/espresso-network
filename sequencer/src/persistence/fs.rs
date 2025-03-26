@@ -12,11 +12,12 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
+    traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::StakeTables,
+    v0_3::{IndexedStake, Validator},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
-use hotshot::InitializerEpochInfo;
+use hotshot::{types::BLSPubKey, InitializerEpochInfo};
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
@@ -35,6 +36,8 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
+use indexmap::IndexMap;
+use itertools::Itertools;
 
 use crate::ViewNumber;
 
@@ -189,6 +192,8 @@ impl Inner {
         self.path.join("upgrade_certificate")
     }
 
+    #[allow(dead_code)]
+    // TODO(abdul): fix stake table persistence for new stake table types
     fn stake_table_dir_path(&self) -> PathBuf {
         self.path.join("stake_table")
     }
@@ -832,43 +837,6 @@ impl SequencerPersistence for Persistence {
         ))
     }
 
-    async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
-        let inner = self.inner.read().await;
-        let path = &inner.stake_table_dir_path();
-        if !path.is_file() {
-            return Ok(None);
-        }
-
-        let file_path = path.join(epoch.to_string()).with_extension("txt");
-        let bytes = fs::read(&file_path).context("read")?;
-        Ok(Some(
-            bincode::deserialize(&bytes).context("deserialize combined stake table")?,
-        ))
-    }
-
-    async fn store_stake(&self, epoch: EpochNumber, stake: StakeTables) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let dir_path = &inner.stake_table_dir_path();
-
-        fs::create_dir_all(dir_path.clone()).context("failed to create proposals dir")?;
-
-        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-
-        inner.replace(
-            &file_path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes =
-                    bincode::serialize(&stake).context("serializing combined stake table")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
-
     async fn store_upgrade_certificate(
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
@@ -1305,7 +1273,76 @@ impl SequencerPersistence for Persistence {
             }
         }
 
+        result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
+
         Ok(result)
+    }
+}
+
+#[async_trait]
+impl MembershipPersistence for Persistence {
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+        let inner = self.inner.read().await;
+        let path = &inner.stake_table_dir_path();
+        let file_path = path.join(epoch.to_string()).with_extension("txt");
+        let bytes = fs::read(&file_path).context("read")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize combined stake table")?,
+        ))
+    }
+
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        let limit = limit as usize;
+        let inner = self.inner.read().await;
+        let path = &inner.stake_table_dir_path();
+        let sorted: Vec<_> = epoch_files(path)?
+            .sorted_unstable_by_key(|t| t.0)
+            .collect::<Vec<_>>();
+
+        let len = sorted.len();
+        let mut slice = &sorted[..];
+        if len > limit {
+            slice = &sorted[len - limit..len - 1]
+        };
+        slice
+            .iter()
+            .map(|(epoch, path)| -> anyhow::Result<Option<IndexedStake>> {
+                let bytes = fs::read(path).context("read")?;
+                let st =
+                    bincode::deserialize(&bytes).context("deserialize combined stake table")?;
+                Ok(Some((*epoch, st)))
+            })
+            .collect()
+    }
+
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let dir_path = &inner.stake_table_dir_path();
+
+        fs::create_dir_all(dir_path.clone()).context("failed to create proposals dir")?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                let bytes =
+                    bincode::serialize(&stake).context("serializing combined stake table")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
     }
 }
 
@@ -1894,5 +1931,40 @@ mod test {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_membership_persistence() -> anyhow::Result<()> {
+        setup_test();
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let validator = Validator::mock();
+        let mut st = IndexMap::new();
+        st.insert(validator.account, validator);
+        storage
+            .store_stake(EpochNumber::new(10), st.clone())
+            .await?;
+
+        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        assert_eq!(st, table);
+
+        let val2 = Validator::mock();
+        let mut st2 = IndexMap::new();
+        st2.insert(val2.account, val2);
+        storage
+            .store_stake(EpochNumber::new(11), st2.clone())
+            .await?;
+
+        let tables = storage.load_latest_stake(4).await?.unwrap();
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
+        assert_eq!(None, iter.next());
+
+        Ok(())
     }
 }

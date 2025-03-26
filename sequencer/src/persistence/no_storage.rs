@@ -6,11 +6,12 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
+    traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::StakeTables,
+    v0_3::{IndexedStake, Validator},
     Leaf2, NetworkConfig,
 };
-use hotshot::InitializerEpochInfo;
+use hotshot::{types::BLSPubKey, InitializerEpochInfo};
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
@@ -22,6 +23,7 @@ use hotshot_types::{
     message::Proposal,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
 };
+use indexmap::IndexMap;
 
 use crate::{NodeType, SeqTypes, ViewNumber};
 
@@ -226,12 +228,26 @@ impl SequencerPersistence for NoStorage {
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         Ok(Vec::new())
     }
+}
 
-    async fn load_stake(&self, _epoch: EpochNumber) -> anyhow::Result<Option<StakeTables>> {
+#[async_trait]
+impl MembershipPersistence for NoStorage {
+    async fn load_stake(
+        &self,
+        _epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
         Ok(None)
     }
 
-    async fn store_stake(&self, _epoch: EpochNumber, _stake: StakeTables) -> anyhow::Result<()> {
+    async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
+    }
+
+    async fn store_stake(
+        &self,
+        _epoch: EpochNumber,
+        _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 }

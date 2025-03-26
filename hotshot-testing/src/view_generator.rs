@@ -40,7 +40,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         BlockPayload,
     },
-    utils::genesis_epoch_from_version,
+    utils::{genesis_epoch_from_version, EpochTransitionIndicator},
 };
 use rand::{thread_rng, Rng};
 use sha2::{Digest, Sha256};
@@ -200,6 +200,7 @@ impl TestView {
             metadata,
             view_number: genesis_view,
             epoch: genesis_epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let da_proposal = Proposal {
@@ -262,6 +263,7 @@ impl TestView {
         let quorum_data = QuorumData2 {
             leaf_commit: old.leaf.commit(),
             epoch: old_epoch,
+            block_number: Some(old.leaf.height()),
         };
 
         //let (old_private_key, old_public_key) = key_pair_for_id::<TestTypes>(*old_view);
@@ -478,6 +480,7 @@ impl TestView {
             metadata,
             view_number: next_view,
             epoch: old_epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let da_proposal = Proposal {
@@ -525,6 +528,7 @@ impl TestView {
             QuorumData2 {
                 leaf_commit: self.leaf.commit(),
                 epoch: self.epoch_number,
+                block_number: Some(self.leaf.height()),
             },
             self.view_number,
             &handle.public_key(),

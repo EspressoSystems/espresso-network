@@ -46,6 +46,8 @@ pub struct QuorumData2<TYPES: NodeType> {
     pub leaf_commit: Commitment<Leaf2<TYPES>>,
     /// An epoch to which the data belongs to. Relevant for validating against the correct stake table
     pub epoch: Option<TYPES::Epoch>,
+    /// Block number of the leaf. It's optional to be compatible with pre-epoch version.
+    pub block_number: Option<u64>,
 }
 /// Data used for a yes vote. Used to distinguish votes sent by the next epoch nodes.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -356,7 +358,11 @@ impl<TYPES: NodeType> Committable for QuorumData<TYPES> {
 
 impl<TYPES: NodeType> Committable for QuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        let QuorumData2 { leaf_commit, epoch } = self;
+        let QuorumData2 {
+            leaf_commit,
+            epoch,
+            block_number,
+        } = self;
 
         let mut cb = committable::RawCommitmentBuilder::new("Quorum data")
             .var_size_bytes(leaf_commit.as_ref());
@@ -365,19 +371,31 @@ impl<TYPES: NodeType> Committable for QuorumData2<TYPES> {
             cb = cb.u64_field("epoch number", **epoch);
         }
 
+        if let Some(ref block_number) = *block_number {
+            cb = cb.u64_field("block number", *block_number);
+        }
+
         cb.finalize()
     }
 }
 
 impl<TYPES: NodeType> Committable for NextEpochQuorumData2<TYPES> {
     fn commit(&self) -> Commitment<Self> {
-        let NextEpochQuorumData2(QuorumData2 { leaf_commit, epoch }) = self;
+        let NextEpochQuorumData2(QuorumData2 {
+            leaf_commit,
+            epoch,
+            block_number,
+        }) = self;
 
         let mut cb = committable::RawCommitmentBuilder::new("Quorum data")
             .var_size_bytes(leaf_commit.as_ref());
 
         if let Some(ref epoch) = *epoch {
             cb = cb.u64_field("epoch number", **epoch);
+        }
+
+        if let Some(ref block_number) = *block_number {
+            cb = cb.u64_field("block number", *block_number);
         }
 
         cb.finalize()
@@ -642,6 +660,7 @@ impl<TYPES: NodeType> QuorumVote<TYPES> {
         let data = QuorumData2 {
             leaf_commit: Commitment::from_raw(bytes),
             epoch: None,
+            block_number: None,
         };
         let view_number = self.view_number;
 
@@ -906,6 +925,7 @@ impl<TYPES: NodeType> From<QuorumData2<TYPES>> for NextEpochQuorumData2<TYPES> {
         Self(QuorumData2 {
             epoch: data.epoch,
             leaf_commit: data.leaf_commit,
+            block_number: data.block_number,
         })
     }
 }

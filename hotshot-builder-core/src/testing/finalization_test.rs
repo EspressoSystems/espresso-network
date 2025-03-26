@@ -26,7 +26,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, Versions},
         EncodeBytes,
     },
-    utils::BuilderCommitment,
+    utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use marketplace_builder_shared::{
     block::{BuilderStateId, ParentBlockReferences},
@@ -289,6 +289,7 @@ async fn progress_round_with_transactions(
                         metadata,
                         view_number: next_view,
                         epoch: None, // TODO
+                        epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
                     },
                     signature: da_signature,
                     _pd: Default::default(),

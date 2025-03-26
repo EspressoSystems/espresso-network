@@ -107,9 +107,13 @@ pub struct Config {
     account_index: u32,
 
     /// L1 Ethereum RPC.
-    #[clap(long, env = "RPC_URL")]
+    #[clap(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
     rpc_url: Url,
+
+    /// Deployed ESP token contract address.
+    #[clap(long, env = "ESP_TOKEN_ADDRESS")]
+    token_address: Address,
 
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
@@ -179,7 +183,13 @@ enum Commands {
         validator_address: Address,
     },
     /// Register the validators and delegates for the local demo.
-    StakeForDemo,
+    StakeForDemo {
+        /// The number of validators to register.
+        ///
+        /// The default (5) works for the local native and docker demos.
+        #[clap(long, default_value_t = 5)]
+        num_validators: u16,
+    },
 }
 
 fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
@@ -310,8 +320,8 @@ pub async fn main() -> Result<()> {
         Commands::ClaimValidatorExit { validator_address } => {
             claim_validator_exit(stake_table, validator_address).await
         },
-        Commands::StakeForDemo => {
-            stake_for_demo(&config).await.unwrap();
+        Commands::StakeForDemo { num_validators } => {
+            stake_for_demo(&config, num_validators).await.unwrap();
             return Ok(());
         },
         _ => unreachable!(),
