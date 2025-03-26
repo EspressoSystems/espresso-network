@@ -9,6 +9,20 @@ import { IPlonkVerifier } from "../../src/interfaces/IPlonkVerifier.sol";
 import { PlonkVerifierV2 as PV } from "../../src/libraries/PlonkVerifierV2.sol";
 
 contract LightClientV2Mock is LCV2 {
+    bool internal hotShotDown;
+    uint256 internal frozenL1Height;
+
+    /// copy from LightClientMock.sol
+    function setHotShotDownSince(uint256 l1Height) public {
+        hotShotDown = true;
+        frozenL1Height = l1Height;
+    }
+    /// copy from LightClientMock.sol
+
+    function setHotShotUp() public {
+        hotShotDown = false;
+    }
+
     /// @dev Directly mutate finalizedState variable for test
     function setFinalizedState(LC.LightClientState memory state) public {
         finalizedState = state;
