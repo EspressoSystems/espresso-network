@@ -403,33 +403,49 @@ pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow
 
     let first_epoch = coordinator.membership().read().await.first_epoch();
 
-    Ok(epoch == first_epoch || epoch == first_epoch + 1 || true)
+    tracing::error!(">> EPOCH {epoch:?}");
+    tracing::error!(">> FIRST EPOCH {first_epoch:?}");
+    Ok(epoch == first_epoch || epoch == first_epoch + 1 || epoch == EpochNumber::new(0))
 }
 
 pub async fn catchup_missing_accounts(
     instance_state: &NodeState,
     validated_state: &mut ValidatedState,
-    parent_leaf: &Leaf2,
-    view: ViewNumber,
+    leaf: &Leaf2,
+    view: u64,
+    height: u64,
 ) -> anyhow::Result<Validator<BLSPubKey>> {
-    let height = parent_leaf.height();
+    tracing::error!("view={view:?}, height={height:?}");
+    let parent_view = leaf
+        .block_header()
+        .view()
+        .unwrap_or_else(|| leaf.view_number());
+
+    // let parent_view = leaf.view_number();
+
     let epoch_height = instance_state.epoch_height;
     if epoch_height == 0 {
         bail!("epoch height is 0. can not catchup reward accounts");
     }
     let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+
     let coordinator = instance_state.coordinator.clone();
+    let first_epoch = coordinator.membership().read().await.first_epoch();
 
     let epoch_membership = coordinator.membership_for_epoch(Some(epoch)).await?;
     let membership = epoch_membership.coordinator.membership().read().await;
 
     let leader: BLSPubKey = membership
-        .leader(view, Some(epoch))
+        .leader(ViewNumber::new(view), Some(epoch))
         .context(format!("leader for epoch {epoch:?} not found"))?;
+
+    tracing::error!("height={height:?}, view={view:?} leader={leader:?}");
 
     let validator = membership
         .get_validator_config(&epoch, leader)
         .context("validator not found")?;
+
+    tracing::error!("validator config = {validator:?}");
     let mut reward_accounts = HashSet::new();
     reward_accounts.insert(validator.account.to_ethers().into());
     let delegators = validator
@@ -440,33 +456,37 @@ pub async fn catchup_missing_accounts(
         .collect::<Vec<RewardAccount>>();
 
     reward_accounts.extend(delegators.clone());
-    let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
 
-    if !missing_reward_accts.is_empty() {
-        tracing::warn!(
-            height,
-            ?view,
-            ?missing_reward_accts,
-            "fetching missing reward accounts from peers"
-        );
+    if !(epoch == first_epoch + 2) {
+        let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
 
-        let missing_account_proofs = instance_state
-            .peers
-            .fetch_reward_accounts(
-                instance_state,
+        if !missing_reward_accts.is_empty() {
+            tracing::warn!(
                 height,
-                view,
-                validated_state.reward_merkle_tree.commitment(),
-                missing_reward_accts,
-            )
-            .await?;
+                ?parent_view,
+                ?missing_reward_accts,
+                "fetching missing reward accounts from peers"
+            );
 
-        for proof in missing_account_proofs.iter() {
-            proof
-                .remember(&mut validated_state.reward_merkle_tree)
-                .expect("proof previously verified");
+            let missing_account_proofs = instance_state
+                .peers
+                .fetch_reward_accounts(
+                    instance_state,
+                    height - 1,
+                    parent_view,
+                    validated_state.reward_merkle_tree.commitment(),
+                    missing_reward_accts,
+                )
+                .await?;
+
+            for proof in missing_account_proofs.iter() {
+                proof
+                    .remember(&mut validated_state.reward_merkle_tree)
+                    .expect("proof previously verified");
+            }
         }
     }
+
     Ok(validator)
 }
 

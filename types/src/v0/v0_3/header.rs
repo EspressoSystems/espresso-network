@@ -6,7 +6,10 @@ use super::{
 };
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
+use hotshot_types::{
+    data::{VidCommitment, ViewNumber},
+    utils::BuilderCommitment,
+};
 use serde::{Deserialize, Serialize};
 
 /// A header is like a [`Block`] with the body replaced by a digest.
@@ -26,6 +29,7 @@ pub struct Header {
     pub(crate) fee_info: FeeInfo,
     pub(crate) builder_signature: Option<BuilderSignature>,
     pub(crate) reward_merkle_tree_root: RewardMerkleCommitment,
+    pub(crate) view: ViewNumber,
 }
 
 impl Committable for Header {
@@ -59,6 +63,7 @@ impl Committable for Header {
             .var_size_field("fee_merkle_tree_root", &fmt_bytes)
             .field("fee_info", self.fee_info.commit())
             .var_size_field("reward_merkle_tree_root", &rwd_bytes)
+            .u64_field("view", *self.view)
             .finalize()
     }
 

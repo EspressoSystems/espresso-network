@@ -7,10 +7,10 @@ use ethers_conv::ToAlloy;
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::VidCommitment,
+    data::{VidCommitment, ViewNumber},
     traits::{
         block_contents::{BlockHeader, BuilderFee},
-        node_implementation::NodeType,
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::BuilderSignatureKey,
         BlockPayload, ValidatedState as _,
     },
@@ -292,6 +292,7 @@ impl Header {
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
         version: Version,
+        view: Option<ViewNumber>,
     ) -> Self {
         let Version { major, minor } = version;
 
@@ -349,6 +350,7 @@ impl Header {
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
                 reward_merkle_tree_root: reward_merkle_tree_root.unwrap(),
+                view: view.unwrap(),
             }),
 
             99 => Self::V99(v0_99::Header {
@@ -524,7 +526,9 @@ impl Header {
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
         if let Some(validator) = validator {
+            tracing::error!("distributing rewards");
             let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
+            tracing::error!("rewards distributed");
             state.reward_merkle_tree = reward_state;
         }
 
@@ -577,6 +581,7 @@ impl Header {
                 reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
+                view: ViewNumber::new(view_number),
             }),
             99 => Self::V99(v0_99::Header {
                 chain_config: chain_config.into(),
@@ -763,6 +768,15 @@ impl Header {
             Self::V2(_) => None,
             Self::V3(fields) => Some(fields.reward_merkle_tree_root),
             // TODO: add reward commitment to v99
+            Self::V99(_) => None,
+        }
+    }
+
+    pub fn view(&self) -> Option<ViewNumber> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(_) => None,
+            Self::V3(fields) => Some(fields.view),
             Self::V99(_) => None,
         }
     }
@@ -986,11 +1000,12 @@ impl BlockHeader<SeqTypes> for Header {
         metadata: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
         builder_fee: BuilderFee<SeqTypes>,
         version: Version,
+        view_number: u64,
     ) -> Result<Self, Self::Error> {
         tracing::info!("preparing to propose legacy header");
 
         let height = parent_leaf.height();
-        let view = parent_leaf.view_number();
+        let view = parent_leaf.block_header().view().unwrap();
 
         let mut validated_state = parent_state.clone();
 
@@ -1086,11 +1101,18 @@ impl BlockHeader<SeqTypes> for Header {
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
         if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height(), instance_state).await?
+            && !first_two_epochs(parent_leaf.height() + 1, instance_state).await?
         {
+            tracing::error!("finding leader to distribute rewards");
             leader_config = Some(
-                catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)
-                    .await?,
+                catchup_missing_accounts(
+                    instance_state,
+                    &mut validated_state,
+                    parent_leaf,
+                    view_number,
+                    parent_leaf.height() + 1,
+                )
+                .await?,
             );
         };
 
@@ -1102,8 +1124,7 @@ impl BlockHeader<SeqTypes> for Header {
             l1_snapshot,
             &l1_deposits,
             vec![builder_fee],
-            // View number is 0 for legacy headers
-            0,
+            view_number,
             OffsetDateTime::now_utc().unix_timestamp() as u64,
             validated_state,
             chain_config,
@@ -1149,6 +1170,7 @@ impl BlockHeader<SeqTypes> for Header {
             vec![FeeInfo::genesis()],
             vec![],
             instance_state.current_version,
+            Some(ViewNumber::genesis()),
         )
     }
 
@@ -1593,6 +1615,7 @@ mod test_headers {
             ns_table,
             builder_fee,
             StaticVersion::<0, 1>::version(),
+            0,
         )
         .await
         .unwrap();
@@ -1677,6 +1700,7 @@ mod test_headers {
             }],
             Default::default(),
             Version { major: 0, minor: 1 },
+            Some(ViewNumber::genesis()),
         );
 
         let serialized = serde_json::to_string(&v1_header).unwrap();
@@ -1701,6 +1725,7 @@ mod test_headers {
             }],
             Default::default(),
             Version { major: 0, minor: 2 },
+            Some(ViewNumber::genesis()),
         );
 
         let serialized = serde_json::to_string(&v2_header).unwrap();
@@ -1728,6 +1753,7 @@ mod test_headers {
                 major: 0,
                 minor: 99,
             },
+            Some(ViewNumber::genesis()),
         );
 
         let serialized = serde_json::to_string(&v99_header).unwrap();

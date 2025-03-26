@@ -188,6 +188,10 @@ where
 {
     let parent_chain_config = parent_state.chain_config;
 
+    if parent_leaf.height() == proposed_leaf.height() {
+        panic!("parent leaf height = proposed leaf height");
+    }
+
     let (state, delta) = compute_state_update(
         parent_state,
         instance,

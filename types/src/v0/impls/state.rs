@@ -826,7 +826,12 @@ impl ValidatedState {
         );
 
         let parent_height = parent_leaf.height();
-        let parent_view = parent_leaf.view_number();
+        let parent_view = parent_leaf
+            .block_header()
+            .view()
+            .unwrap_or_else(|| parent_leaf.view_number());
+
+        // let parent_view = parent_leaf.view_number();
 
         // Ensure merkle tree has frontier
         if self.need_to_fetch_blocks_mt_frontier() {
@@ -886,14 +891,20 @@ impl ValidatedState {
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
         if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height(), instance).await?
+            && !first_two_epochs(proposed_header.height(), instance).await?
         {
-            let validator =
-                catchup_missing_accounts(instance, &mut validated_state, parent_leaf, parent_view)
-                    .await?;
+            tracing::error!("finding leader to distribute rewards");
+            let validator = catchup_missing_accounts(
+                instance,
+                &mut validated_state,
+                parent_leaf,
+                *proposed_header.view().unwrap(),
+                proposed_header.height(),
+            )
+            .await?;
 
             // apply rewards
-
+            tracing::error!("distributing rewards");
             validated_state
                 .distribute_rewards(&mut delta, validator)
                 .context("failed to distribute rewards")?
@@ -1010,6 +1021,13 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
+        assert!(
+            parent_leaf.height() != proposed_header.height(),
+            "SOMETHING IS VERY WRONG"
+        );
+
+        let height = parent_leaf.height();
+        tracing::error!("xxx11 height {height:?}");
         // Unwrapping here is okay as we retry in a loop
         //so we should either get a validated state or until hotshot cancels the task
         let (validated_state, delta) = self

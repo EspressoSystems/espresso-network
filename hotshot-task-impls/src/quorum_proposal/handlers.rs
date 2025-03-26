@@ -293,6 +293,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 metadata,
                 commitment_and_metadata.fees.first().clone(),
                 version,
+                *self.view_number,
             )
             .await
             .wrap()

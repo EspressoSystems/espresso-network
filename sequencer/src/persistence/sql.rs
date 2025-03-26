@@ -895,11 +895,11 @@ impl Persistence {
 }
 
 const PRUNE_TABLES: &[&str] = &[
-    "anchor_leaf2",
-    "vid_share2",
-    "da_proposal2",
-    "quorum_proposals2",
-    "quorum_certificate2",
+    // "anchor_leaf2",
+    // "vid_share2",
+    // "da_proposal2",
+    // "quorum_proposals2",
+    // "quorum_certificate2",
 ];
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
@@ -1004,11 +1004,11 @@ impl SequencerPersistence for Persistence {
             return Ok(());
         }
 
-        // Garbage collect data which was not included in any decide event, but which at this point
-        // is old enough to just forget about.
-        if let Err(err) = self.prune(view).await {
-            tracing::warn!(?view, "pruning failed: {err:#}");
-        }
+        // // Garbage collect data which was not included in any decide event, but which at this point
+        // // is old enough to just forget about.
+        // if let Err(err) = self.prune(view).await {
+        //     tracing::warn!(?view, "pruning failed: {err:#}");
+        // }
 
         Ok(())
     }
