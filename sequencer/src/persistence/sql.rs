@@ -1836,12 +1836,10 @@ impl SequencerPersistence for Persistence {
         else {
             return Ok(None);
         };
-        if let Some(data) = row.get::<Option<Vec<u8>>, _>("state_cert") {
-            bincode::deserialize(&data)
-                .context("deserializing light client state update certificate")
-        } else {
-            Err(anyhow::anyhow!("Failed fetching row from database"))
-        }
+        let bytes: Vec<u8> = row.get("state_cert");
+        bincode::deserialize(&bytes)
+            .context("deserializing light client state update certificate")
+            .map(Some)
     }
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
@@ -2567,6 +2565,8 @@ mod test {
 
         let rows = 300;
 
+        assert!(storage.load_state_cert().await.unwrap().is_none());
+
         for i in 0..rows {
             let view = ViewNumber::new(i);
             let validated_state = ValidatedState::default();
@@ -2786,6 +2786,15 @@ mod test {
             state_cert_count, rows as i64,
             "Light client state update certificates count does not match rows",
         );
+        assert_eq!(
+            storage.load_state_cert().await.unwrap().unwrap(),
+            LightClientStateUpdateCertificate::<SeqTypes> {
+                epoch: EpochNumber::new(rows - 1),
+                light_client_state: Default::default(),
+                signatures: vec![]
+            },
+            "Wrong light client state update certificate in the storage",
+        )
     }
 
     #[tokio::test(flavor = "multi_thread")]

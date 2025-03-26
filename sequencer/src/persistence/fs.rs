@@ -1891,6 +1891,16 @@ mod test {
             state_cert_count, rows as usize,
             "light client state update certificate count does not match",
         );
+
+        assert_eq!(
+            storage.load_state_cert().await.unwrap().unwrap(),
+            LightClientStateUpdateCertificate::<SeqTypes> {
+                epoch: EpochNumber::new(rows - 1),
+                light_client_state: Default::default(),
+                signatures: vec![]
+            },
+            "Wrong light client state update certificate in the storage",
+        )
     }
 
     #[tokio::test(flavor = "multi_thread")]
