@@ -13,22 +13,21 @@ contract DeployStakeTableScript is Script {
     function run(
         address tokenAddress,
         address lightClientAddress,
-        address timelockAddress,
-        uint256 escrowPeriod
+        uint256 escrowPeriod,
+        address initialOwner,
+        address timelockAddress
     ) external returns (address payable proxyAddress, address admin) {
-        string memory seedPhrase = vm.envString("MNEMONIC");
-        (admin,) = deriveRememberKey(seedPhrase, 0);
-        vm.startBroadcast(admin);
-
         //Our implementation(logic).Proxy will point here to delegate
         StakeTable stakeTableContract = new StakeTable();
 
+        vm.startBroadcast(initialOwner);
         // Encode the initializer function call
         bytes memory data = abi.encodeWithSelector(
             StakeTable.initialize.selector,
             tokenAddress,
             lightClientAddress,
             escrowPeriod,
+            initialOwner,
             timelockAddress
         );
 
@@ -38,6 +37,6 @@ contract DeployStakeTableScript is Script {
 
         proxyAddress = payable(address(proxy));
 
-        return (proxyAddress, admin);
+        return (proxyAddress, initialOwner);
     }
 }

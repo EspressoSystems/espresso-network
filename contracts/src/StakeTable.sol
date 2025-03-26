@@ -4,6 +4,8 @@ import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 import { LightClient } from "../src/LightClient.sol";
@@ -15,7 +17,7 @@ using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 /// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
 ///
 /// @dev All functions are marked as virtual so that future upgrades can override them.
-contract StakeTable is Initializable, InitializedAt, UUPSUpgradeable {
+contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
     // === Events ===
 
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
@@ -198,11 +200,13 @@ contract StakeTable is Initializable, InitializedAt, UUPSUpgradeable {
         address _tokenAddress,
         address _lightClientAddress,
         uint256 _exitEscrowPeriod,
-        address _initialOwner
+        address _initialOwner,
+        address _timelock
     ) public initializer {
+        __Ownable_init(_initialOwner);
         __UUPSUpgradeable_init();
         initializeAtBlock();
-        timelock = _initialOwner;
+        timelock = _timelock;
 
         initializeState(_tokenAddress, _lightClientAddress, _exitEscrowPeriod);
     }
@@ -237,15 +241,8 @@ contract StakeTable is Initializable, InitializedAt, UUPSUpgradeable {
     }
 
     /// @notice only the timelock can authorize an upgrade
-    function _authorizeUpgrade(address newImplementation) internal virtual override onlyTimelock {
+    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
         emit Upgrade(newImplementation);
-    }
-
-    modifier onlyTimelock() {
-        if (msg.sender != timelock) {
-            revert NotTimelock();
-        }
-        _;
     }
 
     /// @dev Computes a hash value of some G2 point.

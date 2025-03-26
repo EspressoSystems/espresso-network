@@ -21,6 +21,8 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
 
@@ -78,6 +80,7 @@ contract StakeTable_register_Test is Test {
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
         validator = makeAddr("validator");
         delegator = makeAddr("delegator");
+        admin = makeAddr("admin");
 
         string[] memory cmds = new string[](3);
         cmds[0] = "diff-test";
@@ -95,14 +98,16 @@ contract StakeTable_register_Test is Test {
         lcMock = new LightClientMock(genesis, genesisStakeTableState, 864000);
 
         DeployEspTokenScript tokenDeployer = new DeployEspTokenScript();
-        (address tokenAddress, address admin) = tokenDeployer.run(tokenGrantRecipient);
+        (address tokenAddress,) = tokenDeployer.run(tokenGrantRecipient);
         token = EspToken(tokenAddress);
 
         vm.prank(tokenGrantRecipient);
         token.transfer(address(validator), INITIAL_BALANCE);
 
         DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
-        (proxy, admin) = stakeTableDeployer.run(tokenAddress, address(lcMock), admin, ESCROW_PERIOD);
+        (proxy, admin) = stakeTableDeployer.run(
+            tokenAddress, address(lcMock), ESCROW_PERIOD, admin, makeAddr("timelock")
+        );
         stakeTable = StakeTableMock(proxy);
     }
 
@@ -553,6 +558,7 @@ contract StakeTableTimelockTest is Test {
     address tokenGrantRecipient;
     address validator;
     address delegator;
+    address admin;
     address[] proposers = [makeAddr("proposer")];
     address[] executors = [makeAddr("executor")];
     LightClientMock lcMock;
@@ -567,6 +573,7 @@ contract StakeTableTimelockTest is Test {
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
         validator = makeAddr("validator");
         delegator = makeAddr("delegator");
+        admin = makeAddr("admin");
 
         string[] memory cmds = new string[](3);
         cmds[0] = "diff-test";
@@ -584,7 +591,7 @@ contract StakeTableTimelockTest is Test {
         lcMock = new LightClientMock(genesis, genesisStakeTableState, 864000);
 
         DeployEspTokenScript tokenDeployer = new DeployEspTokenScript();
-        (address tokenAddress, address admin) = tokenDeployer.run(tokenGrantRecipient);
+        (address tokenAddress,) = tokenDeployer.run(tokenGrantRecipient);
         token = EspToken(tokenAddress);
 
         vm.prank(tokenGrantRecipient);
@@ -594,16 +601,24 @@ contract StakeTableTimelockTest is Test {
         timelock = new Timelock(DELAY, proposers, executors, admin);
 
         DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
-        (proxy, admin) =
-            stakeTableDeployer.run(tokenAddress, address(lcMock), address(timelock), ESCROW_PERIOD);
+        (proxy, admin) = stakeTableDeployer.run(
+            tokenAddress, address(lcMock), ESCROW_PERIOD, admin, address(timelock)
+        );
         stakeTable = StakeTableMock(proxy);
     }
 
     function test_initialize_sets_timelock() public {
+        vm.startPrank(admin);
+        stakeTable.transferOwnership(address(timelock));
         assertEq(stakeTable.timelock(), address(timelock));
+        assertEq(stakeTable.owner(), address(timelock));
     }
 
     function test_timelock_upgrade_proposal_and_execution_succeeds() public {
+        vm.startPrank(admin);
+        stakeTable.transferOwnership(address(timelock));
+        vm.stopPrank();
+
         vm.startPrank(proposers[0]);
 
         // Encode upgrade call
@@ -628,6 +643,35 @@ contract StakeTableTimelockTest is Test {
         vm.assertTrue(timelock.isOperationDone(txId));
     }
 
+    function test_expect_revert_when_timelock_is_not_owner() public {
+        vm.startPrank(proposers[0]);
+
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        vm.assertFalse(timelock.isOperationReady(txId));
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.assertTrue(timelock.isOperationReady(txId));
+
+        vm.startPrank(executors[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, address(timelock)
+            )
+        );
+        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        vm.assertFalse(timelock.isOperationDone(txId));
+    }
+
     function test_expect_revert_when_timelock_upgrade_proposal_and_execution_before_delay()
         public
     {
@@ -638,7 +682,6 @@ contract StakeTableTimelockTest is Test {
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
 
         bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
-
         timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
 
         vm.stopPrank();
@@ -723,6 +766,8 @@ contract StakeTableTimelockTest is Test {
     }
 
     function test_unauthorized_cannot_upgrade() public {
+        vm.startPrank(makeAddr("notAdmin"));
+
         try stakeTable.upgradeToAndCall(address(new S()), "") {
             fail();
         } catch (bytes memory lowLevelData) {
@@ -731,7 +776,7 @@ contract StakeTableTimelockTest is Test {
             assembly {
                 selector := mload(add(lowLevelData, 32))
             }
-            assertEq(selector, S.NotTimelock.selector);
+            assertEq(selector, OwnableUpgradeable.OwnableUnauthorizedAccount.selector);
         }
     }
 }
