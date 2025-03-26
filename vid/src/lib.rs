@@ -29,6 +29,14 @@ pub enum VidError {
     Argument(String),
     /// internal error: {0}
     Internal(anyhow::Error),
+    /// Insufficient shares
+    InsufficientShares,
+    /// Share index out of bound
+    IndexOutOfBound,
+    /// Invalid parameter
+    InvalidParam,
+    /// Invalid VID share
+    InvalidShare,
 }
 
 impl From<Poseidon2Error> for VidError {

@@ -15,28 +15,25 @@ use crate::{
 };
 
 /// A proof of incorrect encoding.
-/// It consists of a witness vector, which is the claimed low degree polynomial,
-/// and a list of [`MalEncodingProofRawShare`]s. Each raw share claims that, in the Merkle tree committed by the provided commitment,
-/// some code word of the witness vector appears at the `index` position.
-/// If we have enough raw shares, and the Merkle commitment of the encoding of witness vector doesn't match the provided commitment,
-/// we assert that the provided commitment cannot open to be a correct encoding.
+/// When the disperser is malicious, he can disperse an incorrectly encoded block, resulting in a merkle root of
+/// a Merkle tree containing invalid share (i.e. inconsistent with shares from correctly encoded block). Disperser
+/// would disperse them to all replicas with valid Merkle proof against this incorrect root, or else the replicas
+/// won't even vote if the merkle proof is wrong. By the time of reconstruction, replicas can come together with
+/// at least `threshold` shares to interpolate back the original block (in polynomial form), and by recomputing the
+/// corresponding encoded block on this recovered polynomial, we can derive another merkle root of encoded shares.
+/// If the merkle root matches the one dispersed earlier, then the encoding was correct.
+/// If not, this mismatch can serve as a proof of incorrect encoding.
+///
+/// In short, the proof contains the recovered poly (from the received shares) and the merkle proofs (against the wrong root)
+/// being distributed by the malicious disperser.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct MalEncodingProof {
     /// The witness vector
     #[serde(with = "canonical")]
-    witness: Vec<F>,
+    recovered_poly: Vec<F>,
     /// Proof content.
-    raw_shares: Vec<MalEncodingProofRawShare>,
-}
-
-/// Proof content, see [`MalEncodingProof`].
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct MalEncodingProofRawShare {
-    /// The index of this raw share
-    pub index: usize,
-    /// A Merkle tree proof against the provided Merkle tree commitment.
     #[serde(with = "canonical")]
-    pub mt_proof: MerkleProof,
+    raw_shares: Vec<(usize, MerkleProof)>,
 }
 
 impl AvidMScheme {
@@ -50,7 +47,7 @@ impl AvidMScheme {
         // First verify all the shares
         for share in shares.iter() {
             if AvidMScheme::verify_share(param, commit, share)?.is_err() {
-                return Err(VidError::Argument("Invalid share".to_string()));
+                return Err(VidError::InvalidShare);
             }
         }
         // Recover the original payload in fields representation.
@@ -73,15 +70,12 @@ impl AvidMScheme {
                 .zip(share.content.mt_proofs.iter())
             {
                 if index > param.total_weights {
-                    return Err(VidError::Argument("Invalid share".to_string()));
+                    return Err(VidError::InvalidShare);
                 }
                 if visited_indices.contains(&index) {
-                    return Err(VidError::Argument("Overlapping shares".to_string()));
+                    return Err(VidError::InvalidShare);
                 }
-                raw_shares.push(MalEncodingProofRawShare {
-                    index,
-                    mt_proof: mt_proof.clone(),
-                });
+                raw_shares.push((index, mt_proof.clone()));
                 visited_indices.insert(index);
                 if raw_shares.len() >= param.recovery_threshold {
                     break;
@@ -89,13 +83,11 @@ impl AvidMScheme {
             }
         }
         if raw_shares.len() < param.recovery_threshold {
-            return Err(VidError::Argument(
-                "Insufficient shares to generate the proof of incorrect encoding.".to_string(),
-            ));
+            return Err(VidError::InsufficientShares);
         }
 
         Ok(MalEncodingProof {
-            witness,
+            recovered_poly: witness,
             raw_shares,
         })
     }
@@ -110,29 +102,25 @@ impl MalEncodingProof {
     ) -> VidResult<VerificationResult> {
         // First check that all shares are valid.
         if self.raw_shares.len() < param.recovery_threshold {
-            return Err(VidError::Argument(
-                "Insufficient shares to generate the proof of incorrect encoding.".to_string(),
-            ));
+            return Err(VidError::InsufficientShares);
         }
         if self.raw_shares.len() > param.total_weights {
-            return Err(VidError::Argument("To many shares".to_string()));
+            return Err(VidError::InvalidShare);
         }
-        let (mt, raw_shares) = AvidMScheme::raw_encode(param, &self.witness)?;
+        let (mt, raw_shares) = AvidMScheme::raw_encode(param, &self.recovered_poly)?;
         if mt.commitment() == commit.commit {
-            return Ok(Err(()));
+            return Err(VidError::InvalidParam);
         }
         let mut visited_indices = HashSet::new();
-        for share in self.raw_shares.iter() {
-            if share.index >= param.total_weights || visited_indices.contains(&share.index) {
-                return Err(VidError::Argument("Invalid share".to_string()));
+        for (index, proof) in self.raw_shares.iter() {
+            if *index >= param.total_weights || visited_indices.contains(index) {
+                return Err(VidError::InvalidShare);
             }
-            let digest = Config::raw_share_digest(&raw_shares[share.index])?;
-            if MerkleTree::verify(&commit.commit, share.index as u64, &digest, &share.mt_proof)?
-                .is_err()
-            {
+            let digest = Config::raw_share_digest(&raw_shares[*index])?;
+            if MerkleTree::verify(&commit.commit, *index as u64, &digest, proof)?.is_err() {
                 return Ok(Err(()));
             }
-            visited_indices.insert(share.index);
+            visited_indices.insert(*index);
         }
         Ok(Ok(()))
     }
@@ -145,9 +133,8 @@ mod tests {
 
     use crate::{
         avid_m::{
-            config::AvidMConfig,
-            proofs::{MalEncodingProof, MalEncodingProofRawShare},
-            radix2_domain, AvidMScheme, Config, MerkleTree, F,
+            config::AvidMConfig, proofs::MalEncodingProof, radix2_domain, AvidMScheme, Config,
+            MerkleTree, F,
         },
         utils::bytes_to_field,
         VidScheme,
@@ -199,13 +186,10 @@ mod tests {
 
         let witness = AvidMScheme::pad_to_fields(&param, &payload);
         let bad_proof = MalEncodingProof {
-            witness: witness.clone(),
+            recovered_poly: witness.clone(),
             raw_shares: shares
                 .iter()
-                .map(|share| MalEncodingProofRawShare {
-                    index: share.index as usize,
-                    mt_proof: share.content.mt_proofs[0].clone(),
-                })
+                .map(|share| (share.index as usize, share.content.mt_proofs[0].clone()))
                 .collect(),
         };
         assert!(bad_proof.verify(&param, &commit).unwrap().is_err());
@@ -214,7 +198,7 @@ mod tests {
         let mut bad_witness = vec![F::from(0u64); 5];
         bad_witness[0] = shares[0].content.payload[0][0];
         let bad_proof2 = MalEncodingProof {
-            witness: bad_witness,
+            recovered_poly: bad_witness,
             raw_shares: std::iter::repeat(bad_proof.raw_shares[0].clone())
                 .take(6)
                 .collect(),

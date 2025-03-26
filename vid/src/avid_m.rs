@@ -125,7 +125,7 @@ impl AvidMParam {
     /// Construct a new [`AvidMParam`].
     pub fn new(recovery_threshold: usize, total_weights: usize) -> VidResult<Self> {
         if recovery_threshold == 0 || total_weights < recovery_threshold {
-            return Err(VidError::Argument("Invalid Parameter.".to_string()));
+            return Err(VidError::InvalidParam);
         }
         Ok(Self {
             total_weights,
@@ -137,8 +137,7 @@ impl AvidMParam {
 /// Helper: initialize a FFT domain
 #[inline]
 fn radix2_domain<F: PrimeField>(domain_size: usize) -> VidResult<Radix2EvaluationDomain<F>> {
-    Radix2EvaluationDomain::<F>::new(domain_size)
-        .ok_or_else(|| VidError::Argument("Invalid Param.".to_string()))
+    Radix2EvaluationDomain::<F>::new(domain_size).ok_or_else(|| VidError::InvalidParam)
 }
 
 /// Dummy struct for AVID-M scheme.
@@ -307,7 +306,7 @@ impl AvidMScheme {
         share: &RawAvidMShare,
     ) -> VidResult<crate::VerificationResult> {
         if share.range.end > param.total_weights || share.range.len() != share.payload.len() {
-            return Err(VidError::Argument("Invalid share".to_string()));
+            return Err(VidError::InvalidShare);
         }
         for (i, index) in share.range.clone().enumerate() {
             let compressed_payload = Config::raw_share_digest(&share.payload[i])?;
@@ -343,14 +342,14 @@ impl AvidMScheme {
             if share.content.range.len() != share.content.payload.len()
                 || share.content.range.end > param.total_weights
             {
-                return Err(VidError::Argument("Invalid shares".to_string()));
+                return Err(VidError::InvalidShare);
             }
             for (i, p) in share.content.range.clone().zip(&share.content.payload) {
                 if p.len() != num_polys {
-                    return Err(VidError::Argument("Invalid shares".to_string()));
+                    return Err(VidError::InvalidShare);
                 }
                 if raw_shares.contains_key(&i) {
-                    return Err(VidError::Argument("Overlapping shares".to_string()));
+                    return Err(VidError::InvalidShare);
                 }
                 raw_shares.insert(i, p);
                 if raw_shares.len() >= recovery_threshold {
@@ -363,7 +362,7 @@ impl AvidMScheme {
         }
 
         if raw_shares.len() < recovery_threshold {
-            return Err(VidError::Argument("Insufficient shares.".to_string()));
+            return Err(VidError::InsufficientShares);
         }
 
         let domain = radix2_domain::<F>(param.total_weights)?;
