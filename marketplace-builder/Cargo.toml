@@ -44,9 +44,9 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
+alloy = { workspace = true }
 hotshot-query-service = { workspace = true }
 marketplace-solver = { path = "../marketplace-solver", features = ["testing"] }
 sequencer = { path = "../sequencer", features = ["testing"] }
 sequencer-utils = { path = "../utils", features = ["testing"] }
 tempfile = { workspace = true }
-alloy = { workspace = true }

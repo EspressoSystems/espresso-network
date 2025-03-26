@@ -9,8 +9,6 @@ resolver = "2"
 
 members = [
     "alloy-compat",
-    "alloy-compat"
-,
     "builder",
     "client",
     "contracts/rust/adapter",

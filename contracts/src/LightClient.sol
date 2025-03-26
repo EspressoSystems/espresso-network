@@ -260,9 +260,10 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
     }
 
-    /// @notice a technically unnecessary but luckily zero-cost indirection for the benefit of having
+    /// @notice a technically unnecessary but luckily zero-cost indirection for the benefit of
+    /// having
     /// `IPlonkVerifier.VerifyingKey` rust alloy bindings, included only if appear in a public func.
-    function _getVk() public pure virtual returns (IPlonkVerifier.VerifyingKey memory vk){
+    function _getVk() public pure virtual returns (IPlonkVerifier.VerifyingKey memory vk) {
         vk = VkLib.getVk();
     }
 
