@@ -8,10 +8,10 @@ use std::{
     time::Duration,
 };
 
+use alloy::primitives::Address;
 use anyhow::{anyhow, Context, Result};
 use client::SequencerClient;
 use espresso_types::{FeeAmount, FeeVersion, MarketplaceVersion};
-use ethers::prelude::*;
 use futures::future::join_all;
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};

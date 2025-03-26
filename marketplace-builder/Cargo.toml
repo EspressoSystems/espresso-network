@@ -18,7 +18,6 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types", features = ["testing"] }
-ethers = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
@@ -50,3 +49,4 @@ marketplace-solver = { path = "../marketplace-solver", features = ["testing"] }
 sequencer = { path = "../sequencer", features = ["testing"] }
 sequencer-utils = { path = "../utils", features = ["testing"] }
 tempfile = { workspace = true }
+alloy = { workspace = true }

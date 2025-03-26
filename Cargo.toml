@@ -8,15 +8,14 @@ edition = "2021"
 resolver = "2"
 
 members = [
+    "alloy-compat",
+    "alloy-compat"
+,
     "builder",
     "client",
-    "contract-bindings-alloy",
-    "contract-bindings-ethers",
-    "alloy-compat",
     "contracts/rust/adapter",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
-    "ethers-conv",
     "hotshot",
     "hotshot-builder-api",
     "hotshot-builder-core",
@@ -30,7 +29,6 @@ members = [
     "hotshot-orchestrator",
     "hotshot-query-service",
     "hotshot-stake-table",
-    "hotshot-state-prover",
     "hotshot-state-prover",
     "hotshot-task",
     "hotshot-task-impls",

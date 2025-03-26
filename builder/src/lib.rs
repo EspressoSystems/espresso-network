@@ -46,13 +46,13 @@ pub mod testing {
         time::{Duration, Instant},
     };
 
+    use alloy::node_bindings::{Anvil, AnvilInstance};
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
         traits::SequencerPersistence, v0_99::ChainConfig, Event, FeeAccount, NamespaceId,
         NodeState, PrivKey, PubKey, Transaction, ValidatedState,
     };
-    use ethers::utils::{Anvil, AnvilInstance};
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
         traits::BlockPayload,
@@ -215,7 +215,7 @@ pub mod testing {
                     stake_value: self.config.known_nodes_with_stake[i]
                         .stake_table_entry
                         .stake_amount
-                        .as_u64(),
+                        .to::<u64>(),
                     state_key_pair: self.staking_nodes_state_key_pairs[i].clone(),
                     is_da: true,
                 }
