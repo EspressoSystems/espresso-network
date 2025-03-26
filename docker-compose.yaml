@@ -17,7 +17,7 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:main
-    command: deploy --only fee-contract,permissioned-stake-table
+    command: deploy --deploy-fee --deploy-permissioned-stake-table
     environment:
       - ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH=/data/initial_stake_table.toml
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
@@ -35,7 +35,7 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:main
-    command: deploy --use-mock-contract --only light-client
+    command: deploy --use-mock --deploy-light-client-v1
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_L1_PROVIDER

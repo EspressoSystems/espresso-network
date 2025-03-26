@@ -28,7 +28,7 @@ processes:
     command:
       unset ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS
       ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
-      && deploy --only fee-contract,permissioned-stake-table
+      && deploy --deploy-fee --deploy-permissioned-stake-table
     namespace: setup
     depends_on:
       demo-l1-network:
@@ -39,7 +39,7 @@ processes:
     # script will think they're already deployed.
     command:
       unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
-      && deploy --use-mock-contract --only light-client
+      && deploy --use-mock --deploy-light-client-v1
     namespace: setup
     depends_on:
       demo-l1-network:

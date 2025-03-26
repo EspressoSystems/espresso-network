@@ -1,17 +1,23 @@
-use std::{fs::File, io::stdout, path::PathBuf, time::Duration};
+use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
+use alloy::{
+    network::EthereumWallet,
+    primitives::Address,
+    providers::{Provider, ProviderBuilder},
+    signers::local::{coins_bip39::English, MnemonicBuilder},
+};
 use clap::Parser;
-use espresso_types::parse_duration;
-use ethers::types::Address;
-use futures::FutureExt;
+use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::light_client_genesis;
 use sequencer_utils::{
-    deployer::{deploy, ContractGroup, Contracts, DeployedContracts},
+    deployer::{self, Contracts, DeployedContracts},
     logging,
     stake_table::PermissionedStakeTableConfig,
 };
+use tide_disco::error::ServerError;
 use url::Url;
+use vbs::version::StaticVersion;
 
 /// Deploy contracts needed to run the sequencer.
 ///
@@ -92,9 +98,24 @@ struct Options {
     )]
     account_index: u32,
 
-    /// Only deploy the given groups of related contracts.
-    #[clap(long, value_delimiter = ',')]
-    only: Option<Vec<ContractGroup>>,
+    // /// Only deploy the given groups of related contracts.
+    // #[clap(long, value_delimiter = ',')]
+    // only: Option<Vec<ContractGroup>>,
+    /// Option to deploy fee contracts
+    #[clap(long, default_value = "false")]
+    deploy_fee: bool,
+
+    /// Option to deploy permissioned stake table contracts
+    #[clap(long, default_value = "false")]
+    deploy_permissioned_stake_table: bool,
+
+    /// Option to deploy LightClient V1 and proxy
+    #[clap(long, default_value = "false")]
+    deploy_light_client_v1: bool,
+
+    /// Option to upgrade to LightClient V2
+    #[clap(long, default_value = "false")]
+    upgrade_light_client_v2: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -105,9 +126,10 @@ struct Options {
     #[clap(flatten)]
     contracts: DeployedContracts,
 
-    /// If toggled, launch a mock prover contract with a smaller verification key.
+    /// If toggled, launch a mock LightClient contract with a smaller verification key for testing.
+    /// Applies to both V1 and V2 of LightClient.
     #[clap(short, long)]
-    pub use_mock_contract: bool,
+    pub use_mock: bool,
 
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
@@ -147,34 +169,75 @@ async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
     opt.logging.init();
 
-    let contracts = Contracts::from(opt.contracts);
+    let mut contracts = Contracts::from(opt.contracts);
 
-    let sequencer_url = opt.sequencer_url.clone();
+    let signer = MnemonicBuilder::<English>::default()
+        .phrase(opt.mnemonic)
+        .index(opt.account_index)
+        .expect("wrong mnemonic or index")
+        .build()
+        .expect("fail to build signer");
+    let wallet = EthereumWallet::from(signer);
+    let provider = ProviderBuilder::new().wallet(wallet).on_http(opt.rpc_url);
+    let admin = provider.get_accounts().await?[0];
 
-    let genesis = light_client_genesis(&sequencer_url, opt.stake_table_capacity).boxed();
+    if opt.deploy_fee {
+        deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+    }
 
-    let initial_stake_table = if let Some(path) = opt.initial_stake_table_path {
-        tracing::info!("Loading initial stake table from {:?}", path);
-        Some(PermissionedStakeTableConfig::from_toml_file(&path)?.into())
-    } else {
-        None
-    };
+    if opt.deploy_permissioned_stake_table {
+        let initial_stake_table = if let Some(path) = opt.initial_stake_table_path {
+            tracing::info!("Loading initial stake table from {:?}", path);
+            PermissionedStakeTableConfig::from_toml_file(&path)?.into()
+        } else {
+            vec![]
+        };
 
-    let contracts = deploy(
-        opt.rpc_url,
-        opt.l1_polling_interval,
-        opt.mnemonic,
-        opt.account_index,
-        opt.multisig_address,
-        opt.use_mock_contract,
-        opt.only,
-        genesis,
-        opt.permissioned_prover,
-        contracts,
-        initial_stake_table,
-        opt.blocks_per_epoch,
-    )
-    .await?;
+        deployer::deploy_permissioned_stake_table(&provider, &mut contracts, initial_stake_table)
+            .await?;
+    }
+
+    if opt.deploy_light_client_v1 {
+        let (genesis_state, genesis_stake) =
+            light_client_genesis(&opt.sequencer_url, opt.stake_table_capacity).await?;
+        deployer::deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            opt.use_mock,
+            genesis_state,
+            genesis_stake,
+            admin,
+            opt.permissioned_prover,
+        )
+        .await?;
+    }
+
+    if opt.upgrade_light_client_v2 {
+        // fetch epoch length from HotShot config
+        let config_url = opt.sequencer_url.join("/config/hotshot")?;
+        // Request the configuration until it is successful
+        let blocks_per_epoch = loop {
+            match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(config_url.clone())
+                .get::<PublicNetworkConfig>(config_url.as_str())
+                .send()
+                .await
+            {
+                Ok(resp) => break resp.hotshot_config().blocks_per_epoch(),
+                Err(e) => {
+                    tracing::error!("Failed to fetch the network config: {e}");
+                    sleep(Duration::from_secs(5));
+                },
+            }
+        };
+
+        deployer::upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            opt.use_mock,
+            blocks_per_epoch,
+        )
+        .await?;
+    }
 
     if let Some(out) = &opt.out {
         let file = File::options()
