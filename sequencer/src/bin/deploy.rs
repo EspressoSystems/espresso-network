@@ -8,10 +8,11 @@ use alloy::{
 };
 use clap::Parser;
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
+use hotshot_contract_adapter::sol_types::FeeContract;
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::light_client_genesis;
 use sequencer_utils::{
-    deployer::{self, Contracts, DeployedContracts},
+    deployer::{self, transfer_ownership, Contract, Contracts, DeployedContracts},
     logging,
     stake_table::PermissionedStakeTableConfig,
 };
@@ -182,7 +183,17 @@ async fn main() -> anyhow::Result<()> {
     let admin = provider.get_accounts().await?[0];
 
     if opt.deploy_fee {
-        deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+        let fee_proxy_addr =
+            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+        if let Some(multisig) = opt.multisig_address {
+            transfer_ownership(
+                &provider,
+                Contract::FeeContractProxy,
+                fee_proxy_addr,
+                multisig,
+            )
+            .await?;
+        }
     }
 
     if opt.deploy_permissioned_stake_table {
@@ -193,14 +204,27 @@ async fn main() -> anyhow::Result<()> {
             vec![]
         };
 
-        deployer::deploy_permissioned_stake_table(&provider, &mut contracts, initial_stake_table)
+        let stake_table_addr = deployer::deploy_permissioned_stake_table(
+            &provider,
+            &mut contracts,
+            initial_stake_table,
+        )
+        .await?;
+        if let Some(multisig) = opt.multisig_address {
+            transfer_ownership(
+                &provider,
+                Contract::PermissonedStakeTable,
+                stake_table_addr,
+                multisig,
+            )
             .await?;
+        }
     }
 
     if opt.deploy_light_client_v1 {
         let (genesis_state, genesis_stake) =
             light_client_genesis(&opt.sequencer_url, opt.stake_table_capacity).await?;
-        deployer::deploy_light_client_proxy(
+        let lc_proxy_addr = deployer::deploy_light_client_proxy(
             &provider,
             &mut contracts,
             opt.use_mock,
@@ -210,6 +234,15 @@ async fn main() -> anyhow::Result<()> {
             opt.permissioned_prover,
         )
         .await?;
+        if let Some(multisig) = opt.multisig_address {
+            transfer_ownership(
+                &provider,
+                Contract::LightClientProxy,
+                lc_proxy_addr,
+                multisig,
+            )
+            .await?;
+        }
     }
 
     if opt.upgrade_light_client_v2 {
