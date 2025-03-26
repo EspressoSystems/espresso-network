@@ -31,7 +31,7 @@ use std::{fmt::Display, path::PathBuf, time::Duration};
 use derive_more::From;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use hotshot_types::{
-    data::{Leaf, Leaf2, QuorumProposal},
+    data::{Leaf, Leaf2, QuorumProposal, VidCommitment},
     simple_certificate::QuorumCertificate,
     traits::node_implementation::NodeType,
 };
@@ -40,7 +40,7 @@ use snafu::{OptionExt, Snafu};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, Payload, QueryError};
+use crate::{api::load_api, Payload, QueryError, VidCommon};
 
 pub(crate) mod data_source;
 mod fetch;
@@ -252,6 +252,50 @@ where
         .await
 }
 
+fn downgrade_vid_common_query_data<Types: NodeType>(
+    data: VidCommonQueryData<Types>,
+) -> Option<ADVZCommonQueryData<Types>> {
+    let VidCommonQueryData {
+        height,
+        block_hash,
+        payload_hash: VidCommitment::V0(payload_hash),
+        common: VidCommon::V0(common),
+    } = data
+    else {
+        return None;
+    };
+    Some(ADVZCommonQueryData {
+        height,
+        block_hash,
+        payload_hash,
+        common,
+    })
+}
+
+async fn get_vid_common_handler<Types, State>(
+    req: tide_disco::RequestParams,
+    state: &State,
+    timeout: Duration,
+) -> Result<VidCommonQueryData<Types>, Error>
+where
+    State: 'static + Send + Sync + ReadState,
+    <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
+    Types: NodeType,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    let id = if let Some(height) = req.opt_integer_param("height")? {
+        BlockId::Number(height)
+    } else if let Some(hash) = req.opt_blob_param("hash")? {
+        BlockId::Hash(hash)
+    } else {
+        BlockId::PayloadHash(req.blob_param("payload-hash")?)
+    };
+    let fetch = state.read(|state| state.get_vid_common(id).boxed()).await;
+    fetch.with_timeout(timeout).await.context(FetchBlockSnafu {
+        resource: id.to_string(),
+    })
+}
+
 pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
     options: &Options,
     _: Ver,
@@ -332,6 +376,58 @@ where
                 state
                     .read(|state| {
                         async move { Ok(state.subscribe_leaves(height).await.map(Ok)) }.boxed()
+                    })
+                    .await
+            }
+            .try_flatten_stream()
+            .boxed()
+        })?;
+    }
+
+    // VIDCommon data is version gated after the VID upgrade.
+    // We keep the old struct and data in the API version V0. Starting from V1 we are returning version gated structs.
+    if api_ver.major == 0 {
+        api.at("get_vid_common", move |req, state| {
+            get_vid_common_handler(req, state, timeout)
+                .map(|r| match r {
+                    Ok(data) => downgrade_vid_common_query_data(data).ok_or(Error::Custom {
+                        message: "Incompatible VID version.".to_string(),
+                        status: StatusCode::BAD_REQUEST,
+                    }),
+                    Err(e) => Err(e),
+                })
+                .boxed()
+        })?
+        .stream("stream_vid_common", move |req, state| {
+            async move {
+                let height = req.integer_param("height")?;
+                state
+                    .read(|state| {
+                        async move {
+                            Ok(state.subscribe_vid_common(height).await.map(|data| {
+                                downgrade_vid_common_query_data(data).ok_or(Error::Custom {
+                                    message: "Incompatible VID version.".to_string(),
+                                    status: StatusCode::BAD_REQUEST,
+                                })
+                            }))
+                        }
+                        .boxed()
+                    })
+                    .await
+            }
+            .try_flatten_stream()
+            .boxed()
+        })?;
+    } else {
+        api.at("get_vid_common", move |req, state| {
+            get_vid_common_handler(req, state, timeout).boxed().boxed()
+        })?
+        .stream("stream_vid_common", move |req, state| {
+            async move {
+                let height = req.integer_param("height")?;
+                state
+                    .read(|state| {
+                        async move { Ok(state.subscribe_vid_common(height).await.map(Ok)) }.boxed()
                     })
                     .await
             }
@@ -481,34 +577,6 @@ where
             state
                 .read(|state| {
                     async move { Ok(state.subscribe_payloads(height).await.map(Ok)) }.boxed()
-                })
-                .await
-        }
-        .try_flatten_stream()
-        .boxed()
-    })?
-    .at("get_vid_common", move |req, state| {
-        async move {
-            let id = if let Some(height) = req.opt_integer_param("height")? {
-                BlockId::Number(height)
-            } else if let Some(hash) = req.opt_blob_param("hash")? {
-                BlockId::Hash(hash)
-            } else {
-                BlockId::PayloadHash(req.blob_param("payload-hash")?)
-            };
-            let fetch = state.read(|state| state.get_vid_common(id).boxed()).await;
-            fetch.with_timeout(timeout).await.context(FetchBlockSnafu {
-                resource: id.to_string(),
-            })
-        }
-        .boxed()
-    })?
-    .stream("stream_vid_common", move |req, state| {
-        async move {
-            let height = req.integer_param("height")?;
-            state
-                .read(|state| {
-                    async move { Ok(state.subscribe_vid_common(height).await.map(Ok)) }.boxed()
                 })
                 .await
         }
