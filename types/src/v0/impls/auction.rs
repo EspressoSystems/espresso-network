@@ -103,7 +103,7 @@ impl BidTxBody {
         let signature = FeeAccount::sign_builder_message(key, self.commit().as_ref())?;
         let bid = BidTx {
             body: self,
-            signature: signature.into(),
+            signature,
         };
         Ok(bid)
     }
@@ -223,7 +223,7 @@ impl BidTx {
     fn verify(&self) -> Result<(), ExecutionError> {
         self.body
             .account
-            .validate_builder_signature(&self.signature.into(), self.body.commit().as_ref())
+            .validate_builder_signature(&self.signature, self.body.commit().as_ref())
             .then_some(())
             .ok_or(ExecutionError::InvalidSignature)
     }

@@ -320,7 +320,7 @@ impl ToTraversalPath<256> for FeeAccount {
     fn to_traversal_path(&self, height: usize) -> Vec<usize> {
         self.0
             .as_slice()
-            .into_iter()
+            .iter()
             .take(height)
             .map(|i| *i as usize)
             .collect()

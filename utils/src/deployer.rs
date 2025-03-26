@@ -239,7 +239,7 @@ pub async fn deploy_light_client_proxy(
         )
         .calldata()
         .to_owned();
-    // deploy proxy and initalize
+    // deploy proxy and initialize
     let lc_proxy_addr = contracts
         .deploy(
             Contract::LightClientProxy,
@@ -280,9 +280,7 @@ pub async fn upgrade_light_client_v2(
 ) -> Result<TransactionReceipt> {
     match contracts.address(Contract::LightClientProxy) {
         // check if proxy already exists
-        None => {
-            return Err(anyhow!("LightClientProxy not found, can't upgrade"));
-        },
+        None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
             // first deploy PlonkVerifierV2.sol
@@ -351,7 +349,7 @@ pub async fn deploy_fee_contract_proxy(
 
     // prepare the input arg for `initialize()`
     let init_data = fee.initialize(admin).calldata().to_owned();
-    // deploy proxy and initalize
+    // deploy proxy and initialize
     let fee_proxy_addr = contracts
         .deploy(
             Contract::FeeContractProxy,
@@ -383,7 +381,7 @@ pub async fn deploy_permissioned_stake_table(
     Ok(stake_table_addr)
 }
 
-/// Common logic for any Ownable contract to tranfer ownership
+/// Common logic for any Ownable contract to transfer ownership
 pub async fn transfer_ownership(
     provider: impl Provider,
     target: Contract,

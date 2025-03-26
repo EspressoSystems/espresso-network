@@ -49,7 +49,7 @@ impl From<PermissionedStakeTableConfig> for Vec<NodeInfoSol> {
             .into_iter()
             .map(|peer_config| {
                 let node_info: NodeInfoSol = peer_config.clone().into();
-                node_info.into()
+                node_info
             })
             .collect()
     }

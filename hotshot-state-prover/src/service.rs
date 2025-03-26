@@ -583,7 +583,7 @@ mod test {
         let admin = provider.get_accounts().await?[0];
         let prover = admin;
 
-        // deploy V1 and proxy (and initalize V1)
+        // deploy V1 and proxy (and initialize V1)
         let lc_proxy_addr = deploy_light_client_proxy(
             &provider,
             contracts,

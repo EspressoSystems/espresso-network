@@ -8,7 +8,6 @@ use alloy::{
 };
 use clap::Parser;
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
-use hotshot_contract_adapter::sol_types::FeeContract;
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::light_client_genesis;
 use sequencer_utils::{

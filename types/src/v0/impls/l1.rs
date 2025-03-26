@@ -974,7 +974,7 @@ mod test {
         let mut contracts = Contracts::new();
 
         // init and kick off the L1Client which wraps around standard L1 provider with more app-specific state management
-        let l1_client = new_l1_client(&provider.anvil(), false).await;
+        let l1_client = new_l1_client(provider.anvil(), false).await;
 
         // Initialize a contract with some deposits
         let fee_proxy_addr = deploy_fee_contract_proxy(&provider, &mut contracts, deployer).await?;
@@ -1245,7 +1245,7 @@ mod test {
             .on_http(anvil.endpoint_url());
         let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
 
-        let l1_client = new_l1_client(&provider.anvil(), false).await;
+        let l1_client = new_l1_client(provider.anvil(), false).await;
         let mut contracts = Contracts::new();
 
         let stake_table_addr =
@@ -1255,7 +1255,7 @@ mod test {
         let mut rng = rand::thread_rng();
         let node = NodeInfoSol::rand(&mut rng);
 
-        let new_nodes: Vec<NodeInfoSol> = vec![node.into()];
+        let new_nodes: Vec<NodeInfoSol> = vec![node];
         stake_table_contract
             .update(vec![], new_nodes)
             .send()

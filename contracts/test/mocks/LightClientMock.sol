@@ -19,7 +19,7 @@ contract LightClientMock is LC {
     }
 
     /// @dev override the production-implementation with test VK.
-    function _getVk() public pure override returns (IPlonkVerifier.VerifyingKey memory vk){
+    function _getVk() public pure override returns (IPlonkVerifier.VerifyingKey memory vk) {
         vk = VkLib.getVk();
     }
 
