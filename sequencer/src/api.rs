@@ -559,7 +559,10 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
 pub mod test_helpers {
     use std::time::Duration;
 
-    use alloy::{node_bindings::Anvil, primitives::Address};
+    use alloy::{
+        node_bindings::Anvil,
+        primitives::{Address, U256},
+    };
     use committable::Committable;
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
