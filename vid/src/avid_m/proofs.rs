@@ -192,7 +192,7 @@ mod tests {
                 .map(|share| (share.index as usize, share.content.mt_proofs[0].clone()))
                 .collect(),
         };
-        assert!(bad_proof.verify(&param, &commit).unwrap().is_err());
+        assert!(bad_proof.verify(&param, &commit).is_err());
 
         // duplicate indices may fool the verification
         let mut bad_witness = vec![F::from(0u64); 5];
