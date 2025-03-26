@@ -132,7 +132,7 @@ mod tests {
         let client = SequencerClient::new("http://dummy-url:3030".parse().unwrap());
         assert_eq!(
             client
-                .get_espresso_balance(Address::zero(), Some(0))
+                .get_espresso_balance(Address::default(), Some(0))
                 .await
                 .unwrap(),
             0.into()

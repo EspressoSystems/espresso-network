@@ -944,13 +944,13 @@ mod test {
             l1_polling_interval: Duration::from_secs(1),
             subscription_timeout: Duration::from_secs(5),
             l1_ws_provider: if include_ws {
-                Some(vec![anvil.ws_endpoint().parse().unwrap()])
+                Some(vec![anvil.ws_endpoint_url()])
             } else {
                 None
             },
             ..Default::default()
         }
-        .connect(vec![anvil.endpoint().parse().unwrap()])
+        .connect(vec![anvil.endpoint_url()])
         .expect("Failed to create L1 client");
 
         l1_client.spawn_tasks().await;
@@ -1299,7 +1299,7 @@ mod test {
             l1_ws_provider: if ws {
                 Some(vec![
                     "ws://notarealurl:1234".parse().unwrap(),
-                    anvil.ws_endpoint().parse().unwrap(),
+                    anvil.ws_endpoint_url(),
                 ])
             } else {
                 None
@@ -1308,7 +1308,7 @@ mod test {
         }
         .connect(vec![
             "http://notarealurl:1234".parse().unwrap(),
-            anvil.endpoint().parse().unwrap(),
+            anvil.endpoint_url(),
         ])
         .expect("Failed to create L1 client");
 
@@ -1359,7 +1359,7 @@ mod test {
         let provider = l1_options
             .connect(vec![
                 "http://notarealurl:1234".parse().unwrap(),
-                anvil.endpoint().parse().unwrap(),
+                anvil.endpoint_url(),
             ])
             .expect("Failed to create L1 client");
 
@@ -1389,7 +1389,7 @@ mod test {
         }
         .connect(vec![
             "http://notarealurl:1234".parse().unwrap(),
-            anvil.endpoint().parse().unwrap(),
+            anvil.endpoint_url(),
         ])
         .expect("Failed to create L1 client");
 
