@@ -1824,23 +1824,23 @@ impl SequencerPersistence for Persistence {
         tx.commit().await
     }
 
-    async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>> {
-        match self
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+        let Some(row) = self
             .db
             .read()
             .await?
-            .fetch_one("SELECT state_cert, MAX(epoch) from state_cert GROUP BY epoch")
-            .await
-        {
-            Ok(row) => {
-                if let Some(data) = row.get::<Option<Vec<u8>>, _>("state_cert") {
-                    bincode::deserialize(&data)
-                        .context("deserializing light client state update certificate")
-                } else {
-                    Ok(LightClientStateUpdateCertificate::genesis())
-                }
-            },
-            Err(_) => Ok(LightClientStateUpdateCertificate::genesis()),
+            .fetch_optional("SELECT state_cert from state_cert ORDER BY epoch DESC LIMIT 1")
+            .await?
+        else {
+            return Ok(None);
+        };
+        if let Some(data) = row.get::<Option<Vec<u8>>, _>("state_cert") {
+            bincode::deserialize(&data)
+                .context("deserializing light client state update certificate")
+        } else {
+            Err(anyhow::anyhow!("Failed fetching row from database"))
         }
     }
 
@@ -2594,6 +2594,13 @@ mod test {
                 metadata,
             );
 
+            let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
+                epoch: EpochNumber::new(i),
+                light_client_state: Default::default(), // filling arbitrary value
+                signatures: vec![],                     // filling arbitrary value
+            };
+            assert!(storage.add_state_cert(state_cert).await.is_ok());
+
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
             };
@@ -2769,6 +2776,15 @@ mod test {
         assert_eq!(
             quorum_certificates_count, rows as i64,
             "quorum certificates count does not match rows",
+        );
+
+        let (state_cert_count,) = query_as::<(i64,)>("SELECT COUNT(*) from state_cert")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(
+            state_cert_count, rows as i64,
+            "Light client state update certificates count does not match rows",
         );
     }
 

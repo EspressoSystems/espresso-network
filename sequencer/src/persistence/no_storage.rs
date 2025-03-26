@@ -239,8 +239,10 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>> {
-        Ok(LightClientStateUpdateCertificate::<SeqTypes>::genesis())
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+        Ok(None)
     }
 }
 

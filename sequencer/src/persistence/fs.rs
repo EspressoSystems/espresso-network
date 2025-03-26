@@ -1303,32 +1303,32 @@ impl SequencerPersistence for Persistence {
         Ok(result)
     }
 
-    async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>> {
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
         let inner = self.inner.read().await;
         let dir_path = inner.light_client_state_update_certificate_dir_path();
 
-        let mut result = LightClientStateUpdateCertificate::genesis();
+        let mut result = None;
 
         if !dir_path.is_dir() {
             return Ok(result);
         }
         for (epoch, path) in epoch_files(dir_path)? {
-            if epoch <= result.epoch {
+            if result.as_ref().is_some_and(|cert| epoch <= cert.epoch) {
                 continue;
             }
             let bytes = fs::read(&path).context(format!(
                 "reading light client state update certificate {}",
                 path.display()
             ))?;
-            let cert = bincode::deserialize::<LightClientStateUpdateCertificate<SeqTypes>>(&bytes)
-                .context(format!(
-                    "parsing light client state update certificate {}",
-                    path.display()
-                ))?;
-
-            if cert.epoch > result.epoch {
-                result = cert;
-            }
+            result = Some(
+                bincode::deserialize::<LightClientStateUpdateCertificate<SeqTypes>>(&bytes)
+                    .context(format!(
+                        "parsing light client state update certificate {}",
+                        path.display()
+                    ))?,
+            );
         }
 
         Ok(result)
@@ -1680,7 +1680,12 @@ mod test {
 
         let qp_dir_path = inner.quorum_proposals_dir_path();
         fs::create_dir_all(qp_dir_path.clone()).expect("failed to create proposals dir");
+
+        let state_cert_dir_path = inner.light_client_state_update_certificate_dir_path();
+        fs::create_dir_all(state_cert_dir_path.clone()).expect("failed to create state cert dir");
         drop(inner);
+
+        assert!(storage.load_state_cert().await.unwrap().is_none());
 
         for i in 0..rows {
             let view = ViewNumber::new(i);
@@ -1708,6 +1713,13 @@ mod test {
                 builder_commitment,
                 metadata,
             );
+
+            let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
+                epoch: EpochNumber::new(i),
+                light_client_state: Default::default(), // filling arbitrary value
+                signatures: vec![],                     // filling arbitrary value
+            };
+            assert!(storage.add_state_cert(state_cert).await.is_ok());
 
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
@@ -1867,6 +1879,17 @@ mod test {
         assert_eq!(
             qps_count, rows as usize,
             "quorum proposals count does not match",
+        );
+
+        let state_certs =
+            fs::read_dir(inner.light_client_state_update_certificate_dir_path()).unwrap();
+        let state_cert_count = state_certs
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_file())
+            .count();
+        assert_eq!(
+            state_cert_count, rows as usize,
+            "light client state update certificate count does not match",
         );
     }
 

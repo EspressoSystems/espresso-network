@@ -723,7 +723,9 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         &self,
     ) -> anyhow::Result<Option<UpgradeCertificate<SeqTypes>>>;
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>>;
-    async fn load_state_cert(&self) -> anyhow::Result<LightClientStateUpdateCertificate<SeqTypes>>;
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>>;
 
     /// Load the latest known consensus state.
     ///
@@ -829,7 +831,8 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         let state_cert = self
             .load_state_cert()
             .await
-            .context("loading light client state update certificate")?;
+            .context("loading light client state update certificate")?
+            .unwrap_or(LightClientStateUpdateCertificate::genesis());
 
         tracing::info!(
             ?leaf,
