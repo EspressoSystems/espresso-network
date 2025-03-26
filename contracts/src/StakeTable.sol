@@ -186,9 +186,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// evidence to be submitted.
     uint256 public exitEscrowPeriod;
 
-    /// address of the timelock controller contract which will administer this contract
-    address public timelock;
-
     /// @notice since the constructor initializes storage on this contract we disable it
     /// @dev storage is on the proxy contract since it calls this contract via delegatecall
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -200,13 +197,11 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         address _tokenAddress,
         address _lightClientAddress,
         uint256 _exitEscrowPeriod,
-        address _initialOwner,
         address _timelock
     ) public initializer {
-        __Ownable_init(_initialOwner);
+        __Ownable_init(_timelock);
         __UUPSUpgradeable_init();
         initializeAtBlock();
-        timelock = _timelock;
 
         initializeState(_tokenAddress, _lightClientAddress, _exitEscrowPeriod);
     }

@@ -21,6 +21,7 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 // Token contract
@@ -106,7 +107,7 @@ contract StakeTable_register_Test is Test {
 
         DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
         (proxy, admin) = stakeTableDeployer.run(
-            tokenAddress, address(lcMock), ESCROW_PERIOD, admin, makeAddr("timelock")
+            tokenAddress, address(lcMock), ESCROW_PERIOD, makeAddr("timelock")
         );
         stakeTable = StakeTableMock(proxy);
     }
@@ -558,7 +559,7 @@ contract StakeTableTimelockTest is Test {
     address tokenGrantRecipient;
     address validator;
     address delegator;
-    address admin;
+    address timelockAdmin;
     address[] proposers = [makeAddr("proposer")];
     address[] executors = [makeAddr("executor")];
     LightClientMock lcMock;
@@ -573,7 +574,7 @@ contract StakeTableTimelockTest is Test {
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
         validator = makeAddr("validator");
         delegator = makeAddr("delegator");
-        admin = makeAddr("admin");
+        timelockAdmin = makeAddr("timelockAdmin");
 
         string[] memory cmds = new string[](3);
         cmds[0] = "diff-test";
@@ -598,27 +599,19 @@ contract StakeTableTimelockTest is Test {
         token.transfer(address(validator), INITIAL_BALANCE);
 
         //deploy timelock
-        timelock = new Timelock(DELAY, proposers, executors, admin);
+        timelock = new Timelock(DELAY, proposers, executors, timelockAdmin);
 
         DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
-        (proxy, admin) = stakeTableDeployer.run(
-            tokenAddress, address(lcMock), ESCROW_PERIOD, admin, address(timelock)
-        );
+        (proxy,) =
+            stakeTableDeployer.run(tokenAddress, address(lcMock), ESCROW_PERIOD, address(timelock));
         stakeTable = StakeTableMock(proxy);
     }
 
-    function test_initialize_sets_timelock() public {
-        vm.startPrank(admin);
-        stakeTable.transferOwnership(address(timelock));
-        assertEq(stakeTable.timelock(), address(timelock));
+    function test_initialize_sets_timelock_as_owner() public {
         assertEq(stakeTable.owner(), address(timelock));
     }
 
     function test_timelock_upgrade_proposal_and_execution_succeeds() public {
-        vm.startPrank(admin);
-        stakeTable.transferOwnership(address(timelock));
-        vm.stopPrank();
-
         vm.startPrank(proposers[0]);
 
         // Encode upgrade call
@@ -644,6 +637,11 @@ contract StakeTableTimelockTest is Test {
     }
 
     function test_expect_revert_when_timelock_is_not_owner() public {
+        assertEq(stakeTable.owner(), address(timelock));
+        vm.startPrank(address(timelock));
+        stakeTable.transferOwnership(makeAddr("newOwner"));
+        vm.stopPrank();
+
         vm.startPrank(proposers[0]);
 
         // Encode upgrade call
@@ -778,5 +776,12 @@ contract StakeTableTimelockTest is Test {
             }
             assertEq(selector, OwnableUpgradeable.OwnableUnauthorizedAccount.selector);
         }
+    }
+
+    function test_timelock_admin_can_grant_roles_without_delay() public {
+        vm.startPrank(timelockAdmin);
+        timelock.grantRole(timelock.PROPOSER_ROLE(), timelockAdmin);
+        timelock.grantRole(timelock.EXECUTOR_ROLE(), timelockAdmin);
+        vm.stopPrank();
     }
 }
