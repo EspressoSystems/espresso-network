@@ -99,24 +99,24 @@ impl Args {
 pub struct Config {
     // # TODO for mainnet we should support hardware wallets. Alloy has support for this.
     #[default(DEV_MNEMONIC.to_string())]
-    #[clap(long, env = "MNEMONIC")]
+    #[arg(long, env = "MNEMONIC")]
     #[serde(alias = "mnemonic", alias = "MNEMONIC")]
     pub mnemonic: String,
 
-    #[clap(long, env = "ACCOUNT_INDEX", default_value = "0")]
+    #[arg(long, env = "ACCOUNT_INDEX", default_value = "0")]
     account_index: u32,
 
     /// L1 Ethereum RPC.
-    #[clap(long, env = "L1_PROVIDER")]
+    #[arg(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
     rpc_url: Url,
 
     /// Deployed ESP token contract address.
-    #[clap(long, env = "ESP_TOKEN_ADDRESS")]
+    #[arg(long, env = "ESP_TOKEN_ADDRESS")]
     token_address: Address,
 
     /// Deployed stake table contract address.
-    #[clap(long, env = "STAKE_TABLE_ADDRESS")]
+    #[arg(long, env = "STAKE_TABLE_ADDRESS")]
     stake_table_address: Address,
 
     #[command(subcommand)]
@@ -132,7 +132,7 @@ enum Commands {
     /// Remove the config file.
     Purge {
         /// Don't ask for confirmation.
-        #[clap(long)]
+        #[arg(long)]
         force: bool,
     },
     /// Show information about delegation, withdrawals, etc.
@@ -141,45 +141,45 @@ enum Commands {
     /// Register to become a validator.
     RegisterValidator {
         /// The consensus signing key. Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_bls_priv_key)]
+        #[arg(long, value_parser = parse::parse_bls_priv_key)]
         consensus_private_key: BLSPrivKey,
 
         /// The state signing key.
         ///
         /// TODO: Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_state_priv_key)]
+        #[arg(long, value_parser = parse::parse_state_priv_key)]
         state_private_key: StateSignKey,
 
         /// The commission to charge delegators
-        #[clap(long, value_parser = parse::parse_commission)]
+        #[arg(long, value_parser = parse::parse_commission)]
         commission: Commission,
     },
     /// Deregister a validator.
     DeregisterValidator {},
     /// Delegate funds to a validator.
     Delegate {
-        #[clap(long)]
+        #[arg(long)]
         validator_address: Address,
 
-        #[clap(long)]
+        #[arg(long)]
         amount: U256,
     },
     /// Initiate a withdrawal of delegated funds from a validator.
     Undelegate {
-        #[clap(long)]
+        #[arg(long)]
         validator_address: Address,
 
-        #[clap(long)]
+        #[arg(long)]
         amount: U256,
     },
     /// Claim withdrawal after an undelegation.
     ClaimWithdrawal {
-        #[clap(long)]
+        #[arg(long)]
         validator_address: Address,
     },
     /// Claim withdrawal after validator exit.
     ClaimValidatorExit {
-        #[clap(long)]
+        #[arg(long)]
         validator_address: Address,
     },
     /// Register the validators and delegates for the local demo.

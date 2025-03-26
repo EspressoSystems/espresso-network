@@ -35,43 +35,43 @@ use url::Url;
 #[derive(Clone, Debug, Parser)]
 pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
-    #[clap(long, env = Contract::PlonkVerifier)]
+    #[arg(long, env = Contract::PlonkVerifier)]
     plonk_verifier: Option<Address>,
 
     /// Use an already-deployed LightClient.sol instead of deploying a new one.
-    #[clap(long, env = Contract::LightClient)]
+    #[arg(long, env = Contract::LightClient)]
     light_client: Option<Address>,
 
     /// Use an already-deployed LightClient.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::LightClientProxy)]
+    #[arg(long, env = Contract::LightClientProxy)]
     light_client_proxy: Option<Address>,
 
     /// Use an already-deployed FeeContract.sol instead of deploying a new one.
-    #[clap(long, env = Contract::FeeContract)]
+    #[arg(long, env = Contract::FeeContract)]
     fee_contract: Option<Address>,
 
     /// Use an already-deployed FeeContract.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::FeeContractProxy)]
+    #[arg(long, env = Contract::FeeContractProxy)]
     fee_contract_proxy: Option<Address>,
 
     /// Use an already-deployed PermissonedStakeTable.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::PermissonedStakeTable)]
+    #[arg(long, env = Contract::PermissonedStakeTable)]
     permissioned_stake_table: Option<Address>,
 
     /// Use an already-deployed EspToken.sol instead of deploying a new one.
-    #[clap(long, env = Contract::EspToken)]
+    #[arg(long, env = Contract::EspToken)]
     esp_token: Option<Address>,
 
     /// Use an already-deployed EspToken.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::EspTokenProxy)]
+    #[arg(long, env = Contract::EspTokenProxy)]
     esp_token_proxy: Option<Address>,
 
     /// Use an already-deployed StakeTable.sol instead of deploying a new one.
-    #[clap(long, env = Contract::StakeTable)]
+    #[arg(long, env = Contract::StakeTable)]
     stake_table: Option<Address>,
 
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::StakeTableProxy)]
+    #[arg(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
 }
 

@@ -17,7 +17,7 @@ use surf_disco::Url;
 /// Command-line utility for working with the Espresso bridge.
 #[derive(Debug, Parser)]
 struct Options {
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 
     #[command(subcommand)]
@@ -35,11 +35,11 @@ enum Command {
 #[derive(Debug, Parser)]
 struct Deposit {
     /// L1 JSON-RPC provider.
-    #[clap(short, long, env = "L1_PROVIDER")]
+    #[arg(short, long, env = "L1_PROVIDER")]
     rpc_url: Url,
 
     /// Request rate when polling L1.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "L1_POLLING_INTERVAL",
@@ -52,29 +52,29 @@ struct Deposit {
     ///
     /// This must point to an Espresso node running the /availability, /node and Merklized state
     /// (/fee-state and /block-state) APIs.
-    #[clap(short, long, env = "ESPRESSO_PROVIDER")]
+    #[arg(short, long, env = "ESPRESSO_PROVIDER")]
     espresso_provider: Url,
 
     /// The address of the Espresso fee contract on the L1.
-    #[clap(short, long, env = "CONTRACT_ADDRESS")]
+    #[arg(short, long, env = "CONTRACT_ADDRESS")]
     contract_address: Address,
 
     /// Mnemonic to generate the account from which to deposit.
-    #[clap(short, long, env = "MNEMONIC")]
+    #[arg(short, long, env = "MNEMONIC")]
     mnemonic: String,
 
     /// Account index when deriving an account from MNEMONIC.
-    #[clap(short = 'i', long, env = "ACCOUNT_INDEX", default_value = "0")]
+    #[arg(short = 'i', long, env = "ACCOUNT_INDEX", default_value = "0")]
     account_index: u32,
 
     /// Amount of WEI to deposit.
     // Note: we use u64 because U256 parses in hex, which is annoying. We can easily convert to U256
     // after parsing.
-    #[clap(short, long, env = "AMOUNT")]
+    #[arg(short, long, env = "AMOUNT")]
     amount: u64,
 
     /// Number of confirmations to wait for before considering an L1 transaction mined.
-    #[clap(long, env = "CONFIRMATIONS", default_value = "6")]
+    #[arg(long, env = "CONFIRMATIONS", default_value = "6")]
     confirmations: usize,
 }
 
@@ -84,19 +84,19 @@ struct Balance {
     /// Espresso query service provider.
     ///
     /// This must point to an Espresso node running the node and Merklized state APIs.
-    #[clap(short, long, env = "ESPRESSO_PROVIDER")]
+    #[arg(short, long, env = "ESPRESSO_PROVIDER")]
     espresso_provider: Url,
 
     /// Account to check.
-    #[clap(short, long, env = "ADDRESS", required_unless_present = "mnemonic")]
+    #[arg(short, long, env = "ADDRESS", required_unless_present = "mnemonic")]
     address: Option<Address>,
 
     /// Mnemonic to generate the account to check.
-    #[clap(short, long, env = "MNEMONIC", conflicts_with = "address")]
+    #[arg(short, long, env = "MNEMONIC", conflicts_with = "address")]
     mnemonic: Option<String>,
 
     /// Account index when deriving an account from MNEMONIC.
-    #[clap(
+    #[arg(
         short = 'i',
         long,
         env = "ACCOUNT_INDEX",
@@ -106,7 +106,7 @@ struct Balance {
     account_index: u32,
 
     /// Espresso block number at which to check (default: latest).
-    #[clap(short, long, env = "BLOCK")]
+    #[arg(short, long, env = "BLOCK")]
     block: Option<u64>,
 }
 
@@ -114,11 +114,11 @@ struct Balance {
 #[derive(Debug, Parser)]
 struct L1Balance {
     /// L1 JSON-RPC provider.
-    #[clap(short, long, env = "L1_PROVIDER")]
+    #[arg(short, long, env = "L1_PROVIDER")]
     rpc_url: Url,
 
     /// Request rate when polling L1.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "L1_POLLING_INTERVAL",
@@ -128,15 +128,15 @@ struct L1Balance {
     l1_interval: Duration,
 
     /// Account to check.
-    #[clap(short, long, env = "ADDRESS", required_unless_present = "mnemonic")]
+    #[arg(short, long, env = "ADDRESS", required_unless_present = "mnemonic")]
     address: Option<Address>,
 
     /// Mnemonic to generate the account to check.
-    #[clap(short, long, env = "MNEMONIC", conflicts_with = "address")]
+    #[arg(short, long, env = "MNEMONIC", conflicts_with = "address")]
     mnemonic: Option<String>,
 
     /// Account index when deriving an account from MNEMONIC.
-    #[clap(
+    #[arg(
         short = 'i',
         long,
         env = "ACCOUNT_INDEX",
@@ -146,7 +146,7 @@ struct L1Balance {
     account_index: u32,
 
     /// L1 block number at which to check (default: latest).
-    #[clap(short, long, env = "BLOCK")]
+    #[arg(short, long, env = "BLOCK")]
     block: Option<u64>,
 }
 
