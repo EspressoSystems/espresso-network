@@ -73,7 +73,7 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
     depends_on:
-      deploy-sequencer-contracts:
+      deploy-prover-contracts:
         condition: service_completed_successfully
       sequencer1:
         condition: service_healthy
