@@ -25,7 +25,7 @@ committable = { workspace = true }
 derive_more = { workspace = true, features = ["debug"] }
 digest = { workspace = true, features = ["rand_core"] }
 displaydoc = { version = "0.2.5", default-features = false }
-dyn-clone = "1.0.17"
+dyn-clone = "1.0.19"
 either = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 hotshot-utils = { workspace = true }
