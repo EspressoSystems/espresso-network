@@ -507,7 +507,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .wrap()
         .context(error!("Failed to store VID share"))?;
 
-    if extended_vote {
+    if extended_vote && upgrade_lock.epochs_enabled(view_number).await {
         tracing::debug!("sending extended vote to everybody",);
         broadcast_event(
             Arc::new(HotShotEvent::ExtendedQuorumVoteSend(vote)),

@@ -29,7 +29,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
         storage::Storage,
     },
-    utils::{epoch_from_block_number, option_epoch_from_block_number},
+    utils::option_epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
     StakeTableEntries,
 };
@@ -253,26 +253,26 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             },
         };
 
-        let current_block_number = leaf.height();
-        let current_epoch = TYPES::Epoch::new(epoch_from_block_number(
-            current_block_number,
+        let current_epoch = option_epoch_from_block_number::<TYPES>(
+            self.upgrade_lock.epochs_enabled(leaf.view_number()).await,
+            leaf.height(),
             self.epoch_height,
-        ));
+        );
 
         let is_vote_leaf_extended = self.consensus.read().await.is_leaf_extended(leaf.commit());
-        if !is_vote_leaf_extended {
+        if current_epoch.is_none() || !is_vote_leaf_extended {
             // We're voting for the proposal that will probably form the eQC. We don't want to change
             // the view here because we will probably change it when we form the eQC.
             // The main reason is to handle view change event only once in the transaction task.
             tracing::trace!(
-                "Sending ViewChange for view {} and epoch {}",
+                "Sending ViewChange for view {} and epoch {:?}",
                 leaf.view_number() + 1,
-                *current_epoch
+                current_epoch
             );
             broadcast_event(
                 Arc::new(HotShotEvent::ViewChange(
                     leaf.view_number() + 1,
-                    Some(current_epoch),
+                    current_epoch,
                 )),
                 &self.sender,
             )
