@@ -1055,6 +1055,328 @@ mod test {
         network.shut_down().await;
     }
 
+    async fn validate_old(client: &Client<Error, MockBase>, height: u64) {
+        // Check the consistency of every block/leaf pair.
+        for i in 0..height {
+            // Limit the number of blocks we validate in order to
+            // speeed up the tests.
+            if ![0, 1, height / 2, height - 1].contains(&i) {
+                continue;
+            }
+            tracing::info!("validate block {i}/{height}");
+
+            // Check that looking up the leaf various ways returns the correct leaf.
+            let leaf: Leaf1QueryData<MockTypes> =
+                client.get(&format!("leaf/{}", i)).send().await.unwrap();
+            assert_eq!(leaf.leaf.height(), i);
+            assert_eq!(
+                leaf,
+                client
+                    .get(&format!(
+                        "leaf/hash/{}",
+                        <Leaf<MockTypes> as Committable>::commit(&leaf.leaf)
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+            );
+
+            // Check that looking up the block various ways returns the correct block.
+            let block: BlockQueryData<MockTypes> =
+                client.get(&format!("block/{}", i)).send().await.unwrap();
+            let expected_payload = PayloadQueryData::from(block.clone());
+            assert_eq!(leaf.leaf.block_header().commit(), block.hash());
+            assert_eq!(block.height(), i);
+            assert_eq!(
+                block,
+                client
+                    .get(&format!("block/hash/{}", block.hash()))
+                    .send()
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                *block.header(),
+                client.get(&format!("header/{i}")).send().await.unwrap()
+            );
+            assert_eq!(
+                *block.header(),
+                client
+                    .get(&format!("header/hash/{}", block.hash()))
+                    .send()
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                expected_payload,
+                client.get(&format!("payload/{i}")).send().await.unwrap(),
+            );
+            assert_eq!(
+                expected_payload,
+                client
+                    .get(&format!("payload/block-hash/{}", block.hash()))
+                    .send()
+                    .await
+                    .unwrap(),
+            );
+            // Look up the common VID data.
+            let common: ADVZCommonQueryData<MockTypes> = client
+                .get(&format!("vid/common/{}", block.height()))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(common.height(), block.height());
+            assert_eq!(common.block_hash(), block.hash());
+            assert_eq!(
+                VidCommitment::V0(common.payload_hash()),
+                block.payload_hash(),
+            );
+            assert_eq!(
+                common,
+                client
+                    .get(&format!("vid/common/hash/{}", block.hash()))
+                    .send()
+                    .await
+                    .unwrap()
+            );
+
+            let block_summary = client
+                .get(&format!("block/summary/{}", i))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                BlockSummaryQueryData::<MockTypes>::from(block.clone()),
+                block_summary,
+            );
+            assert_eq!(block_summary.header(), block.header());
+            assert_eq!(block_summary.hash(), block.hash());
+            assert_eq!(block_summary.size(), block.size());
+            assert_eq!(block_summary.num_transactions(), block.num_transactions());
+
+            let block_summaries: Vec<BlockSummaryQueryData<MockTypes>> = client
+                .get(&format!("block/summaries/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(block_summaries.len() as u64, i);
+
+            // We should be able to look up the block by payload hash. Note that for duplicate
+            // payloads, these endpoints may return a different block with the same payload, which
+            // is acceptable. Therefore, we don't check equivalence of the entire `BlockQueryData`
+            // response, only its payload.
+            assert_eq!(
+                block.payload(),
+                client
+                    .get::<BlockQueryData<MockTypes>>(&format!(
+                        "block/payload-hash/{}",
+                        block.payload_hash()
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+                    .payload()
+            );
+            assert_eq!(
+                block.payload_hash(),
+                client
+                    .get::<Header<MockTypes>>(&format!(
+                        "header/payload-hash/{}",
+                        block.payload_hash()
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+                    .payload_commitment
+            );
+            assert_eq!(
+                block.payload(),
+                client
+                    .get::<PayloadQueryData<MockTypes>>(&format!(
+                        "payload/hash/{}",
+                        block.payload_hash()
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+                    .data(),
+            );
+            assert_eq!(
+                common.common(),
+                client
+                    .get::<ADVZCommonQueryData<MockTypes>>(&format!(
+                        "vid/common/payload-hash/{}",
+                        block.payload_hash()
+                    ))
+                    .send()
+                    .await
+                    .unwrap()
+                    .common()
+            );
+
+            // Check that looking up each transaction in the block various ways returns the correct
+            // transaction.
+            for (j, txn_from_block) in block.enumerate() {
+                let txn: TransactionQueryData<MockTypes> = client
+                    .get(&format!("transaction/{}/{}", i, j))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(txn.block_height(), i);
+                assert_eq!(txn.block_hash(), block.hash());
+                assert_eq!(txn.index(), j as u64);
+                assert_eq!(txn.hash(), txn_from_block.commit());
+                assert_eq!(txn.transaction(), &txn_from_block);
+                // We should be able to look up the transaction by hash. Note that for duplicate
+                // transactions, this endpoint may return a different transaction with the same
+                // hash, which is acceptable. Therefore, we don't check equivalence of the entire
+                // `TransactionQueryData` response, only its commitment.
+                assert_eq!(
+                    txn.hash(),
+                    client
+                        .get::<TransactionQueryData<MockTypes>>(&format!(
+                            "transaction/hash/{}",
+                            txn.hash()
+                        ))
+                        .send()
+                        .await
+                        .unwrap()
+                        .hash()
+                );
+            }
+
+            let block_range: Vec<BlockQueryData<MockTypes>> = client
+                .get(&format!("block/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(block_range.len() as u64, i);
+
+            let leaf_range: Vec<Leaf1QueryData<MockTypes>> = client
+                .get(&format!("leaf/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(leaf_range.len() as u64, i);
+
+            let payload_range: Vec<PayloadQueryData<MockTypes>> = client
+                .get(&format!("payload/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(payload_range.len() as u64, i);
+
+            let header_range: Vec<Header<MockTypes>> = client
+                .get(&format!("header/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(header_range.len() as u64, i);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_old_api() {
+        setup_test();
+
+        // Create the consensus network.
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        network.start().await;
+
+        // Start the web server.
+        let port = pick_unused_port().unwrap();
+        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+        app.register_module(
+            "availability",
+            define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "0.1.0".parse().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        network.spawn(
+            "server",
+            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+        );
+
+        // Start a client.
+        let client = Client::<Error, MockBase>::new(
+            format!("http://localhost:{}/availability", port)
+                .parse()
+                .unwrap(),
+        );
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        assert_eq!(get_non_empty_blocks(&client).await.1, vec![]);
+
+        // Submit a few blocks and make sure each one gets reflected in the query service and
+        // preserves the consistency of the data and indices.
+        let leaves = client
+            .socket("stream/leaves/0")
+            .subscribe::<Leaf1QueryData<MockTypes>>()
+            .await
+            .unwrap();
+        let headers = client
+            .socket("stream/headers/0")
+            .subscribe::<Header<MockTypes>>()
+            .await
+            .unwrap();
+        let blocks = client
+            .socket("stream/blocks/0")
+            .subscribe::<BlockQueryData<MockTypes>>()
+            .await
+            .unwrap();
+        let vid_common = client
+            .socket("stream/vid/common/0")
+            .subscribe::<ADVZCommonQueryData<MockTypes>>()
+            .await
+            .unwrap();
+        let mut chain = leaves.zip(headers.zip(blocks.zip(vid_common))).enumerate();
+        for nonce in 0..3 {
+            let txn = mock_transaction(vec![nonce]);
+            network.submit_transaction(txn).await;
+
+            // Wait for the transaction to be finalized.
+            let (i, leaf, block, common) = loop {
+                tracing::info!("waiting for block with transaction {}", nonce);
+                let (i, (leaf, (header, (block, common)))) = chain.next().await.unwrap();
+                tracing::info!(i, ?leaf, ?header, ?block, ?common);
+                let leaf = leaf.unwrap();
+                let header = header.unwrap();
+                let block = block.unwrap();
+                let common = common.unwrap();
+                assert_eq!(leaf.leaf.height() as usize, i);
+                assert_eq!(leaf.leaf.block_header().commit(), block.hash());
+                assert_eq!(block.header(), &header);
+                assert_eq!(common.height() as usize, i);
+                if !block.is_empty() {
+                    break (i, leaf, block, common);
+                }
+            };
+            assert_eq!(
+                leaf,
+                client.get(&format!("leaf/{}", i)).send().await.unwrap()
+            );
+            assert_eq!(
+                block,
+                client.get(&format!("block/{}", i)).send().await.unwrap()
+            );
+            assert_eq!(
+                common,
+                client.get(&format!("vid/common/{i}")).send().await.unwrap()
+            );
+
+            validate_old(&client, (i + 1) as u64).await;
+        }
+
+        network.shut_down().await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_extensions() {
         use hotshot_example_types::node_types::TestVersions;
