@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use alloy::{
     network::EthereumWallet,
     providers::ProviderBuilder,
@@ -14,7 +16,6 @@ use staking_cli::{
     registration::{deregister_validator, register_validator},
     Commands, Config,
 };
-use std::path::PathBuf;
 use sysinfo::System;
 
 #[derive(Parser)]
