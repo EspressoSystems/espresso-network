@@ -410,6 +410,17 @@ pub fn is_last_block_in_epoch(block_number: u64, epoch_height: u64) -> bool {
     }
 }
 
+/// Returns the height of the last block in the epoch. Will always return a block number greater than
+/// the passed height.
+pub fn last_block_in_epoch(height: u64, epoch_height: u64) -> anyhow::Result<u64> {
+    ensure!(
+        epoch_height > 0,
+        "cannot get last block in epoch if epoch height is 0"
+    );
+
+    Ok(height + (epoch_height - (height % epoch_height)))
+}
+
 /// Returns true if the given block number is the third from the last in the epoch based on the
 /// given epoch height.
 #[must_use]

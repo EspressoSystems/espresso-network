@@ -457,7 +457,10 @@ where
                 .integer_param("height")
                 .map_err(Error::from_request_error)?;
             state
-                .get_leaf_chain(height)
+                .get_leaf_chain(
+                    height,
+                    state.node_state().await.epoch_height.unwrap_or_default(),
+                )
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }
