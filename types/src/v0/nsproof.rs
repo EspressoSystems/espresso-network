@@ -1,11 +1,12 @@
+use hotshot_query_service::VidCommon;
+use hotshot_types::data::VidCommitment;
+use serde::{Deserialize, Serialize};
+
 use crate::{
     v0::{NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction},
     v0_1::ADVZNsProof,
     v0_3::AvidMNsProof,
 };
-use hotshot_query_service::VidCommon;
-use hotshot_types::data::VidCommitment;
-use serde::{Deserialize, Serialize};
 
 /// Each variant represents a specific minor version of a namespace proof.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
