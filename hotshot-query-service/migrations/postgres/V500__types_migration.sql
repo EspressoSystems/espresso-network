@@ -1,13 +1,11 @@
 CREATE TABLE leaf2
 (
-    height     BIGINT NOT NULL REFERENCES header (height) ON DELETE CASCADE,
-    view       BIGINT NOT NULL,
+    height     BIGINT PRIMARY KEY REFERENCES header (height) ON DELETE CASCADE,
     hash       VARCHAR NOT NULL UNIQUE,
     block_hash VARCHAR NOT NULL REFERENCES header (hash) ON DELETE CASCADE,
     leaf JSONB NOT NULL,
     qc   JSONB NOT NULL
 );
-ALTER TABLE leaf2 ADD CONSTRAINT leaf2_pk PRIMARY KEY (height, view);
 
 CREATE TABLE types_migration ( 
     id SERIAL PRIMARY KEY,
