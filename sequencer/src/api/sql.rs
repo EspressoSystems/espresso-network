@@ -28,7 +28,7 @@ use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
     traits::node_implementation::ConsensusTime,
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, last_block_in_epoch},
     vote::HasViewNumber,
 };
 use jf_merkle_tree::{
@@ -211,23 +211,72 @@ impl CatchupStorage for SqlStorage {
         load_chain_config(&mut tx, commitment).await
     }
 
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64, epoch_height: u64) -> anyhow::Result<Vec<Leaf2>> {
         let mut tx = self
             .read()
             .await
             .context(format!("opening transaction to fetch leaf at {height}"))?;
-        let leaf = tx
-            .get_leaf((height as usize).into())
+        let last_height = last_block_in_epoch(height, epoch_height)
+            .context("calculating last block for get_leaf_chain".to_string())?;
+        let leaves = tx
+            .get_leaf_range((height as usize)..=(last_height as usize))
             .await
-            .context(format!("leaf {height} not available"))?;
-        let mut last_leaf: Leaf2 = leaf.leaf().clone();
-        let mut chain = vec![last_leaf.clone()];
-        let mut h = height + 1;
+            .context(format!(
+                "failed to get leaf range from {height} to {last_height}"
+            ))?;
+        let mut leaves_iter = leaves.into_iter();
 
-        let mut found = false;
-        while !found {
-            for leaf in tx.get_leaves(h).await? {
-                let leaf = leaf.leaf();
+        let mut last_leaf = leaves_iter
+            .next()
+            .context("ran out of leaves when searching for first leaf")??
+            .leaf()
+            .clone();
+        let mut chain = vec![last_leaf.clone()];
+
+        loop {
+            let lqd = leaves_iter
+                .next()
+                .context("ran out of leaves while searching for intermediate")??;
+            let leaf = lqd.leaf();
+
+            if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                chain.push(leaf.clone());
+            } else {
+                continue;
+            }
+
+            // just one away from deciding
+            if leaf.view_number() == last_leaf.view_number() + 1 {
+                last_leaf = leaf.clone();
+                break;
+            }
+            last_leaf = leaf.clone();
+        }
+
+        loop {
+            let lqd = leaves_iter
+                .next()
+                .context("ran out of leaves while searching for decide")??;
+            let leaf = lqd.leaf();
+            if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                chain.push(leaf.clone());
+                break;
+            }
+        }
+
+        Ok(chain)
+
+        /*if false {let leaf = tx
+                .get_leaf((height as usize).into())
+                .await
+                .context(format!("leaf {height} not available"))?;
+            let mut last_leaf: Leaf2 = leaf.leaf().clone();
+            let mut chain = vec![last_leaf.clone()];
+            let mut h = height + 1;
+
+            loop {
+                let lqd = tx.get_leaf((h as usize).into()).await?;
+                let leaf = lqd.leaf();
 
                 if leaf.justify_qc().view_number() == last_leaf.view_number() {
                     chain.push(leaf.clone());
@@ -240,28 +289,24 @@ impl CatchupStorage for SqlStorage {
                 if leaf.view_number() == last_leaf.view_number() + 1 {
                     last_leaf = leaf.clone();
                     h += 1;
-                    found = true;
                     break;
                 }
                 h += 1;
                 last_leaf = leaf.clone();
             }
-        }
 
-        found = false;
-        while !found {
-            for leaf in tx.get_leaves(h).await? {
-                let leaf = leaf.leaf();
+            loop {
+                let lqd = tx.get_leaf((h as usize).into()).await?;
+                let leaf = lqd.leaf();
                 if leaf.justify_qc().view_number() == last_leaf.view_number() {
                     chain.push(leaf.clone());
-                    found = true;
                     break;
                 }
                 h += 1;
             }
-        }
 
-        Ok(chain)
+            Ok(chain)
+        }*/
     }
 }
 
@@ -305,8 +350,9 @@ impl CatchupStorage for DataSource {
     ) -> anyhow::Result<ChainConfig> {
         self.as_ref().get_chain_config(commitment).await
     }
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        self.as_ref().get_leaf_chain(height).await
+
+    async fn get_leaf_chain(&self, height: u64, epoch_height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        self.as_ref().get_leaf_chain(height, epoch_height).await
     }
 }
 

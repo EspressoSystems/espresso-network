@@ -359,6 +359,7 @@ pub mod mock {
             &self,
             _retry: usize,
             _height: u64,
+            _epoch_height: u64,
         ) -> anyhow::Result<Vec<Leaf2>> {
             Err(anyhow::anyhow!("todo"))
         }

@@ -184,6 +184,7 @@ pub(crate) trait CatchupDataSource: Sync {
     fn get_leaf_chain(
         &self,
         height: u64,
+        epoch_height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
 
     /// Get the state of the requested `account`.

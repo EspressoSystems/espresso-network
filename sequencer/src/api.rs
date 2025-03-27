@@ -381,9 +381,10 @@ impl<
         // Try storage.
         self.inner().get_chain_config(commitment).await
     }
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+
+    async fn get_leaf_chain(&self, height: u64, epoch_height: u64) -> anyhow::Result<Vec<Leaf2>> {
         // Check if we have the desired state in memory.
-        match self.as_ref().get_leaf_chain(height).await {
+        match self.as_ref().get_leaf_chain(height, epoch_height).await {
             Ok(cf) => return Ok(cf),
             Err(err) => {
                 tracing::info!("chain config is not in memory, trying storage: {err:#}");
@@ -391,7 +392,7 @@ impl<
         }
 
         // Try storage.
-        self.inner().get_leaf_chain(height).await
+        self.inner().get_leaf_chain(height, epoch_height).await
     }
 
     #[tracing::instrument(skip(self, instance))]
@@ -558,7 +559,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
         }
     }
 
-    async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+    async fn get_leaf_chain(&self, height: u64, _epoch_height: u64) -> anyhow::Result<Vec<Leaf2>> {
         let mut leaves = self
             .consensus()
             .await
