@@ -1278,7 +1278,6 @@ mod api_tests {
 
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
-    use endpoints::NamespaceProofQueryData;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
         Header, Leaf2, MockSequencerVersions, NamespaceId,
@@ -1287,7 +1286,7 @@ mod api_tests {
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::availability::{
-        AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
+        ADVZCommonQueryData, AvailabilityDataSource, BlockQueryData,
     };
     use hotshot_types::{
         data::{
@@ -1313,6 +1312,7 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
+        api::endpoints::ADVZNamespaceProofQueryData,
         network,
         persistence::no_storage::NoStorage,
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
@@ -1394,7 +1394,7 @@ mod api_tests {
                 .send()
                 .await
                 .unwrap();
-            let ns_query_res: NamespaceProofQueryData = client
+            let ns_query_res: ADVZNamespaceProofQueryData = client
                 .get(&format!("availability/block/{block_num}/namespace/{ns_id}"))
                 .send()
                 .await
@@ -1402,17 +1402,17 @@ mod api_tests {
 
             // Verify namespace proof if present
             if let Some(ns_proof) = ns_query_res.proof {
-                let vid_common: VidCommonQueryData<SeqTypes> = client
+                let vid_common: ADVZCommonQueryData<SeqTypes> = client
                     .get(&format!("availability/vid/common/{block_num}"))
                     .send()
                     .await
                     .unwrap();
-                let hotshot_query_service::VidCommon::V0(common) = &vid_common.common().clone()
-                else {
-                    panic!("Failed to get vid V0 for namespace");
-                };
                 ns_proof
-                    .verify(header.ns_table(), &header.payload_commitment(), common)
+                    .verify(
+                        header.ns_table(),
+                        &header.payload_commitment(),
+                        vid_common.common(),
+                    )
                     .unwrap();
             } else {
                 // Namespace proof should be present if ns_id exists in ns_table

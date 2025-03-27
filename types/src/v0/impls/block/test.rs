@@ -9,8 +9,8 @@ use rand::RngCore;
 use sequencer_utils::test_utils::setup_test;
 
 use crate::{
-    v0_99::ChainConfig, BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof,
-    ValidatedState,
+    v0_1::ADVZNsProof, v0_99::ChainConfig, BlockSize, NamespaceId, NodeState, Payload, Transaction,
+    TxProof, ValidatedState,
 };
 
 #[tokio::test(flavor = "multi_thread")]
@@ -88,7 +88,7 @@ async fn basic_correctness() {
                 .remove(&ns_id)
                 .expect("block ns_id missing from test");
 
-            let ns_proof = NsProof::new(&block, &ns_index, &vid_common)
+            let ns_proof = ADVZNsProof::new(&block, &ns_index, &vid_common)
                 .expect("namespace_with_proof should succeed");
 
             let (ns_proof_txs, ns_proof_ns_id) = ns_proof
