@@ -804,12 +804,16 @@ impl Membership<SeqTypes> for EpochCommittees {
             .fetch_leaf(drb_height, stake_table, success_threshold, epoch_height)
             .await?;
 
-        Ok((
-            leaf.block_header().clone(),
-            drb_leaf
-                .next_drb_result
-                .context(format!("No DRB result on decided leaf at {drb_height}"))?,
-        ))
+        let Some(drb) = drb_leaf.next_drb_result else {
+            tracing::error!(
+              "We received a leaf that should contain a DRB result, but the DRB result is missing: {:?}",
+              drb_leaf
+            );
+
+            bail!("DRB leaf is missing the DRB result.");
+        };
+
+        Ok((leaf.block_header().clone(), drb))
     }
 
     fn add_drb_result(&mut self, epoch: Epoch, drb: DrbResult) {
