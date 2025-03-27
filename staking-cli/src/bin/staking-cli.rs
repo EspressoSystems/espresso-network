@@ -206,8 +206,8 @@ pub async fn main() -> Result<()> {
         Commands::ClaimValidatorExit { validator_address } => {
             claim_validator_exit(stake_table, validator_address).await
         },
-        Commands::StakeForDemo => {
-            stake_for_demo(&config).await.unwrap();
+        Commands::StakeForDemo { num_validators } => {
+            stake_for_demo(&config, num_validators).await.unwrap();
             return Ok(());
         },
         _ => unreachable!(),

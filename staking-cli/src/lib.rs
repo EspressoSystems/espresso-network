@@ -109,5 +109,11 @@ pub enum Commands {
         validator_address: Address,
     },
     /// Register the validators and delegates for the local demo.
-    StakeForDemo,
+    StakeForDemo {
+        /// The number of validators to register.
+        ///
+        /// The default (5) works for the local native and docker demos.
+        #[clap(long, default_value_t = 5)]
+        num_validators: u16,
+    },
 }
