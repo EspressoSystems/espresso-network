@@ -22,8 +22,8 @@ impl FromStringOrInteger for ChainId {
     }
 
     fn from_string(s: String) -> anyhow::Result<Self> {
-        if s.starts_with("0x") {
-            Ok(Self(U256::from_str_radix(&s[2..], 16)?))
+        if let Some(stripped) = s.strip_prefix("0x") {
+            Ok(Self(U256::from_str_radix(stripped, 16)?))
         } else {
             Ok(Self(U256::from_str_radix(&s, 10)?))
         }
