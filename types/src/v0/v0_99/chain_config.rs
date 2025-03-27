@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Global variables for an Espresso blockchain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChainConfig {
     /// Espresso chain ID
     pub chain_id: ChainId,

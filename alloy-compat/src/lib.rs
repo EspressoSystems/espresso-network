@@ -139,12 +139,8 @@ pub mod ethers_serde {
         pub fn deserialize<'de, D: Deserializer<'de>>(
             deserializer: D,
         ) -> Result<Option<Address>, D::Error> {
-            let v_ethers = <Option<EthersAddress>>::deserialize(deserializer)?;
-            if let Some(v_ethers) = v_ethers {
-                Ok(Some(Address::new(v_ethers.0)))
-            } else {
-                Ok(None)
-            }
+            let v_ethers = Option::<EthersAddress>::deserialize(deserializer)?;
+            Ok(v_ethers.map(|v| Address::new(v.0)))
         }
 
         #[test]
@@ -279,12 +275,11 @@ pub mod ethers_serde {
             deserializer: D,
         ) -> Result<Option<T>, D::Error> {
             let repr = <Option<CompatRepr>>::deserialize(deserializer)?;
-            if let Some(repr) = repr {
-                let sig: PrimitiveSignature = repr.into();
-                Ok(Some(sig.into()))
-            } else {
-                Ok(None)
-            }
+
+            Ok(repr.map(|v| {
+                let sig: PrimitiveSignature = v.into();
+                sig.into()
+            }))
         }
 
         #[test]
