@@ -982,7 +982,7 @@ impl L1State {
         );
 
         if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block) {
-            if old_number == block.info.number {
+            if old_number == block.info.number && block != old_block {
                 tracing::error!(
                     ?old_block,
                     ?block,
