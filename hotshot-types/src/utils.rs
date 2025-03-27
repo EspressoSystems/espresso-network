@@ -427,6 +427,17 @@ pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
         block_number % epoch_height >= epoch_height - 3 || block_number % epoch_height == 0
     }
 }
+
+/// Returns true if the block is the last block in the epoch
+#[must_use]
+pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
+    if block_number == 0 || epoch_height == 0 {
+        false
+    } else {
+        block_number % epoch_height == 0
+    }
+}
+
 /// Returns true if the given block number is the third from the last in the epoch based on the
 /// given epoch height.
 #[must_use]

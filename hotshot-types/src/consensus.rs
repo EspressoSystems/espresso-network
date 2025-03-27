@@ -36,7 +36,7 @@ use crate::{
         BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_transition, is_ge_epoch_root,
+        epoch_from_block_number, is_epoch_transition, is_ge_epoch_root, is_last_block,
         option_epoch_from_block_number, BuilderCommitment, LeafCommitment, StateAndDelta,
         Terminator,
     },
@@ -1063,7 +1063,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         if is_high_qc_extended {
             tracing::debug!("We have formed an eQC!");
         }
-        self.is_leaf_for_last_block(high_qc_leaf_commit) && !is_high_qc_extended
+        self.is_epoch_transition(high_qc_leaf_commit) && !is_high_qc_extended
     }
 
     /// Returns true if our high qc is forming an eQC
@@ -1074,7 +1074,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Return true if the given leaf takes part in forming an eQC, i.e.
     /// it is one of the 3-chain leaves but not the eQC leaf itself
     pub fn is_leaf_forming_eqc(&self, leaf_commit: LeafCommitment<TYPES>) -> bool {
-        self.is_leaf_for_last_block(leaf_commit) && !self.is_leaf_extended(leaf_commit)
+        self.is_epoch_transition(leaf_commit) && !self.is_leaf_extended(leaf_commit)
     }
 
     /// Returns true if the given leaf can form an extended Quorum Certificate
@@ -1133,6 +1133,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         is_leaf_extended
     }
 
+    /// Returns true if a given leaf is for the epoch transition
+    pub fn is_epoch_transition(&self, leaf_commit: LeafCommitment<TYPES>) -> bool {
+        let Some(leaf) = self.saved_leaves.get(&leaf_commit) else {
+            tracing::trace!("We don't have a leaf corresponding to the leaf commit");
+            return false;
+        };
+        let block_height = leaf.height();
+        is_epoch_transition(block_height, self.epoch_height)
+    }
+
     /// Returns true if a given leaf is for the last block in the epoch
     pub fn is_leaf_for_last_block(&self, leaf_commit: LeafCommitment<TYPES>) -> bool {
         let Some(leaf) = self.saved_leaves.get(&leaf_commit) else {
@@ -1140,7 +1150,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             return false;
         };
         let block_height = leaf.height();
-        is_epoch_transition(block_height, self.epoch_height)
+        is_last_block(block_height, self.epoch_height)
     }
 
     /// Returns true if our high QC is for the last block in the epoch
