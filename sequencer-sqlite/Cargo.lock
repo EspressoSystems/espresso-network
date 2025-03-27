@@ -3757,6 +3757,7 @@ dependencies = [
  "url",
  "vbs",
  "vec1",
+ "vid",
 ]
 
 [[package]]
