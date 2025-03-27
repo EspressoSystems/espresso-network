@@ -31,7 +31,7 @@ use hotshot_types::{
     },
     utils::{
         epoch_from_block_number, is_epoch_transition, is_transition_block,
-        option_epoch_from_block_number,
+        option_epoch_from_block_number, BuilderCommitment,
     },
     vote::HasViewNumber,
 };
@@ -369,6 +369,10 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             && self.consensus.read().await.is_qc_forming_eqc(&parent_qc)
         {
             tracing::info!("Reached end of epoch.");
+            ensure!(
+                builder_commitment == BuilderCommitment::from_bytes([]),
+                "We're trying to propose non empty block in the epoch transition. Do not propose."
+            );
         }
         let block_header = if version < V::Marketplace::VERSION {
             TYPES::BlockHeader::new_legacy(
