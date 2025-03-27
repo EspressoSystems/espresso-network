@@ -22,7 +22,7 @@ use hotshot_types::{
         node_implementation::{NodeType, Versions},
         EncodeBytes,
     },
-    vid::advz::advz_scheme,
+    vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon},
 };
 use jf_vid::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -451,6 +451,68 @@ impl<Types: NodeType> PayloadQueryData<Types> {
 impl<Types: NodeType> HeightIndexed for PayloadQueryData<Types> {
     fn height(&self) -> u64 {
         self.height
+    }
+}
+
+/// The old VidCommonQueryData, associated with ADVZ VID Scheme.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(bound = "")]
+pub struct ADVZCommonQueryData<Types: NodeType> {
+    pub(crate) height: u64,
+    pub(crate) block_hash: BlockHash<Types>,
+    pub(crate) payload_hash: ADVZCommitment,
+    pub(crate) common: ADVZCommon,
+}
+
+impl<Types: NodeType> ADVZCommonQueryData<Types> {
+    pub fn new(header: Header<Types>, common: ADVZCommon) -> anyhow::Result<Self> {
+        let VidCommitment::V0(payload_hash) = header.payload_commitment() else {
+            return Err(anyhow::anyhow!("Inconsistent header type."));
+        };
+        Ok(Self {
+            height: header.block_number(),
+            block_hash: header.commit(),
+            payload_hash,
+            common,
+        })
+    }
+
+    pub async fn genesis<HsVer: Versions>(
+        validated_state: &Types::ValidatedState,
+        instance_state: &Types::InstanceState,
+    ) -> anyhow::Result<Self> {
+        let leaf = Leaf::<Types>::genesis::<HsVer>(validated_state, instance_state).await;
+        let payload = leaf.block_payload().unwrap();
+        let bytes = payload.encode();
+        let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
+            .disperse(bytes)
+            .unwrap();
+
+        Self::new(leaf.block_header().clone(), disperse.common)
+    }
+
+    pub fn block_hash(&self) -> BlockHash<Types> {
+        self.block_hash
+    }
+
+    pub fn payload_hash(&self) -> ADVZCommitment {
+        self.payload_hash
+    }
+
+    pub fn common(&self) -> &ADVZCommon {
+        &self.common
+    }
+}
+
+impl<Types: NodeType> HeightIndexed for ADVZCommonQueryData<Types> {
+    fn height(&self) -> u64 {
+        self.height
+    }
+}
+
+impl<Types: NodeType> HeightIndexed for (ADVZCommonQueryData<Types>, Option<VidShare>) {
+    fn height(&self) -> u64 {
+        self.0.height
     }
 }
 
