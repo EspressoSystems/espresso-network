@@ -470,22 +470,31 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         genesis_state.prefund_account(address, amount);
     }
 
-    // Get the local catchup provider (as persistence)
-    let catchup_providers = match persistence
+    // Create the list of parallel catchup providers
+    let state_catchup_providers = ParallelStateCatchup::new(&[]);
+
+    // Add the state peers to the list
+    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+        network_params.state_peers,
+        network_params.catchup_backoff,
+        metrics,
+    );
+    state_catchup_providers.add_provider(Arc::new(state_peers));
+
+    // Add the local (persistence) catchup provider to the list (if we can)
+    match persistence
         .clone()
         .into_catchup_provider(network_params.catchup_backoff)
     {
-        Ok(catchup) => vec![catchup],
+        Ok(catchup) => {
+            state_catchup_providers.add_provider(Arc::new(catchup));
+        },
         Err(e) => {
             tracing::warn!(
                 "Failed to create local catchup provider: {e:#}. Only using remote catchup."
             );
-            vec![]
         },
     };
-
-    // Create a state catchup provider from both the local and remote sources
-    let state_catchup = ParallelStateCatchup::new(&catchup_providers);
 
     // Create the HotShot membership
     let membership = EpochCommittees::new_stake(
@@ -496,7 +505,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
             .chain_config
             .stake_table_contract
             .map(|a| a.to_alloy()),
-        Arc::new(state_catchup.clone()),
+        Arc::new(state_catchup_providers.clone()),
         persistence.clone(),
     );
 
@@ -514,7 +523,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         upgrades: genesis.upgrades,
         current_version: V::Base::VERSION,
         epoch_height: Some(epoch_height),
-        state_catchup: Arc::new(state_catchup.clone()),
+        state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
     };
 
@@ -565,7 +574,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         coordinator,
         instance_state,
         storage,
-        state_catchup,
+        state_catchup_providers,
         persistence,
         network,
         Some(network_params.state_relay_server_url),
