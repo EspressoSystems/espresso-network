@@ -919,7 +919,7 @@ pub mod testing {
                     i,
                     ValidatedState::default(),
                     no_storage::Options,
-                    NullStateCatchup::default(),
+                    Some(NullStateCatchup::default()),
                     None,
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -963,7 +963,7 @@ pub mod testing {
             i: usize,
             mut state: ValidatedState,
             mut persistence_opt: P,
-            state_peers: impl StateCatchup + 'static,
+            state_peers: Option<impl StateCatchup + 'static>,
             storage: Option<Arc<SqlStorage>>,
             metrics: &dyn Metrics,
             stake_table_capacity: u64,
@@ -1010,11 +1010,28 @@ pub mod testing {
             let l1_client =
                 L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
 
-            // Create a state catchup provider from both local and remote sources
-            let state_catchup = ParallelStateCatchup::new(&[persistence
+            // Create an empty list of catchup providers
+            let catchup_providers = ParallelStateCatchup::new(&[]);
+
+            // If we have the state peers, add them
+            if let Some(state_peers) = state_peers {
+                catchup_providers.add_provider(Arc::new(state_peers));
+            }
+
+            // If we have a working local catchup provider, add it
+            match persistence
                 .clone()
-                .into_catchup_provider(*state_peers.backoff())
-                .expect("failed to convert persistence to catchup provider")]);
+                .into_catchup_provider(BackoffParams::default())
+            {
+                Ok(local_catchup) => {
+                    catchup_providers.add_provider(local_catchup);
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+                    );
+                },
+            };
 
             // Create the HotShot membership
             let membership = EpochCommittees::new_stake(
@@ -1022,7 +1039,7 @@ pub mod testing {
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
                 chain_config.stake_table_contract.map(|a| a.to_alloy()),
-                Arc::new(state_catchup.clone()),
+                Arc::new(catchup_providers.clone()),
                 persistence.clone(),
             );
             let membership = Arc::new(RwLock::new(membership));
@@ -1033,7 +1050,7 @@ pub mod testing {
                 i as u64,
                 chain_config,
                 l1_client,
-                state_catchup.clone(),
+                Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
             )
@@ -1061,7 +1078,7 @@ pub mod testing {
                 coordinator,
                 node_state,
                 storage,
-                state_catchup,
+                catchup_providers,
                 persistence,
                 network,
                 self.state_relay_url.clone(),

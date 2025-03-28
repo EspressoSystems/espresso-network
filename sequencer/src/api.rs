@@ -888,7 +888,7 @@ pub mod test_helpers {
                                                 0,
                                                 state,
                                                 persistence,
-                                                state_peers,
+                                                Some(state_peers),
                                                 storage,
                                                 &*metrics,
                                                 STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -908,7 +908,7 @@ pub mod test_helpers {
                                     i,
                                     state,
                                     persistence,
-                                    state_peers,
+                                    Some(state_peers),
                                     None,
                                     &NoMetrics,
                                     STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -1730,7 +1730,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
-        BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
+        EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState, V0_1,
     };
@@ -1755,8 +1755,8 @@ mod test {
     use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
     use surf_disco::Client;
     use test_helpers::{
-        catchup_test_helper, spawn_dishonest_peer_catchup_api, state_signature_test_helper,
-        status_test_helper, submit_test_helper, TestNetwork, TestNetworkConfigBuilder,
+        catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
+        TestNetwork, TestNetworkConfigBuilder,
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use time::OffsetDateTime;
@@ -2045,11 +2045,11 @@ mod test {
                 1,
                 ValidatedState::default(),
                 no_storage::Options,
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
                     &NoMetrics,
-                ),
+                )),
                 None,
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -2155,11 +2155,214 @@ mod test {
                 1,
                 ValidatedState::default(),
                 no_storage::Options,
+                Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )),
+                None,
+                &NoMetrics,
+                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                MockSequencerVersions::new(),
+                Default::default(),
+                "http://localhost".parse().unwrap(),
+            )
+            .await;
+        let mut events = node.event_stream().await;
+
+        // Wait for a (non-genesis) block proposed by each node, to prove that the lagging node has
+        // caught up and all nodes are in sync.
+        let mut proposers = [false; NUM_NODES];
+        loop {
+            let event = events.next().await.unwrap();
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+            for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
+                let height = leaf.height();
+                let leaf_builder = (leaf.view_number().u64() as usize) % NUM_NODES;
+                if height == 0 {
+                    continue;
+                }
+
+                tracing::info!(
+                    "waiting for blocks from {proposers:?}, block {height} is from {leaf_builder}",
+                );
+                proposers[leaf_builder] = true;
+            }
+
+            if proposers.iter().all(|has_proposed| *has_proposed) {
+                break;
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_no_state_peers() {
+        setup_test();
+
+        // Start a sequencer network, using the query service for catchup.
+        let port = pick_unused_port().expect("No ports free");
+        let anvil = Anvil::new().spawn();
+        let l1 = anvil.endpoint().parse().unwrap();
+        const NUM_NODES: usize = 5;
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().l1_url(l1).build())
+            .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
                     &NoMetrics,
-                ),
+                )
+            }))
+            .build();
+        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+
+        // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
+        let mut events = network.peers[0].event_stream().await;
+        loop {
+            let event = events.next().await.unwrap();
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+            if leaf_chain[0].leaf.height() > 0 {
+                break;
+            }
+        }
+
+        // Shut down and restart replica 0. We don't just stop consensus and restart it; we fully
+        // drop the node and recreate it so it loses all of its temporary state and starts off from
+        // genesis. It should be able to catch up by listening to proposals and then rebuild its
+        // state from its peers.
+        tracing::info!("shutting down node");
+        network.peers.remove(0);
+
+        // Wait for a few blocks to pass while the node is down, so it falls behind.
+        network
+            .server
+            .event_stream()
+            .await
+            .filter(|event| future::ready(matches!(event.event, EventType::Decide { .. })))
+            .take(3)
+            .collect::<Vec<_>>()
+            .await;
+
+        tracing::info!("restarting node");
+        let node = network
+            .cfg
+            .init_node(
+                1,
+                ValidatedState::default(),
+                no_storage::Options,
+                None::<NullStateCatchup>,
+                None,
+                &NoMetrics,
+                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                MockSequencerVersions::new(),
+                Default::default(),
+                "http://localhost".parse().unwrap(),
+            )
+            .await;
+        let mut events = node.event_stream().await;
+
+        // Wait for a (non-genesis) block proposed by each node, to prove that the lagging node has
+        // caught up and all nodes are in sync.
+        let mut proposers = [false; NUM_NODES];
+        loop {
+            let event = events.next().await.unwrap();
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+            for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
+                let height = leaf.height();
+                let leaf_builder = (leaf.view_number().u64() as usize) % NUM_NODES;
+                if height == 0 {
+                    continue;
+                }
+
+                tracing::info!(
+                    "waiting for blocks from {proposers:?}, block {height} is from {leaf_builder}",
+                );
+                proposers[leaf_builder] = true;
+            }
+
+            if proposers.iter().all(|has_proposed| *has_proposed) {
+                break;
+            }
+        }
+    }
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_epochs_no_state_peers() {
+        setup_test();
+
+        // Start a sequencer network, using the query service for catchup.
+        let port = pick_unused_port().expect("No ports free");
+        let anvil = Anvil::new().spawn();
+        let l1 = anvil.endpoint().parse().unwrap();
+        const EPOCH_HEIGHT: u64 = 5;
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1)
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        const NUM_NODES: usize = 5;
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::with_port(port))
+            .network_config(network_config)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .build();
+        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
+
+        // Wait for replica 0 to decide in the third epoch.
+        let mut events = network.peers[0].event_stream().await;
+        loop {
+            let event = events.next().await.unwrap();
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+            tracing::error!("got decide height {}", leaf_chain[0].leaf.height());
+
+            if leaf_chain[0].leaf.height() > EPOCH_HEIGHT * 3 {
+                tracing::error!("decided past one epoch");
+                break;
+            }
+        }
+
+        // Shut down and restart replica 0. We don't just stop consensus and restart it; we fully
+        // drop the node and recreate it so it loses all of its temporary state and starts off from
+        // genesis. It should be able to catch up by listening to proposals and then rebuild its
+        // state from its peers.
+        tracing::info!("shutting down node");
+        network.peers.remove(0);
+
+        // Wait for a few blocks to pass while the node is down, so it falls behind.
+        network
+            .server
+            .event_stream()
+            .await
+            .filter(|event| future::ready(matches!(event.event, EventType::Decide { .. })))
+            .take(3)
+            .collect::<Vec<_>>()
+            .await;
+
+        tracing::error!("restarting node");
+        let node = network
+            .cfg
+            .init_node(
+                1,
+                ValidatedState::default(),
+                no_storage::Options,
+                None::<NullStateCatchup>,
                 None,
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -2326,84 +2529,6 @@ mod test {
 
         network.server.shut_down().await;
         drop(network);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_chain_config_catchup_dishonest_peer() {
-        // This test sets up a network of three nodes, each with the full chain config.
-        // One of the nodes is connected to a dishonest peer.
-        // When this node makes a chain config catchup request, it will result in an error due to the peer's malicious response.
-        // The test also makes a catchup request for another node with an honest peer, which succeeds.
-        // The requested chain config is based on the commitment from the validated state's chain config.
-        // The dishonest peer responds with an invalid (malicious) chain config
-        setup_test();
-
-        const NUM_NODES: usize = 3;
-
-        let (url, handle) = spawn_dishonest_peer_catchup_api().await.unwrap();
-
-        let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
-
-        let cf = ChainConfig {
-            max_block_size: 300.into(),
-            base_fee: 1.into(),
-            ..Default::default()
-        };
-
-        let state = ValidatedState {
-            chain_config: cf.into(),
-            ..Default::default()
-        };
-
-        let mut peers = std::array::from_fn(|_| {
-            StatePeers::<SequencerApiVersion>::from_urls(
-                vec![format!("http://localhost:{port}").parse().unwrap()],
-                BackoffParams::default(),
-                &NoMetrics,
-            )
-        });
-
-        // one of the node has dishonest peer. This list of peers is for node#1
-        peers[2] = StatePeers::<SequencerApiVersion>::from_urls(
-            vec![url.clone()],
-            BackoffParams::default(),
-            &NoMetrics,
-        );
-
-        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(Options::from(options::Http {
-                port,
-                max_connections: None,
-            }))
-            .states(std::array::from_fn(|_| state.clone()))
-            .catchups(peers)
-            .network_config(TestConfigBuilder::default().l1_url(l1).build())
-            .build();
-
-        let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
-
-        // Test a catchup request for node #0, which is connected to an honest peer.
-        // The catchup should successfully retrieve the correct chain config.
-        let node = &network.peers[0];
-        let state_catchup = node.node_state().state_catchup.clone();
-        state_catchup
-            .try_fetch_chain_config(0, cf.commit())
-            .await
-            .unwrap();
-
-        // Test a catchup request for node #1, which is connected to a dishonest peer.
-        // This request will result in an error due to the malicious chain config provided by the peer.
-        let node = &network.peers[1];
-        let state_catchup = node.node_state().state_catchup.clone();
-        state_catchup
-            .try_fetch_chain_config(0, cf.commit())
-            .await
-            .unwrap_err();
-
-        network.server.shut_down().await;
-        handle.abort();
     }
 
     #[tokio::test(flavor = "multi_thread")]
