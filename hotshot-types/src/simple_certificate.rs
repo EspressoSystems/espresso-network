@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     data::serialize_signature2,
     epoch_membership::EpochMembership,
+    light_client::LightClientState,
     message::UpgradeLock,
     simple_vote::{
         DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
@@ -33,7 +34,7 @@ use crate::{
     },
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
     },
     vote::{Certificate, HasViewNumber},
     PeerConfig, StakeTableEntries,
@@ -181,14 +182,12 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     async fn stake_table_entry(
         membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<PeerConfig<TYPES>> {
         membership.da_stake(pub_key).await
     }
 
     /// Proxy's to `Membership.da_stake_table`
-    async fn stake_table(
-        membership: &EpochMembership<TYPES>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    async fn stake_table(membership: &EpochMembership<TYPES>) -> Vec<PeerConfig<TYPES>> {
         membership.da_stake_table().await
     }
     /// Proxy's to `Membership.da_total_nodes`
@@ -262,14 +261,12 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     async fn stake_table_entry(
         membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<PeerConfig<TYPES>> {
         membership.da_stake(pub_key).await
     }
 
     /// Proxy's to `Membership.da_stake_table`
-    async fn stake_table(
-        membership: &EpochMembership<TYPES>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    async fn stake_table(membership: &EpochMembership<TYPES>) -> Vec<PeerConfig<TYPES>> {
         membership.da_stake_table().await
     }
     /// Proxy's to `Membership.da_total_nodes`
@@ -349,13 +346,11 @@ impl<
     async fn stake_table_entry(
         membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<PeerConfig<TYPES>> {
         membership.stake(pub_key).await
     }
 
-    async fn stake_table(
-        membership: &EpochMembership<TYPES>,
-    ) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    async fn stake_table(membership: &EpochMembership<TYPES>) -> Vec<PeerConfig<TYPES>> {
         membership.stake_table().await
     }
 
@@ -753,3 +748,39 @@ pub type ViewSyncFinalizeCertificate2<TYPES> =
 /// Type alias for a `UpgradeCertificate`, which is a `SimpleCertificate` of `UpgradeProposalData`
 pub type UpgradeCertificate<TYPES> =
     SimpleCertificate<TYPES, UpgradeProposalData<TYPES>, UpgradeThreshold>;
+
+/// Type for light client state update certificate
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+pub struct LightClientStateUpdateCertificate<TYPES: NodeType> {
+    /// The epoch of the light client state
+    pub epoch: TYPES::Epoch,
+    /// Light client state for epoch transition
+    pub light_client_state: LightClientState,
+    /// Signatures to the light client state
+    pub signatures: Vec<(
+        TYPES::StateSignatureKey,
+        <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+    )>,
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for LightClientStateUpdateCertificate<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        TYPES::View::new(self.light_client_state.view_number)
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for LightClientStateUpdateCertificate<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        Some(self.epoch)
+    }
+}
+
+impl<TYPES: NodeType> LightClientStateUpdateCertificate<TYPES> {
+    pub fn genesis() -> Self {
+        Self {
+            epoch: TYPES::Epoch::genesis(),
+            light_client_state: Default::default(),
+            signatures: vec![],
+        }
+    }
+}

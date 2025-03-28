@@ -1,7 +1,7 @@
 use std::{fs::File, io::stdout, path::PathBuf, time::Duration};
 
 use clap::Parser;
-use espresso_types::parse_duration;
+use espresso_types::{parse_duration, SeqTypes};
 use ethers::types::Address;
 use futures::FutureExt;
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
@@ -170,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
 
     let initial_stake_table = if let Some(path) = opt.initial_stake_table_path {
         tracing::info!("Loading initial stake table from {:?}", path);
-        Some(PermissionedStakeTableConfig::from_toml_file(&path)?.into())
+        Some(PermissionedStakeTableConfig::<SeqTypes>::from_toml_file(&path)?.into())
     } else {
         None
     };
