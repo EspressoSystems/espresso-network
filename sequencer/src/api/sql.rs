@@ -644,7 +644,7 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
     let mut reward_accounts = HashSet::default();
     let epoch_height = instance.epoch_height;
 
-    let Some(epoch_height) = epoch_height else {
+    if epoch_height == 0 {
         bail!("epoch height not set");
     };
 

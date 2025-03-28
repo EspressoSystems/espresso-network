@@ -5543,6 +5543,7 @@ dependencies = [
  "hotshot-types",
  "libp2p-identity",
  "multiaddr",
+ "primitive-types",
  "serde",
  "surf-disco",
  "tide-disco",

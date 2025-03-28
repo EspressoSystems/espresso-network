@@ -74,7 +74,7 @@ pub struct ValidatorConfig<KEY: SignatureKey> {
     /// The validator's private key, should be in the mempool, not public
     pub private_key: KEY::PrivateKey,
     /// The validator's stake
-    pub stake_value: u64,
+    pub stake_value: U256,
     /// the validator's key pairs for state signing/verification
     pub state_key_pair: light_client::StateKeyPair,
     /// Whether or not this validator is DA
@@ -90,6 +90,8 @@ impl<KEY: SignatureKey> ValidatorConfig<KEY> {
         stake_value: u64,
         is_da: bool,
     ) -> Self {
+        let stake_value = U256::from(stake_value);
+
         let (public_key, private_key) = KEY::generated_from_seed_indexed(seed, index);
         let state_key_pairs = light_client::StateKeyPair::generate_from_seed_indexed(seed, index);
         Self {
@@ -104,9 +106,7 @@ impl<KEY: SignatureKey> ValidatorConfig<KEY> {
     /// get the public config of the validator
     pub fn public_config(&self) -> PeerConfig<KEY> {
         PeerConfig {
-            stake_table_entry: self
-                .public_key
-                .stake_table_entry(U256::from(self.stake_value)),
+            stake_table_entry: self.public_key.stake_table_entry(self.stake_value),
             state_ver_key: self.state_key_pair.0.ver_key(),
         }
     }
