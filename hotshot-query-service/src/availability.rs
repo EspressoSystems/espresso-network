@@ -85,6 +85,12 @@ pub struct Options {
     pub large_object_range_limit: usize,
 }
 
+impl Options {
+    pub fn with_fetch_timeout(mut self, fetch_timeout: Duration) -> Self {
+        self.fetch_timeout = fetch_timeout;
+        self
+    }
+}
 impl Default for Options {
     fn default() -> Self {
         Self {
