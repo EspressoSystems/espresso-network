@@ -3,7 +3,7 @@ use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 use alloy::{
     network::EthereumWallet,
     primitives::Address,
-    providers::{Provider, ProviderBuilder},
+    providers::ProviderBuilder,
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use clap::Parser;
@@ -180,20 +180,14 @@ async fn main() -> anyhow::Result<()> {
     let deployer = signer.address();
     let wallet = EthereumWallet::from(signer);
     let provider = ProviderBuilder::new().wallet(wallet).on_http(opt.rpc_url);
-    let admin = deployer;
 
     if opt.deploy_fee {
-        let fee_proxy_addr =
-            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
-        if let Some(multisig) = opt.multisig_address {
-            transfer_ownership(
-                &provider,
-                Contract::FeeContractProxy,
-                fee_proxy_addr,
-                multisig,
-            )
-            .await?;
-        }
+        let owner = match opt.multisig_address {
+            Some(multisig) => multisig,
+            None => deployer,
+        };
+        let _fee_proxy_addr =
+            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, owner).await?;
     }
 
     if opt.deploy_permissioned_stake_table {
@@ -230,10 +224,44 @@ async fn main() -> anyhow::Result<()> {
             opt.use_mock,
             genesis_state,
             genesis_stake,
-            admin,
+            deployer,
             opt.permissioned_prover,
         )
         .await?;
+        // NOTE: in actual production, we should transfer ownership to multisig at this point,
+        // and only upgrade from multisig, but here for tests and demo, we only transfer ownership
+        // after upgrade so that the deployer can still upgrade.
+
+        if opt.upgrade_light_client_v2 {
+            // fetch epoch length from HotShot config
+            let config_url = opt.sequencer_url.join("/config/hotshot")?;
+            // Request the configuration until it is successful
+            let blocks_per_epoch = loop {
+                match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                    config_url.clone(),
+                )
+                .get::<PublicNetworkConfig>(config_url.as_str())
+                .send()
+                .await
+                {
+                    Ok(resp) => break resp.hotshot_config().blocks_per_epoch(),
+                    Err(e) => {
+                        tracing::error!("Failed to fetch the network config: {e}");
+                        sleep(Duration::from_secs(5));
+                    },
+                }
+            };
+
+            deployer::upgrade_light_client_v2(
+                &provider,
+                &mut contracts,
+                opt.use_mock,
+                blocks_per_epoch,
+            )
+            .await?;
+        }
+
+        // NOTE: see the comment during LC V1 deployment, we defer ownership transfer to multisig here.
         if let Some(multisig) = opt.multisig_address {
             transfer_ownership(
                 &provider,
@@ -243,33 +271,6 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
-    }
-
-    if opt.upgrade_light_client_v2 {
-        // fetch epoch length from HotShot config
-        let config_url = opt.sequencer_url.join("/config/hotshot")?;
-        // Request the configuration until it is successful
-        let blocks_per_epoch = loop {
-            match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(config_url.clone())
-                .get::<PublicNetworkConfig>(config_url.as_str())
-                .send()
-                .await
-            {
-                Ok(resp) => break resp.hotshot_config().blocks_per_epoch(),
-                Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5));
-                },
-            }
-        };
-
-        deployer::upgrade_light_client_v2(
-            &provider,
-            &mut contracts,
-            opt.use_mock,
-            blocks_per_epoch,
-        )
-        .await?;
     }
 
     if let Some(out) = &opt.out {
