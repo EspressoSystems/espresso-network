@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, io, iter::once, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use clap::Parser;
 use contract_bindings_ethers::light_client_mock::LightClientMock;
-use espresso_types::{parse_duration, MarketplaceVersion, SequencerVersions, V0_1};
+use espresso_types::{parse_duration, FeeVersion, SequencerVersions, V0_1};
 use ethers::{
     middleware::{MiddlewareBuilder, SignerMiddleware},
     providers::{Http, Middleware, Provider},
@@ -227,7 +227,7 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     let network =
-        TestNetwork::new(config, SequencerVersions::<MarketplaceVersion, V0_1>::new()).await;
+        TestNetwork::new(config, SequencerVersions::<FeeVersion, V0_1>::new()).await;
     let st = network.cfg.stake_table();
     let total_stake = st.total_stake(SnapshotVersion::LastEpochStart).unwrap();
     let config = network.cfg.hotshot_config();
