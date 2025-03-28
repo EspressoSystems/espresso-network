@@ -2,8 +2,11 @@
 //! a set of recipients and wait for responses.
 
 use std::{
+    any::Any,
     collections::HashMap,
+    future::Future,
     marker::PhantomData,
+    pin::Pin,
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
@@ -17,7 +20,7 @@ use network::{Bytes, Receiver, Sender};
 use parking_lot::RwLock;
 use rand::seq::SliceRandom;
 use recipient_source::RecipientSource;
-use request::{Request, Response};
+use request::Request;
 use tokio::{
     spawn,
     time::{sleep, timeout},
@@ -236,7 +239,7 @@ impl<
     /// # Errors
     /// - If the request was invalid
     /// - If there was a critical error (e.g. the channel was closed)
-    pub async fn request_indefinitely(
+    pub async fn request_indefinitely<F, Fut, O>(
         self: &Arc<Self>,
         public_key: &K,
         private_key: &K::PrivateKey,
@@ -245,9 +248,14 @@ impl<
         estimated_request_ttl: Duration,
         // The request to make
         request: Req,
-        // Any additional context that we may need for response validation
-        validation_context: &<Req::Response as Response<Req>>::ValidationContext,
-    ) -> std::result::Result<<Req::Response as Response<Req>>::Output, RequestError> {
+        // The response validation function
+        response_validation_fn: F,
+    ) -> std::result::Result<O, RequestError>
+    where
+        F: Fn(&Req, Req::Response) -> Fut + Send + Sync + 'static + Clone,
+        Fut: Future<Output = anyhow::Result<O>> + Send + Sync + 'static,
+        O: Send + Sync + 'static + Clone,
+    {
         loop {
             // Sign a request message
             let request_message = RequestMessage::new_signed(public_key, private_key, &request)
@@ -259,7 +267,11 @@ impl<
 
             // Request the data, handling the errors appropriately
             match self
-                .request(request_message, estimated_request_ttl, validation_context)
+                .request(
+                    request_message,
+                    estimated_request_ttl,
+                    response_validation_fn.clone(),
+                )
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -277,12 +289,17 @@ impl<
     /// - If the request times out
     /// - If the channel is closed (this is an internal error)
     /// - If the request we sign is invalid
-    pub async fn request(
+    pub async fn request<F, Fut, O>(
         self: &Arc<Self>,
         request_message: RequestMessage<Req, K>,
         timeout_duration: Duration,
-        validation_context: &<Req::Response as Response<Req>>::ValidationContext,
-    ) -> std::result::Result<<Req::Response as Response<Req>>::Output, RequestError> {
+        response_validation_fn: F,
+    ) -> std::result::Result<O, RequestError>
+    where
+        F: Fn(&Req, Req::Response) -> Fut + Send + Sync + 'static + Clone,
+        Fut: Future<Output = anyhow::Result<O>> + Send + Sync + 'static,
+        O: Send + Sync + 'static + Clone,
+    {
         timeout(timeout_duration, async move {
             // Calculate the hash of the request
             let request_hash = blake3::hash(&request_message.request.to_bytes().map_err(|e| {
@@ -306,12 +323,34 @@ impl<
                     // Create a new broadcast channel for the response
                     let (sender, receiver) = async_broadcast::broadcast(1);
 
+                    // Modify the response validation function to return an `Arc<dyn Any>`
+                    let response_validation_fn =
+                        Box::new(move |request: &Req, response: Req::Response| {
+                            let fut = response_validation_fn(request, response);
+                            Box::pin(async move {
+                                fut.await
+                                    .map(|ok| Arc::new(ok) as Arc<dyn Any + Send + Sync + 'static>)
+                            })
+                                as Pin<
+                                    Box<
+                                        dyn Future<
+                                                Output = Result<
+                                                    Arc<dyn Any + Send + Sync + 'static>,
+                                                    anyhow::Error,
+                                                >,
+                                            > + Send
+                                            + Sync
+                                            + 'static,
+                                    >,
+                                >
+                        });
+
                     // Create a new active request
                     let active_request = ActiveRequest(Arc::new(ActiveRequestInner {
                         sender,
                         receiver,
+                        response_validation_fn,
                         request: request_message.request.clone(),
-                        validation_context: validation_context.clone(),
                         active_requests: Arc::clone(&self.active_requests),
                         request_hash,
                     }));
@@ -399,6 +438,15 @@ impl<
         .await
         .map_err(|_| RequestError::Timeout)
         .and_then(|result| result)
+        .and_then(|result| {
+            result.downcast::<O>().map_err(|e| {
+                RequestError::Other(anyhow::anyhow!(
+                    "failed to downcast response to expected type: {:?}",
+                    e
+                ))
+            })
+        })
+        .map(|result| Arc::unwrap_or_clone(result))
     }
 
     /// The task responsible for receiving messages from the receiver and handling them
@@ -524,10 +572,11 @@ impl<
         let response_task = AbortOnDropHandle::new(tokio::spawn(async move {
             if timeout(response_validate_timeout, async move {
                 // Make sure the response is valid for the given request
-                let validation_result = match response
-                    .response
-                    .validate(&active_request.request, &active_request.validation_context)
-                    .await
+                let validation_result = match (active_request.response_validation_fn)(
+                    &active_request.request,
+                    response.response,
+                )
+                .await
                 {
                     Ok(validation_result) => validation_result,
                     Err(e) => {
@@ -560,14 +609,29 @@ pub struct ActiveRequest<R: Request>(Arc<ActiveRequestInner<R>>);
 /// The inner implementation of an active request
 pub struct ActiveRequestInner<R: Request> {
     /// The sender to use for the protocol
-    sender: async_broadcast::Sender<<R::Response as Response<R>>::Output>,
+    sender: async_broadcast::Sender<Arc<dyn Any + Send + Sync + 'static>>,
     /// The receiver to use for the protocol
-    receiver: async_broadcast::Receiver<<R::Response as Response<R>>::Output>,
+    receiver: async_broadcast::Receiver<Arc<dyn Any + Send + Sync + 'static>>,
 
     /// The request that we are waiting for a response to
     request: R,
-    /// The context which we need for response validation
-    validation_context: <R::Response as Response<R>>::ValidationContext,
+
+    /// The function used to validate the response
+    response_validation_fn: Box<
+        dyn Fn(
+                &R,
+                R::Response,
+            ) -> Pin<
+                Box<
+                    dyn Future<Output = Result<Arc<dyn Any + Send + Sync + 'static>, anyhow::Error>>
+                        + Send
+                        + Sync
+                        + 'static,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    >,
 
     /// A copy of the map of currently active requests
     active_requests: ActiveRequestsMap<R>,
@@ -608,7 +672,21 @@ mod tests {
             sender,
             receiver,
             request: TestRequest(vec![1, 2, 3]),
-            validation_context: (),
+            response_validation_fn: Box::new(|_request, _response| {
+                Box::pin(async move { Ok(Arc::new(()) as Arc<dyn Any + Send + Sync + 'static>) })
+                    as Pin<
+                        Box<
+                            dyn Future<
+                                    Output = Result<
+                                        Arc<dyn Any + Send + Sync + 'static>,
+                                        anyhow::Error,
+                                    >,
+                                > + Send
+                                + Sync
+                                + 'static,
+                        >,
+                    >
+            }),
             active_requests: Arc::clone(&active_requests),
             request_hash: blake3::hash(&[1, 2, 3]),
         }));
@@ -686,21 +764,6 @@ mod tests {
         type Response = Vec<u8>;
         async fn validate(&self) -> Result<()> {
             Ok(())
-        }
-    }
-
-    // Implement the [`Response`] trait for the [`TestRequest`] type
-    #[async_trait]
-    impl Response<TestRequest> for Vec<u8> {
-        type ValidationContext = ();
-        type Output = Self;
-
-        async fn validate(
-            self,
-            _request: &TestRequest,
-            _context: &Self::ValidationContext,
-        ) -> Result<Self::Output> {
-            Ok(self)
         }
     }
 
@@ -863,7 +926,11 @@ mod tests {
 
                 // Request the data from the protocol
                 let response = protocol
-                    .request(request, config.request_timeout, &())
+                    .request(
+                        request,
+                        config.request_timeout,
+                        |_request, response| async move { Ok(response) },
+                    )
                     .await?;
 
                 // Make sure the response is the hash of the request
@@ -995,7 +1062,11 @@ mod tests {
                 // Start requesting it
                 one_clone
                     .0
-                    .request(request_message, Duration::from_secs(20), &())
+                    .request(
+                        request_message,
+                        Duration::from_secs(20),
+                        |_request, response| async move { Ok(response) },
+                    )
                     .await?;
 
                 Ok::<(), anyhow::Error>(())
