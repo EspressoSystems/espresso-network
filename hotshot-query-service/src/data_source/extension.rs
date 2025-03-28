@@ -117,26 +117,21 @@ impl<D, U> AsMut<U> for ExtensibleDataSource<D, U> {
     }
 }
 
+#[async_trait]
 impl<D, U> VersionedDataSource for ExtensibleDataSource<D, U>
 where
     D: VersionedDataSource + Send,
     U: Send + Sync,
 {
-    type Transaction<'a>
-        = D::Transaction<'a>
-    where
-        Self: 'a;
+    type Transaction = D::Transaction;
 
-    type ReadOnly<'a>
-        = D::ReadOnly<'a>
-    where
-        Self: 'a;
+    type ReadOnly = D::ReadOnly;
 
-    async fn write(&self) -> anyhow::Result<Self::Transaction<'_>> {
+    async fn write(&self) -> anyhow::Result<Self::Transaction> {
         self.data_source.write().await
     }
 
-    async fn read(&self) -> anyhow::Result<Self::ReadOnly<'_>> {
+    async fn read(&self) -> anyhow::Result<Self::ReadOnly> {
         self.data_source.read().await
     }
 }

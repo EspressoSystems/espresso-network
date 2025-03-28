@@ -93,9 +93,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
         fetch_header_and_then(
@@ -165,7 +164,7 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
     let Some(payload_fetcher) = fetcher.payload_fetcher.as_ref() else {
@@ -225,9 +224,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
         // We don't have storage for the payload alone, only the whole block. So if we need to fetch
@@ -293,7 +291,7 @@ impl<Types: NodeType, S, P> Callback<Payload<Types>> for PayloadCallback<Types, 
 where
     Payload<Types>: QueryablePayload<Types>,
     S: 'static + VersionedDataSource,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
     async fn run(self, payload: Payload<Types>) {
@@ -339,9 +337,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
         // Trigger the full block to be fetched. This will be enough to satisfy this request for the
