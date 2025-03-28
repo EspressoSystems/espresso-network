@@ -31,6 +31,8 @@ impl AvidMNsProof {
         }
     }
 
+    /// Unlike the ADVZ scheme, this function won't fail with a wrong `ns_table`.
+    /// It only uses `ns_table` to get the namespace id.
     pub fn verify(
         &self,
         ns_table: &NsTable,
@@ -119,7 +121,6 @@ mod tests {
                         .iter()
                         .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
                         .collect::<Vec<_>>();
-                    // let vid = vid.disperse(block.encode()).unwrap();
                     let vid_commit =
                         AvidMScheme::commit(&param, &block.encode(), ns_table.clone()).unwrap();
                     let ns_proofs: Vec<AvidMNsProof> = block
@@ -171,16 +172,10 @@ mod tests {
         let ns_proof_0_0 = &blocks[0].ns_proofs[0];
         let ns_table_0 = blocks[0].block.ns_table();
         let ns_table_1 = blocks[1].block.ns_table();
-        let vid_commit_0 = &blocks[0].vid_commit;
         let vid_commit_1 = &blocks[1].vid_commit;
 
         // mix and match ns_table, vid_commit, vid_common
         {
-            // wrong ns_table
-            assert!(ns_proof_0_0
-                .verify(ns_table_1, vid_commit_0, &param)
-                .is_none());
-
             // wrong vid commitment
             assert!(ns_proof_0_0
                 .verify(ns_table_0, vid_commit_1, &param)

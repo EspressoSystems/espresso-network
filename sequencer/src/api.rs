@@ -1286,7 +1286,7 @@ mod api_tests {
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::availability::{
-        ADVZCommonQueryData, AvailabilityDataSource, BlockQueryData,
+        AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
     };
     use hotshot_types::{
         data::{
@@ -1312,7 +1312,7 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
-        api::endpoints::ADVZNamespaceProofQueryData,
+        api::endpoints::NamespaceProofQueryData,
         network,
         persistence::no_storage::NoStorage,
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
@@ -1394,7 +1394,7 @@ mod api_tests {
                 .send()
                 .await
                 .unwrap();
-            let ns_query_res: ADVZNamespaceProofQueryData = client
+            let ns_query_res: NamespaceProofQueryData = client
                 .get(&format!("availability/block/{block_num}/namespace/{ns_id}"))
                 .send()
                 .await
@@ -1402,7 +1402,7 @@ mod api_tests {
 
             // Verify namespace proof if present
             if let Some(ns_proof) = ns_query_res.proof {
-                let vid_common: ADVZCommonQueryData<SeqTypes> = client
+                let vid_common: VidCommonQueryData<SeqTypes> = client
                     .get(&format!("availability/vid/common/{block_num}"))
                     .send()
                     .await
