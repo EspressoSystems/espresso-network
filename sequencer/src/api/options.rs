@@ -268,11 +268,7 @@ impl Options {
         let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
         let api_state: endpoints::AvailState<N, P, D, V> = ds.clone().into();
         let mut app = App::<_, Error>::with_state(api_state);
-        let fetch_timeout = self
-            .query
-            .clone()
-            .map(|query| query.fetch_timeout)
-            .flatten();
+        let fetch_timeout = self.query.clone().and_then(|query| query.fetch_timeout);
         // Initialize status API
         let status_api = status::define_api::<endpoints::AvailState<N, P, D, _>, _>(
             &Default::default(),

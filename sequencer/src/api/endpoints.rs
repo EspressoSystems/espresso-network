@@ -106,7 +106,7 @@ where
     if let Some(timeout) = fetch_timeout {
         options = options.with_fetch_timeout(timeout);
     }
-    
+
     let extension = toml::from_str(include_str!("../../api/availability.toml"))?;
     options.extensions.push(extension);
     let timeout = options.fetch_timeout;
