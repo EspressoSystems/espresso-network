@@ -177,9 +177,10 @@ async fn main() -> anyhow::Result<()> {
         .expect("wrong mnemonic or index")
         .build()
         .expect("fail to build signer");
+    let deployer = signer.address();
     let wallet = EthereumWallet::from(signer);
     let provider = ProviderBuilder::new().wallet(wallet).on_http(opt.rpc_url);
-    let admin = provider.get_accounts().await?[0];
+    let admin = deployer;
 
     if opt.deploy_fee {
         let fee_proxy_addr =
