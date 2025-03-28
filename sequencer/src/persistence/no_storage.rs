@@ -21,7 +21,10 @@ use hotshot_types::{
     drb::DrbResult,
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        UpgradeCertificate,
+    },
 };
 use indexmap::IndexMap;
 
@@ -227,6 +230,19 @@ impl SequencerPersistence for NoStorage {
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         Ok(Vec::new())
+    }
+
+    async fn add_state_cert(
+        &self,
+        _state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+        Ok(None)
     }
 }
 

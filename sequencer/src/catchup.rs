@@ -17,7 +17,7 @@ use espresso_types::{
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     v0_99::ChainConfig,
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState,
+    FeeMerkleTree, Leaf2, NodeState, SeqTypes,
 };
 use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
@@ -46,7 +46,7 @@ use tracing::warn;
 use url::Url;
 use vbs::version::StaticVersionType;
 
-use crate::{api::BlocksFrontier, PubKey};
+use crate::api::BlocksFrontier;
 
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
@@ -223,8 +223,8 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     #[tracing::instrument(skip(self, my_own_validator_config))]
     pub async fn fetch_config(
         &self,
-        my_own_validator_config: ValidatorConfig<PubKey>,
-    ) -> anyhow::Result<NetworkConfig<PubKey>> {
+        my_own_validator_config: ValidatorConfig<SeqTypes>,
+    ) -> anyhow::Result<NetworkConfig<SeqTypes>> {
         self.backoff()
             .retry(self, move |provider, retry| {
                 let my_own_validator_config = my_own_validator_config.clone();
@@ -890,7 +890,7 @@ impl StateCatchup for ParallelStateCatchup {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<PubKey>>,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: NonZeroU64,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {

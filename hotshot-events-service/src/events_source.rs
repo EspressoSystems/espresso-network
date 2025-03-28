@@ -26,8 +26,9 @@ where
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound = "Types::SignatureKey: for<'a> Deserialize<'a>")]
 pub struct StartupInfo<Types: NodeType> {
-    pub known_node_with_stake: Vec<PeerConfig<Types::SignatureKey>>,
+    pub known_node_with_stake: Vec<PeerConfig<Types>>,
     pub non_staked_node_count: usize,
 }
 
@@ -46,12 +47,12 @@ pub struct EventsStreamer<Types: NodeType> {
     subscriber_send_channel: BroadcastSender<Arc<Event<Types>>>,
 
     // required for sending startup info
-    known_nodes_with_stake: Vec<PeerConfig<Types::SignatureKey>>,
+    known_nodes_with_stake: Vec<PeerConfig<Types>>,
     non_staked_node_count: usize,
 }
 
 impl<Types: NodeType> EventsStreamer<Types> {
-    pub fn known_node_with_stake(&self) -> Vec<PeerConfig<Types::SignatureKey>> {
+    pub fn known_node_with_stake(&self) -> Vec<PeerConfig<Types>> {
         self.known_nodes_with_stake.clone()
     }
 
@@ -155,7 +156,7 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
 
 impl<Types: NodeType> EventsStreamer<Types> {
     pub fn new(
-        known_nodes_with_stake: Vec<PeerConfig<Types::SignatureKey>>,
+        known_nodes_with_stake: Vec<PeerConfig<Types>>,
         non_staked_node_count: usize,
     ) -> Self {
         let (mut subscriber_send_channel, to_subscribe_clone_recv) =

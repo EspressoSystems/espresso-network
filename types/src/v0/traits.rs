@@ -20,7 +20,8 @@ use hotshot_types::{
     event::{HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
@@ -38,7 +39,7 @@ use super::{
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     v0_3::{IndexedStake, Validator},
-    EpochVersion, PubKey, SequencerVersions,
+    EpochVersion, SequencerVersions,
 };
 use crate::{
     v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,
@@ -52,7 +53,7 @@ pub trait StateCatchup: Send + Sync {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<PubKey>>,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: NonZeroU64,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
@@ -239,7 +240,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<PubKey>>,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: NonZeroU64,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
@@ -437,6 +438,9 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         &self,
     ) -> anyhow::Result<Option<UpgradeCertificate<SeqTypes>>>;
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>>;
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>>;
 
     /// Load the latest known consensus state.
     ///
@@ -539,12 +543,19 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
             .await
             .context("loading start epoch info")?;
 
+        let state_cert = self
+            .load_state_cert()
+            .await
+            .context("loading light client state update certificate")?
+            .unwrap_or(LightClientStateUpdateCertificate::genesis());
+
         tracing::info!(
             ?leaf,
             ?view,
             ?epoch,
             ?high_qc,
             ?validated_state,
+            ?state_cert,
             "loaded consensus state"
         );
 
@@ -567,6 +578,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
                 undecided_state: Default::default(),
                 saved_vid_shares: Default::default(), // TODO: implement saved_vid_shares
                 start_epoch_info,
+                state_cert,
             },
             anchor_view,
         ))
@@ -724,6 +736,10 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         epoch: <SeqTypes as NodeType>::Epoch,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()>;
+    async fn add_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -841,6 +857,13 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
         (**self).add_epoch_root(epoch, block_header).await
+    }
+
+    async fn update_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        (**self).add_state_cert(state_cert).await
     }
 }
 

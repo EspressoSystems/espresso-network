@@ -9,7 +9,7 @@ use espresso_types::{
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     v0_99::ChainConfig,
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
+    FeeMerkleTree, Leaf2, NodeState, SeqTypes, SequencerVersions,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
@@ -136,7 +136,7 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> StateCatchup for RequestRespo
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<PubKey>>,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: NonZeroU64,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {

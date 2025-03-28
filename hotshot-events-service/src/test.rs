@@ -97,7 +97,7 @@ mod tests {
         let pub_key = BLSPubKey::from_private(&private_key);
         let state_key_pair = StateKeyPair::generate();
 
-        let peer_config = PeerConfig::<BLSPubKey> {
+        let peer_config = PeerConfig::<TestTypes> {
             stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
         };
