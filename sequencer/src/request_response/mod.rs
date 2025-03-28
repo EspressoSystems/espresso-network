@@ -20,13 +20,14 @@ pub mod request;
 #[derive(Clone, Deref)]
 pub struct RequestResponseProtocol<I: NodeImplementation<SeqTypes>, V: Versions> {
     #[deref]
+    #[allow(clippy::type_complexity)]
     /// The actual inner request response protocol
     inner: RequestResponse<
         Sender,
         Receiver<Bytes>,
         Request,
         RecipientSource<I, V>,
-        DataSource,
+        DataSource<I, V>,
         PubKey,
     >,
 
@@ -54,7 +55,7 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> RequestResponseProtocol<I, V>
         recipient_source: RecipientSource<I, V>,
         // The [response] data source that [`RequestResponseProtocol`] will use to derive the
         // response data for a specific request
-        data_source: DataSource,
+        data_source: DataSource<I, V>,
         // The public key of this node
         public_key: PubKey,
         // The private key of this node

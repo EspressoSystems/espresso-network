@@ -191,6 +191,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             DataSource {
                 node_state: instance_state.clone(),
                 storage,
+                consensus: handle.hotshot.clone(),
             },
             validator_config.public_key,
             validator_config.private_key.clone(),

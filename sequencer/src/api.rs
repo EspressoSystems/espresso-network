@@ -468,25 +468,6 @@ impl<
     }
 }
 
-// #[async_trait]
-// impl<
-//         N: ConnectedNetwork<PubKey>,
-//         V: Versions,
-//         P: SequencerPersistence,
-//         D: ChainConfigPersistence + Send + Sync,
-//     > ChainConfigPersistence for StorageState<N, P, D, V>
-// {
-//     async fn insert_chain_config(&mut self, chain_config: ChainConfig) -> anyhow::Result<()> {
-//         self.inner_mut().insert_chain_config(chain_config).await
-//     }
-//     async fn load_chain_config(
-//         &self,
-//         commitment: Commitment<ChainConfig>,
-//     ) -> anyhow::Result<ChainConfig> {
-//         self.inner().load_chain_config(commitment).await
-//     }
-// }
-
 impl<N, V, P> NodeStateDataSource for ApiState<N, P, V>
 where
     N: ConnectedNetwork<PubKey>,

@@ -168,6 +168,7 @@ impl Options {
 
         // The server state type depends on whether we are running a query or status API or not, so
         // we handle the two cases differently.
+        #[allow(clippy::type_complexity)]
         let (metrics, consumer, storage): (
             Box<dyn Metrics>,
             Box<dyn EventConsumer>,
