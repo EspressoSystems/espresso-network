@@ -207,24 +207,31 @@ pub(crate) async fn handle_quorum_proposal_validated<
         .await
     };
 
-    if let Some(cert) = &task_state.staged_epoch_upgrade_certificate {
-        if leaf_views.last().unwrap().leaf.height() >= task_state.epoch_upgrade_block_height {
-            let mut decided_certificate_lock = task_state
-                .upgrade_lock
-                .decided_upgrade_certificate
-                .write()
-                .await;
-            *decided_certificate_lock = Some(cert.clone());
-            drop(decided_certificate_lock);
+    if let Some(cert) = task_state.staged_epoch_upgrade_certificate.clone() {
+        for leaf_view in &leaf_views {
+            if leaf_view.leaf.height() == task_state.epoch_upgrade_block_height {
+                let mut amended_upgrade_certificate = cert.clone();
+                amended_upgrade_certificate.data.old_version_last_view =
+                    leaf_view.leaf.view_number() + 4;
+                amended_upgrade_certificate.data.new_version_first_view =
+                    leaf_view.leaf.view_number() + 5;
+                let mut decided_certificate_lock = task_state
+                    .upgrade_lock
+                    .decided_upgrade_certificate
+                    .write()
+                    .await;
+                *decided_certificate_lock = Some(amended_upgrade_certificate.clone());
+                drop(decided_certificate_lock);
 
-            let _ = task_state
-                .storage
-                .write()
-                .await
-                .update_decided_upgrade_certificate(Some(cert.clone()))
-                .await;
+                let _ = task_state
+                    .storage
+                    .write()
+                    .await
+                    .update_decided_upgrade_certificate(Some(amended_upgrade_certificate.clone()))
+                    .await;
 
-            task_state.staged_epoch_upgrade_certificate = None;
+                task_state.staged_epoch_upgrade_certificate = None;
+            }
         }
     };
 
