@@ -146,7 +146,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 if self.consensus.read().await.cur_view() > proposal.data.view_number()
                     || self.cur_view > proposal.data.view_number()
                 {
-                    tracing::error!(
+                    tracing::warn!(
                         "Throwing away old proposal for view {:?}",
                         proposal.data.view_number()
                     );
