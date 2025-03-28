@@ -401,7 +401,12 @@ pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow
         .context("epoch height not found")?;
     let epoch = EpochNumber::new(height % epoch_height);
     let coordinator = instance_state.coordinator.clone();
-    let first_epoch = coordinator.membership().read().await.first_epoch();
+    let first_epoch = coordinator
+        .membership()
+        .read()
+        .await
+        .first_epoch()
+        .context("The first epoch was not set.")?;
 
     Ok(epoch == first_epoch || epoch == first_epoch + 1)
 }
