@@ -148,7 +148,7 @@ pub trait StateCatchup: Send + Sync {
         self.backoff()
             .retry(mt, |mt, retry| {
                 self.try_remember_blocks_merkle_tree(retry, instance, height, view, mt)
-                    .map_err(|err| err.context("fetching frontier"))
+                    .map_err(|err| err.context(format!("fetching frontier using {}", self.name())))
                     .boxed()
             })
             .await

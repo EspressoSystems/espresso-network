@@ -23,6 +23,8 @@ pub struct RecipientSource<I: NodeImplementation<SeqTypes>, V: Versions> {
     pub consensus: Consensus<I, V>,
     /// A copy of the membership coordinator
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
+    /// The public key of the node
+    pub public_key: PubKey,
 }
 
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
@@ -62,6 +64,7 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> RecipientSourceTrait<Request,
             .await
             .iter()
             .map(|entry| entry.stake_table_entry.stake_key)
+            .filter(|key| *key != self.public_key)
             .collect())
     }
 }

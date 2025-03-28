@@ -186,6 +186,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             RecipientSource {
                 memberships: coordinator,
                 consensus: handle.hotshot.clone(),
+                public_key: validator_config.public_key,
             },
             DataSource {
                 node_state: instance_state.clone(),
