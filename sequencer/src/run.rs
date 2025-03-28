@@ -218,7 +218,7 @@ where
             }
 
             http_opt
-                .serve(move |metrics, consumer| {
+                .serve(move |metrics, consumer, storage| {
                     async move {
                         init_node(
                             genesis,
@@ -226,6 +226,7 @@ where
                             &*metrics,
                             persistence,
                             l1_params,
+                            storage,
                             versions,
                             consumer,
                             opt.is_da,
@@ -246,6 +247,7 @@ where
                 &NoMetrics,
                 persistence,
                 l1_params,
+                None,
                 versions,
                 NullEventConsumer,
                 opt.is_da,

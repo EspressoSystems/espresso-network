@@ -294,8 +294,9 @@ mod tests {
     use hotshot_types::signature_key::BLSPubKey;
     use rand::Rng;
 
-    use super::*;
     use crate::request::Response;
+
+    use super::*;
 
     // A testing implementation of the [`Serializable`] trait for [`Vec<u8>`]
     impl Serializable for Vec<u8> {
@@ -311,6 +312,7 @@ mod tests {
     #[async_trait]
     impl Request for Vec<u8> {
         type Response = Vec<u8>;
+
         async fn validate(&self) -> Result<()> {
             Ok(())
         }
@@ -319,8 +321,15 @@ mod tests {
     /// A testing implementation of the [`Response`] trait for [`Vec<u8>`]
     #[async_trait]
     impl Response<Vec<u8>> for Vec<u8> {
-        async fn validate(&self, _request: &Vec<u8>) -> Result<()> {
-            Ok(())
+        type ValidationContext = ();
+        type Output = Self;
+
+        async fn validate(
+            self,
+            _request: &Vec<u8>,
+            _context: &Self::ValidationContext,
+        ) -> Result<Self::Output> {
+            Ok(self)
         }
     }
 

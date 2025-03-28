@@ -450,7 +450,7 @@ pub async fn catchup_missing_accounts(
         );
 
         let missing_account_proofs = instance_state
-            .peers
+            .state_catchup
             .fetch_reward_accounts(
                 instance_state,
                 height,

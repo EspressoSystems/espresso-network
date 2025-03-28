@@ -896,14 +896,14 @@ pub mod test_helpers {
             let mut nodes = join_all(
                 izip!(cfg.state, cfg.persistence, cfg.catchup)
                     .enumerate()
-                    .map(|(i, (state, persistence, catchup))| {
+                    .map(|(i, (state, persistence, state_peers))| {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
                         let upgrades_map = cfg.upgrades();
                         let marketplace_builder_url = marketplace_builder_url.clone();
                         async move {
                             if i == 0 {
-                                opt.serve(|metrics, consumer| {
+                                opt.serve(|metrics, consumer, storage| {
                                     let cfg = cfg.clone();
                                     async move {
                                         Ok(cfg
@@ -911,7 +911,8 @@ pub mod test_helpers {
                                                 0,
                                                 state,
                                                 persistence,
-                                                catchup,
+                                                state_peers,
+                                                storage,
                                                 &*metrics,
                                                 STAKE_TABLE_CAPACITY_FOR_TEST,
                                                 consumer,
@@ -930,7 +931,8 @@ pub mod test_helpers {
                                     i,
                                     state,
                                     persistence,
-                                    catchup,
+                                    state_peers,
+                                    None,
                                     &NoMetrics,
                                     STAKE_TABLE_CAPACITY_FOR_TEST,
                                     NullEventConsumer,
@@ -2071,6 +2073,7 @@ mod test {
                     Default::default(),
                     &NoMetrics,
                 ),
+                None,
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
@@ -2180,6 +2183,7 @@ mod test {
                     Default::default(),
                     &NoMetrics,
                 ),
+                None,
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
@@ -2406,14 +2410,17 @@ mod test {
         // Test a catchup request for node #0, which is connected to an honest peer.
         // The catchup should successfully retrieve the correct chain config.
         let node = &network.peers[0];
-        let peers = node.node_state().peers;
-        peers.try_fetch_chain_config(0, cf.commit()).await.unwrap();
+        let state_catchup = node.node_state().state_catchup.clone();
+        state_catchup
+            .try_fetch_chain_config(0, cf.commit())
+            .await
+            .unwrap();
 
         // Test a catchup request for node #1, which is connected to a dishonest peer.
         // This request will result in an error due to the malicious chain config provided by the peer.
         let node = &network.peers[1];
-        let peers = node.node_state().peers;
-        peers
+        let state_catchup = node.node_state().state_catchup.clone();
+        state_catchup
             .try_fetch_chain_config(0, cf.commit())
             .await
             .unwrap_err();

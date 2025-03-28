@@ -619,7 +619,7 @@ impl Header {
                 tracing::info!("fetching chain config {} from peers", validated_cf.commit());
 
                 instance_state
-                    .peers
+                    .state_catchup
                     .as_ref()
                     .fetch_chain_config(validated_cf.commit())
                     .await
@@ -916,7 +916,7 @@ impl BlockHeader<SeqTypes> for Header {
 
             // Fetch missing fee state entries
             let missing_account_proofs = instance_state
-                .peers
+                .state_catchup
                 .as_ref()
                 .fetch_accounts(
                     instance_state,
@@ -939,7 +939,7 @@ impl BlockHeader<SeqTypes> for Header {
         if validated_state.need_to_fetch_blocks_mt_frontier() {
             tracing::warn!(height, ?view, "fetching block frontier from peers");
             instance_state
-                .peers
+                .state_catchup
                 .as_ref()
                 .remember_blocks_merkle_tree(
                     instance_state,
@@ -1048,7 +1048,7 @@ impl BlockHeader<SeqTypes> for Header {
 
             // Fetch missing fee state entries
             let missing_account_proofs = instance_state
-                .peers
+                .state_catchup
                 .as_ref()
                 .fetch_accounts(
                     instance_state,
@@ -1071,7 +1071,7 @@ impl BlockHeader<SeqTypes> for Header {
         if validated_state.need_to_fetch_blocks_mt_frontier() {
             tracing::warn!(height, ?view, "fetching block frontier from peers");
             instance_state
-                .peers
+                .state_catchup
                 .as_ref()
                 .remember_blocks_merkle_tree(
                     instance_state,
@@ -1570,7 +1570,7 @@ mod test_headers {
 
         // Forget the state to trigger lookups in Header::new
         let forgotten_state = parent_state.forget();
-        genesis_state.peers = Arc::new(MockStateCatchup::from_iter([(
+        genesis_state.state_catchup = Arc::new(MockStateCatchup::from_iter([(
             parent_leaf.view_number(),
             Arc::new(parent_state.clone()),
         )]));
@@ -1617,7 +1617,7 @@ mod test_headers {
         let _proposal_state = proposal_state
             .apply_header(
                 &genesis_state,
-                &genesis_state.peers,
+                &genesis_state.state_catchup,
                 &parent_leaf,
                 &proposal,
                 StaticVersion::<0, 1>::version(),

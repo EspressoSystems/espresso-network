@@ -23,7 +23,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_util::task::AbortOnDropHandle;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use util::BoundedVecDeque;
 
 /// The data source trait. Is what we use to derive the response data for a request
@@ -245,7 +245,9 @@ impl<
         estimated_request_ttl: Duration,
         // The request to make
         request: Req,
-    ) -> std::result::Result<Req::Response, RequestError> {
+        // Any additional context that we may need for response validation
+        validation_context: &<Req::Response as Response<Req>>::ValidationContext,
+    ) -> std::result::Result<<Req::Response as Response<Req>>::Output, RequestError> {
         loop {
             // Sign a request message
             let request_message = RequestMessage::new_signed(public_key, private_key, &request)
@@ -256,7 +258,10 @@ impl<
                 })?;
 
             // Request the data, handling the errors appropriately
-            match self.request(request_message, estimated_request_ttl).await {
+            match self
+                .request(request_message, estimated_request_ttl, validation_context)
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(RequestError::Timeout) => continue,
                 Err(e) => return Err(e),
@@ -276,7 +281,8 @@ impl<
         self: &Arc<Self>,
         request_message: RequestMessage<Req, K>,
         timeout_duration: Duration,
-    ) -> std::result::Result<Req::Response, RequestError> {
+        validation_context: &<Req::Response as Response<Req>>::ValidationContext,
+    ) -> std::result::Result<<Req::Response as Response<Req>>::Output, RequestError> {
         timeout(timeout_duration, async move {
             // Calculate the hash of the request
             let request_hash = blake3::hash(&request_message.request.to_bytes().map_err(|e| {
@@ -305,6 +311,7 @@ impl<
                         sender,
                         receiver,
                         request: request_message.request.clone(),
+                        validation_context: validation_context.clone(),
                         active_requests: Arc::clone(&self.active_requests),
                         request_hash,
                     }));
@@ -322,7 +329,12 @@ impl<
             let mut recipients = self
                 .recipient_source
                 .get_expected_responders(&request_message.request)
-                .await;
+                .await
+                .map_err(|e| {
+                    RequestError::InvalidRequest(anyhow::anyhow!(
+                        "failed to get expected responders for request: {e}"
+                    ))
+                })?;
             recipients.shuffle(&mut rand::thread_rng());
 
             // Create a request message and serialize it
@@ -404,7 +416,7 @@ impl<
                     let message = match Message::from_bytes(&message) {
                         Ok(message) => message,
                         Err(e) => {
-                            warn!("Received invalid message: {e}");
+                            warn!("Received invalid message: {e:#}");
                             continue;
                         },
                     };
@@ -421,7 +433,7 @@ impl<
                 },
                 // An error here means the receiver will _NEVER_ receive any more messages
                 Err(e) => {
-                    error!("Request/response receive task exited: {e}");
+                    error!("Request/response receive task exited: {e:#}");
                     return;
                 },
             }
@@ -481,7 +493,7 @@ impl<
             .and_then(|result| result);
 
             if let Err(e) = result {
-                warn!("Failed to send response to requester: {e}");
+                debug!("Failed to send response to requester: {e:#}");
             }
         }));
 
@@ -512,13 +524,20 @@ impl<
         let response_task = AbortOnDropHandle::new(tokio::spawn(async move {
             if timeout(response_validate_timeout, async move {
                 // Make sure the response is valid for the given request
-                if let Err(e) = response.response.validate(&active_request.request).await {
-                    warn!("Received invalid response: {e}");
-                    return;
-                }
+                let validation_result = match response
+                    .response
+                    .validate(&active_request.request, &active_request.validation_context)
+                    .await
+                {
+                    Ok(validation_result) => validation_result,
+                    Err(e) => {
+                        warn!("Received invalid response: {e:#}");
+                        return;
+                    },
+                };
 
                 // Send the response to the requester (the user of [`RequestResponse::request`])
-                let _ = active_request.sender.try_broadcast(response.response);
+                let _ = active_request.sender.try_broadcast(validation_result);
             })
             .await
             .is_err()
@@ -541,11 +560,14 @@ pub struct ActiveRequest<R: Request>(Arc<ActiveRequestInner<R>>);
 /// The inner implementation of an active request
 pub struct ActiveRequestInner<R: Request> {
     /// The sender to use for the protocol
-    sender: async_broadcast::Sender<R::Response>,
+    sender: async_broadcast::Sender<<R::Response as Response<R>>::Output>,
     /// The receiver to use for the protocol
-    receiver: async_broadcast::Receiver<R::Response>,
+    receiver: async_broadcast::Receiver<<R::Response as Response<R>>::Output>,
+
     /// The request that we are waiting for a response to
     request: R,
+    /// The context which we need for response validation
+    validation_context: <R::Response as Response<R>>::ValidationContext,
 
     /// A copy of the map of currently active requests
     active_requests: ActiveRequestsMap<R>,
@@ -586,6 +608,7 @@ mod tests {
             sender,
             receiver,
             request: TestRequest(vec![1, 2, 3]),
+            validation_context: (),
             active_requests: Arc::clone(&active_requests),
             request_hash: blake3::hash(&[1, 2, 3]),
         }));
@@ -636,9 +659,9 @@ mod tests {
     // Implement the [`RecipientSource`] trait for the [`TestSender`] type
     #[async_trait]
     impl RecipientSource<TestRequest, BLSPubKey> for TestSender {
-        async fn get_expected_responders(&self, _request: &TestRequest) -> Vec<BLSPubKey> {
+        async fn get_expected_responders(&self, _request: &TestRequest) -> Result<Vec<BLSPubKey>> {
             // Get all the participants in the network
-            self.network.keys().copied().collect()
+            Ok(self.network.keys().copied().collect())
         }
     }
 
@@ -669,8 +692,15 @@ mod tests {
     // Implement the [`Response`] trait for the [`TestRequest`] type
     #[async_trait]
     impl Response<TestRequest> for Vec<u8> {
-        async fn validate(&self, _request: &TestRequest) -> Result<()> {
-            Ok(())
+        type ValidationContext = ();
+        type Output = Self;
+
+        async fn validate(
+            self,
+            _request: &TestRequest,
+            _context: &Self::ValidationContext,
+        ) -> Result<Self::Output> {
+            Ok(self)
         }
     }
 
@@ -832,7 +862,9 @@ mod tests {
                     .expect("failed to create request message");
 
                 // Request the data from the protocol
-                let response = protocol.request(request, config.request_timeout).await?;
+                let response = protocol
+                    .request(request, config.request_timeout, &())
+                    .await?;
 
                 // Make sure the response is the hash of the request
                 assert_eq!(response, request_hash);
@@ -963,7 +995,7 @@ mod tests {
                 // Start requesting it
                 one_clone
                     .0
-                    .request(request_message, Duration::from_secs(20))
+                    .request(request_message, Duration::from_secs(20), &())
                     .await?;
 
                 Ok::<(), anyhow::Error>(())

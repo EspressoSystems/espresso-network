@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_lock::RwLock;
-use catchup::StatePeers;
+use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
@@ -28,6 +28,7 @@ use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
+use hotshot_query_service::data_source::storage::SqlStorage;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -198,6 +199,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     metrics: &dyn Metrics,
     persistence: P,
     l1_params: L1Params,
+    storage: Option<Arc<SqlStorage>>,
     seq_versions: V,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
@@ -467,15 +469,23 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         genesis_state.prefund_account(address, amount);
     }
 
-    let peers = catchup::local_and_remote(
-        persistence.clone(),
-        StatePeers::<SequencerApiVersion>::from_urls(
-            network_params.state_peers,
-            network_params.catchup_backoff,
-            metrics,
-        ),
-    )
-    .await;
+    // Get the local catchup provider (as persistence)
+    let catchup_providers = match persistence
+        .clone()
+        .into_catchup_provider(network_params.catchup_backoff)
+    {
+        Ok(catchup) => vec![catchup],
+        Err(e) => {
+            tracing::warn!(
+                "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+            );
+            vec![]
+        },
+    };
+
+    // Create a state catchup provider from both the local and remote sources
+    let state_catchup = ParallelStateCatchup::new(&catchup_providers);
+
     // Create the HotShot membership
     let membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
@@ -485,7 +495,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
             .chain_config
             .stake_table_contract
             .map(|a| a.to_alloy()),
-        peers.clone(),
+        Arc::new(state_catchup.clone()),
         persistence.clone(),
     );
 
@@ -503,7 +513,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         upgrades: genesis.upgrades,
         current_version: V::Base::VERSION,
         epoch_height: Some(epoch_height),
-        peers,
+        state_catchup: Arc::new(state_catchup.clone()),
         coordinator: coordinator.clone(),
     };
 
@@ -553,6 +563,8 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         validator_config,
         coordinator,
         instance_state,
+        storage,
+        state_catchup,
         persistence,
         network,
         Some(network_params.state_relay_server_url),
@@ -627,7 +639,10 @@ pub mod testing {
     use vbs::version::Version;
 
     use super::*;
-    use crate::persistence::no_storage::{self, NoStorage};
+    use crate::{
+        catchup::ParallelStateCatchup,
+        persistence::no_storage::{self, NoStorage},
+    };
 
     const STAKE_TABLE_CAPACITY_FOR_TEST: u64 = 10;
     const BUILDER_CHANNEL_CAPACITY_FOR_TEST: usize = 128;
@@ -904,6 +919,7 @@ pub mod testing {
                     ValidatedState::default(),
                     no_storage::Options,
                     NullStateCatchup::default(),
+                    None,
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
                     NullEventConsumer,
@@ -946,7 +962,8 @@ pub mod testing {
             i: usize,
             mut state: ValidatedState,
             mut persistence_opt: P,
-            catchup: impl StateCatchup + 'static,
+            state_peers: impl StateCatchup + 'static,
+            storage: Option<Arc<SqlStorage>>,
             metrics: &dyn Metrics,
             stake_table_capacity: u64,
             event_consumer: impl EventConsumer + 'static,
@@ -990,14 +1007,20 @@ pub mod testing {
             let chain_config = state.chain_config.resolve().unwrap_or_default();
             let l1_client =
                 L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
-            let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
+
+            // Create a state catchup provider from both local and remote sources
+            let state_catchup = ParallelStateCatchup::new(&[persistence
+                .clone()
+                .into_catchup_provider(*state_peers.backoff())
+                .expect("failed to convert persistence to catchup provider")]);
+
             // Create the HotShot membership
             let membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
                 chain_config.stake_table_contract.map(|a| a.to_alloy()),
-                peers.clone(),
+                Arc::new(state_catchup.clone()),
                 persistence.clone(),
             );
             let membership = Arc::new(RwLock::new(membership));
@@ -1008,7 +1031,7 @@ pub mod testing {
                 i as u64,
                 chain_config,
                 l1_client,
-                peers,
+                state_catchup.clone(),
                 V::Base::VERSION,
                 coordinator.clone(),
             )
@@ -1035,6 +1058,8 @@ pub mod testing {
                 validator_config,
                 coordinator,
                 node_state,
+                storage,
+                state_catchup,
                 persistence,
                 network,
                 self.state_relay_url.clone(),
