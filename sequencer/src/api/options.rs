@@ -1,10 +1,11 @@
 //! Sequencer-specific API options and initialization.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
+    parse_duration,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
     v0_1::RewardMerkleTree,
     BlockMerkleTree, PubKey,
@@ -267,7 +268,11 @@ impl Options {
         let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
         let api_state: endpoints::AvailState<N, P, D, V> = ds.clone().into();
         let mut app = App::<_, Error>::with_state(api_state);
-
+        let fetch_timeout = self
+            .query
+            .clone()
+            .map(|query| query.fetch_timeout)
+            .flatten();
         // Initialize status API
         let status_api = status::define_api::<endpoints::AvailState<N, P, D, _>, _>(
             &Default::default(),
@@ -285,14 +290,14 @@ impl Options {
         // This ensures compatibility for nodes that expect `Leaf1` for leaf endpoints
         app.register_module(
             "availability",
-            endpoints::availability("0.0.1".parse().unwrap())?,
+            endpoints::availability("0.0.1".parse().unwrap(), fetch_timeout)?,
         )?;
 
         // initialize the availability module for API version V1.
         // This enables support for the new `Leaf2` type
         app.register_module(
             "availability",
-            endpoints::availability("1.0.0".parse().unwrap())?,
+            endpoints::availability("1.0.0".parse().unwrap(), fetch_timeout)?,
         )?;
 
         app.register_module("node", endpoints::node()?)?;
@@ -571,6 +576,8 @@ pub struct Query {
     /// Peers for fetching missing data for the query service.
     #[clap(long, env = "ESPRESSO_SEQUENCER_API_PEERS", value_delimiter = ',')]
     pub peers: Vec<Url>,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_FETCH_TIMEOUT", value_parser = parse_duration)]
+    pub fetch_timeout: Option<Duration>,
 }
 
 /// Options for the state API module.

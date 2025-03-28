@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     env,
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -94,6 +95,7 @@ type AvailabilityApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, availabil
 // However, the query service still uses snafu
 pub(super) fn availability<N, P, D, V: Versions>(
     api_ver: semver::Version,
+    fetch_timeout: Option<Duration>,
 ) -> Result<AvailabilityApi<N, P, D, V, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
@@ -101,6 +103,10 @@ where
     P: SequencerPersistence,
 {
     let mut options = availability::Options::default();
+    if let Some(timeout) = fetch_timeout {
+        options = options.with_fetch_timeout(timeout);
+    }
+    
     let extension = toml::from_str(include_str!("../../api/availability.toml"))?;
     options.extensions.push(extension);
     let timeout = options.fetch_timeout;
