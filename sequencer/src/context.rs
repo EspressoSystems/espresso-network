@@ -197,7 +197,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             validator_config.private_key.clone(),
         );
 
-        // Add the request-response protocol as the second provider (remote) for state catchup
+        // Add the request-response protocol to the list of providers for state catchup. Since the interior is mutable,
+        // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
+        // itself)
         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
 
         // Create the external event handler
