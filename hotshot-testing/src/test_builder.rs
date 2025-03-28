@@ -562,7 +562,7 @@ where
                 node_id,
                 1,
                 // This is the config for node 0
-                node_id < test_config.da_staked_committee_size.try_into().unwrap(),
+                node_id < test_config.da_staked_committee_size as u64,
             )
         });
 
