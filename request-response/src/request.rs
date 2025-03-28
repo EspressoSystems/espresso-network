@@ -36,4 +36,3 @@ pub trait Request: Send + Sync + Serializable + 'static + Clone + Debug {
     /// If the request is not valid
     async fn validate(&self) -> Result<()>;
 }
-

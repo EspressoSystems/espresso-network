@@ -202,6 +202,17 @@ impl<
     }
 }
 
+/// A type alias for an `Arc<dyn Any + Send + Sync + 'static>`
+type ThreadSafeAny = Arc<dyn Any + Send + Sync + 'static>;
+
+/// A type alias for the future that validates a response
+type ResponseValidationFuture =
+    Pin<Box<dyn Future<Output = Result<ThreadSafeAny, anyhow::Error>> + Send + Sync + 'static>>;
+
+/// A type alias for the function that returns the above future
+type ResponseValidationFn<R> =
+    Box<dyn Fn(&R, <R as Request>::Response) -> ResponseValidationFuture + Send + Sync + 'static>;
+
 /// The inner implementation for the request-response protocol
 pub struct RequestResponseInner<
     S: Sender<K>,
@@ -327,22 +338,9 @@ impl<
                     let response_validation_fn =
                         Box::new(move |request: &Req, response: Req::Response| {
                             let fut = response_validation_fn(request, response);
-                            Box::pin(async move {
-                                fut.await
-                                    .map(|ok| Arc::new(ok) as Arc<dyn Any + Send + Sync + 'static>)
-                            })
-                                as Pin<
-                                    Box<
-                                        dyn Future<
-                                                Output = Result<
-                                                    Arc<dyn Any + Send + Sync + 'static>,
-                                                    anyhow::Error,
-                                                >,
-                                            > + Send
-                                            + Sync
-                                            + 'static,
-                                    >,
-                                >
+                            Box::pin(
+                                async move { fut.await.map(|ok| Arc::new(ok) as ThreadSafeAny) },
+                            ) as ResponseValidationFuture
                         });
 
                     // Create a new active request
@@ -609,29 +607,15 @@ pub struct ActiveRequest<R: Request>(Arc<ActiveRequestInner<R>>);
 /// The inner implementation of an active request
 pub struct ActiveRequestInner<R: Request> {
     /// The sender to use for the protocol
-    sender: async_broadcast::Sender<Arc<dyn Any + Send + Sync + 'static>>,
+    sender: async_broadcast::Sender<ThreadSafeAny>,
     /// The receiver to use for the protocol
-    receiver: async_broadcast::Receiver<Arc<dyn Any + Send + Sync + 'static>>,
+    receiver: async_broadcast::Receiver<ThreadSafeAny>,
 
     /// The request that we are waiting for a response to
     request: R,
 
     /// The function used to validate the response
-    response_validation_fn: Box<
-        dyn Fn(
-                &R,
-                R::Response,
-            ) -> Pin<
-                Box<
-                    dyn Future<Output = Result<Arc<dyn Any + Send + Sync + 'static>, anyhow::Error>>
-                        + Send
-                        + Sync
-                        + 'static,
-                >,
-            > + Send
-            + Sync
-            + 'static,
-    >,
+    response_validation_fn: ResponseValidationFn<R>,
 
     /// A copy of the map of currently active requests
     active_requests: ActiveRequestsMap<R>,
@@ -673,19 +657,8 @@ mod tests {
             receiver,
             request: TestRequest(vec![1, 2, 3]),
             response_validation_fn: Box::new(|_request, _response| {
-                Box::pin(async move { Ok(Arc::new(()) as Arc<dyn Any + Send + Sync + 'static>) })
-                    as Pin<
-                        Box<
-                            dyn Future<
-                                    Output = Result<
-                                        Arc<dyn Any + Send + Sync + 'static>,
-                                        anyhow::Error,
-                                    >,
-                                > + Send
-                                + Sync
-                                + 'static,
-                        >,
-                    >
+                Box::pin(async move { Ok(Arc::new(()) as ThreadSafeAny) })
+                    as ResponseValidationFuture
             }),
             active_requests: Arc::clone(&active_requests),
             request_hash: blake3::hash(&[1, 2, 3]),
