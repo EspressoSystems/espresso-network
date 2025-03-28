@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub mod config;
 mod header;
 mod impls;
+mod nsproof;
 pub mod traits;
 mod utils;
 pub use header::Header;
@@ -22,6 +23,7 @@ pub use impls::{
     get_l1_deposits, retain_accounts, BuilderValidationError, EpochCommittees, FeeError,
     ProposalValidationError, StateValidationError,
 };
+pub use nsproof::NsProof;
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -97,7 +99,6 @@ reexport_unchanged_types!(
     NsPayloadByteLen,
     NsPayloadOwned,
     NsPayloadRange,
-    NsProof,
     NsTable,
     NsTableBuilder,
     NsTableValidationError,

@@ -1274,7 +1274,6 @@ mod api_tests {
 
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
-    use endpoints::NamespaceProofQueryData;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
         Header, Leaf2, MockSequencerVersions, NamespaceId,
@@ -1309,6 +1308,7 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
+        api::endpoints::NamespaceProofQueryData,
         network,
         persistence::no_storage::NoStorage,
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
@@ -1403,12 +1403,12 @@ mod api_tests {
                     .send()
                     .await
                     .unwrap();
-                let hotshot_query_service::VidCommon::V0(common) = &vid_common.common().clone()
-                else {
-                    panic!("Failed to get vid V0 for namespace");
-                };
                 ns_proof
-                    .verify(header.ns_table(), &header.payload_commitment(), common)
+                    .verify(
+                        header.ns_table(),
+                        &header.payload_commitment(),
+                        vid_common.common(),
+                    )
                     .unwrap();
             } else {
                 // Namespace proof should be present if ns_id exists in ns_table
