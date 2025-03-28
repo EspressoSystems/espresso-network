@@ -36,7 +36,7 @@ use thiserror::Error;
 
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{DAMembers, Validator},
+    v0_3::Validator,
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 
@@ -853,6 +853,8 @@ impl super::v0_3::StakeTable {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
+use super::v0_3::DAMembers;
 #[cfg(any(test, feature = "testing"))]
 impl DAMembers {
     /// Generate a `DaMembers` (alias committee) with `n` members.
