@@ -719,14 +719,18 @@ impl Membership<SeqTypes> for EpochCommittees {
         if total_stake < primitive_types::U256::max_value() / 2 {
             ((total_stake * 2) / 3) + 1
         } else {
-            ((total_stake / 3) * 2) + 1
+            ((total_stake / 3) * 2) + 2
         }
     }
 
     /// Get the voting success threshold for the committee
     fn da_success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
-        let da_len = self.da_stake_table(epoch).len();
-        primitive_types::U256::from(((da_len as u64 * 2) / 3) + 1)
+        let total_stake = self.total_da_stake(epoch);
+        if total_stake < primitive_types::U256::max_value() / 2 {
+            ((total_stake * 2) / 3) + 1
+        } else {
+            ((total_stake / 3) * 2) + 2
+        }
     }
 
     /// Get the voting failure threshold for the committee

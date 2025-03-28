@@ -34,6 +34,14 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
             })
     }
 
+    fn total_da_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {
+        self.da_stake_table(epoch)
+            .iter()
+            .fold(U256::zero(), |acc, entry| {
+                acc + entry.stake_table_entry.stake()
+            })
+    }
+
     /// Get all participants in the committee (including their stake) for a specific epoch
     fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES>>;
 
