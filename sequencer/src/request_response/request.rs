@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use committable::Commitment;
-use espresso_types::v0_1::RewardAccount;
-use espresso_types::v0_1::RewardMerkleTree;
-use espresso_types::{v0_99::ChainConfig, FeeAccount, FeeAmount, Leaf2};
+use espresso_types::{
+    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_99::ChainConfig,
+    FeeAccount, FeeAmount, Leaf2,
+};
 use jf_merkle_tree::prelude::{Sha3Digest, Sha3Node, UniversalMerkleTree};
 use request_response::{request::Request as RequestTrait, Serializable};
 use serde::{Deserialize, Serialize};

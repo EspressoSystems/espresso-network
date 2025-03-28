@@ -19,15 +19,14 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
-use jf_merkle_tree::ForgetableUniversalMerkleTreeScheme;
 use jf_merkle_tree::{
-    ForgetableMerkleTreeScheme, LookupResult, MerkleTreeScheme, UniversalMerkleTreeScheme,
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use request_response::data_source::DataSource as DataSourceTrait;
 
-use crate::{api::BlocksFrontier, catchup::CatchupStorage};
-
 use super::request::{Request, Response};
+use crate::{api::BlocksFrontier, catchup::CatchupStorage};
 
 /// A type alias for SQL storage
 type Storage = Arc<SqlStorage>;

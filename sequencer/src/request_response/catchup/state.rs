@@ -1,6 +1,5 @@
 use std::num::NonZeroU64;
 
-use crate::request_response::request::{Request, Response};
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -16,10 +15,12 @@ use hotshot_types::{
     data::ViewNumber, message::UpgradeLock, traits::node_implementation::Versions,
     utils::verify_epoch_root_chain, PeerConfig,
 };
-use jf_merkle_tree::ForgetableMerkleTreeScheme;
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
-use crate::request_response::RequestResponseProtocol;
+use crate::request_response::{
+    request::{Request, Response},
+    RequestResponseProtocol,
+};
 
 #[async_trait]
 impl<I: NodeImplementation<SeqTypes>, V: Versions> StateCatchup for RequestResponseProtocol<I, V> {
