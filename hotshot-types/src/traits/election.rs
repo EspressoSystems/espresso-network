@@ -12,7 +12,7 @@ use hotshot_utils::anytrace::Result;
 use primitive_types::U256;
 
 use super::node_implementation::NodeType;
-use crate::{drb::DrbResult, PeerConfig};
+use crate::{drb::DrbResult, traits::signature_key::StakeTableEntryType, PeerConfig};
 
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
@@ -25,6 +25,14 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         stake_committee_members: Vec<PeerConfig<TYPES>>,
         da_committee_members: Vec<PeerConfig<TYPES>>,
     ) -> Self;
+
+    fn total_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {
+        self.stake_table(epoch)
+            .iter()
+            .fold(U256::zero(), |acc, entry| {
+                acc + entry.stake_table_entry.stake()
+            })
+    }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
     fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES>>;
