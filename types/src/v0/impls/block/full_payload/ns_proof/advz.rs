@@ -1,3 +1,5 @@
+//! This module contains the original namespace proof implementation for ADVZ scheme.
+
 use hotshot_types::{
     data::VidCommitment,
     traits::EncodeBytes,

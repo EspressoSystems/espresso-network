@@ -1,3 +1,5 @@
+//! This module contains the namespace proof implementation for the new AvidM scheme.
+
 use hotshot_types::{data::VidCommitment, vid::avidm::AvidMCommon};
 use vid::avid_m::namespaced::NsAvidMScheme;
 
