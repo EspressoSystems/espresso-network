@@ -1019,7 +1019,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
         tracing::error!(
-            "proposed_header height={:?}, parent_view_number={:?}, header view_number {:?}",
+            "proposed_header height={:?}, parent_view_number={:?}, header view_number {:?}, validate_and_apply_header view {view_number:?}",
             proposed_header.height(),
             parent_leaf.view_number(),
             proposed_header.view()

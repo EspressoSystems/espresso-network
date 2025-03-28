@@ -1006,6 +1006,10 @@ impl BlockHeader<SeqTypes> for Header {
         let height = parent_leaf.height();
         let view = parent_leaf.block_header().view().unwrap();
 
+        tracing::error!(
+            "parent height={height:?}, parent view={view:?}, view_number={view_number:?}"
+        );
+
         let mut validated_state = parent_state.clone();
 
         let chain_config = if version > instance_state.current_version {
@@ -1047,50 +1051,50 @@ impl BlockHeader<SeqTypes> for Header {
                 .into_iter()
                 .chain(l1_deposits.iter().map(|info| info.account())),
         );
-        if !missing_accounts.is_empty() {
-            tracing::warn!(
-                height,
-                ?view,
-                ?missing_accounts,
-                "fetching missing accounts from peers"
-            );
+        // if !missing_accounts.is_empty() {
+        //     tracing::warn!(
+        //         height,
+        //         ?view,
+        //         ?missing_accounts,
+        //         "fetching missing accounts from peers"
+        //     );
 
-            // Fetch missing fee state entries
-            let missing_account_proofs = instance_state
-                .peers
-                .as_ref()
-                .fetch_accounts(
-                    instance_state,
-                    height,
-                    view,
-                    parent_state.fee_merkle_tree.commitment(),
-                    missing_accounts,
-                )
-                .await?;
+        //     // Fetch missing fee state entries
+        //     let missing_account_proofs = instance_state
+        //         .peers
+        //         .as_ref()
+        //         .fetch_accounts(
+        //             instance_state,
+        //             height,
+        //             view,
+        //             parent_state.fee_merkle_tree.commitment(),
+        //             missing_accounts,
+        //         )
+        //         .await?;
 
-            // Insert missing fee state entries
-            for proof in missing_account_proofs.iter() {
-                proof
-                    .remember(&mut validated_state.fee_merkle_tree)
-                    .context("remembering fee account")?;
-            }
-        }
+        //     // Insert missing fee state entries
+        //     for proof in missing_account_proofs.iter() {
+        //         proof
+        //             .remember(&mut validated_state.fee_merkle_tree)
+        //             .context("remembering fee account")?;
+        //     }
+        // }
 
         // Ensure merkle tree has frontier
-        if validated_state.need_to_fetch_blocks_mt_frontier() {
-            tracing::warn!(height, ?view, "fetching block frontier from peers");
-            instance_state
-                .peers
-                .as_ref()
-                .remember_blocks_merkle_tree(
-                    instance_state,
-                    height,
-                    view,
-                    &mut validated_state.block_merkle_tree,
-                )
-                .await
-                .context("remembering block proof")?;
-        }
+        // if validated_state.need_to_fetch_blocks_mt_frontier() {
+        //     tracing::warn!(height, ?view, "fetching block frontier from peers");
+        //     instance_state
+        //         .peers
+        //         .as_ref()
+        //         .remember_blocks_merkle_tree(
+        //             instance_state,
+        //             height,
+        //             view,
+        //             &mut validated_state.block_merkle_tree,
+        //         )
+        //         .await
+        //         .context("remembering block proof")?;
+        // }
 
         // TODO(abdul): Change this to version >= EpochVersion::version()
         // when we deploy the permissionless contract in native demo

@@ -419,6 +419,8 @@ pub async fn find_validator(
         .view()
         .unwrap_or_else(|| leaf.view_number());
 
+    let parent_height = leaf.height();
+
     // let parent_view = leaf.view_number();
 
     let epoch_height = instance_state.epoch_height;
@@ -451,33 +453,33 @@ pub async fn find_validator(
 
     reward_accounts.extend(delegators.clone());
 
-    // let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
+    let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
 
-    // if !missing_reward_accts.is_empty() {
-    //     tracing::warn!(
-    //         height,
-    //         ?parent_view,
-    //         ?missing_reward_accts,
-    //         "fetching missing reward accounts from peers"
-    //     );
+    if !missing_reward_accts.is_empty() && height != 120 {
+        tracing::error!(
+            height,
+            ?parent_view,
+            ?missing_reward_accts,
+            "fetching missing reward accounts from peers"
+        );
 
-    //     let missing_account_proofs = instance_state
-    //         .peers
-    //         .fetch_reward_accounts(
-    //             instance_state,
-    //             height - 1,
-    //             parent_view,
-    //             validated_state.reward_merkle_tree.commitment(),
-    //             missing_reward_accts,
-    //         )
-    //         .await?;
+        let missing_account_proofs = instance_state
+            .peers
+            .fetch_reward_accounts(
+                instance_state,
+                parent_height,
+                parent_view,
+                validated_state.reward_merkle_tree.commitment(),
+                missing_reward_accts,
+            )
+            .await?;
 
-    //     for proof in missing_account_proofs.iter() {
-    //         proof
-    //             .remember(&mut validated_state.reward_merkle_tree)
-    //             .expect("proof previously verified");
-    //     }
-    // }
+        for proof in missing_account_proofs.iter() {
+            proof
+                .remember(&mut validated_state.reward_merkle_tree)
+                .expect("proof previously verified");
+        }
+    }
     Ok(validator)
 }
 
