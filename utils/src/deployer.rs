@@ -332,6 +332,8 @@ pub async fn upgrade_light_client_v2(
 /// The primary logic for deploying and initializing an upgradable fee contract.
 ///
 /// Deploy the upgradable proxy contract, point to a deployed fee contract as its implementation, and invoke `initialize()` on it.
+/// - `admin`: is the new owner (e.g. a multisig address) of the proxy contract
+///
 /// Return the proxy address.
 pub async fn deploy_fee_contract_proxy(
     provider: impl Provider,
