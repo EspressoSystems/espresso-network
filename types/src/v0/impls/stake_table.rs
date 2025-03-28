@@ -1,7 +1,6 @@
 use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -715,33 +714,32 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
+    fn success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
         let quorum_len = self.stake_table(epoch).len();
-        NonZeroU64::new(((quorum_len as u64 * 2) / 3) + 1).unwrap()
+        primitive_types::U256::from(((quorum_len as u64 * 2) / 3) + 1)
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
+    fn da_success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
         let da_len = self.da_stake_table(epoch).len();
-        NonZeroU64::new(((da_len as u64 * 2) / 3) + 1).unwrap()
+        primitive_types::U256::from(((da_len as u64 * 2) / 3) + 1)
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
+    fn failure_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
         let quorum_len = self.stake_table(epoch).len();
 
-        NonZeroU64::new(((quorum_len as u64) / 3) + 1).unwrap()
+        primitive_types::U256::from(((quorum_len as u64) / 3) + 1)
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
+    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
         let quorum_len = self.total_nodes(epoch);
 
-        NonZeroU64::new(max(
+        primitive_types::U256::from(max(
             (quorum_len as u64 * 9) / 10,
             ((quorum_len as u64 * 2) / 3) + 1,
         ))
-        .unwrap()
     }
 
     #[allow(refining_impl_trait)]

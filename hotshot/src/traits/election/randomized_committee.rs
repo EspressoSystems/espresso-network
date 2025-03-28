@@ -7,7 +7,6 @@
 use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
 };
 
 use hotshot_types::{
@@ -207,27 +206,26 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
         self.da_stake_table.len()
     }
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
-        NonZeroU64::new(((self.stake_table.len() as u64 * 2) / 3) + 1).unwrap()
+    fn success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(((self.stake_table.len() as u64 * 2) / 3) + 1)
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
-        NonZeroU64::new(((self.da_stake_table.len() as u64 * 2) / 3) + 1).unwrap()
+    fn da_success_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(((self.da_stake_table.len() as u64 * 2) / 3) + 1)
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
-        NonZeroU64::new(((self.stake_table.len() as u64) / 3) + 1).unwrap()
+    fn failure_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(((self.stake_table.len() as u64) / 3) + 1)
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> NonZeroU64 {
-        NonZeroU64::new(max(
+    fn upgrade_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
+        U256::from(max(
             (self.stake_table.len() as u64 * 9) / 10,
             ((self.stake_table.len() as u64 * 2) / 3) + 1,
         ))
-        .unwrap()
     }
 
     fn has_epoch(&self, _epoch: TYPES::Epoch) -> bool {

@@ -40,7 +40,6 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber, Vote},
     StakeTableEntries, ValidatorConfig,
 };
-use primitive_types::U256;
 use serde::Serialize;
 use vbs::version::Version;
 
@@ -232,7 +231,7 @@ pub async fn build_assembled_sig<
     let real_qc_pp: <TYPES::SignatureKey as SignatureKey>::QcParams =
         <TYPES::SignatureKey as SignatureKey>::public_parameter(
             StakeTableEntries::<TYPES>::from(stake_table.clone()).0,
-            U256::from(CERT::threshold(epoch_membership).await),
+            CERT::threshold(epoch_membership).await,
         );
 
     let total_nodes = stake_table.len();

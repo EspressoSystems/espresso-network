@@ -10,7 +10,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
     marker::PhantomData,
-    num::NonZeroU64,
 };
 
 use bitvec::{bitvec, vec::BitVec};
@@ -78,12 +77,12 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     fn is_valid_cert<V: Versions>(
         &self,
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
-        threshold: NonZeroU64,
+        threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> impl std::future::Future<Output = Result<()>>;
     /// Returns the amount of stake needed to create this certificate
     // TODO: Make this a static ratio of the total stake of `Membership`
-    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = u64> + Send;
+    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = U256> + Send;
 
     /// Get  Stake Table from Membership implementation.
     fn stake_table(
@@ -214,12 +213,12 @@ impl<
         *total_stake_casted += stake_table_entry.stake_table_entry.stake();
         total_vote_map.insert(key, (vote.signature(), vote_commitment));
 
-        if *total_stake_casted >= threshold.into() {
+        if *total_stake_casted >= threshold {
             // Assemble QC
             let real_qc_pp: <<TYPES as NodeType>::SignatureKey as SignatureKey>::QcParams =
                 <TYPES::SignatureKey as SignatureKey>::public_parameter(
                     StakeTableEntries::<TYPES>::from(stake_table).0,
-                    U256::from(threshold),
+                    threshold,
                 );
 
             let real_qc_sig = <TYPES::SignatureKey as SignatureKey>::assemble(

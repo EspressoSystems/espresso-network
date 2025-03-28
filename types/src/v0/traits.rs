@@ -1,6 +1,6 @@
 //! This module contains all the traits used for building the sequencer types.
 //! It also includes some trait implementations that cannot be implemented in an external crate.
-use std::{cmp::max, collections::BTreeMap, fmt::Debug, num::NonZeroU64, ops::Range, sync::Arc};
+use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
@@ -33,6 +33,7 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
+use primitive_types::U256;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
@@ -55,7 +56,7 @@ pub trait StateCatchup: Send + Sync {
         &self,
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
-        success_threshold: NonZeroU64,
+        success_threshold: U256,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         self.backoff().retry(
@@ -242,7 +243,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Box<T> {
         &self,
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
-        success_threshold: NonZeroU64,
+        success_threshold: U256,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         (**self)
@@ -376,7 +377,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         &self,
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
-        success_threshold: NonZeroU64,
+        success_threshold: U256,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         (**self)
