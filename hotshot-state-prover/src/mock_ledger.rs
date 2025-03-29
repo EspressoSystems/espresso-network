@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use alloy::primitives::U256;
 use anyhow::Result;
 use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
@@ -8,8 +9,7 @@ use ark_std::{
     rand::{rngs::StdRng, CryptoRng, Rng, RngCore},
     UniformRand,
 };
-use ethers::types::U256;
-use hotshot_contract_adapter::jellyfish::{field_to_u256, open_key};
+use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
 use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
     light_client::{
@@ -66,8 +66,8 @@ impl MockSystemParam {
 pub struct MockLedger {
     pp: MockSystemParam,
     pub rng: StdRng,
-    epoch: u64,
-    state: GenericLightClientState<F>,
+    pub(crate) epoch: u64,
+    pub(crate) state: GenericLightClientState<F>,
     pub(crate) st: StakeTable<BLSVerKey, SchnorrVerKey, F>,
     pub(crate) qc_keys: Vec<BLSVerKey>,
     pub(crate) state_keys: Vec<(SchnorrSignKey, SchnorrVerKey)>,
@@ -117,20 +117,18 @@ impl MockLedger {
 
     /// Elapse a view with a new finalized block
     pub fn elapse_with_block(&mut self) {
-        self.try_advance_epoch();
-
         let new_root = self.new_dummy_comm();
         // let new_fee_ledger_comm = self.new_dummy_comm();
 
         self.state.view_number += 1;
         self.state.block_height += 1;
         self.state.block_comm_root = new_root;
+        self.try_advance_epoch();
     }
 
     /// Elapse a view without a new finalized block
     /// (e.g. insufficient votes, malicious leaders or inconsecutive noterized views)
     pub fn elapse_without_block(&mut self) {
-        self.try_advance_epoch();
         self.state.view_number += 1;
     }
 
@@ -181,8 +179,8 @@ impl MockLedger {
         let mut msg = Vec::with_capacity(7);
         let state_msg: [F; 3] = self.state.clone().into();
         msg.extend_from_slice(&state_msg);
-        let st_state_msg: [F; 4] = next_st_state.into();
-        msg.extend_from_slice(&st_state_msg);
+        let next_stake_msg: [F; 4] = next_st_state.into();
+        msg.extend_from_slice(&next_stake_msg);
 
         let st: Vec<(BLSVerKey, U256, SchnorrVerKey)> = self
             .st
@@ -244,7 +242,7 @@ impl MockLedger {
             .unwrap()
             .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
             .collect::<Vec<_>>();
-        let (proof, pi) = generate_state_update_proof::<_, _, _, _>(
+        let (proof, pi) = generate_state_update_proof(
             &mut self.rng,
             &pk,
             &stake_table_entries,

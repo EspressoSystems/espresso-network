@@ -44,6 +44,7 @@ anyhow = { workspace = true }
 vergen = { workspace = true }
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true, features = ["derive"] }
@@ -61,14 +62,11 @@ cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.
 clap = { workspace = true }
 client = { path = "../client" }
 committable = "0.2"
-contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 espresso-types = { path = "../types" }
-ethers = { workspace = true }
-ethers-conv = { workspace = true }
 futures = { workspace = true }
 
 hotshot = { workspace = true }

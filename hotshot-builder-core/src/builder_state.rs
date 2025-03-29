@@ -313,7 +313,7 @@ async fn best_builder_states_to_extend<Types: NodeType>(
         .spawned_builder_states
         .keys()
         .map(|builder_state_id| *builder_state_id.parent_view)
-        .filter(|view_number| view_number < &current_view_number)
+        .filter(|view_number| *view_number < *current_view_number)
         .max();
 
     // If we have a maximum view number that meets our criteria, then we should

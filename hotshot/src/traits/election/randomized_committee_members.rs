@@ -10,6 +10,7 @@ use std::{
     num::NonZeroU64,
 };
 
+use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
     traits::{
@@ -20,7 +21,6 @@ use hotshot_types::{
     PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
-use primitive_types::U256;
 use rand::{rngs::StdRng, Rng};
 use tracing::error;
 
@@ -104,21 +104,21 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         // For each eligible leader, get the stake table entry
         let eligible_leaders = committee_members
             .iter()
-            .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+            .filter(|&member| member.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> = committee_members
             .iter()
-            .filter(|&entry| entry.stake_table_entry.stake() > U256::zero())
+            .filter(|&entry| entry.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
         // For each da member, get the stake table entry
         let da_members: Vec<PeerConfig<<TYPES as NodeType>::SignatureKey>> = da_members
             .iter()
-            .filter(|&entry| entry.stake_table_entry.stake() > U256::zero())
+            .filter(|&entry| entry.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
@@ -324,7 +324,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
             if actual_members.contains(pub_key) {
                 self.indexed_stake_table
                     .get(pub_key)
-                    .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+                    .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
             } else {
                 // Skip members which aren't included based on the quorum filter
                 false
@@ -332,7 +332,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         } else {
             self.indexed_stake_table
                 .get(pub_key)
-                .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+                .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
         }
     }
 
@@ -355,7 +355,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
             if actual_members.contains(pub_key) {
                 self.indexed_da_stake_table
                     .get(pub_key)
-                    .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+                    .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
             } else {
                 // Skip members which aren't included based on the quorum filter
                 false
@@ -363,7 +363,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         } else {
             self.indexed_da_stake_table
                 .get(pub_key)
-                .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+                .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
         }
     }
 

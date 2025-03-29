@@ -1,16 +1,17 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
+use alloy::{
+    eips::{BlockId, BlockNumberOrTag},
+    network::EthereumWallet,
+    primitives::{Address, U256},
+    providers::{Provider, ProviderBuilder},
+};
 use anyhow::{bail, ensure, Context};
 use clap::{Parser, Subcommand};
 use client::SequencerClient;
-use contract_bindings_ethers::fee_contract::FeeContract;
 use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, Header};
-use ethers::{
-    middleware::{Middleware, SignerMiddleware},
-    providers::Provider,
-    types::{Address, BlockId, U256},
-};
 use futures::stream::StreamExt;
+use hotshot_contract_adapter::sol_types::FeeContract;
 use sequencer_utils::logging;
 use surf_disco::Url;
 
@@ -155,18 +156,19 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
     let key_pair = EthKeyPair::from_mnemonic(opt.mnemonic, opt.account_index)?;
 
     // Connect to L1.
-    let rpc = Provider::try_from(opt.rpc_url.to_string())?.interval(opt.l1_interval);
     let signer = key_pair.signer();
-    let l1 = Arc::new(SignerMiddleware::new_with_provider_chain(rpc, signer).await?);
-    let contract = FeeContract::new(opt.contract_address, l1.clone());
+    let l1 = ProviderBuilder::new()
+        .wallet(EthereumWallet::from(signer.clone()))
+        .on_http(opt.rpc_url);
+    let contract = FeeContract::new(opt.contract_address, &l1);
 
     // Connect to Espresso.
     let espresso = SequencerClient::new(opt.espresso_provider);
 
     // Validate deposit.
     let amount = U256::from(opt.amount);
-    let min_deposit = contract.min_deposit_amount().call().await?;
-    let max_deposit = contract.max_deposit_amount().call().await?;
+    let min_deposit = contract.minDepositAmount().call().await?._0;
+    let max_deposit = contract.maxDepositAmount().call().await?._0;
     ensure!(
         amount >= min_deposit,
         "amount is too small (minimum deposit: {min_deposit})",
@@ -178,31 +180,31 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
 
     // Record the initial balance on Espresso.
     let initial_balance = espresso
-        .get_espresso_balance(l1.address(), None)
+        .get_espresso_balance(signer.address(), None)
         .await
         .context("getting Espresso balance")?;
     tracing::debug!(%initial_balance, "initial balance");
 
     // Send the deposit transaction.
-    tracing::info!(address = %l1.address(), %amount, "sending deposit transaction");
-    let call = contract.deposit(l1.address()).value(amount);
-    let tx = call.send().await.context("sending deposit transaction")?;
+    tracing::info!(address = %signer.address(), %amount, "sending deposit transaction");
+    let tx = contract
+        .deposit(signer.address())
+        .value(amount)
+        .send()
+        .await
+        .context("sending deposit transaction")?;
     tracing::info!(hash = %tx.tx_hash(), "deposit transaction sent to L1");
 
     // Wait for the transaction to finalize on L1.
     let receipt = tx
-        .confirmations(opt.confirmations)
+        .with_required_confirmations(opt.confirmations as u64)
+        .get_receipt()
         .await
-        .context("waiting for deposit transaction")?
-        .context("deposit transaction not mined")?;
+        .context("waiting for deposit transaction")?;
     let l1_block = receipt
         .block_number
-        .context("deposit transaction not mined")?
-        .as_u64();
-    ensure!(
-        receipt.status == Some(1.into()),
-        "deposit transaction reverted"
-    );
+        .context("deposit transaction not mined")?;
+    ensure!(receipt.inner.is_success(), "deposit transaction reverted");
     tracing::info!(l1_block, "deposit mined on L1");
 
     // Wait for Espresso to catch up to the L1.
@@ -234,7 +236,7 @@ async fn deposit(opt: Deposit) -> anyhow::Result<()> {
 
     // Confirm that the Espresso balance has increased.
     let final_balance = espresso
-        .get_espresso_balance(l1.address(), Some(espresso_block))
+        .get_espresso_balance(signer.address(), Some(espresso_block))
         .await?;
     if final_balance >= initial_balance + amount.into() {
         tracing::info!(%final_balance, "deposit successful");
@@ -279,12 +281,18 @@ async fn l1_balance(opt: L1Balance) -> anyhow::Result<()> {
         bail!("address or mnemonic must be provided");
     };
 
-    let l1 = Provider::try_from(opt.rpc_url.to_string())?.interval(opt.l1_interval);
+    // let l1 = Provider::try_from(opt.rpc_url.to_string())?.interval(opt.l1_interval);
+    let l1 = ProviderBuilder::new().on_http(opt.rpc_url);
 
-    let block = opt.block.map(BlockId::from);
+    // let block = opt.block.map(BlockId::from);
+    let block = match opt.block {
+        Some(n) => BlockNumberOrTag::Number(n),
+        None => BlockNumberOrTag::Latest,
+    };
     tracing::debug!(%address, ?block, "fetching L1 balance");
     let balance = l1
-        .get_balance(address, block)
+        .get_balance(address)
+        .block_id(BlockId::Number(block))
         .await
         .context("getting account balance")?;
 

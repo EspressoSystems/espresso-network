@@ -235,7 +235,7 @@ async fn main() {
         #[cfg(feature = "benchmarking")]
         {
             num_block += 1;
-            if !has_started && (num_block as usize) >= opt.benchmark_start_block.into() {
+            if !has_started && (num_block as usize) >= usize::from(opt.benchmark_start_block) {
                 has_started = true;
                 start = Instant::now();
             }
@@ -286,7 +286,7 @@ async fn main() {
         }
 
         #[cfg(feature = "benchmarking")]
-        if !benchmark_finish && (num_block as usize) >= opt.benchmark_end_block.into() {
+        if !benchmark_finish && (num_block as usize) >= usize::from(opt.benchmark_end_block) {
             let block_range = format!("{}~{}", opt.benchmark_start_block, opt.benchmark_end_block,);
             let transaction_size_range_in_bytes = format!("{}~{}", opt.min_size, opt.max_size,);
             let transactions_per_batch_range = format!(

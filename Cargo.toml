@@ -8,14 +8,12 @@ edition = "2021"
 resolver = "2"
 
 members = [
+    "alloy-compat",
     "builder",
     "client",
-    "contract-bindings-alloy",
-    "contract-bindings-ethers",
     "contracts/rust/adapter",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
-    "ethers-conv",
     "hotshot",
     "hotshot-builder-api",
     "hotshot-builder-core",
@@ -29,7 +27,6 @@ members = [
     "hotshot-orchestrator",
     "hotshot-query-service",
     "hotshot-stake-table",
-    "hotshot-state-prover",
     "hotshot-state-prover",
     "hotshot-task",
     "hotshot-task-impls",
@@ -50,12 +47,12 @@ members = [
 exclude = ["sequencer-sqlite"]
 
 [workspace.dependencies]
-contract-bindings-alloy = { path = "./contract-bindings-alloy" }
 ethers-conv = { path = "./ethers-conv" }
-alloy = { version = "0.9", default-features = false, features = [
+alloy = { version = "0.12.5", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
+    "node-bindings",
     "provider-ws",
     "providers",
     "reqwest",
@@ -67,6 +64,7 @@ alloy = { version = "0.9", default-features = false, features = [
     "signers",
     "sol-types",
     "transports",
+    "getrandom",
 ] }
 anyhow = "^1.0"
 ark-std = "0.4"
@@ -124,9 +122,6 @@ dashmap = "6"
 memoize = { version = "0.4", features = ["full"] }
 derive_builder = "0.20"
 parking_lot = { version = "0.12", features = ["send_guard"] }
-primitive-types = { version = "0.12.2", default-features = false, features = [
-    "serde",
-] }
 
 # Builder imports
 marketplace-builder-core = { path = "marketplace-builder-core" }
@@ -200,7 +195,7 @@ strum = { version = "0.26", features = ["derive"] }
 surf-disco = "0.9"
 sqlx = "=0.8.3"
 tagged-base64 = "0.4"
-tide-disco = "0.9.3"
+tide-disco = "0.9.4"
 thiserror = "1.0.69"
 tracing = "0.1"
 bytesize = "1.3"

@@ -7,6 +7,7 @@
 //! Implementation for `BitVectorQc` that uses BLS signature + Bit vector.
 //! See more details in hotshot paper.
 
+use alloy::primitives::U256;
 use ark_std::{
     fmt::Debug,
     format,
@@ -18,7 +19,6 @@ use ark_std::{
 use bitvec::prelude::*;
 use digest::generic_array::GenericArray;
 use jf_signature::{AggregateableSignatureSchemes, SignatureError};
-use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use typenum::U32;
 
@@ -86,13 +86,16 @@ where
                 .stake_entries
                 .iter()
                 .zip(signers.iter())
-                .fold(U256::zero(), |acc, (entry, b)| {
-                    if *b {
-                        acc + entry.stake_amount
-                    } else {
-                        acc
-                    }
-                });
+                .fold(
+                    U256::ZERO,
+                    |acc, (entry, b)| {
+                        if *b {
+                            acc + entry.stake_amount
+                        } else {
+                            acc
+                        }
+                    },
+                );
         if total_weight < qc_pp.threshold {
             return Err(SignatureError::ParameterError(format!(
                 "total_weight {} less than threshold {}",
@@ -135,13 +138,16 @@ where
                 .stake_entries
                 .iter()
                 .zip(signers.iter())
-                .fold(U256::zero(), |acc, (entry, b)| {
-                    if *b {
-                        acc + entry.stake_amount
-                    } else {
-                        acc
-                    }
-                });
+                .fold(
+                    U256::ZERO,
+                    |acc, (entry, b)| {
+                        if *b {
+                            acc + entry.stake_amount
+                        } else {
+                            acc
+                        }
+                    },
+                );
         if total_weight < qc_vp.threshold {
             return Err(SignatureError::ParameterError(format!(
                 "total_weight {} less than threshold {}",

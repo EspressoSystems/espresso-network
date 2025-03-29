@@ -9,13 +9,32 @@ import { IPlonkVerifier } from "../../src/interfaces/IPlonkVerifier.sol";
 import { PlonkVerifierV2 as PV } from "../../src/libraries/PlonkVerifierV2.sol";
 
 contract LightClientV2Mock is LCV2 {
+    bool internal hotShotDown;
+    uint256 internal frozenL1Height;
+
+    /// copy from LightClientMock.sol
+    function setHotShotDownSince(uint256 l1Height) public {
+        hotShotDown = true;
+        frozenL1Height = l1Height;
+    }
+    /// copy from LightClientMock.sol
+
+    function setHotShotUp() public {
+        hotShotDown = false;
+    }
+
     /// @dev Directly mutate finalizedState variable for test
     function setFinalizedState(LC.LightClientState memory state) public {
         finalizedState = state;
         updateStateHistory(uint64(block.number), uint64(block.timestamp), state);
     }
-    /// @dev same as LCV1Mock
 
+    /// @dev Directly mutate votingStakeTableState variable for test
+    function setVotingStakeTableState(LC.StakeTableState memory stake) public {
+        votingStakeTableState = stake;
+    }
+
+    /// @dev same as LCV1Mock
     function setStateHistory(StateHistoryCommitment[] memory _stateHistoryCommitments) public {
         // delete the previous stateHistoryCommitments
         delete stateHistoryCommitments;
@@ -26,49 +45,12 @@ contract LightClientV2Mock is LCV2 {
         }
     }
 
-    function verifyProof(
-        LC.LightClientState memory state,
-        StakeTableState memory nextStakeTable,
-        IPlonkVerifier.PlonkProof memory proof
-    ) internal view override {
-        IPlonkVerifier.VerifyingKey memory vk = getVk();
-
-        // Prepare the public input
-        uint256[11] memory publicInput;
-        publicInput[0] = uint256(state.viewNum);
-        publicInput[1] = uint256(state.blockHeight);
-        publicInput[2] = BN254.ScalarField.unwrap(state.blockCommRoot);
-        publicInput[3] = BN254.ScalarField.unwrap(votingStakeTableState.blsKeyComm);
-        publicInput[4] = BN254.ScalarField.unwrap(votingStakeTableState.schnorrKeyComm);
-        publicInput[5] = BN254.ScalarField.unwrap(votingStakeTableState.amountComm);
-        publicInput[6] = votingStakeTableState.threshold;
-
-        if (isLastBlockInEpoch(state.blockHeight)) {
-            // during epoch change: use the next stake table
-            publicInput[7] = BN254.ScalarField.unwrap(nextStakeTable.blsKeyComm);
-            publicInput[8] = BN254.ScalarField.unwrap(nextStakeTable.schnorrKeyComm);
-            publicInput[9] = BN254.ScalarField.unwrap(nextStakeTable.amountComm);
-            publicInput[10] = nextStakeTable.threshold;
-        } else {
-            // use the previous stake table, effectively force nextStakeTable == votingStakeTable
-            publicInput[7] = BN254.ScalarField.unwrap(votingStakeTableState.blsKeyComm);
-            publicInput[8] = BN254.ScalarField.unwrap(votingStakeTableState.schnorrKeyComm);
-            publicInput[9] = BN254.ScalarField.unwrap(votingStakeTableState.amountComm);
-            publicInput[10] = votingStakeTableState.threshold;
-        }
-
-        // invoking PlonkVerifier2.sol::verify()
-        if (!PV(_verifier).verify(vk, publicInput, proof)) {
-            revert InvalidProof();
-        }
-    }
-
     function setBlocksPerEpoch(uint64 newBlocksPerEpoch) public {
         _blocksPerEpoch = newBlocksPerEpoch;
     }
 
     // generated and copied from `cargo run --bin gen-vk-contract --release -- --mock`
-    function getVk() public pure returns (IPlonkVerifier.VerifyingKey memory vk) {
+    function _getVk() public pure override returns (IPlonkVerifier.VerifyingKey memory vk) {
         assembly {
             // domain size
             mstore(vk, 65536)

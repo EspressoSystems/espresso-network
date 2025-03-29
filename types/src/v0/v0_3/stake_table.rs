@@ -1,11 +1,11 @@
 use crate::PubKey;
 use derive_more::derive::{From, Into};
-use hotshot_contract_adapter::stake_table::NodeInfoJf;
+use hotshot::types::BLSPubKey;
 use hotshot_types::{network::PeerConfigKeys, PeerConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
-pub struct PermissionedStakeTableEntry(NodeInfoJf);
+pub struct PermissionedStakeTableEntry(PeerConfigKeys<BLSPubKey>);
 
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]

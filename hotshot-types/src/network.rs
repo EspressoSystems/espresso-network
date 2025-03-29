@@ -6,6 +6,7 @@
 
 use std::{fs, ops::Range, path::Path, time::Duration, vec};
 
+use alloy::primitives::U256;
 use clap::ValueEnum;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
@@ -20,8 +21,9 @@ use crate::{
     },
     hotshot_config_file::HotShotConfigFile,
     light_client::StateVerKey,
+    stake_table::StakeTableEntry,
     traits::signature_key::SignatureKey,
-    HotShotConfig, ValidatorConfig,
+    HotShotConfig, PeerConfig, ValidatorConfig,
 };
 
 /// Configuration describing a libp2p node
@@ -72,7 +74,7 @@ pub enum BuilderType {
 }
 
 /// Node PeerConfig keys
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 #[serde(bound(deserialize = ""))]
 pub struct PeerConfigKeys<KEY: SignatureKey> {
     /// The peer's public key
@@ -83,6 +85,19 @@ pub struct PeerConfigKeys<KEY: SignatureKey> {
     pub stake: u64,
     /// whether the node is a DA node
     pub da: bool,
+}
+impl<K: SignatureKey<StakeTableEntry = StakeTableEntry<K>>> From<PeerConfigKeys<K>>
+    for PeerConfig<K>
+{
+    fn from(v: PeerConfigKeys<K>) -> Self {
+        Self {
+            stake_table_entry: StakeTableEntry {
+                stake_key: v.stake_table_key,
+                stake_amount: U256::from(v.stake),
+            },
+            state_ver_key: v.state_ver_key,
+        }
+    }
 }
 
 /// Options controlling how the random builder generates blocks

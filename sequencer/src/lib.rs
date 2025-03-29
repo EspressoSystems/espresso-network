@@ -15,6 +15,7 @@ mod message_compat_tests;
 
 use std::sync::Arc;
 
+use alloy::primitives::U256;
 use anyhow::Context;
 use catchup::StatePeers;
 use context::SequencerContext;
@@ -22,7 +23,6 @@ use espresso_types::{
     traits::EventConsumer, BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey,
     SeqTypes, SolverAuctionResultsProvider, ValidatedState,
 };
-use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
@@ -444,9 +444,7 @@ pub async fn init_node<P: SequencerPersistence, V: Versions>(
         L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
         L1Finalized::Timestamp { timestamp } => {
             l1_client
-                .wait_for_finalized_block_with_timestamp(
-                    ethers::types::U256::from(timestamp.unix_timestamp()).to_alloy(),
-                )
+                .wait_for_finalized_block_with_timestamp(U256::from(timestamp.unix_timestamp()))
                 .await
         },
     };
@@ -563,6 +561,7 @@ pub mod testing {
         time::Duration,
     };
 
+    use alloy::primitives::U256;
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_types::{
@@ -571,7 +570,6 @@ pub mod testing {
         Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey, SeqTypes,
         Transaction, Upgrade,
     };
-    use ethers::types::U256;
     use futures::{
         future::join_all,
         stream::{Stream, StreamExt},
@@ -943,7 +941,7 @@ pub mod testing {
             let validator_config = ValidatorConfig {
                 public_key: my_peer_config.stake_table_entry.stake_key,
                 private_key: self.priv_keys[i].clone(),
-                stake_value: my_peer_config.stake_table_entry.stake_amount.as_u64(),
+                stake_value: my_peer_config.stake_table_entry.stake_amount.to::<u64>(),
                 state_key_pair: self.state_key_pairs[i].clone(),
                 is_da,
             };
@@ -964,7 +962,7 @@ pub mod testing {
             // Make sure the builder account is funded.
             let builder_account = Self::builder_key().fee_account();
             tracing::info!(%builder_account, "prefunding builder account");
-            state.prefund_account(builder_account, U256::max_value().into());
+            state.prefund_account(builder_account, U256::MAX.into());
 
             let persistence = persistence_opt.create().await.unwrap();
             let node_state = NodeState::new(
@@ -1065,6 +1063,7 @@ pub mod testing {
 #[cfg(test)]
 mod test {
 
+    use alloy::node_bindings::Anvil;
     use espresso_types::{Header, MockSequencerVersions, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
@@ -1076,7 +1075,7 @@ mod test {
             BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES,
         },
     };
-    use sequencer_utils::{test_utils::setup_test, AnvilOptions};
+    use sequencer_utils::test_utils::setup_test;
     use testing::{wait_for_decide_on_handle, TestConfigBuilder};
 
     use self::testing::run_test_builder;
@@ -1086,8 +1085,8 @@ mod test {
     async fn test_skeleton_instantiation() {
         setup_test();
         // Assign `config` so it isn't dropped early.
-        let anvil = AnvilOptions::default().spawn().await;
-        let url = anvil.url();
+        let anvil = Anvil::new().spawn();
+        let url = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
         let mut config = TestConfigBuilder::<NUM_NODES>::default()
             .l1_url(url)
@@ -1127,8 +1126,8 @@ mod test {
 
         let success_height = 30;
         // Assign `config` so it isn't dropped early.
-        let anvil = AnvilOptions::default().spawn().await;
-        let url = anvil.url();
+        let anvil = Anvil::new().spawn();
+        let url = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
         let mut config = TestConfigBuilder::<NUM_NODES>::default()
             .l1_url(url)

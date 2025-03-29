@@ -57,7 +57,7 @@ contract DeployLightClientTestScript is Script {
     ) public returns (address payable proxyAddress, address admin, LC.LightClientState memory) {
         vm.startBroadcast(owner);
 
-        LCMock lightClientContract = new LCMock(state, stakeState, stateHistoryRetentionPeriod);
+        LCMock lightClientContract = new LCMock();
 
         // Encode the initializer function call
         bytes memory data = abi.encodeWithSignature(

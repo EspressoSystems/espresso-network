@@ -28,7 +28,7 @@ contract Transcript_appendMessage_Test is Test {
         cmds[3] = vm.toString(abi.encode(message));
 
         bytes memory result = vm.ffi(cmds);
-        (T.TranscriptData memory updated) = abi.decode(result, (T.TranscriptData));
+        T.TranscriptData memory updated = abi.decode(result, (T.TranscriptData));
 
         transcript.appendMessage(message);
         assertEq(updated.transcript, transcript.transcript);
@@ -53,7 +53,7 @@ contract Transcript_appendFieldElement_Test is Test {
         cmds[3] = vm.toString(bytes32(fieldElement));
 
         bytes memory result = vm.ffi(cmds);
-        (T.TranscriptData memory updated) = abi.decode(result, (T.TranscriptData));
+        T.TranscriptData memory updated = abi.decode(result, (T.TranscriptData));
 
         transcript.transcript = abi.encodePacked(transcript.transcript, fieldElement);
 
@@ -81,7 +81,7 @@ contract Transcript_appendGroupElement_Test is Test {
         cmds[3] = vm.toString(abi.encode(randPoint));
 
         bytes memory result = vm.ffi(cmds);
-        (T.TranscriptData memory updated) = abi.decode(result, (T.TranscriptData));
+        T.TranscriptData memory updated = abi.decode(result, (T.TranscriptData));
 
         transcript.transcript = abi.encodePacked(transcript.transcript, randPoint.x, randPoint.y);
 
@@ -100,7 +100,7 @@ contract Transcript_appendGroupElement_Test is Test {
         cmds[3] = vm.toString(abi.encode(infinity));
 
         bytes memory result = vm.ffi(cmds);
-        (T.TranscriptData memory updated) = abi.decode(result, (T.TranscriptData));
+        T.TranscriptData memory updated = abi.decode(result, (T.TranscriptData));
 
         transcript.transcript = abi.encodePacked(transcript.transcript, infinity.x, infinity.y);
         assertEq(updated.transcript, transcript.transcript);
@@ -155,7 +155,7 @@ contract Transcript_appendVkAndPubInput_Test is Test {
         cmds[4] = vm.toString(abi.encode(publicInput));
 
         bytes memory result = vm.ffi(cmds);
-        (T.TranscriptData memory updated) = abi.decode(result, (T.TranscriptData));
+        T.TranscriptData memory updated = abi.decode(result, (T.TranscriptData));
 
         transcript.appendVkAndPubInput(vk, publicInput);
 

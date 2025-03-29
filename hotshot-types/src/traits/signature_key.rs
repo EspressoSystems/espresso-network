@@ -14,11 +14,11 @@ use std::{
     hash::Hash,
 };
 
+use alloy::primitives::U256;
 use ark_serialize::SerializationError;
 use bitvec::prelude::*;
 use committable::Committable;
 use jf_signature::SignatureError;
-use primitive_types::U256;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tagged_base64::{TaggedBase64, Tb64Error};
 

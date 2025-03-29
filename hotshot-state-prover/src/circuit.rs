@@ -1,12 +1,12 @@
 //! Circuit implementation for verifying light client state update
 
+use alloy::primitives::U256;
 use ark_ec::twisted_edwards::TECurveConfig;
 use ark_ff::PrimeField;
 use ark_std::borrow::Borrow;
-use ethers::types::U256;
 use hotshot_contract_adapter::{
-    jellyfish::u256_to_field,
-    light_client::{ParsedLightClientState, ParsedStakeTableState},
+    sol_types::{LightClientStateSol, StakeTableStateSol},
+    u256_to_field,
 };
 use hotshot_types::light_client::{
     GenericLightClientState, GenericPublicInput, GenericStakeTableState,
@@ -322,8 +322,8 @@ where
     F: RescueParameter,
     P: TECurveConfig<BaseField = F>,
 {
-    let lightclient_state = ParsedLightClientState::dummy_genesis().into();
-    let stake_table_state = ParsedStakeTableState::dummy_genesis().into();
+    let lightclient_state = LightClientStateSol::dummy_genesis().into();
+    let stake_table_state = StakeTableStateSol::dummy_genesis().into();
 
     build::<F, P, _, _, _>(
         &[],

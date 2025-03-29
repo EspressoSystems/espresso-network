@@ -169,6 +169,9 @@ impl PublicHotShotConfig {
     pub fn known_da_nodes(&self) -> Vec<PeerConfig<PubKey>> {
         self.known_da_nodes.clone()
     }
+    pub fn blocks_per_epoch(&self) -> u64 {
+        self.epoch_height
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

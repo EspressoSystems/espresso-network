@@ -8,16 +8,20 @@ use std::{
     time::Duration,
 };
 
+use alloy::{
+    eips::BlockNumberOrTag,
+    primitives::Address,
+    providers::{Provider, ProviderBuilder},
+    rpc::types::Filter,
+};
 use anyhow::{anyhow, Context, Result};
 use client::SequencerClient;
 use espresso_types::{FeeAmount, FeeVersion, MarketplaceVersion};
-use ethers::prelude::*;
 use futures::future::join_all;
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 use vbs::version::StaticVersionType;
 
-const L1_PROVIDER_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 // TODO add to .env
 const RECIPIENT_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
 /// Duration in seconds to wait before declaring the chain deceased.
@@ -26,7 +30,7 @@ const SEQUENCER_BLOCKS_TIMEOUT: u64 = 300;
 #[derive(Clone, Debug)]
 pub struct TestConfig {
     pub load_generator_url: String,
-    pub provider: Provider<Http>,
+    pub l1_endpoint: Url,
     pub espresso: SequencerClient,
     pub builder_address: Address,
     pub recipient_address: Address,
@@ -156,8 +160,7 @@ impl TestConfig {
 
         Ok(Self {
             load_generator_url,
-            provider: Provider::<Http>::try_from(l1_provider_url)?
-                .interval(L1_PROVIDER_RETRY_INTERVAL),
+            l1_endpoint: Url::parse(&l1_provider_url).unwrap(),
             espresso: client,
             light_client_address: light_client_proxy_address.parse::<Address>().unwrap(),
             builder_address,
@@ -178,20 +181,19 @@ impl TestConfig {
     }
     /// Get the latest block where we see a light client update
     pub async fn latest_light_client_update(&self) -> u64 {
+        let provider = ProviderBuilder::new().on_http(self.l1_endpoint.clone());
         let filter = Filter::new()
-            .from_block(BlockNumber::Earliest)
+            .from_block(BlockNumberOrTag::Earliest)
             .address(self.light_client_address);
         // block number for latest light client update
-        let latest_light_client_update = self
-            .provider
+        provider
             .get_logs(&filter)
             .await
             .unwrap()
             .last()
             .unwrap()
-            .block_number;
-
-        latest_light_client_update.unwrap().as_u64()
+            .block_number
+            .unwrap()
     }
 
     /// Return current state  of the test

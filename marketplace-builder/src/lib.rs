@@ -18,11 +18,6 @@ use espresso_types::{
     v0_99::BidTxBody,
     FeeVersion, MarketplaceVersion, SeqTypes, SequencerVersions,
 };
-use ethers::{
-    core::k256::ecdsa::SigningKey,
-    signers::{coins_bip39::English, MnemonicBuilder, Signer as _, Wallet},
-    types::{Address, U256},
-};
 use futures::{
     future::{join_all, Future},
     stream::{Stream, StreamExt},

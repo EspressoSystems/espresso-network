@@ -3,9 +3,9 @@ use std::{
     path::PathBuf,
 };
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use clap::Args;
-use ethers::types::U256;
 use futures::FutureExt;
 use hotshot_stake_table::vec_based::config::FieldType;
 use hotshot_types::light_client::{
@@ -109,7 +109,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
             // This signature is no longer needed
             return Ok(());
         }
-        let one = U256::one();
+        let one = U256::from(1);
         let weight = self.known_nodes.get(&key).unwrap_or(&one);
         // TODO(Chengyu): We don't know where to fetch the stake table yet.
         // Related issue: [https://github.com/EspressoSystems/espresso-sequencer/issues/1022]

@@ -1,6 +1,7 @@
+use alloy::primitives::{Address, U256};
+use alloy_compat::ethers_serde;
 use committable::{Commitment, Committable};
 use derive_more::{Deref, Display, From, Into};
-use ethers::types::{Address, U256};
 use itertools::Either;
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,7 @@ pub struct ChainConfig {
     /// This is optional so that fees can easily be toggled on/off, with no need to deploy a
     /// contract when they are off. In a future release, after fees are switched on and thoroughly
     /// tested, this may be made mandatory.
+    #[serde(with = "ethers_serde::option_address")]
     pub fee_contract: Option<Address>,
 
     /// Account that receives sequencing fees.
