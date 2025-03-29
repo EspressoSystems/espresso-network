@@ -1010,8 +1010,6 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
-        // Unwrapping here is okay as we retry in a loop
-        //so we should either get a validated state or until hotshot cancels the task
         let (validated_state, delta) = self
             // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
             .apply_header(
@@ -1022,7 +1020,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
                 version,
             )
             .await
-            .unwrap();
+            .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
         // Validate the proposal.
         let validated_state = ValidatedTransition::new(
