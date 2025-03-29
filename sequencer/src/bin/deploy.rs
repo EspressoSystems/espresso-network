@@ -236,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
             // fetch epoch length from HotShot config
             let config_url = opt.sequencer_url.join("/config/hotshot")?;
             // Request the configuration until it is successful
-            let blocks_per_epoch = loop {
+            let mut blocks_per_epoch = loop {
                 match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
                     config_url.clone(),
                 )
@@ -251,6 +251,13 @@ async fn main() -> anyhow::Result<()> {
                     },
                 }
             };
+
+            // TEST-ONLY: if this config is not yet set, we use a default value of 60
+            // to avoid contract complaining about invalid zero-valued blocks_per_epoch
+            if opt.use_mock && blocks_per_epoch == 0 {
+                blocks_per_epoch = 60;
+            }
+            tracing::info!(%blocks_per_epoch, "Upgrading LightClientV2 with ");
 
             deployer::upgrade_light_client_v2(
                 &provider,
