@@ -29,7 +29,7 @@ portpicker = { workspace = true }
 rand = { workspace = true }
 rust_decimal = "1.36.0"
 serde = { workspace = true }
-sysinfo = "0.33.1"
+sysinfo = "0.34.1"
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
