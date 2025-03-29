@@ -632,6 +632,13 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
         }
     }
 
+    pub async fn upgrade_view(&self) -> Option<TYPES::View> {
+        let upgrade_certificate = self.decided_upgrade_certificate.read().await;
+        upgrade_certificate
+            .as_ref()
+            .map(|cert| cert.data.new_version_first_view)
+    }
+
     /// Calculate the version applied in a view, based on the provided upgrade lock.
     ///
     /// # Errors

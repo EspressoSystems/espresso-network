@@ -350,7 +350,7 @@ pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
     if epoch_height == 0 || epoch < 1 {
         0
     } else {
-        epoch_height * epoch - 2
+        epoch_height * epoch - 5
     }
 }
 
@@ -400,9 +400,37 @@ pub enum EpochTransitionIndicator {
     NotInTransition,
 }
 
-/// Returns true if the given block number is the last in the epoch based on the given epoch height.
+/// Return true if the given block number is the final full block, the "transition block"
 #[must_use]
-pub fn is_last_block_in_epoch(block_number: u64, epoch_height: u64) -> bool {
+pub fn is_transition_block(block_number: u64, epoch_height: u64) -> bool {
+    if block_number == 0 || epoch_height == 0 {
+        false
+    } else {
+        (block_number + 3) % epoch_height == 0
+    }
+}
+/// returns true if it's the first transition block (epoch height - 2)
+#[must_use]
+pub fn is_first_transition_block(block_number: u64, epoch_height: u64) -> bool {
+    if block_number == 0 || epoch_height == 0 {
+        false
+    } else {
+        block_number % epoch_height == epoch_height - 2
+    }
+}
+/// Returns true if the block is part of the epoch transition (including the last non null block)  
+#[must_use]
+pub fn is_epoch_transition(block_number: u64, epoch_height: u64) -> bool {
+    if block_number == 0 || epoch_height == 0 {
+        false
+    } else {
+        block_number % epoch_height >= epoch_height - 3 || block_number % epoch_height == 0
+    }
+}
+
+/// Returns true if the block is the last block in the epoch
+#[must_use]
+pub fn is_last_block(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
@@ -417,7 +445,7 @@ pub fn is_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        (block_number + 2) % epoch_height == 0
+        (block_number + 5) % epoch_height == 0
     }
 }
 
@@ -427,7 +455,7 @@ pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height >= epoch_height - 2
+        block_number % epoch_height >= epoch_height - 5
     }
 }
 
@@ -462,22 +490,28 @@ mod test {
 
     #[test]
     fn test_is_last_block_in_epoch() {
-        assert!(!is_last_block_in_epoch(8, 10));
-        assert!(!is_last_block_in_epoch(9, 10));
-        assert!(is_last_block_in_epoch(10, 10));
-        assert!(!is_last_block_in_epoch(11, 10));
+        assert!(!is_epoch_transition(5, 10));
+        assert!(!is_epoch_transition(6, 10));
+        assert!(is_epoch_transition(7, 10));
+        assert!(is_epoch_transition(8, 10));
+        assert!(is_epoch_transition(9, 10));
+        assert!(is_epoch_transition(10, 10));
+        assert!(!is_epoch_transition(11, 10));
 
-        assert!(!is_last_block_in_epoch(10, 0));
+        assert!(!is_epoch_transition(10, 0));
     }
 
     #[test]
     fn test_is_epoch_root() {
-        assert!(is_epoch_root(8, 10));
+        assert!(is_epoch_root(5, 10));
+        assert!(!is_epoch_root(6, 10));
+        assert!(!is_epoch_root(7, 10));
+        assert!(!is_epoch_root(8, 10));
         assert!(!is_epoch_root(9, 10));
         assert!(!is_epoch_root(10, 10));
         assert!(!is_epoch_root(11, 10));
 
-        assert!(!is_last_block_in_epoch(10, 0));
+        assert!(!is_epoch_transition(10, 0));
     }
 
     #[test]
@@ -487,9 +521,9 @@ mod test {
         let epoch_height = 10;
         let epoch_root_block_number = root_block_in_epoch(3, epoch_height);
 
-        assert!(is_epoch_root(28, epoch_height));
+        assert!(is_epoch_root(25, epoch_height));
 
-        assert_eq!(epoch_root_block_number, 28);
+        assert_eq!(epoch_root_block_number, 25);
 
         assert_eq!(
             epoch,

@@ -27,7 +27,7 @@ use hotshot_types::{
         signature_key::{BuilderSignatureKey, SignatureKey},
         BlockPayload,
     },
-    utils::ViewInner,
+    utils::{is_epoch_transition, ViewInner},
 };
 use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};
@@ -161,6 +161,64 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             },
         };
 
+        // Short circuit if we are in epochs and we are likely proposing a transition block
+        // If it's the first view of the upgrade, we don't need to check for transition blocks
+        if version >= V::Epochs::VERSION {
+            let Some(epoch) = block_epoch else {
+                tracing::error!("Epoch is required for epoch-based view change");
+                return None;
+            };
+            let high_qc = self.consensus.read().await.high_qc().clone();
+            let mut high_qc_block_number = if let Some(bn) = high_qc.data.block_number {
+                bn
+            } else {
+                // If it's the first view after the upgrade the high QC won't have a block number
+                // So just use the highest_block number we've stored
+                if block_view
+                    > self
+                        .upgrade_lock
+                        .upgrade_view()
+                        .await
+                        .unwrap_or(TYPES::View::new(0))
+                        + 1
+                {
+                    tracing::error!("High QC in epoch version and not the first QC after upgrade");
+                    return None;
+                }
+                // 0 here so we use the highest block number in the calculation below
+                0
+            };
+            high_qc_block_number = std::cmp::max(
+                high_qc_block_number,
+                self.consensus.read().await.highest_block,
+            );
+            if self
+                .consensus
+                .read()
+                .await
+                .transition_qc()
+                .is_some_and(|qc| {
+                    let Some(e) = qc.0.data.epoch else {
+                        return false;
+                    };
+                    e == epoch
+                })
+                || is_epoch_transition(high_qc_block_number, self.epoch_height)
+            {
+                // We are proposing a transition block it should be empty
+                if high_qc_block_number % self.epoch_height != 0 {
+                    tracing::error!(
+                        "Sending empty block event. View number: {}. Parent Block number: {}",
+                        block_view,
+                        high_qc_block_number
+                    );
+                    self.send_empty_block(event_stream, block_view, block_epoch, version)
+                        .await;
+                    return None;
+                }
+            }
+        }
+
         // Request a block from the builder unless we are between versions.
         let block = {
             if self
@@ -196,44 +254,56 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             )
             .await;
         } else {
-            // If we couldn't get a block, send an empty block
-            tracing::info!(
-                "Failed to get a block for view {:?}, proposing empty block",
-                block_view
-            );
-
-            // Increment the metric for number of empty blocks proposed
-            self.consensus
-                .write()
-                .await
-                .metrics
-                .number_of_empty_blocks_proposed
-                .add(1);
-
-            let Some(null_fee) = null_block::builder_fee::<TYPES, V>(version, *block_view) else {
-                tracing::error!("Failed to get null fee");
-                return None;
-            };
-
-            // Create an empty block payload and metadata
-            let (_, metadata) = <TYPES as NodeType>::BlockPayload::empty();
-
-            // Broadcast the empty block
-            broadcast_event(
-                Arc::new(HotShotEvent::BlockRecv(PackedBundle::new(
-                    vec![].into(),
-                    metadata,
-                    block_view,
-                    block_epoch,
-                    vec1::vec1![null_fee],
-                    None,
-                ))),
-                event_stream,
-            )
-            .await;
+            self.send_empty_block(event_stream, block_view, block_epoch, version)
+                .await;
         };
 
         return None;
+    }
+
+    /// Send the event to the event stream that we are proposing an empty block
+    async fn send_empty_block(
+        &self,
+        event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
+        block_view: TYPES::View,
+        block_epoch: Option<TYPES::Epoch>,
+        version: Version,
+    ) {
+        // If we couldn't get a block, send an empty block
+        tracing::info!(
+            "Failed to get a block for view {:?}, proposing empty block",
+            block_view
+        );
+
+        // Increment the metric for number of empty blocks proposed
+        self.consensus
+            .write()
+            .await
+            .metrics
+            .number_of_empty_blocks_proposed
+            .add(1);
+
+        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(version, *block_view) else {
+            tracing::error!("Failed to get null fee");
+            return;
+        };
+
+        // Create an empty block payload and metadata
+        let (_, metadata) = <TYPES as NodeType>::BlockPayload::empty();
+
+        // Broadcast the empty block
+        broadcast_event(
+            Arc::new(HotShotEvent::BlockRecv(PackedBundle::new(
+                vec![].into(),
+                metadata,
+                block_view,
+                block_epoch,
+                vec1::vec1![null_fee],
+                None,
+            ))),
+            event_stream,
+        )
+        .await;
     }
 
     /// Produce a block by fetching auction results from the solver and bundles from builders.
@@ -419,23 +489,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         .await;
 
         None
-    }
-
-    /// epochs view change handler
-    #[instrument(skip_all, fields(id = self.id, view_number = *self.cur_view))]
-    pub async fn handle_view_change_epochs(
-        &mut self,
-        event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
-        block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
-    ) -> Option<HotShotTaskCompleted> {
-        if self.consensus.read().await.is_high_qc_forming_eqc() {
-            tracing::info!("Reached end of epoch. Not getting a new block until we form an eQC.");
-            None
-        } else {
-            self.handle_view_change_marketplace(event_stream, block_view, block_epoch)
-                .await
-        }
     }
 
     /// main task event handler

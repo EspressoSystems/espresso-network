@@ -20,7 +20,7 @@ use hotshot_types::{
         node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
     },
-    utils::option_epoch_from_block_number,
+    utils::{is_transition_block, option_epoch_from_block_number},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -161,6 +161,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     cert_block_number,
                     self.epoch_height,
                 );
+                tracing::debug!(
+                    "Formed Extended QC for view {:?} and epoch {:?}.",
+                    cert_view,
+                    cert_epoch
+                );
                 // Transition to the new epoch by sending ViewChange
                 let next_epoch = cert_epoch.map(|x| x + 1);
                 tracing::info!("Entering new epoch: {:?}", next_epoch);
@@ -184,8 +189,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::error!("Received invalid high QC: {}", e);
                     return Ok(());
                 }
-
                 let mut consensus_writer = self.consensus.write().await;
+
+                if high_qc
+                    .data
+                    .block_number
+                    .is_some_and(|bn| is_transition_block(bn, self.epoch_height))
+                {
+                    let Some(next_epoch_high_qc) = maybe_next_epoch_high_qc else {
+                        tracing::error!("Received transition QC but no next epoch high QC");
+                        return Ok(());
+                    };
+                    consensus_writer
+                        .update_transition_qc(high_qc.clone(), next_epoch_high_qc.clone());
+                }
+
                 let high_qc_updated = consensus_writer.update_high_qc(high_qc.clone()).is_ok();
                 let next_high_qc_updated =
                     if let Some(next_epoch_high_qc) = maybe_next_epoch_high_qc {
