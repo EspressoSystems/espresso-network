@@ -44,7 +44,8 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -1805,6 +1806,42 @@ impl SequencerPersistence for Persistence {
         tx.commit().await
     }
 
+    async fn add_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let state_cert_bytes = bincode::serialize(&state_cert)
+            .context("serializing light client state update certificate")?;
+
+        let mut tx = self.db.write().await?;
+        tx.upsert(
+            "state_cert",
+            ["epoch", "state_cert"],
+            ["epoch"],
+            [(state_cert.epoch.u64() as i64, state_cert_bytes)],
+        )
+        .await?;
+        tx.commit().await
+    }
+
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+        let Some(row) = self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT state_cert from state_cert ORDER BY epoch DESC LIMIT 1")
+            .await?
+        else {
+            return Ok(None);
+        };
+        let bytes: Vec<u8> = row.get("state_cert");
+        bincode::deserialize(&bytes)
+            .context("deserializing light client state update certificate")
+            .map(Some)
+    }
+
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         let rows = self
             .db
@@ -2528,6 +2565,8 @@ mod test {
 
         let rows = 300;
 
+        assert!(storage.load_state_cert().await.unwrap().is_none());
+
         for i in 0..rows {
             let view = ViewNumber::new(i);
             let validated_state = ValidatedState::default();
@@ -2554,6 +2593,13 @@ mod test {
                 builder_commitment,
                 metadata,
             );
+
+            let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
+                epoch: EpochNumber::new(i),
+                light_client_state: Default::default(), // filling arbitrary value
+                signatures: vec![],                     // filling arbitrary value
+            };
+            assert!(storage.add_state_cert(state_cert).await.is_ok());
 
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
@@ -2731,6 +2777,24 @@ mod test {
             quorum_certificates_count, rows as i64,
             "quorum certificates count does not match rows",
         );
+
+        let (state_cert_count,) = query_as::<(i64,)>("SELECT COUNT(*) from state_cert")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(
+            state_cert_count, rows as i64,
+            "Light client state update certificates count does not match rows",
+        );
+        assert_eq!(
+            storage.load_state_cert().await.unwrap().unwrap(),
+            LightClientStateUpdateCertificate::<SeqTypes> {
+                epoch: EpochNumber::new(rows - 1),
+                light_client_state: Default::default(),
+                signatures: vec![]
+            },
+            "Wrong light client state update certificate in the storage",
+        )
     }
 
     #[tokio::test(flavor = "multi_thread")]

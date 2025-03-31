@@ -5,13 +5,14 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
-use std::{collections::BTreeSet, fmt::Debug, num::NonZeroU64, sync::Arc};
+use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
 
 use async_lock::RwLock;
 use hotshot_utils::anytrace::Result;
+use primitive_types::U256;
 
 use super::node_implementation::NodeType;
-use crate::{drb::DrbResult, PeerConfig};
+use crate::{drb::DrbResult, traits::signature_key::StakeTableEntryType, PeerConfig};
 
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
@@ -21,15 +22,31 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn new(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
         // but they should not have voting power.
-        stake_committee_members: Vec<PeerConfig<TYPES::SignatureKey>>,
-        da_committee_members: Vec<PeerConfig<TYPES::SignatureKey>>,
+        stake_committee_members: Vec<PeerConfig<TYPES>>,
+        da_committee_members: Vec<PeerConfig<TYPES>>,
     ) -> Self;
 
-    /// Get all participants in the committee (including their stake) for a specific epoch
-    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES::SignatureKey>>;
+    fn total_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {
+        self.stake_table(epoch)
+            .iter()
+            .fold(U256::zero(), |acc, entry| {
+                acc + entry.stake_table_entry.stake()
+            })
+    }
+
+    fn total_da_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {
+        self.da_stake_table(epoch)
+            .iter()
+            .fold(U256::zero(), |acc, entry| {
+                acc + entry.stake_table_entry.stake()
+            })
+    }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES::SignatureKey>>;
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES>>;
+
+    /// Get all participants in the committee (including their stake) for a specific epoch
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES>>;
 
     /// Get all participants in the committee for a specific view for a specific epoch
     fn committee_members(
@@ -51,7 +68,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
+    ) -> Option<PeerConfig<TYPES>>;
 
     /// Get the DA stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
@@ -59,7 +76,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>>;
+    ) -> Option<PeerConfig<TYPES>>;
 
     /// See if a node has stake in the committee in a specific epoch
     fn has_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<TYPES::Epoch>) -> bool;
@@ -106,16 +123,16 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn da_total_nodes(&self, epoch: Option<TYPES::Epoch>) -> usize;
 
     /// Returns the threshold for a specific `Membership` implementation
-    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> NonZeroU64;
+    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
 
     /// Returns the DA threshold for a specific `Membership` implementation
-    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> NonZeroU64;
+    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
 
     /// Returns the threshold for a specific `Membership` implementation
-    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> NonZeroU64;
+    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
 
     /// Returns the threshold required to upgrade the network protocol
-    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> NonZeroU64;
+    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
 
     /// Returns if the stake table is available for the current Epoch
     fn has_epoch(&self, epoch: TYPES::Epoch) -> bool;

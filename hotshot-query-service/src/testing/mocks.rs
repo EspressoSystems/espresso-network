@@ -23,7 +23,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{QuorumProposal, ViewNumber},
-    signature_key::BLSPubKey,
+    signature_key::{BLSPubKey, SchnorrPubKey},
     traits::node_implementation::{NodeType, Versions},
 };
 use jf_merkle_tree::{
@@ -140,6 +140,7 @@ impl NodeType for MockTypes {
     type Membership = StaticCommittee<Self>;
     type BuilderSignatureKey = BLSPubKey;
     type AuctionResult = TestAuctionResult;
+    type StateSignatureKey = SchnorrPubKey;
 }
 
 #[derive(Clone, Debug, Copy)]

@@ -10,7 +10,7 @@ use clap::Parser;
 use futures::{Future, FutureExt};
 use hotshot_types::{
     network::{NetworkConfig, NetworkConfigSource},
-    traits::signature_key::SignatureKey,
+    traits::node_implementation::NodeType,
     PeerConfig, ValidatorConfig,
 };
 use libp2p_identity::PeerId;
@@ -167,15 +167,19 @@ pub struct MultiValidatorArgs {
 ///
 /// # Errors
 /// If we are unable to get the configuration from the orchestrator
-pub async fn get_complete_config<K: SignatureKey>(
+pub async fn get_complete_config<TYPES: NodeType>(
     client: &OrchestratorClient,
-    mut validator_config: ValidatorConfig<K>,
+    mut validator_config: ValidatorConfig<TYPES>,
     libp2p_advertise_address: Option<Multiaddr>,
     libp2p_public_key: Option<PeerId>,
-) -> anyhow::Result<(NetworkConfig<K>, ValidatorConfig<K>, NetworkConfigSource)> {
+) -> anyhow::Result<(
+    NetworkConfig<TYPES>,
+    ValidatorConfig<TYPES>,
+    NetworkConfigSource,
+)> {
     // get the configuration from the orchestrator
-    let run_config: NetworkConfig<K> = client
-        .post_and_wait_all_public_keys::<K>(
+    let run_config: NetworkConfig<TYPES> = client
+        .post_and_wait_all_public_keys::<TYPES>(
             &mut validator_config,
             libp2p_advertise_address,
             libp2p_public_key,
@@ -250,11 +254,11 @@ impl OrchestratorClient {
     /// # Errors
     /// If we were unable to serialize the Libp2p data
     #[allow(clippy::type_complexity)]
-    pub async fn get_config_without_peer<K: SignatureKey>(
+    pub async fn get_config_without_peer<TYPES: NodeType>(
         &self,
         libp2p_advertise_address: Option<Multiaddr>,
         libp2p_public_key: Option<PeerId>,
-    ) -> anyhow::Result<NetworkConfig<K>> {
+    ) -> anyhow::Result<NetworkConfig<TYPES>> {
         // Serialize our (possible) libp2p-specific data
         let request_body = vbs::Serializer::<OrchestratorVersion>::serialize(&(
             libp2p_advertise_address,
@@ -281,7 +285,7 @@ impl OrchestratorClient {
         // get the corresponding config
         let f = |client: Client<ClientError, OrchestratorVersion>| {
             async move {
-                let config: Result<NetworkConfig<K>, ClientError> = client
+                let config: Result<NetworkConfig<TYPES>, ClientError> = client
                     .post(&format!("api/config/{node_index}"))
                     .send()
                     .await;
@@ -322,7 +326,7 @@ impl OrchestratorClient {
     ///
     /// Does not fail, retries internally until success.
     #[instrument(skip_all, name = "orchestrator config")]
-    pub async fn get_config_after_collection<K: SignatureKey>(&self) -> NetworkConfig<K> {
+    pub async fn get_config_after_collection<TYPES: NodeType>(&self) -> NetworkConfig<TYPES> {
         // Define the request for post-register configurations
         let get_config_after_collection = |client: Client<ClientError, OrchestratorVersion>| {
             async move {
@@ -396,13 +400,14 @@ impl OrchestratorClient {
     /// # Panics
     /// if unable to post
     #[instrument(skip(self), name = "orchestrator public keys")]
-    pub async fn post_and_wait_all_public_keys<K: SignatureKey>(
+    pub async fn post_and_wait_all_public_keys<TYPES: NodeType>(
         &self,
-        validator_config: &mut ValidatorConfig<K>,
+        validator_config: &mut ValidatorConfig<TYPES>,
         libp2p_advertise_address: Option<Multiaddr>,
         libp2p_public_key: Option<PeerId>,
-    ) -> NetworkConfig<K> {
-        let pubkey: Vec<u8> = PeerConfig::<K>::to_bytes(&validator_config.public_config()).clone();
+    ) -> NetworkConfig<TYPES> {
+        let pubkey: Vec<u8> =
+            PeerConfig::<TYPES>::to_bytes(&validator_config.public_config()).clone();
         let da_requested: bool = validator_config.is_da;
 
         // Serialize our (possible) libp2p-specific data

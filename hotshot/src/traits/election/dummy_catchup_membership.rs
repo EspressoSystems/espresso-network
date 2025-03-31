@@ -6,6 +6,7 @@ use hotshot_types::{
     drb::DrbResult,
     traits::{election::Membership, node_implementation::NodeType},
 };
+use primitive_types::U256;
 
 use super::static_committee::StaticCommittee;
 
@@ -39,8 +40,8 @@ where
     fn new(
         // Note: eligible_leaders is currently a haMemck because the DA leader == the quorum leader
         // but they should not have voting power.
-        stake_committee_members: Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>>,
-        da_committee_members: Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>>,
+        stake_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
+        da_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
     ) -> Self {
         Self {
             inner: StaticCommittee::new(stake_committee_members, da_committee_members),
@@ -49,18 +50,12 @@ where
         }
     }
 
-    fn stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_epoch(epoch);
         self.inner.stake_table(epoch)
     }
 
-    fn da_stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_epoch(epoch);
         self.inner.da_stake_table(epoch)
     }
@@ -87,7 +82,7 @@ where
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_epoch(epoch);
         self.inner.stake(pub_key, epoch)
     }
@@ -96,7 +91,7 @@ where
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_epoch(epoch);
         self.inner.da_stake(pub_key, epoch)
     }
@@ -130,22 +125,22 @@ where
         self.inner.da_total_nodes(epoch)
     }
 
-    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.success_threshold(epoch)
     }
 
-    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.da_success_threshold(epoch)
     }
 
-    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.failure_threshold(epoch)
     }
 
-    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.upgrade_threshold(epoch)
     }

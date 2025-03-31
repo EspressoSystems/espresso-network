@@ -1,7 +1,6 @@
 use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -341,19 +340,19 @@ struct NonEpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
-    eligible_leaders: Vec<PeerConfig<PubKey>>,
+    eligible_leaders: Vec<PeerConfig<SeqTypes>>,
 
     /// Keys for nodes participating in the network
-    stake_table: Vec<PeerConfig<PubKey>>,
+    stake_table: Vec<PeerConfig<SeqTypes>>,
 
     /// Keys for DA members
-    da_members: Vec<PeerConfig<PubKey>>,
+    da_members: Vec<PeerConfig<SeqTypes>>,
 
     /// Stake entries indexed by public key, for efficient lookup.
-    indexed_stake_table: HashMap<PubKey, PeerConfig<PubKey>>,
+    indexed_stake_table: HashMap<PubKey, PeerConfig<SeqTypes>>,
 
     /// DA entries indexed by public key, for efficient lookup.
-    indexed_da_members: HashMap<PubKey, PeerConfig<PubKey>>,
+    indexed_da_members: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
 /// Holds Stake table and da stake
@@ -362,9 +361,9 @@ pub struct EpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
-    eligible_leaders: Vec<PeerConfig<PubKey>>,
+    eligible_leaders: Vec<PeerConfig<SeqTypes>>,
     /// Keys for nodes participating in the network
-    stake_table: IndexMap<PubKey, PeerConfig<PubKey>>,
+    stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>>,
     validators: IndexMap<Address, Validator<BLSPubKey>>,
     address_mapping: HashMap<BLSPubKey, Address>,
 }
@@ -452,8 +451,8 @@ impl EpochCommittees {
     pub fn new_stake(
         // TODO remove `new` from trait and rename this to `new`.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        committee_members: Vec<PeerConfig<PubKey>>,
-        da_members: Vec<PeerConfig<PubKey>>,
+        committee_members: Vec<PeerConfig<SeqTypes>>,
+        da_members: Vec<PeerConfig<SeqTypes>>,
         l1_client: L1Client,
         contract_address: Option<Address>,
         peers: Arc<dyn StateCatchup>,
@@ -542,7 +541,7 @@ impl EpochCommittees {
             first_epoch: Epoch::genesis(),
         }
     }
-    fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<PubKey>>> {
+    fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<SeqTypes>>> {
         if let Some(epoch) = epoch {
             self.state
                 .get(epoch)
@@ -596,18 +595,18 @@ impl Membership<SeqTypes> for EpochCommittees {
     fn new(
         // TODO remove `new` from trait and remove this fn as well.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
-        _committee_members: Vec<PeerConfig<PubKey>>,
-        _da_members: Vec<PeerConfig<PubKey>>,
+        _committee_members: Vec<PeerConfig<SeqTypes>>,
+        _da_members: Vec<PeerConfig<SeqTypes>>,
     ) -> Self {
         panic!("This function has been replaced with new_stake()");
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
+    fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<SeqTypes>> {
         self.get_stake_table(&epoch).unwrap_or_default()
     }
     /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<Epoch>) -> Vec<PeerConfig<PubKey>> {
+    fn da_stake_table(&self, _epoch: Option<Epoch>) -> Vec<PeerConfig<SeqTypes>> {
         self.non_epoch_committee.da_members.clone()
     }
 
@@ -638,7 +637,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the stake table entry for a public key
-    fn stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
+    fn stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> Option<PeerConfig<SeqTypes>> {
         // Only return the stake if it is above zero
         if let Some(epoch) = epoch {
             self.state
@@ -654,7 +653,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the DA stake table entry for a public key
-    fn da_stake(&self, pub_key: &PubKey, _epoch: Option<Epoch>) -> Option<PeerConfig<PubKey>> {
+    fn da_stake(&self, pub_key: &PubKey, _epoch: Option<Epoch>) -> Option<PeerConfig<SeqTypes>> {
         // Only return the stake if it is above zero
         self.non_epoch_committee
             .indexed_da_members
@@ -715,33 +714,44 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.stake_table(epoch).len();
-        NonZeroU64::new(((quorum_len as u64 * 2) / 3) + 1).unwrap()
+    fn success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+        let total_stake = self.total_stake(epoch);
+        if total_stake < primitive_types::U256::max_value() / 2 {
+            ((total_stake * 2) / 3) + 1
+        } else {
+            ((total_stake / 3) * 2) + 2
+        }
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let da_len = self.da_stake_table(epoch).len();
-        NonZeroU64::new(((da_len as u64 * 2) / 3) + 1).unwrap()
+    fn da_success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+        let total_stake = self.total_da_stake(epoch);
+        if total_stake < primitive_types::U256::max_value() / 2 {
+            ((total_stake * 2) / 3) + 1
+        } else {
+            ((total_stake / 3) * 2) + 2
+        }
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.stake_table(epoch).len();
+    fn failure_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+        let total_stake = self.total_stake(epoch);
 
-        NonZeroU64::new(((quorum_len as u64) / 3) + 1).unwrap()
+        (total_stake / 3) + 1
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.total_nodes(epoch);
+    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+        let total_stake = self.total_stake(epoch);
 
-        NonZeroU64::new(max(
-            (quorum_len as u64 * 9) / 10,
-            ((quorum_len as u64 * 2) / 3) + 1,
-        ))
-        .unwrap()
+        let normal_threshold = self.success_threshold(epoch);
+        let higher_threshold = if total_stake < primitive_types::U256::max_value() / 9 {
+            (total_stake * 9) / 10
+        } else {
+            (total_stake / 10) * 9
+        };
+
+        max(higher_threshold, normal_threshold)
     }
 
     #[allow(refining_impl_trait)]
@@ -804,12 +814,16 @@ impl Membership<SeqTypes> for EpochCommittees {
             .fetch_leaf(drb_height, stake_table, success_threshold, epoch_height)
             .await?;
 
-        Ok((
-            leaf.block_header().clone(),
-            drb_leaf
-                .next_drb_result
-                .context(format!("No DRB result on decided leaf at {drb_height}"))?,
-        ))
+        let Some(drb) = drb_leaf.next_drb_result else {
+            tracing::error!(
+              "We received a leaf that should contain a DRB result, but the DRB result is missing: {:?}",
+              drb_leaf
+            );
+
+            bail!("DRB leaf is missing the DRB result.");
+        };
+
+        Ok((leaf.block_header().clone(), drb))
     }
 
     fn add_drb_result(&mut self, epoch: Epoch, drb: DrbResult) {
@@ -848,7 +862,7 @@ impl super::v0_3::StakeTable {
         [..n]
             .iter()
             .map(|_| PeerConfig::default())
-            .collect::<Vec<PeerConfig<PubKey>>>()
+            .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
 }
@@ -860,7 +874,7 @@ impl DAMembers {
         [..n]
             .iter()
             .map(|_| PeerConfig::default())
-            .collect::<Vec<PeerConfig<PubKey>>>()
+            .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
     }
 }

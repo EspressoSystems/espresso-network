@@ -34,6 +34,7 @@ use crate::{
 mod config;
 
 pub mod namespaced;
+pub mod proofs;
 
 #[cfg(all(not(feature = "sha256"), not(feature = "keccak256")))]
 type Config = config::Poseidon2Config;
@@ -124,7 +125,7 @@ impl AvidMParam {
     /// Construct a new [`AvidMParam`].
     pub fn new(recovery_threshold: usize, total_weights: usize) -> VidResult<Self> {
         if recovery_threshold == 0 || total_weights < recovery_threshold {
-            return Err(VidError::Argument("Invalid Parameter.".to_string()));
+            return Err(VidError::InvalidParam);
         }
         Ok(Self {
             total_weights,
@@ -136,8 +137,7 @@ impl AvidMParam {
 /// Helper: initialize a FFT domain
 #[inline]
 fn radix2_domain<F: PrimeField>(domain_size: usize) -> VidResult<Radix2EvaluationDomain<F>> {
-    Radix2EvaluationDomain::<F>::new(domain_size)
-        .ok_or_else(|| VidError::Argument("Invalid Param.".to_string()))
+    Radix2EvaluationDomain::<F>::new(domain_size).ok_or_else(|| VidError::InvalidParam)
 }
 
 /// Dummy struct for AVID-M scheme.
@@ -215,8 +215,7 @@ impl AvidMScheme {
         end_timer!(hash_timer);
 
         let mt_timer = start_timer!(|| "Constructing Merkle tree");
-        let mt = MerkleTree::from_elems(None, &compressed_raw_shares)
-            .map_err(|err| VidError::Internal(err.into()))?;
+        let mt = MerkleTree::from_elems(None, &compressed_raw_shares)?;
         end_timer!(mt_timer);
 
         Ok((mt, raw_shares))
@@ -228,117 +227,15 @@ impl AvidMScheme {
         Self::raw_encode(param, &payload)
     }
 
-    pub(crate) fn verify_internal(
+    /// Consume in the constructed Merkle tree and the raw shares from `raw_encode`, provide the AvidM commitment and shares.
+    fn distribute_shares(
         param: &AvidMParam,
-        commit: &AvidMCommit,
-        share: &RawAvidMShare,
-    ) -> VidResult<crate::VerificationResult> {
-        if share.range.end > param.total_weights || share.range.len() != share.payload.len() {
-            return Err(VidError::Argument("Invalid share".to_string()));
-        }
-        for (i, index) in share.range.clone().enumerate() {
-            let compressed_payload = Config::raw_share_digest(&share.payload[i])?;
-            if MerkleTree::verify(
-                commit.commit,
-                index as u64,
-                compressed_payload,
-                &share.mt_proofs[i],
-            )
-            .map_err(|err| VidError::Internal(err.into()))?
-            .is_err()
-            {
-                return Ok(Err(()));
-            }
-        }
-        Ok(Ok(()))
-    }
-
-    pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
-        let recovery_threshold: usize = param.recovery_threshold;
-
-        // Each share's payload contains some evaluations from `num_polys`
-        // polynomials.
-        let num_polys = shares
-            .iter()
-            .find(|s| !s.content.payload.is_empty())
-            .ok_or(VidError::Argument("All shares are empty".to_string()))?
-            .content
-            .payload[0]
-            .len();
-
-        let mut raw_shares = HashMap::new();
-        for share in shares {
-            if share.content.range.len() != share.content.payload.len()
-                || share.content.range.end > param.total_weights
-            {
-                return Err(VidError::Argument("Invalid shares".to_string()));
-            }
-            for (i, p) in share.content.range.clone().zip(&share.content.payload) {
-                if p.len() != num_polys {
-                    return Err(VidError::Argument("Invalid shares".to_string()));
-                }
-                if raw_shares.contains_key(&i) {
-                    return Err(VidError::Argument("Overlapping shares".to_string()));
-                }
-                raw_shares.insert(i, p);
-                if raw_shares.len() >= recovery_threshold {
-                    break;
-                }
-            }
-            if raw_shares.len() >= recovery_threshold {
-                break;
-            }
-        }
-
-        if raw_shares.len() < recovery_threshold {
-            return Err(VidError::Argument("Insufficient shares.".to_string()));
-        }
-
-        let domain = radix2_domain::<F>(param.total_weights)?;
-
-        // Lagrange interpolation
-        // step 1: find all evaluation points and their raw shares
-        let (x, raw_shares): (Vec<_>, Vec<_>) = raw_shares
-            .into_iter()
-            .map(|(i, p)| (domain.element(i), p))
-            .unzip();
-        // step 2: interpolate each polynomial
-        Ok((0..num_polys)
-            .into_par_iter()
-            .map(|poly_index| {
-                jf_utils::reed_solomon_code::reed_solomon_erasure_decode(
-                    x.iter().zip(raw_shares.iter().map(|p| p[poly_index])),
-                    recovery_threshold,
-                )
-                .map_err(|err| VidError::Internal(err.into()))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect())
-    }
-}
-
-impl VidScheme for AvidMScheme {
-    type Param = AvidMParam;
-
-    type Share = AvidMShare;
-
-    type Commit = AvidMCommit;
-
-    fn commit(param: &Self::Param, payload: &[u8]) -> VidResult<Self::Commit> {
-        let (mt, _) = Self::pad_and_encode(param, payload)?;
-        Ok(AvidMCommit {
-            commit: mt.commitment(),
-        })
-    }
-
-    fn disperse(
-        param: &Self::Param,
         distribution: &[u32],
-        payload: &[u8],
-    ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
-        let payload_byte_len = payload.len();
+        mt: MerkleTree,
+        raw_shares: Vec<Vec<F>>,
+        payload_byte_len: usize,
+    ) -> VidResult<(AvidMCommit, Vec<AvidMShare>)> {
+        // let payload_byte_len = payload.len();
         let total_weights = distribution.iter().sum::<u32>() as usize;
         if total_weights != param.total_weights {
             return Err(VidError::Argument(
@@ -348,10 +245,6 @@ impl VidScheme for AvidMScheme {
         if distribution.iter().any(|&w| w == 0) {
             return Err(VidError::Argument("Weight cannot be zero".to_string()));
         }
-
-        let disperse_timer = start_timer!(|| format!("Disperse {} bytes", payload_byte_len));
-
-        let (mt, raw_shares) = Self::pad_and_encode(param, payload)?;
 
         let distribute_timer = start_timer!(|| "Distribute codewords to the storage nodes");
         // Distribute the raw shares to each storage node according to the weight
@@ -404,8 +297,120 @@ impl VidScheme for AvidMScheme {
             commit: mt.commitment(),
         };
 
-        end_timer!(disperse_timer);
         Ok((commit, shares))
+    }
+
+    pub(crate) fn verify_internal(
+        param: &AvidMParam,
+        commit: &AvidMCommit,
+        share: &RawAvidMShare,
+    ) -> VidResult<crate::VerificationResult> {
+        if share.range.end > param.total_weights || share.range.len() != share.payload.len() {
+            return Err(VidError::InvalidShare);
+        }
+        for (i, index) in share.range.clone().enumerate() {
+            let compressed_payload = Config::raw_share_digest(&share.payload[i])?;
+            if MerkleTree::verify(
+                commit.commit,
+                index as u64,
+                compressed_payload,
+                &share.mt_proofs[i],
+            )?
+            .is_err()
+            {
+                return Ok(Err(()));
+            }
+        }
+        Ok(Ok(()))
+    }
+
+    pub(crate) fn recover_fields(param: &AvidMParam, shares: &[AvidMShare]) -> VidResult<Vec<F>> {
+        let recovery_threshold: usize = param.recovery_threshold;
+
+        // Each share's payload contains some evaluations from `num_polys`
+        // polynomials.
+        let num_polys = shares
+            .iter()
+            .find(|s| !s.content.payload.is_empty())
+            .ok_or(VidError::Argument("All shares are empty".to_string()))?
+            .content
+            .payload[0]
+            .len();
+
+        let mut raw_shares = HashMap::new();
+        for share in shares {
+            if share.content.range.len() != share.content.payload.len()
+                || share.content.range.end > param.total_weights
+            {
+                return Err(VidError::InvalidShare);
+            }
+            for (i, p) in share.content.range.clone().zip(&share.content.payload) {
+                if p.len() != num_polys {
+                    return Err(VidError::InvalidShare);
+                }
+                if raw_shares.contains_key(&i) {
+                    return Err(VidError::InvalidShare);
+                }
+                raw_shares.insert(i, p);
+                if raw_shares.len() >= recovery_threshold {
+                    break;
+                }
+            }
+            if raw_shares.len() >= recovery_threshold {
+                break;
+            }
+        }
+
+        if raw_shares.len() < recovery_threshold {
+            return Err(VidError::InsufficientShares);
+        }
+
+        let domain = radix2_domain::<F>(param.total_weights)?;
+
+        // Lagrange interpolation
+        // step 1: find all evaluation points and their raw shares
+        let (x, raw_shares): (Vec<_>, Vec<_>) = raw_shares
+            .into_iter()
+            .map(|(i, p)| (domain.element(i), p))
+            .unzip();
+        // step 2: interpolate each polynomial
+        Ok((0..num_polys)
+            .into_par_iter()
+            .map(|poly_index| {
+                jf_utils::reed_solomon_code::reed_solomon_erasure_decode(
+                    x.iter().zip(raw_shares.iter().map(|p| p[poly_index])),
+                    recovery_threshold,
+                )
+                .map_err(|err| VidError::Internal(err.into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+}
+
+impl VidScheme for AvidMScheme {
+    type Param = AvidMParam;
+
+    type Share = AvidMShare;
+
+    type Commit = AvidMCommit;
+
+    fn commit(param: &Self::Param, payload: &[u8]) -> VidResult<Self::Commit> {
+        let (mt, _) = Self::pad_and_encode(param, payload)?;
+        Ok(AvidMCommit {
+            commit: mt.commitment(),
+        })
+    }
+
+    fn disperse(
+        param: &Self::Param,
+        distribution: &[u32],
+        payload: &[u8],
+    ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
+        let (mt, raw_shares) = Self::pad_and_encode(param, payload)?;
+        Self::distribute_shares(param, distribution, mt, raw_shares, payload.len())
     }
 
     fn verify_share(
@@ -540,7 +545,9 @@ pub mod tests {
             bytes_random
         };
 
+        let disperse_timer = start_timer!(|| format!("Disperse {} bytes", payload_byte_len));
         let (commit, shares) = AvidMScheme::disperse(&params, &weights, &payload).unwrap();
+        end_timer!(disperse_timer);
 
         let recover_timer = start_timer!(|| "Recovery");
         AvidMScheme::recover(&params, &commit, &shares).unwrap();
