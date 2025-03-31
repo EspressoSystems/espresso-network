@@ -6,6 +6,7 @@ use hotshot_types::{
     drb::DrbResult,
     traits::{election::Membership, node_implementation::NodeType},
 };
+use primitive_types::U256;
 
 use super::static_committee::StaticCommittee;
 
@@ -124,22 +125,22 @@ where
         self.inner.da_total_nodes(epoch)
     }
 
-    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.success_threshold(epoch)
     }
 
-    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.da_success_threshold(epoch)
     }
 
-    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.failure_threshold(epoch)
     }
 
-    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.upgrade_threshold(epoch)
     }

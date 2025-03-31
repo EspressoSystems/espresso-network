@@ -1,7 +1,6 @@
 use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -715,33 +714,44 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.stake_table(epoch).len();
-        NonZeroU64::new(((quorum_len as u64 * 2) / 3) + 1).unwrap()
+    fn success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+        let total_stake = self.total_stake(epoch);
+        if total_stake < primitive_types::U256::max_value() / 2 {
+            ((total_stake * 2) / 3) + 1
+        } else {
+            ((total_stake / 3) * 2) + 2
+        }
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let da_len = self.da_stake_table(epoch).len();
-        NonZeroU64::new(((da_len as u64 * 2) / 3) + 1).unwrap()
+    fn da_success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+        let total_stake = self.total_da_stake(epoch);
+        if total_stake < primitive_types::U256::max_value() / 2 {
+            ((total_stake * 2) / 3) + 1
+        } else {
+            ((total_stake / 3) * 2) + 2
+        }
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.stake_table(epoch).len();
+    fn failure_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+        let total_stake = self.total_stake(epoch);
 
-        NonZeroU64::new(((quorum_len as u64) / 3) + 1).unwrap()
+        (total_stake / 3) + 1
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> NonZeroU64 {
-        let quorum_len = self.total_nodes(epoch);
+    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+        let total_stake = self.total_stake(epoch);
 
-        NonZeroU64::new(max(
-            (quorum_len as u64 * 9) / 10,
-            ((quorum_len as u64 * 2) / 3) + 1,
-        ))
-        .unwrap()
+        let normal_threshold = self.success_threshold(epoch);
+        let higher_threshold = if total_stake < primitive_types::U256::max_value() / 9 {
+            (total_stake * 9) / 10
+        } else {
+            (total_stake / 10) * 9
+        };
+
+        max(higher_threshold, normal_threshold)
     }
 
     #[allow(refining_impl_trait)]

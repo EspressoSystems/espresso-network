@@ -42,6 +42,7 @@ num-traits = { workspace = true }
 parking_lot = "0.12"
 paste = { workspace = true }
 pretty_assertions = { workspace = true }
+primitive-types = { workspace = true }
 rand = { workspace = true }
 sequencer-utils = { path = "../utils" }
 serde = { workspace = true }

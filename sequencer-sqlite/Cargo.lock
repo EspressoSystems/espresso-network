@@ -3740,6 +3740,7 @@ dependencies = [
  "parking_lot",
  "paste",
  "pretty_assertions",
+ "primitive-types",
  "rand 0.8.5",
  "sequencer-utils",
  "serde",
