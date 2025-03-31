@@ -7,7 +7,7 @@ use ethers_conv::ToAlloy;
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{VidCommitment, ViewNumber},
+    data::{QuorumProposalWrapper, VidCommitment, ViewNumber},
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::{ConsensusTime, NodeType},
@@ -1099,8 +1099,9 @@ impl BlockHeader<SeqTypes> for Header {
         let mut leader_config = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
+        let proposed_header_height = parent_leaf.height()+ 1;
         if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height() + 1, instance_state).await?
+            && !first_two_epochs(proposed_header_height, instance_state).await?
         {
             leader_config = Some(
                 find_validator(
@@ -1108,7 +1109,7 @@ impl BlockHeader<SeqTypes> for Header {
                     &mut validated_state,
                     parent_leaf,
                     view_number,
-                    parent_leaf.height() + 1,
+                    proposed_header_height,
                 )
                 .await?,
             );
