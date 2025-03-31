@@ -494,6 +494,10 @@ contract StakeTable_register_Test is Test {
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
         assertEq(token.balanceOf(address(stakeTable)), 3 ether);
 
+        // Withdraw from non-existent validator
+        vm.expectRevert(S.NothingToWithdraw.selector);
+        stakeTable.claimWithdrawal(makeAddr("nobody"));
+
         // Withdraw without undelegation
         vm.expectRevert(S.NothingToWithdraw.selector);
         stakeTable.claimWithdrawal(validator);
