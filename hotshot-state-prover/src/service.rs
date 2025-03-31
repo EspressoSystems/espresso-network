@@ -374,7 +374,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             let next_stake_msg: [FieldType; 4] = next_stake.into();
             msg.extend_from_slice(&next_stake_msg);
 
-            if key.verify(&state_msg, sig, CS_ID_SCHNORR).is_ok() {
+            if key.verify(&msg, sig, CS_ID_SCHNORR).is_ok() {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;

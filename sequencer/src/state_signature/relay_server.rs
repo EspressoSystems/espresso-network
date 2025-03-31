@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{hash_map::Entry, BTreeSet, HashMap},
     path::PathBuf,
 };
 
@@ -8,9 +8,7 @@ use async_lock::RwLock;
 use clap::Args;
 use futures::FutureExt;
 use hotshot_stake_table::vec_based::config::FieldType;
-use hotshot_types::light_client::{
-    StateSignature, StateSignatureScheme, StateSignaturesBundle, StateVerKey,
-};
+use hotshot_types::light_client::{StateSignatureScheme, StateSignaturesBundle, StateVerKey};
 use jf_signature::SignatureScheme;
 use tide_disco::{
     api::ApiError,
@@ -69,27 +67,21 @@ impl StateRelayServerState {
 // TODO(Chengyu): move this `RwLock` inside `StateRelayServerState` so that when nodes are submitting
 //                signatures, it won't block the prover from fetching the available signatures.
 type State = RwLock<StateRelayServerState>;
-type Error = ServerError;
 
 pub trait StateRelayServerDataSource {
     /// Get the latest available signatures bundle.
     /// # Errors
     /// Errors if there's no available signatures bundle.
-    fn get_latest_signature_bundle(&self) -> Result<StateSignaturesBundle, Error>;
+    fn get_latest_signature_bundle(&self) -> Result<StateSignaturesBundle, ServerError>;
 
     /// Post a signature to the relay server
     /// # Errors
     /// Errors if the signature is invalid, already posted, or no longer needed.
-    fn post_signature(
-        &mut self,
-        key: StateVerKey,
-        state: LightClientState,
-        signature: StateSignature,
-    ) -> Result<(), Error>;
+    fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError>;
 }
 
 impl StateRelayServerDataSource for StateRelayServerState {
-    fn get_latest_signature_bundle(&self) -> Result<StateSignaturesBundle, Error> {
+    fn get_latest_signature_bundle(&self) -> Result<StateSignaturesBundle, ServerError> {
         match &self.latest_available_bundle {
             Some(bundle) => Ok(bundle.clone()),
             None => Err(tide_disco::error::ServerError::catch_all(
@@ -99,59 +91,60 @@ impl StateRelayServerDataSource for StateRelayServerState {
         }
     }
 
-    fn post_signature(
-        &mut self,
-        key: StateVerKey,
-        state: LightClientState,
-        signature: StateSignature,
-    ) -> Result<(), Error> {
-        if state.block_height <= self.latest_block_height.unwrap_or(0) {
+    fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError> {
+        let block_height = req.state.block_height;
+        if block_height <= self.latest_block_height.unwrap_or(0) {
             // This signature is no longer needed
             return Ok(());
         }
         let one = U256::from(1);
-        let weight = self.known_nodes.get(&key).unwrap_or(&one);
+        let weight = self.known_nodes.get(&req.key).unwrap_or(&one);
         // TODO(Chengyu): We don't know where to fetch the stake table yet.
         // Related issue: [https://github.com/EspressoSystems/espresso-sequencer/issues/1022]
         // .ok_or(tide_disco::error::ServerError::catch_all(
         //     StatusCode::Unauthorized,
         //     "The posted key is not found in the stake table.".to_owned(),
         // ))?;
-        let state_msg: [FieldType; 3] = (&state).into();
-        if StateSignatureScheme::verify(&(), &key, state_msg, &signature).is_err() {
-            return Err(tide_disco::error::ServerError::catch_all(
+        let mut msg = Vec::with_capacity(7);
+        let state_msg: [FieldType; 3] = (&req.state).into();
+        msg.extend_from_slice(&state_msg);
+        let stake_msg: [FieldType; 4] = req.next_stake.into();
+        msg.extend_from_slice(&stake_msg);
+
+        if StateSignatureScheme::verify(&(), &req.key, msg, &req.signature).is_err() {
+            return Err(ServerError::catch_all(
                 StatusCode::BAD_REQUEST,
                 "The posted signature is not valid.".to_owned(),
             ));
         }
-        let block_height = state.block_height;
         // TODO(Chengyu): this serialization should be removed once `LightClientState` implements `Eq`.
         let bundles_at_height = self.bundles.entry(block_height).or_insert_with(|| {
             self.queue.insert(block_height);
             Default::default()
         });
         let bundle = bundles_at_height
-            .entry(state.clone())
+            .entry(req.state.clone())
             .or_insert(StateSignaturesBundle {
-                state,
+                state: req.state.clone(),
+                next_stake: req.next_stake.clone(),
                 signatures: Default::default(),
                 accumulated_weight: U256::from(0),
             });
         tracing::debug!(
             "Accepting new signature for block height {} from {}.",
             block_height,
-            key
+            req.key
         );
-        match bundle.signatures.entry(key) {
-            std::collections::hash_map::Entry::Occupied(_) => {
+        match bundle.signatures.entry(req.key) {
+            Entry::Occupied(_) => {
                 // A signature is already posted for this key with this state
-                return Err(tide_disco::error::ServerError::catch_all(
+                return Err(ServerError::catch_all(
                     StatusCode::BAD_REQUEST,
                     "A signature of this light client state is already posted at this block height for this key.".to_owned(),
                 ));
             },
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(signature);
+            Entry::Vacant(entry) => {
+                entry.insert(req.signature);
                 bundle.accumulated_weight += *weight;
             },
         }
@@ -189,13 +182,13 @@ pub struct Options {
 fn define_api<State, ApiVer: StaticVersionType + 'static>(
     options: &Options,
     _: ApiVer,
-) -> Result<Api<State, Error, ApiVer>, ApiError>
+) -> Result<Api<State, ServerError, ApiVer>, ApiError>
 where
     State: 'static + Send + Sync + ReadState + WriteState,
     <State as ReadState>::State: Send + Sync + StateRelayServerDataSource,
 {
     let mut api = match &options.api_path {
-        Some(path) => Api::<State, Error, ApiVer>::from_file(path)?,
+        Some(path) => Api::<State, ServerError, ApiVer>::from_file(path)?,
         None => {
             let toml: toml::Value = toml::from_str(include_str!(
                 "../../api/state_relay_server.toml"
@@ -203,7 +196,7 @@ where
             .map_err(|err| ApiError::CannotReadToml {
                 reason: err.to_string(),
             })?;
-            Api::<State, Error, ApiVer>::new(toml)?
+            Api::<State, ServerError, ApiVer>::new(toml)?
         },
     };
 
@@ -212,14 +205,10 @@ where
     })?
     .post("poststatesignature", |req, state| {
         async move {
-            let StateSignatureRequestBody {
-                key,
-                state: lcstate,
-                signature,
-            } = req
+            let body = req
                 .body_auto::<StateSignatureRequestBody, ApiVer>(ApiVer::instance())
-                .map_err(Error::from_request_error)?;
-            state.post_signature(key, lcstate, signature)
+                .map_err(ServerError::from_request_error)?;
+            state.post_signature(body)
         }
         .boxed()
     })?;
@@ -241,7 +230,7 @@ pub async fn run_relay_server<ApiVer: StaticVersionType + 'static>(
     // Related issue: [https://github.com/EspressoSystems/espresso-sequencer/issues/1022]
     let state =
         State::new(StateRelayServerState::new(threshold).with_shutdown_signal(shutdown_listener));
-    let mut app = App::<State, Error>::with_state(state);
+    let mut app = App::<State, ServerError>::with_state(state);
 
     app.register_module("api", api).unwrap();
 

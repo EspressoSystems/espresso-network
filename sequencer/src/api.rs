@@ -66,7 +66,7 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
 struct ConsensusState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
-    state_signer: Arc<StateSigner<SequencerApiVersion>>,
+    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
     node_state: NodeState,
     network_config: NetworkConfig<SeqTypes>,
@@ -107,7 +107,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
         }
     }
 
-    async fn state_signer(&self) -> &StateSigner<SequencerApiVersion> {
+    async fn state_signer(&self) -> &Arc<RwLock<StateSigner<SequencerApiVersion>>> {
         &self.consensus.as_ref().get().await.get_ref().state_signer
     }
 
@@ -667,7 +667,12 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
     for ApiState<N, P, V>
 {
     async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
-        self.state_signer().await.get_state_signature(height).await
+        self.state_signer()
+            .await
+            .read()
+            .await
+            .get_state_signature(height)
+            .await
     }
 }
 
