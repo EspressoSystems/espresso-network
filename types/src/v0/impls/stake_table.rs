@@ -508,7 +508,7 @@ impl EpochCommittees {
             .collect();
 
         let members = NonEpochCommittee {
-            eligible_leaders,
+            eligible_leaders: eligible_leaders.clone(),
             stake_table,
             da_members,
             indexed_stake_table,
@@ -526,16 +526,27 @@ impl EpochCommittees {
             validators: Default::default(),
             address_mapping: HashMap::new(),
         };
-        map.insert(Epoch::genesis(), epoch_committee.clone());
-        // TODO: remove this, workaround for hotshot asking for stake tables from epoch 1
-        map.insert(Epoch::genesis() + 1u64, epoch_committee.clone());
+
+        let randomized_committee = generate_stake_cdf(
+            eligible_leaders
+                .clone()
+                .into_iter()
+                .map(|l| l.stake_table_entry)
+                .collect(),
+            [0u8; 32],
+        );
+        let mut randomized_committees = BTreeMap::new();
+        for epoch in Epoch::genesis().u64()..=2 {
+            map.insert(Epoch::new(epoch), epoch_committee.clone());
+            randomized_committees.insert(Epoch::new(epoch), randomized_committee.clone());
+        }
 
         Self {
             non_epoch_committee: members,
             state: map,
             l1_client,
             contract_address,
-            randomized_committees: BTreeMap::new(),
+            randomized_committees,
             peers,
             persistence: Arc::new(persistence),
             first_epoch: Epoch::genesis(),
