@@ -26,6 +26,7 @@ use hotshot_types::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::NodeType,
     },
+    vid::advz::ADVZCommon,
 };
 use sqlx::{Arguments, FromRow, Row};
 
@@ -36,7 +37,7 @@ use crate::{
         VidCommonQueryData,
     },
     data_source::storage::{PayloadMetadata, VidCommonMetadata},
-    Header, Leaf2, Payload, QueryError, QueryResult,
+    Header, Leaf2, Payload, QueryError, QueryResult, VidCommon,
 };
 
 pub(super) mod availability;
@@ -276,8 +277,9 @@ where
             .parse()
             .decode_error("malformed payload hash")?;
         let common_data: Vec<u8> = row.try_get("common_data")?;
-        let common =
-            bincode::deserialize(&common_data).decode_error("malformed VID common data")?;
+        let common = bincode::deserialize::<VidCommon>(&common_data)
+            .or(bincode::deserialize::<ADVZCommon>(&common_data).map(VidCommon::V0))
+            .decode_error("malformed VID common data")?;
         Ok(Self {
             height,
             block_hash,
