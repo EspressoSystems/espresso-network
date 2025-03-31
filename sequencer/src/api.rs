@@ -2878,4 +2878,80 @@ mod test {
         }
         assert_eq!(receive_count, total_count + 1);
     }
+
+    // TODO when `EpochVersion` becomes base version we can merge the
+    // functionality here w/ above test.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_epoch_progression() {
+        setup_test();
+
+        let epoch_height = 10;
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let hotshot_event_streaming_port =
+            pick_unused_port().expect("No ports free for hotshot event streaming");
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+
+        let url = format!("http://localhost:{hotshot_event_streaming_port}")
+            .parse()
+            .unwrap();
+
+        let hotshot_events = HotshotEvents {
+            events_service_port: hotshot_event_streaming_port,
+        };
+
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+
+        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+
+        let anvil = Anvil::new().spawn();
+        let l1 = anvil.endpoint().parse().unwrap();
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1)
+            .epoch_height(epoch_height)
+            .build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config)
+            .build();
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+
+        let mut subscribed_events = client
+            .socket("hotshot-events/events")
+            .subscribe::<Event<SeqTypes>>()
+            .await
+            .unwrap();
+
+        // wanted views
+        let total_count = epoch_height * 5;
+        // wait for these events to receive on client 1
+        let mut views = HashSet::new();
+        let mut i = 0;
+        loop {
+            let event = subscribed_events.next().await.unwrap();
+            let event = event.unwrap();
+            let view_number = event.view_number;
+            views.insert(view_number.u64());
+
+            if let hotshot::types::EventType::Decide { qc, .. } = event.event {
+                tracing::debug!(
+                    "Got decide: epoch: {:?}, block: {:?} ",
+                    qc.data.epoch,
+                    qc.data.block_number
+                );
+                assert!(qc.data.epoch.is_some());
+                assert!(qc.data.block_number.is_some());
+            }
+            if views.contains(&total_count) {
+                tracing::info!("Client Received at least desired views, exiting loop");
+                break;
+            }
+            if i > 100 {
+                // Timeout
+                panic!("Views are not progressing");
+            }
+            i += 1;
+        }
+        assert!(views.contains(&total_count));
+    }
 }
