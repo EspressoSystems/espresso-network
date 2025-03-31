@@ -2,7 +2,6 @@ use std::{
     cmp::Ordering,
     collections::HashMap,
     fmt::{Debug, Display},
-    num::NonZeroU64,
     sync::Arc,
     time::Duration,
 };
@@ -36,6 +35,7 @@ use hotshot_types::{
 use itertools::Itertools;
 use jf_merkle_tree::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use parking_lot::Mutex;
+use primitive_types::U256;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
 use surf_disco::Request;
@@ -891,7 +891,7 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
-        success_threshold: NonZeroU64,
+        success_threshold: U256,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         self.on_all_providers(move |provider| {

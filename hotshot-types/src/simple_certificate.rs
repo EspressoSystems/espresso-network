@@ -11,7 +11,6 @@ use std::{
     future::Future,
     hash::Hash,
     marker::PhantomData,
-    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -43,7 +42,7 @@ use crate::{
 /// Trait which allows use to inject different threshold calculations into a Certificate type
 pub trait Threshold<TYPES: NodeType> {
     /// Calculate a threshold based on the membership
-    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = u64> + Send;
+    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = U256> + Send;
 }
 
 /// Defines a threshold which is 2f + 1 (Amount needed for Quorum)
@@ -51,8 +50,8 @@ pub trait Threshold<TYPES: NodeType> {
 pub struct SuccessThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for SuccessThreshold {
-    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
-        membership.success_threshold().await.into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
+        membership.success_threshold().await
     }
 }
 
@@ -61,8 +60,8 @@ impl<TYPES: NodeType> Threshold<TYPES> for SuccessThreshold {
 pub struct OneHonestThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for OneHonestThreshold {
-    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
-        membership.failure_threshold().await.into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
+        membership.failure_threshold().await
     }
 }
 
@@ -71,8 +70,8 @@ impl<TYPES: NodeType> Threshold<TYPES> for OneHonestThreshold {
 pub struct UpgradeThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for UpgradeThreshold {
-    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
-        membership.upgrade_threshold().await.into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
+        membership.upgrade_threshold().await
     }
 }
 
@@ -158,16 +157,14 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     async fn is_valid_cert<V: Versions>(
         &self,
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
-        threshold: NonZeroU64,
+        threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
         }
-        let real_qc_pp = <TYPES::SignatureKey as SignatureKey>::public_parameter(
-            stake_table,
-            U256::from(u64::from(threshold)),
-        );
+        let real_qc_pp =
+            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
         let commit = self.data_commitment(upgrade_lock).await?;
 
         <TYPES::SignatureKey as SignatureKey>::check(
@@ -194,8 +191,8 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
         membership.da_total_nodes().await
     }
-    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
-        membership.da_success_threshold().await.into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
+        membership.da_success_threshold().await
     }
     fn data(&self) -> &Self::Voteable {
         &self.data
@@ -237,16 +234,14 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     async fn is_valid_cert<V: Versions>(
         &self,
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
-        threshold: NonZeroU64,
+        threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
         }
-        let real_qc_pp = <TYPES::SignatureKey as SignatureKey>::public_parameter(
-            stake_table,
-            U256::from(u64::from(threshold)),
-        );
+        let real_qc_pp =
+            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
         let commit = self.data_commitment(upgrade_lock).await?;
 
         <TYPES::SignatureKey as SignatureKey>::check(
@@ -273,8 +268,8 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
         membership.da_total_nodes().await
     }
-    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
-        membership.da_success_threshold().await.into()
+    async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
+        membership.da_success_threshold().await
     }
     fn data(&self) -> &Self::Voteable {
         &self.data
@@ -319,16 +314,14 @@ impl<
     async fn is_valid_cert<V: Versions>(
         &self,
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
-        threshold: NonZeroU64,
+        threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
         if self.view_number == TYPES::View::genesis() {
             return Ok(());
         }
-        let real_qc_pp = <TYPES::SignatureKey as SignatureKey>::public_parameter(
-            stake_table,
-            U256::from(u64::from(threshold)),
-        );
+        let real_qc_pp =
+            <TYPES::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
         let commit = self.data_commitment(upgrade_lock).await?;
 
         <TYPES::SignatureKey as SignatureKey>::check(
@@ -339,7 +332,7 @@ impl<
         .wrap()
         .context(|e| warn!("Signature check failed: {}", e))
     }
-    async fn threshold(membership: &EpochMembership<TYPES>) -> u64 {
+    async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
         THRESHOLD::threshold(membership).await
     }
 

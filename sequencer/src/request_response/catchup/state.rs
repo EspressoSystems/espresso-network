@@ -1,5 +1,3 @@
-use std::num::NonZeroU64;
-
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -10,6 +8,7 @@ use espresso_types::{
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, SeqTypes, SequencerVersions,
 };
+use ethers::types::U256;
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::ViewNumber, message::UpgradeLock, traits::node_implementation::Versions,
@@ -138,7 +137,7 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> StateCatchup for RequestRespo
         &self,
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
-        success_threshold: NonZeroU64,
+        success_threshold: U256,
         epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         tracing::info!("Fetching leaf for height: {height}");
