@@ -835,7 +835,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             block_height
         );
         let drb_leaf = peers
-            .fetch_leaf(block_height, stake_table, success_threshold, block_height)
+            .fetch_leaf(block_height, stake_table, success_threshold)
             .await?;
 
         let Some(drb) = drb_leaf.next_drb_result else {
