@@ -80,7 +80,6 @@ pub mod testing {
         },
         HotShotConfig, PeerConfig, ValidatorConfig,
     };
-    use jf_signature::bls_over_bn254::VerKey;
     use primitive_types::U256;
     use sequencer::{context::Consensus, network, SequencerApiVersion};
     use surf_disco::Client;
@@ -91,7 +90,7 @@ pub mod testing {
 
     #[derive(Clone)]
     pub struct HotShotTestConfig {
-        pub config: HotShotConfig<PubKey>,
+        pub config: HotShotConfig<SeqTypes>,
         priv_keys_staking_nodes: Vec<BLSPrivKey>,
         priv_keys_non_staking_nodes: Vec<BLSPrivKey>,
         staking_nodes_state_key_pairs: Vec<StateKeyPair>,
@@ -116,7 +115,7 @@ pub mod testing {
 
             let builder_url = hotshot_builder_url();
 
-            let config: HotShotConfig<PubKey> = HotShotConfig {
+            let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 num_nodes_with_stake: NonZeroUsize::new(num_nodes_with_stake).unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
                 known_nodes_with_stake: known_nodes_with_stake.clone(),
@@ -158,7 +157,11 @@ pub mod testing {
     pub fn generate_stake_table_entries(
         num_nodes: u64,
         stake_value: u64,
-    ) -> (Vec<BLSPrivKey>, Vec<StateKeyPair>, Vec<PeerConfig<PubKey>>) {
+    ) -> (
+        Vec<BLSPrivKey>,
+        Vec<StateKeyPair>,
+        Vec<PeerConfig<SeqTypes>>,
+    ) {
         // Generate keys for the nodes.
         let priv_keys = (0..num_nodes)
             .map(|_| PrivKey::generate(&mut rand::thread_rng()))
@@ -174,7 +177,7 @@ pub mod testing {
         let nodes_with_stake = pub_keys
             .iter()
             .zip(&state_key_pairs)
-            .map(|(pub_key, state_key_pair)| PeerConfig::<PubKey> {
+            .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                 stake_table_entry: pub_key.stake_table_entry(U256::from(stake_value)),
                 state_ver_key: state_key_pair.ver_key(),
             })
@@ -202,11 +205,7 @@ pub mod testing {
         pub fn get_anvil(&self) -> Arc<AnvilInstance> {
             self.anvil.clone()
         }
-        pub fn get_validator_config(
-            &self,
-            i: usize,
-            is_staked: bool,
-        ) -> ValidatorConfig<hotshot_state_prover::QCVerKey> {
+        pub fn get_validator_config(&self, i: usize, is_staked: bool) -> ValidatorConfig<SeqTypes> {
             if is_staked {
                 ValidatorConfig {
                     public_key: self.config.known_nodes_with_stake[i]
@@ -217,7 +216,8 @@ pub mod testing {
                         .stake_table_entry
                         .stake_amount
                         .as_u64(),
-                    state_key_pair: self.staking_nodes_state_key_pairs[i].clone(),
+                    state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
+                    state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
                 }
             } else {
@@ -227,7 +227,8 @@ pub mod testing {
                         .stake_key,
                     private_key: self.priv_keys_non_staking_nodes[i].clone(),
                     stake_value: 0,
-                    state_key_pair: self.non_staking_nodes_state_key_pairs[i].clone(),
+                    state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
+                    state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
                 }
             }
@@ -268,7 +269,7 @@ pub mod testing {
         // enable hotshot event streaming
         pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence, V: Versions>(
             hotshot_events_api_url: Url,
-            known_nodes_with_stake: Vec<PeerConfig<VerKey>>,
+            known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
             num_non_staking_nodes: usize,
             hotshot_context_handle: Arc<Consensus<network::Memory, P, V>>,
         ) {

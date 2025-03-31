@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeSet, HashMap},
-    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -10,6 +9,7 @@ use hotshot_utils::{
     anytrace::{self, Error, Level, Result, DEFAULT_LOG_LEVEL},
     ensure, line_info, log, warn,
 };
+use primitive_types::U256;
 
 use crate::{
     drb::DrbResult,
@@ -239,7 +239,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn stake_table(&self) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn stake_table(&self) -> Vec<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -248,7 +248,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn da_stake_table(&self) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn da_stake_table(&self) -> Vec<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -282,10 +282,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
 
     /// Get the stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
-    pub async fn stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn stake(&self, pub_key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -295,10 +292,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
 
     /// Get the DA stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
-    pub async fn da_stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn da_stake(&self, pub_key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -379,7 +373,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Returns the threshold for a specific `Membership` implementation
-    pub async fn success_threshold(&self) -> NonZeroU64 {
+    pub async fn success_threshold(&self) -> U256 {
         self.coordinator
             .membership
             .read()
@@ -388,7 +382,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Returns the DA threshold for a specific `Membership` implementation
-    pub async fn da_success_threshold(&self) -> NonZeroU64 {
+    pub async fn da_success_threshold(&self) -> U256 {
         self.coordinator
             .membership
             .read()
@@ -397,7 +391,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Returns the threshold for a specific `Membership` implementation
-    pub async fn failure_threshold(&self) -> NonZeroU64 {
+    pub async fn failure_threshold(&self) -> U256 {
         self.coordinator
             .membership
             .read()
@@ -406,7 +400,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Returns the threshold required to upgrade the network protocol
-    pub async fn upgrade_threshold(&self) -> NonZeroU64 {
+    pub async fn upgrade_threshold(&self) -> U256 {
         self.coordinator
             .membership
             .read()

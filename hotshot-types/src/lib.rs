@@ -9,10 +9,12 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duratio
 
 use bincode::Options;
 use displaydoc::Display;
-use light_client::StateVerKey;
 use primitive_types::U256;
 use tracing::error;
-use traits::{node_implementation::NodeType, signature_key::SignatureKey};
+use traits::{
+    node_implementation::NodeType,
+    signature_key::{SignatureKey, StateSignatureKey},
+};
 use url::Url;
 use vec1::Vec1;
 
@@ -68,20 +70,22 @@ where
 
 #[derive(Clone, Debug, Display)]
 /// config for validator, including public key, private key, stake value
-pub struct ValidatorConfig<KEY: SignatureKey> {
+pub struct ValidatorConfig<TYPES: NodeType> {
     /// The validator's public key and stake value
-    pub public_key: KEY,
+    pub public_key: TYPES::SignatureKey,
     /// The validator's private key, should be in the mempool, not public
-    pub private_key: KEY::PrivateKey,
+    pub private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     /// The validator's stake
     pub stake_value: u64,
-    /// the validator's key pairs for state signing/verification
-    pub state_key_pair: light_client::StateKeyPair,
+    /// the validator's key pairs for state verification
+    pub state_public_key: TYPES::StateSignatureKey,
+    /// the validator's key pairs for state verification
+    pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
     /// Whether or not this validator is DA
     pub is_da: bool,
 }
 
-impl<KEY: SignatureKey> ValidatorConfig<KEY> {
+impl<TYPES: NodeType> ValidatorConfig<TYPES> {
     /// generate validator config from input seed, index, stake value, and whether it's DA
     #[must_use]
     pub fn generated_from_seed_indexed(
@@ -90,29 +94,32 @@ impl<KEY: SignatureKey> ValidatorConfig<KEY> {
         stake_value: u64,
         is_da: bool,
     ) -> Self {
-        let (public_key, private_key) = KEY::generated_from_seed_indexed(seed, index);
-        let state_key_pairs = light_client::StateKeyPair::generate_from_seed_indexed(seed, index);
+        let (public_key, private_key) =
+            TYPES::SignatureKey::generated_from_seed_indexed(seed, index);
+        let (state_public_key, state_private_key) =
+            TYPES::StateSignatureKey::generated_from_seed_indexed(seed, index);
         Self {
             public_key,
             private_key,
             stake_value,
-            state_key_pair: state_key_pairs,
+            state_public_key,
+            state_private_key,
             is_da,
         }
     }
 
     /// get the public config of the validator
-    pub fn public_config(&self) -> PeerConfig<KEY> {
+    pub fn public_config(&self) -> PeerConfig<TYPES> {
         PeerConfig {
             stake_table_entry: self
                 .public_key
                 .stake_table_entry(U256::from(self.stake_value)),
-            state_ver_key: self.state_key_pair.0.ver_key(),
+            state_ver_key: self.state_public_key.clone(),
         }
     }
 }
 
-impl<KEY: SignatureKey> Default for ValidatorConfig<KEY> {
+impl<TYPES: NodeType> Default for ValidatorConfig<TYPES> {
     fn default() -> Self {
         Self::generated_from_seed_indexed([0u8; 32], 0, 1, true)
     }
@@ -121,16 +128,16 @@ impl<KEY: SignatureKey> Default for ValidatorConfig<KEY> {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Display, PartialEq, Eq, Hash)]
 #[serde(bound(deserialize = ""))]
 /// structure of peers' config, including public key, stake value, and state key.
-pub struct PeerConfig<KEY: SignatureKey> {
+pub struct PeerConfig<TYPES: NodeType> {
     ////The peer's public key and stake value. The key is the BLS Public Key used to
     /// verify Stake Holder in the application layer.
-    pub stake_table_entry: KEY::StakeTableEntry,
+    pub stake_table_entry: <TYPES::SignatureKey as SignatureKey>::StakeTableEntry,
     //// The peer's state public key. This is the Schnorr Public Key used to
     /// verify HotShot state in the state-prover.
-    pub state_ver_key: StateVerKey,
+    pub state_ver_key: TYPES::StateSignatureKey,
 }
 
-impl<KEY: SignatureKey> PeerConfig<KEY> {
+impl<TYPES: NodeType> PeerConfig<TYPES> {
     /// Serialize a peer's config to bytes
     pub fn to_bytes(config: &Self) -> Vec<u8> {
         let x = bincode_opts().serialize(config);
@@ -147,7 +154,7 @@ impl<KEY: SignatureKey> PeerConfig<KEY> {
     /// # Errors
     /// Will return `None` if deserialization fails
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let x: Result<PeerConfig<KEY>, _> = bincode_opts().deserialize(bytes);
+        let x: Result<PeerConfig<TYPES>, _> = bincode_opts().deserialize(bytes);
         match x {
             Ok(pub_key) => Some(pub_key),
             Err(e) => {
@@ -158,9 +165,9 @@ impl<KEY: SignatureKey> PeerConfig<KEY> {
     }
 }
 
-impl<KEY: SignatureKey> Default for PeerConfig<KEY> {
+impl<TYPES: NodeType> Default for PeerConfig<TYPES> {
     fn default() -> Self {
-        let default_validator_config = ValidatorConfig::<KEY>::default();
+        let default_validator_config = ValidatorConfig::<TYPES>::default();
         default_validator_config.public_config()
     }
 }
@@ -169,8 +176,8 @@ pub struct StakeTableEntries<TYPES: NodeType>(
     pub Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry>,
 );
 
-impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES::SignatureKey>>> for StakeTableEntries<TYPES> {
-    fn from(peers: Vec<PeerConfig<TYPES::SignatureKey>>) -> Self {
+impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for StakeTableEntries<TYPES> {
+    fn from(peers: Vec<PeerConfig<TYPES>>) -> Self {
         Self(
             peers
                 .into_iter()
@@ -183,7 +190,7 @@ impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES::SignatureKey>>> for StakeTableE
 /// Holds configuration for a `HotShot`
 #[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
-pub struct HotShotConfig<KEY: SignatureKey> {
+pub struct HotShotConfig<TYPES: NodeType> {
     /// The proportion of nodes required before the orchestrator issues the ready signal,
     /// expressed as (numerator, denominator)
     pub start_threshold: (u64, u64),
@@ -191,9 +198,9 @@ pub struct HotShotConfig<KEY: SignatureKey> {
     // Earlier it was total_nodes
     pub num_nodes_with_stake: NonZeroUsize,
     /// List of known node's public keys and stake value for certificate aggregation, serving as public parameter
-    pub known_nodes_with_stake: Vec<PeerConfig<KEY>>,
+    pub known_nodes_with_stake: Vec<PeerConfig<TYPES>>,
     /// All public keys known to be DA nodes
-    pub known_da_nodes: Vec<PeerConfig<KEY>>,
+    pub known_da_nodes: Vec<PeerConfig<TYPES>>,
     /// List of DA committee (staking)nodes for static DA committee
     pub da_staked_committee_size: usize,
     /// Number of fixed leaders for GPU VID, normally it will be 0, it's only used when running GPU VID
@@ -237,7 +244,7 @@ fn default_epoch_start_block() -> u64 {
     1
 }
 
-impl<KEY: SignatureKey> HotShotConfig<KEY> {
+impl<TYPES: NodeType> HotShotConfig<TYPES> {
     /// Update a hotshot config to have a view-based upgrade.
     pub fn set_view_upgrade(&mut self, view: u64) {
         self.start_proposing_view = view;

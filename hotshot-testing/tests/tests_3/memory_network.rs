@@ -25,7 +25,7 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::{DataMessage, Message, MessageKind, UpgradeLock},
-    signature_key::{BLSPubKey, BuilderKey},
+    signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
         node_implementation::{ConsensusTime, NodeType},
@@ -63,6 +63,7 @@ impl NodeType for Test {
     type InstanceState = TestInstanceState;
     type Membership = StaticCommittee<Test>;
     type BuilderSignatureKey = BuilderKey;
+    type StateSignatureKey = SchnorrPubKey;
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]

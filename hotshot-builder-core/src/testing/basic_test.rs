@@ -30,7 +30,7 @@ mod tests {
     };
     use hotshot_types::{
         data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
-        signature_key::BuilderKey,
+        signature_key::{BuilderKey, SchnorrPubKey},
         simple_vote::QuorumData2,
         traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
         utils::{BuilderCommitment, EpochTransitionIndicator},
@@ -89,6 +89,7 @@ mod tests {
             type Membership = StaticCommittee<Self>;
             type BuilderSignatureKey = BuilderKey;
             type AuctionResult = TestAuctionResult;
+            type StateSignatureKey = SchnorrPubKey;
         }
         // no of test messages to send
         let num_test_messages = 5;

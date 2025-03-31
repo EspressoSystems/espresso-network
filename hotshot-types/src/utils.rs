@@ -8,7 +8,6 @@
 
 use std::{
     hash::{Hash, Hasher},
-    num::NonZeroU64,
     ops::Deref,
     sync::Arc,
 };
@@ -24,6 +23,7 @@ use bincode::{
 };
 use committable::{Commitment, Committable};
 use digest::OutputSizeUser;
+use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
@@ -105,8 +105,8 @@ pub type StateAndDelta<TYPES> = (
 
 pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
     leaf_chain: Vec<Leaf2<T>>,
-    stake_table: Vec<PeerConfig<T::SignatureKey>>,
-    success_threshold: NonZeroU64,
+    stake_table: Vec<PeerConfig<T>>,
+    success_threshold: U256,
     epoch_height: u64,
     upgrade_lock: &crate::message::UpgradeLock<T, V>,
 ) -> anyhow::Result<Leaf2<T>> {

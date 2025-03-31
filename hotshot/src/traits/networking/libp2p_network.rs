@@ -392,7 +392,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
     /// If we are unable to calculate the replication factor
     #[allow(clippy::too_many_arguments)]
     pub async fn from_config<D: DhtPersistentStorage>(
-        mut config: NetworkConfig<T::SignatureKey>,
+        mut config: NetworkConfig<T>,
         dht_persistent_storage: D,
         quorum_membership: Arc<RwLock<T::Membership>>,
         gossip_config: GossipConfig,
