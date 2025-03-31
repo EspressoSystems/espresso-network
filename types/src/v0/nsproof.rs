@@ -8,7 +8,7 @@ use crate::{
     v0_3::AvidMNsProof,
 };
 
-/// Each variant represents a specific minor version of a namespace proof.
+/// Each variant represents a specific version of a namespace proof.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NsProof {
     V0(ADVZNsProof),

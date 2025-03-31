@@ -101,43 +101,31 @@ mod tests {
             ns_proofs: Vec<AvidMNsProof>,
         }
 
-        let blocks: Vec<BlockInfo> = {
-            // compute blocks separately to avoid async error `captured variable
-            // cannot escape `FnMut` closure body` caused by mutable variable `vid`
-            // below.
-            let blocks_only = future::join_all(tests.iter().map(|t| async {
+        let blocks: Vec<BlockInfo> = future::join_all(tests.iter().map(|t| async {
+            let block =
                 Payload::from_transactions(t.all_txs(), &Default::default(), &Default::default())
                     .await
                     .unwrap()
-                    .0
-            }))
-            .await;
-
-            // let mut vid = advz_scheme(10);
-            blocks_only
-                .into_iter()
-                .map(|block| {
-                    let payload_byte_len = block.byte_len();
-                    let ns_table = block.ns_table();
-                    let ns_table = ns_table
-                        .iter()
-                        .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
-                        .collect::<Vec<_>>();
-                    let vid_commit =
-                        AvidMScheme::commit(&param, &block.encode(), ns_table.clone()).unwrap();
-                    let ns_proofs: Vec<AvidMNsProof> = block
-                        .ns_table()
-                        .iter()
-                        .map(|ns_index| AvidMNsProof::new(&block, &ns_index, &param).unwrap())
-                        .collect();
-                    BlockInfo {
-                        block,
-                        vid_commit: VidCommitment::V1(vid_commit),
-                        ns_proofs,
-                    }
-                })
-                .collect()
-        };
+                    .0;
+            let payload_byte_len = block.byte_len();
+            let ns_table = block.ns_table();
+            let ns_table = ns_table
+                .iter()
+                .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+                .collect::<Vec<_>>();
+            let vid_commit = AvidMScheme::commit(&param, &block.encode(), ns_table).unwrap();
+            let ns_proofs: Vec<AvidMNsProof> = block
+                .ns_table()
+                .iter()
+                .map(|ns_index| AvidMNsProof::new(&block, &ns_index, &param).unwrap())
+                .collect();
+            BlockInfo {
+                block,
+                vid_commit: VidCommitment::V1(vid_commit),
+                ns_proofs,
+            }
+        }))
+        .await;
 
         // sanity: verify all valid namespace proofs
         for (
