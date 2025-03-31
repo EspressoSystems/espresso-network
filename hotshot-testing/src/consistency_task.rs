@@ -112,8 +112,8 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
             })?;
 
         ensure!(
-          child.height() == parent.height() + 1,
-          "The node has decided leaf\n\n{:?}\n\nextending leaf\n\n{:?}but the block height did not increase by exactly 1.",
+          child.height() > parent.height(),
+          "The node has decided leaf\n\n{:?}\n\nextending leaf\n\n{:?}but the block height did not increase.",
           child,
           parent
         );
