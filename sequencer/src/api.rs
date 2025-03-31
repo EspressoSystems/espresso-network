@@ -1740,7 +1740,7 @@ mod api_tests {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::BTreeMap, time::Duration};
+    use std::{collections::BTreeMap, collections::HashSet, time::Duration};
 
     use committable::{Commitment, Committable};
     use espresso_types::{
@@ -1765,6 +1765,7 @@ mod test {
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        utils::epoch_from_block_number,
         ValidatorConfig,
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
@@ -2922,36 +2923,34 @@ mod test {
             .await
             .unwrap();
 
-        // wanted views
-        let total_count = epoch_height * 5;
-        // wait for these events to receive on client 1
+        let wanted_views = epoch_height * 5;
         let mut views = HashSet::new();
-        let mut i = 0;
-        loop {
+        for _ in 0..=300 {
             let event = subscribed_events.next().await.unwrap();
             let event = event.unwrap();
             let view_number = event.view_number;
             views.insert(view_number.u64());
 
             if let hotshot::types::EventType::Decide { qc, .. } = event.event {
-                tracing::debug!(
+                tracing::error!(
                     "Got decide: epoch: {:?}, block: {:?} ",
                     qc.data.epoch,
                     qc.data.block_number
                 );
                 assert!(qc.data.epoch.is_some());
                 assert!(qc.data.block_number.is_some());
+                // Given test setup, view number is equivalent to block number
+                assert_eq!(
+                    epoch_from_block_number(view_number.u64(), epoch_height),
+                    qc.data.epoch.unwrap().u64()
+                )
             }
-            if views.contains(&total_count) {
+            if views.contains(&wanted_views) {
                 tracing::info!("Client Received at least desired views, exiting loop");
                 break;
             }
-            if i > 100 {
-                // Timeout
-                panic!("Views are not progressing");
-            }
-            i += 1;
         }
-        assert!(views.contains(&total_count));
+        // prevent false positive when we overflow the range
+        assert!(views.contains(&wanted_views), "Views are not progressing");
     }
 }
