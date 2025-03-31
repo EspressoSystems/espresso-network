@@ -14,6 +14,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
+    utils::epoch_from_block_number,
 };
 use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -399,7 +400,7 @@ pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow
     let epoch_height = instance_state
         .epoch_height
         .context("epoch height not found")?;
-    let epoch = EpochNumber::new(height % epoch_height);
+    let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
     let coordinator = instance_state.coordinator.clone();
     let first_epoch = coordinator.membership().read().await.first_epoch();
 
@@ -416,7 +417,7 @@ pub async fn catchup_missing_accounts(
     let epoch_height = instance_state
         .epoch_height
         .context("epoch height not found")?;
-    let epoch = EpochNumber::new(height % epoch_height);
+    let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
     let coordinator = instance_state.coordinator.clone();
 
     let epoch_membership = coordinator.membership_for_epoch(Some(epoch)).await?;
