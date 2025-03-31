@@ -53,6 +53,7 @@ exclude = ["sequencer-sqlite"]
 [workspace.dependencies]
 contract-bindings-alloy = { path = "./contract-bindings-alloy" }
 ethers-conv = { path = "./ethers-conv" }
+staking-cli = { path = "./staking-cli" }
 alloy = { version = "0.9", default-features = false, features = [
     "contract",
     "eips",
@@ -205,7 +206,7 @@ strum = { version = "0.26", features = ["derive"] }
 surf-disco = "0.9"
 sqlx = "=0.8.3"
 tagged-base64 = "0.4"
-tide-disco = "0.9.3"
+tide-disco = "0.9.4"
 thiserror = "1.0.69"
 tracing = "0.1"
 bytesize = "1.3"

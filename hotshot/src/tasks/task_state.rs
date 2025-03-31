@@ -233,6 +233,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
         Self {
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
+            state_private_key: handle.state_private_key().clone(),
             consensus: OuterConsensus::new(consensus),
             instance_state: handle.hotshot.instance_state(),
             latest_voted_view: handle.cur_view().await,
@@ -263,7 +264,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             cur_epoch: handle.cur_epoch().await,
             proposal_dependencies: BTreeMap::new(),
             formed_quorum_certificates: BTreeMap::new(),
-            formed_extended_quorum_certificates: BTreeMap::new(),
+            formed_next_epoch_quorum_certificates: BTreeMap::new(),
             consensus: OuterConsensus::new(consensus),
             instance_state: handle.hotshot.instance_state(),
             membership_coordinator: handle.hotshot.membership_coordinator.clone(),

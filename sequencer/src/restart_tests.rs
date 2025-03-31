@@ -829,7 +829,7 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
         })
         .collect();
 
-    let mut config = NetworkConfig::<PubKey> {
+    let mut config = NetworkConfig::<SeqTypes> {
         indexed_da: false,
         libp2p_config: Some(Libp2pConfig { bootstrap_nodes }),
         ..Default::default()

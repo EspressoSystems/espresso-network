@@ -69,7 +69,7 @@ struct ConsensusState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: V
     state_signer: Arc<StateSigner<SequencerApiVersion>>,
     event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
     node_state: NodeState,
-    network_config: NetworkConfig<PubKey>,
+    network_config: NetworkConfig<SeqTypes>,
 
     #[derivative(Debug = "ignore")]
     handle: Arc<RwLock<Consensus<N, P, V>>>,
@@ -119,7 +119,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
         Arc::clone(&self.consensus.as_ref().get().await.get_ref().handle)
     }
 
-    async fn network_config(&self) -> NetworkConfig<PubKey> {
+    async fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.consensus
             .as_ref()
             .get()
@@ -174,14 +174,12 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_stake_table(
         &self,
         epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    ) -> Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>> {
+    ) -> Vec<PeerConfig<SeqTypes>> {
         self.as_ref().get_stake_table(epoch).await
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(
-        &self,
-    ) -> Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>> {
+    async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.as_ref().get_stake_table_current().await
     }
 }
@@ -192,7 +190,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_stake_table(
         &self,
         epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    ) -> Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>> {
+    ) -> Vec<PeerConfig<SeqTypes>> {
         let Ok(mem) = self
             .consensus()
             .await
@@ -208,9 +206,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(
-        &self,
-    ) -> Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>> {
+    async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
         let epoch = self.consensus().await.read().await.cur_epoch().await;
 
         self.get_stake_table(epoch).await
@@ -1278,7 +1274,6 @@ mod api_tests {
 
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
-    use endpoints::NamespaceProofQueryData;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
         Header, Leaf2, MockSequencerVersions, NamespaceId,
@@ -1313,6 +1308,7 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
+        api::endpoints::NamespaceProofQueryData,
         network,
         persistence::no_storage::NoStorage,
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
@@ -1407,12 +1403,12 @@ mod api_tests {
                     .send()
                     .await
                     .unwrap();
-                let hotshot_query_service::VidCommon::V0(common) = &vid_common.common().clone()
-                else {
-                    panic!("Failed to get vid V0 for namespace");
-                };
                 ns_proof
-                    .verify(header.ns_table(), &header.payload_commitment(), common)
+                    .verify(
+                        header.ns_table(),
+                        &header.payload_commitment(),
+                        vid_common.common(),
+                    )
                     .unwrap();
             } else {
                 // Namespace proof should be present if ns_id exists in ns_table
