@@ -997,6 +997,10 @@ pub enum BlockError {
     /// The payload commitment does not match the block header's payload commitment
     #[error("Inconsistent payload commitment")]
     InconsistentPayloadCommitment,
+
+    /// The block header apply failed
+    #[error("Failed to apply block header: {0}")]
+    FailedHeaderApply(String),
 }
 
 /// Additional functions required to use a [`Leaf`] with hotshot-testing.
