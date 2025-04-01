@@ -111,6 +111,13 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
                 )
             })?;
 
+        ensure!(
+          child.height() > parent.height(),
+          "The node has decided leaf\n\n{:?}\n\nextending leaf\n\n{:?}but the block height did not increase.",
+          child,
+          parent
+        );
+
         // We want to make sure the commitment matches,
         // but allow for the possibility that we may have skipped views in between.
         if child.justify_qc().view_number == parent.view_number()

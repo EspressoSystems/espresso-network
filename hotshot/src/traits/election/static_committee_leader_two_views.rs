@@ -214,7 +214,10 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     fn upgrade_threshold(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> U256 {
         U256::from(((self.stake_table.len() as u64 * 9) / 10) + 1)
     }
-    fn has_epoch(&self, _epoch: TYPES::Epoch) -> bool {
+    fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
+        true
+    }
+    fn has_randomized_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
         true
     }
 

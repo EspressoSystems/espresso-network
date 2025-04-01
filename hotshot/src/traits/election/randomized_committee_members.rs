@@ -426,7 +426,10 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         let len = self.total_nodes(epoch);
         U256::from(max((len as u64 * 9) / 10, ((len as u64 * 2) / 3) + 1))
     }
-    fn has_epoch(&self, _epoch: TYPES::Epoch) -> bool {
+    fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
+        true
+    }
+    fn has_randomized_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
         true
     }
 

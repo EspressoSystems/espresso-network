@@ -134,8 +134,11 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Returns the threshold required to upgrade the network protocol
     fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
 
-    /// Returns if the stake table is available for the current Epoch
-    fn has_epoch(&self, epoch: TYPES::Epoch) -> bool;
+    /// Returns if the stake table is available for the given epoch
+    fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool;
+
+    /// Returns if the randomized stake table is available for the given epoch
+    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> bool;
 
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height

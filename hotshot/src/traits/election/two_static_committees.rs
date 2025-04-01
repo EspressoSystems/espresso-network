@@ -387,7 +387,10 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
             ))
         }
     }
-    fn has_epoch(&self, _epoch: TYPES::Epoch) -> bool {
+    fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
+        true
+    }
+    fn has_randomized_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
         true
     }
 
