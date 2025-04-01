@@ -1742,6 +1742,7 @@ mod api_tests {
 mod test {
     use std::{collections::BTreeMap, collections::HashSet, time::Duration};
 
+    use alloy::primitives::utils::parse_ether;
     use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
@@ -2896,6 +2897,11 @@ mod test {
         let url = format!("http://localhost:{hotshot_event_streaming_port}")
             .parse()
             .unwrap();
+
+        let sys = staking_cli::deploy::TestSystem::deploy().await.unwrap();
+        sys.register_validator().await.unwrap();
+        let delegate_amount = parse_ether("100").unwrap();
+        sys.delegate(delegate_amount).await.unwrap();
 
         let hotshot_events = HotshotEvents {
             events_service_port: hotshot_event_streaming_port,
