@@ -123,7 +123,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                     .await?;
                 if !membership.has_stake(&self.public_key).await
                     && (!membership
-                        .next_epoch()
+                        .next_epoch_stake_table()
                         .await?
                         .has_stake(&self.public_key)
                         .await

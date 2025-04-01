@@ -482,7 +482,11 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     // in the next epoch, the node should vote to achieve the double quorum.
     let committee_member_in_next_epoch = leaf.with_epoch
         && is_epoch_transition(leaf.height(), epoch_height)
-        && membership.next_epoch().await?.has_stake(&public_key).await;
+        && membership
+            .next_epoch_stake_table()
+            .await?
+            .has_stake(&public_key)
+            .await;
 
     ensure!(
         committee_member_in_current_epoch || committee_member_in_next_epoch,

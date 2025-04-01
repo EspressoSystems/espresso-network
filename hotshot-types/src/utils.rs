@@ -354,6 +354,16 @@ pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
     }
 }
 
+/// Get the block height of the transition block for the given epoch
+#[must_use]
+pub fn transition_block_for_epoch(epoch: u64, epoch_height: u64) -> u64 {
+    if epoch_height == 0 || epoch < 1 {
+        0
+    } else {
+        epoch_height * epoch - 3
+    }
+}
+
 /// Returns an Option<Epoch> based on a boolean condition of whether or not epochs are enabled, a block number,
 /// and the epoch height. If epochs are disabled or the epoch height is zero, returns None.
 #[must_use]

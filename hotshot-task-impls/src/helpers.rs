@@ -1220,7 +1220,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
         if qc.view_number() != next_epoch_qc.view_number() || qc.data != *next_epoch_qc.data {
             bail!("Next epoch qc exists but it's not equal with qc.");
         }
-        epoch_membership = epoch_membership.next_epoch().await?;
+        epoch_membership = epoch_membership.next_epoch_stake_table().await?;
         let membership_next_stake_table = epoch_membership.stake_table().await;
         let membership_next_success_threshold = epoch_membership.success_threshold().await;
 

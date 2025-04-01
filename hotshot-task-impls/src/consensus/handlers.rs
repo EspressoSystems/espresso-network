@@ -78,10 +78,15 @@ pub(crate) async fn handle_quorum_vote_recv<
     )
     .await?;
 
-    if vote.epoch().is_some() {
+    if vote.epoch().is_some()
+        && vote
+            .data
+            .block_number
+            .is_some_and(|b| is_epoch_transition(b, task_state.epoch_height))
+    {
         // If the vote sender belongs to the next epoch, collect it separately to form the second QC
         let has_stake = epoch_membership
-            .next_epoch()
+            .next_epoch_stake_table()
             .await?
             .has_stake(&vote.signing_key())
             .await;
