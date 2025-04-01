@@ -1753,6 +1753,7 @@ mod test {
         UpgradeType, ValidatedState, V0_1,
     };
     use ethers::utils::Anvil;
+    use ethers_conv::ToEthers;
     use futures::{
         future::{self, join_all},
         stream::{StreamExt, TryStreamExt},
@@ -2115,7 +2116,7 @@ mod test {
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
         let l1 = anvil.endpoint().parse().unwrap();
-        const EPOCH_HEIGHT: u64 = 5;
+        const EPOCH_HEIGHT: u64 = 10;
         let network_config = TestConfigBuilder::default()
             .l1_url(l1)
             .epoch_height(EPOCH_HEIGHT)
@@ -2891,6 +2892,9 @@ mod test {
         let wanted_epochs = 10;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
+        let anvil = Anvil::new().spawn();
+        let l1 = anvil.endpoint().parse().unwrap();
+
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
@@ -2912,14 +2916,26 @@ mod test {
 
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
 
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let chain_config = ChainConfig {
+            max_block_size: 300.into(),
+            base_fee: 1.into(),
+            stake_table_contract: Some(sys.stake_table.address().to_ethers()),
+            ..Default::default()
+        };
+        let state = ValidatedState {
+            chain_config: chain_config.into(),
+            ..Default::default()
+        };
+
+        let states = std::array::from_fn(|_| state.clone());
+
         let network_config = TestConfigBuilder::default()
             .l1_url(l1)
             .epoch_height(epoch_height)
             .build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
+            .states(states)
             .network_config(network_config)
             .build();
         let _network = TestNetwork::new(config, PosVersion::new()).await;
@@ -2953,12 +2969,11 @@ mod test {
                     qc.data.block_number
                 );
 
-                // Given test setup, view number is equivalent to block number
                 let expected_epoch =
                     epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
-                tracing::error!(epoch);
+                tracing::error!(expected_epoch, epoch);
 
-                assert_eq!(expected_epoch, qc.data.epoch.unwrap().u64())
+                assert_eq!(expected_epoch, epoch)
             }
             if views.contains(&wanted_views) {
                 tracing::info!("Client Received at least desired views, exiting loop");

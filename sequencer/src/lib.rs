@@ -483,10 +483,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         l1_client.clone(),
-        genesis
-            .chain_config
-            .stake_table_contract
-            .map(|a| a.to_alloy()),
+        genesis.chain_config,
         peers.clone(),
         persistence.clone(),
     );
@@ -589,8 +586,9 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey, SeqTypes,
-        Transaction, Upgrade,
+        v0_99::ChainConfig,
+        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
+        SeqTypes, Transaction, Upgrade,
     };
     use ethers::types::U256;
     use futures::{
@@ -770,6 +768,10 @@ pub mod testing {
             self
         }
 
+        pub fn epoch_start_block(mut self, epoch_start_block: u64) -> Self {
+            self.config.epoch_start_block = epoch_start_block;
+            self
+        }
         pub fn build(self) -> TestConfig<NUM_NODES> {
             TestConfig {
                 config: self.config,
@@ -999,7 +1001,7 @@ pub mod testing {
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
-                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                chain_config,
                 peers.clone(),
                 persistence.clone(),
             );
