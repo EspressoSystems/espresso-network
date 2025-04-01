@@ -6,7 +6,7 @@ use std::{
 use async_broadcast::{broadcast, InactiveReceiver};
 use async_lock::{Mutex, RwLock};
 use hotshot_utils::{
-    anytrace::{self, Error, Level, Result, DEFAULT_LOG_LEVEL},
+    anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
     ensure, line_info, log, warn,
 };
 use primitive_types::U256;
@@ -194,7 +194,10 @@ where
             ))
             .await
         else {
-            return anytrace::Err(anytrace::warn!("get epoch drb failed for in epoch {:?}", root_epoch + 1));
+            return Err(anytrace::warn!(
+                "get epoch drb failed for in epoch {:?}",
+                root_epoch + 1
+            ));
         };
 
         self.membership.write().await.add_drb_result(epoch, drb);
@@ -299,9 +302,9 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_drb(&self, block_height: u64) -> anyhow::Result<DrbResult> {
+    async fn get_epoch_drb(&self, block_height: u64) -> Result<DrbResult> {
         let Some(epoch) = self.epoch else {
-            anyhow::bail!("Cannot get drb for None epoch");
+            return Err(anytrace::warn!("Cannot get drb for None epoch"));
         };
         <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
             self.coordinator.membership.clone(),
@@ -309,6 +312,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
             epoch,
         )
         .await
+        .wrap()
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
