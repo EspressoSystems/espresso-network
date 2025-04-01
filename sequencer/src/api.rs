@@ -2973,7 +2973,7 @@ mod test {
                     epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
                 tracing::error!(expected_epoch, epoch);
 
-                assert_eq!(expected_epoch, epoch)
+                assert_eq!(expected_epoch, epoch);
             }
             if views.contains(&wanted_views) {
                 tracing::info!("Client Received at least desired views, exiting loop");
