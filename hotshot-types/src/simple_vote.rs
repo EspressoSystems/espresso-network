@@ -963,3 +963,22 @@ impl<TYPES: NodeType> HasEpoch<TYPES> for LightClientStateUpdateVote<TYPES> {
         Some(self.epoch)
     }
 }
+
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+#[serde(bound(deserialize = "QuorumVote2<TYPES>:for<'a> Deserialize<'a>"))]
+pub struct EpochRootQuorumVote<TYPES: NodeType> {
+    pub vote: QuorumVote2<TYPES>,
+    pub state_vote: LightClientStateUpdateVote<TYPES>,
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumVote<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.vote.view_number()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumVote<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.vote.epoch()
+    }
+}

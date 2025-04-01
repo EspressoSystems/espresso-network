@@ -2209,6 +2209,7 @@ mod test {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
+                state_cert: None,
             },
             signature,
             _pd: Default::default(),
@@ -2310,6 +2311,7 @@ mod test {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: None,
+                state_cert: None,
             },
         };
         let quorum_proposal_signature =
@@ -2458,6 +2460,7 @@ mod test {
                 view_change_evidence: None,
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
+                state_cert: None,
             },
         };
         let quorum_proposal_signature =

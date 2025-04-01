@@ -8,13 +8,17 @@ use std::{sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
+use handlers::handle_epoch_root_quorum_vote_recv;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::UpgradeLock,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, TimeoutCertificate2},
+    simple_certificate::{
+        EpochRootQuorumCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        TimeoutCertificate2,
+    },
     simple_vote::{HasEpoch, NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
     traits::{
         node_implementation::{NodeImplementation, NodeType, Versions},
@@ -32,8 +36,11 @@ use self::handlers::{
 };
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, validate_qc_and_next_epoch_qc},
-    vote_collection::VoteCollectorsMap,
+    helpers::{
+        broadcast_event, validate_light_client_state_update_certificate,
+        validate_qc_and_next_epoch_qc,
+    },
+    vote_collection::{EpochRootVoteCollectorsMap, VoteCollectorsMap},
 };
 
 /// Event handlers for use in the `handle` method.
@@ -58,6 +65,9 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
 
     /// A map of `QuorumVote` collector tasks.
     pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>,
+
+    /// A map of `EpochRootQuorumVote` collector tasks.
+    pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES, V>,
 
     /// A map of `QuorumVote` collector tasks. They collect votes from the nodes in the next epoch.
     pub next_epoch_vote_collectors: VoteCollectorsMap<
@@ -120,6 +130,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     handle_quorum_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {
                     tracing::debug!("Failed to handle QuorumVoteRecv event; error = {e}");
+                }
+            },
+            HotShotEvent::EpochRootQuorumVoteRecv(ref vote) => {
+                if let Err(e) =
+                    handle_epoch_root_quorum_vote_recv(vote, Arc::clone(&event), &sender, self)
+                        .await
+                {
+                    tracing::debug!("Failed to handle EpochRootQuorumVoteRecv event; error = {e}");
                 }
             },
             HotShotEvent::TimeoutVoteRecv(ref vote) => {
@@ -233,6 +251,62 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                         Arc::new(HotShotEvent::ViewChange(
                             high_qc.view_number() + 1,
                             high_qc.data.epoch(),
+                        )),
+                        &sender,
+                    )
+                    .await;
+                }
+            },
+            HotShotEvent::EpochRootQcRecv(EpochRootQuorumCertificate { qc, state_cert }, _) => {
+                if let Err(e) = validate_qc_and_next_epoch_qc(
+                    qc,
+                    None,
+                    &self.consensus,
+                    &self.membership_coordinator,
+                    &self.upgrade_lock,
+                    self.epoch_height,
+                )
+                .await
+                {
+                    tracing::error!("Received invalid high QC: {}", e);
+                    return Ok(());
+                }
+                if let Err(e) = validate_light_client_state_update_certificate(
+                    state_cert,
+                    &self.membership_coordinator,
+                )
+                .await
+                {
+                    tracing::error!(
+                        "Received invalid light client state update certificate: {}",
+                        e
+                    );
+                    return Ok(());
+                }
+                let mut consensus_writer = self.consensus.write().await;
+
+                let high_qc_updated = consensus_writer.update_high_qc(qc.clone()).is_ok();
+                let state_cert_updated = consensus_writer
+                    .update_state_cert(state_cert.clone())
+                    .is_ok();
+                drop(consensus_writer);
+
+                tracing::debug!(
+                    "Received Epoch Root QC for view {:?} and epoch {:?}.",
+                    qc.view_number(),
+                    qc.epoch(),
+                );
+                if high_qc_updated || state_cert_updated {
+                    // Send ViewChange indicating new view and new epoch.
+                    tracing::trace!(
+                        "Sending ViewChange for view {} and epoch {:?}",
+                        qc.view_number() + 1,
+                        qc.data.epoch(),
+                    );
+                    broadcast_event(
+                        Arc::new(HotShotEvent::ViewChange(
+                            qc.view_number() + 1,
+                            qc.data.epoch(),
                         )),
                         &sender,
                     )

@@ -30,8 +30,8 @@ use hotshot_types::{
         signature_key::SignatureKey,
     },
     utils::{
-        epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block,
-        option_epoch_from_block_number, BuilderCommitment,
+        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
+        is_transition_block, option_epoch_from_block_number, BuilderCommitment,
     },
     vote::HasViewNumber,
 };
@@ -54,13 +54,13 @@ pub(crate) enum ProposalDependency {
     /// For the `SendPayloadCommitmentAndMetadata` event.
     PayloadAndMetadata,
 
-    /// For the `Qc2Formed` event.
+    /// For the `Qc2Formed`, `ExtendedQc2Formed`, and `EpochRootQcFormed` event.
     Qc,
 
     /// For the `ViewSyncFinalizeCertificateRecv` event.
     ViewSyncCert,
 
-    /// For the `Qc2Formed` event timeout branch.
+    /// For the `Qc2Formed`, `ExtendedQc2Formed`, and `EpochRootQcFormed` event timeout branch.
     TimeoutCert,
 
     /// For the `QuorumProposalRecv` event.
@@ -130,20 +130,38 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         mut rx: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<QuorumCertificate2<TYPES>> {
         while let Ok(event) = rx.recv_direct().await {
-            if let HotShotEvent::HighQcRecv(qc, maybe_next_epoch_qc, _sender) = event.as_ref() {
-                if validate_qc_and_next_epoch_qc(
-                    qc,
-                    maybe_next_epoch_qc.as_ref(),
-                    &self.consensus,
-                    &self.membership.coordinator,
-                    &self.upgrade_lock,
-                    self.epoch_height,
-                )
-                .await
-                .is_ok()
-                {
-                    return Some(qc.clone());
+            let (qc, maybe_next_epoch_qc, maybe_state_cert) = match event.as_ref() {
+                HotShotEvent::HighQcRecv(qc, maybe_next_epoch_qc, _sender) => {
+                    (qc, maybe_next_epoch_qc, None)
+                },
+                HotShotEvent::EpochRootQcRecv(root_qc, _sender) => {
+                    (&root_qc.qc, &None, Some(root_qc.state_cert.clone()))
+                },
+                _ => continue,
+            };
+            if validate_qc_and_next_epoch_qc(
+                qc,
+                maybe_next_epoch_qc.as_ref(),
+                &self.consensus,
+                &self.membership.coordinator,
+                &self.upgrade_lock,
+                self.epoch_height,
+            )
+            .await
+            .is_ok()
+            {
+                if let Some(state_cert) = maybe_state_cert {
+                    if self
+                        .consensus
+                        .write()
+                        .await
+                        .update_state_cert(state_cert)
+                        .is_err()
+                    {
+                        tracing::error!("Failed to update state cert");
+                    }
                 }
+                return Some(qc.clone());
             }
         }
         None
@@ -169,6 +187,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let mut rx = self.receiver.clone();
 
         // drain any qc off the queue
+        // We don't watch for EpochRootQcRecv events here because it's not in transition.
         while let Ok(event) = rx.try_recv() {
             if let HotShotEvent::HighQcRecv(qc, maybe_next_epoch_qc, _sender) = event.as_ref() {
                 if let Some(block_number) = qc.data.block_number {
@@ -259,19 +278,38 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
 
         // drain any qc off the queue
         while let Ok(event) = rx.try_recv() {
-            if let HotShotEvent::HighQcRecv(qc, maybe_next_epoch_qc, _sender) = event.as_ref() {
-                if validate_qc_and_next_epoch_qc(
-                    qc,
-                    maybe_next_epoch_qc.as_ref(),
-                    &self.consensus,
-                    &self.membership.coordinator,
-                    &self.upgrade_lock,
-                    self.epoch_height,
-                )
-                .await
-                .is_ok()
-                    && qc.view_number() > highest_qc.view_number()
-                {
+            let (qc, maybe_next_epoch_qc, maybe_state_cert) = match event.as_ref() {
+                HotShotEvent::HighQcRecv(qc, maybe_next_epoch_qc, _sender) => {
+                    (qc, maybe_next_epoch_qc, None)
+                },
+                HotShotEvent::EpochRootQcRecv(root_qc, _sender) => {
+                    (&root_qc.qc, &None, Some(root_qc.state_cert.clone()))
+                },
+                _ => continue,
+            };
+            if validate_qc_and_next_epoch_qc(
+                qc,
+                maybe_next_epoch_qc.as_ref(),
+                &self.consensus,
+                &self.membership.coordinator,
+                &self.upgrade_lock,
+                self.epoch_height,
+            )
+            .await
+            .is_ok()
+            {
+                if let Some(state_cert) = maybe_state_cert {
+                    if self
+                        .consensus
+                        .write()
+                        .await
+                        .update_state_cert(state_cert)
+                        .is_err()
+                    {
+                        tracing::error!("Failed to update state cert");
+                    }
+                }
+                if qc.view_number() > highest_qc.view_number() {
                     highest_qc = qc.clone();
                 }
             }
@@ -485,6 +523,15 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         } else {
             None
         };
+        let state_cert = if parent_qc
+            .data
+            .block_number
+            .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
+        {
+            Some(self.consensus.read().await.state_cert().clone())
+        } else {
+            None
+        };
         let proposal = QuorumProposalWrapper {
             proposal: QuorumProposal2 {
                 block_header,
@@ -495,6 +542,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 upgrade_certificate,
                 view_change_evidence: proposal_certificate,
                 next_drb_result,
+                state_cert,
             },
         };
 
@@ -570,6 +618,23 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     },
                     either::Left(qc) => {
                         parent_qc = Some(qc.clone());
+                    },
+                },
+                HotShotEvent::EpochRootQcFormed(cert) => match cert {
+                    either::Right(timeout) => {
+                        timeout_certificate = Some(timeout.clone());
+                    },
+                    either::Left(root_qc) => {
+                        if self
+                            .consensus
+                            .write()
+                            .await
+                            .update_state_cert(root_qc.state_cert.clone())
+                            .is_err()
+                        {
+                            tracing::error!("Failed to update state cert");
+                        }
+                        parent_qc = Some(root_qc.qc.clone());
                     },
                 },
                 HotShotEvent::ViewSyncFinalizeCertificateRecv(cert) => {

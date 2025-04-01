@@ -10,7 +10,7 @@ use async_broadcast::{Receiver, Sender};
 use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
-    simple_vote::{HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
+    simple_vote::{EpochRootQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
     utils::{is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
@@ -25,7 +25,7 @@ use crate::{
     consensus::Versions,
     events::HotShotEvent,
     helpers::{broadcast_event, validate_qc_and_next_epoch_qc, wait_for_next_epoch_qc},
-    vote_collection::handle_vote,
+    vote_collection::{handle_epoch_root_vote, handle_vote},
 };
 
 /// Handle a `QuorumVoteRecv` event.
@@ -100,6 +100,58 @@ pub(crate) async fn handle_quorum_vote_recv<
             .await?;
         }
     }
+
+    Ok(())
+}
+
+/// Handle a `QuorumVoteRecv` event.
+pub(crate) async fn handle_epoch_root_quorum_vote_recv<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
+    vote: &EpochRootQuorumVote<TYPES>,
+    event: Arc<HotShotEvent<TYPES>>,
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+) -> Result<()> {
+    let in_transition = task_state
+        .consensus
+        .read()
+        .await
+        .is_high_qc_for_last_block();
+    ensure!(
+        !in_transition,
+        warn!("Received epoch root quorum vote in transition, this should not happen.")
+    );
+
+    let epoch_membership = task_state
+        .membership_coordinator
+        .membership_for_epoch(vote.vote.data.epoch)
+        .await
+        .context(warn!("No stake table for epoch"))?;
+
+    let we_are_leader =
+        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key;
+    ensure!(
+        we_are_leader,
+        info!(
+            "We are not the leader for view {:?}",
+            vote.view_number() + 1
+        )
+    );
+
+    handle_epoch_root_vote(
+        &mut task_state.epoch_root_vote_collectors,
+        vote,
+        task_state.public_key.clone(),
+        &epoch_membership,
+        task_state.id,
+        &event,
+        sender,
+        &task_state.upgrade_lock,
+    )
+    .await?;
 
     Ok(())
 }

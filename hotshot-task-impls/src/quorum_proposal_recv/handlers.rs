@@ -27,7 +27,7 @@ use hotshot_types::{
         ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_transition, is_transition_block,
+        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
         option_epoch_from_block_number, View, ViewInner,
     },
     vote::{Certificate, HasViewNumber},
@@ -42,8 +42,8 @@ use crate::{
     events::HotShotEvent,
     helpers::{
         broadcast_event, fetch_proposal, update_high_qc, validate_epoch_transition_qc,
-        validate_proposal_safety_and_liveness, validate_proposal_view_and_certs,
-        validate_qc_and_next_epoch_qc,
+        validate_light_client_state_update_certificate, validate_proposal_safety_and_liveness,
+        validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc,
     },
     quorum_proposal_recv::{UpgradeLock, Versions},
 };
@@ -275,6 +275,21 @@ pub(crate) async fn handle_quorum_proposal_recv<
         proposal_block_number,
         validation_info.epoch_height,
     );
+
+    if justify_qc
+        .data
+        .block_number
+        .is_some_and(|bn| is_epoch_root(bn, validation_info.epoch_height))
+    {
+        let Some(state_cert) = proposal.data.state_cert() else {
+            bail!("Epoch root QC has no state cert");
+        };
+        validate_light_client_state_update_certificate(
+            state_cert,
+            &validation_info.membership.coordinator,
+        )
+        .await?;
+    }
 
     validate_epoch_transition_block(proposal, &validation_info).await?;
 

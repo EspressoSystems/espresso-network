@@ -19,7 +19,10 @@ use hotshot_types::{
     consensus::OuterConsensus,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{
+        EpochRootQuorumCertificate, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate,
+    },
     traits::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
@@ -96,6 +99,9 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Formed light client state update certificates
+    pub formed_state_cert: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
@@ -118,12 +124,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     ProposalDependency::Qc => {
                         if let HotShotEvent::Qc2Formed(either::Left(qc)) = event {
                             qc.view_number() + 1
+                        } else if let HotShotEvent::EpochRootQcFormed(either::Left(root_qc)) = event
+                        {
+                            root_qc.view_number() + 1
                         } else {
                             return false;
                         }
                     },
                     ProposalDependency::TimeoutCert => {
-                        if let HotShotEvent::Qc2Formed(either::Right(timeout)) = event {
+                        if let HotShotEvent::Qc2Formed(either::Right(timeout))
+                        | HotShotEvent::EpochRootQcFormed(either::Right(timeout)) = event
+                        {
                             timeout.view_number() + 1
                         } else {
                             return false;
@@ -230,12 +241,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 proposal_dependency.mark_as_completed(event);
             },
             HotShotEvent::Qc2Formed(quorum_certificate) => match quorum_certificate {
-                Either::Right(_) => {
-                    timeout_dependency.mark_as_completed(event);
-                },
-                Either::Left(_) => {
-                    qc_dependency.mark_as_completed(event);
-                },
+                Either::Right(_) => timeout_dependency.mark_as_completed(event),
+                Either::Left(_) => qc_dependency.mark_as_completed(event),
+            },
+            HotShotEvent::EpochRootQcFormed(root_qc) => match root_qc {
+                Either::Right(_) => timeout_dependency.mark_as_completed(event),
+                Either::Left(_) => qc_dependency.mark_as_completed(event),
             },
             HotShotEvent::ViewSyncFinalizeCertificateRecv(_) => {
                 view_sync_dependency.mark_as_completed(event);
@@ -579,6 +590,55 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                         &event_sender,
                     )
                     .await;
+
+                    let view_number = qc.view_number() + 1;
+                    self.create_dependency_task_if_new(
+                        view_number,
+                        epoch_number,
+                        event_receiver,
+                        event_sender,
+                        Arc::clone(&event),
+                        epoch_transition_indicator,
+                    )
+                    .await?;
+                },
+            },
+
+            HotShotEvent::EpochRootQcFormed(root_qc) => match root_qc.clone() {
+                either::Right(timeout_cert) => {
+                    let view_number = timeout_cert.view_number + 1;
+                    self.create_dependency_task_if_new(
+                        view_number,
+                        epoch_number,
+                        event_receiver,
+                        event_sender,
+                        Arc::clone(&event),
+                        epoch_transition_indicator,
+                    )
+                    .await?;
+                },
+                either::Left(EpochRootQuorumCertificate { qc, state_cert }) => {
+                    // Only update if the qc is from a newer view
+                    if qc.view_number() <= self.consensus.read().await.high_qc().view_number {
+                        tracing::trace!(
+                            "Received a QC for a view that was not > than our current high QC"
+                        );
+                    }
+
+                    self.formed_quorum_certificates
+                        .insert(qc.view_number(), qc.clone());
+                    self.formed_state_cert
+                        .insert(state_cert.epoch, state_cert.clone());
+
+                    self.storage
+                        .write()
+                        .await
+                        .update_high_qc2_and_state_cert(qc.clone(), state_cert.clone())
+                        .await
+                        .wrap()
+                        .context(error!(
+                            "Failed to update the epoch root QC and state cert in storage!"
+                        ))?;
 
                     let view_number = qc.view_number() + 1;
                     self.create_dependency_task_if_new(

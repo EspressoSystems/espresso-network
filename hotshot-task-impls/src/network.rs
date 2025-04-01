@@ -324,6 +324,24 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
                         GeneralConsensusMessage::ExtendedQc(qc, next_epoch_qc) => {
                             HotShotEvent::ExtendedQcRecv(qc, next_epoch_qc, sender)
                         },
+                        GeneralConsensusMessage::EpochRootQuorumVote(vote) => {
+                            if !self.upgrade_lock.epochs_enabled(vote.view_number()).await {
+                                tracing::warn!("received GeneralConsensusMessage::EpochRootVote for view {} but epochs are not enabled for that view", vote.view_number());
+                                return;
+                            }
+                            HotShotEvent::EpochRootQuorumVoteRecv(vote)
+                        },
+                        GeneralConsensusMessage::EpochRootQc(root_qc) => {
+                            if !self
+                                .upgrade_lock
+                                .epochs_enabled(root_qc.view_number())
+                                .await
+                            {
+                                tracing::warn!("received GeneralConsensusMessage::EpochRootQc for view {} but epochs are not enabled for that view", root_qc.view_number());
+                                return;
+                            }
+                            HotShotEvent::EpochRootQcRecv(root_qc, sender)
+                        },
                     },
                     SequencingMessage::Da(da_message) => match da_message {
                         DaConsensusMessage::DaProposal(proposal) => {
@@ -767,6 +785,20 @@ impl<
                 };
 
                 Some((vote.signing_key(), message, TransmitType::Direct(leader)))
+            },
+            HotShotEvent::EpochRootQuorumVoteSend(vote) => {
+                *maybe_action = Some(HotShotAction::Vote);
+                let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::EpochRootQuorumVote(vote.clone()),
+                    ))
+                } else {
+                    MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
+                        GeneralConsensusMessage::Vote(vote.vote.clone().to_vote()),
+                    ))
+                };
+
+                Some((vote.vote.signing_key(), message, TransmitType::Broadcast))
             },
             HotShotEvent::ExtendedQuorumVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::Vote);

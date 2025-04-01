@@ -296,6 +296,7 @@ mod persistence_tests {
                     view_change_evidence: None,
                     next_drb_result: None,
                     next_epoch_justify_qc: None,
+                    state_cert: None,
                 },
             },
             signature,
@@ -796,6 +797,7 @@ mod persistence_tests {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: None,
+                state_cert: None,
             },
         };
         let mut qc = QuorumCertificate2::genesis::<TestVersions>(
@@ -1005,6 +1007,7 @@ mod persistence_tests {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: None,
+                state_cert: None,
             },
         };
         let quorum_proposal_signature =
