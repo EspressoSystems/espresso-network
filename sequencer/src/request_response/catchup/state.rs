@@ -12,7 +12,7 @@ use ethers::types::U256;
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::ViewNumber, message::UpgradeLock, traits::node_implementation::Versions,
-    utils::verify_epoch_root_chain, PeerConfig,
+    utils::verify_leaf_chain, PeerConfig,
 };
 use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
@@ -138,7 +138,6 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> StateCatchup for RequestRespo
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: U256,
-        epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         tracing::info!("Fetching leaf for height: {height}");
 
@@ -160,11 +159,11 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> StateCatchup for RequestRespo
                 leaf_chain.reverse();
 
                 // Verify the leaf chain
-                let leaf = verify_epoch_root_chain(
+                let leaf = verify_leaf_chain(
                     leaf_chain,
                     stake_table_clone,
                     success_threshold,
-                    epoch_height,
+                    height,
                     &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
                 )
                 .await

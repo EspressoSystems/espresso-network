@@ -60,6 +60,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+vid = { workspace = true }
 
 [dev-dependencies]
 espresso-types = { path = ".", features = [ "testing" ] }

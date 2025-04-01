@@ -134,18 +134,28 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Returns the threshold required to upgrade the network protocol
     fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256;
 
-    /// Returns if the stake table is available for the current Epoch
-    fn has_epoch(&self, epoch: TYPES::Epoch) -> bool;
+    /// Returns if the stake table is available for the given epoch
+    fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool;
+
+    /// Returns if the randomized stake table is available for the given epoch
+    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> bool;
 
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height
-    fn get_epoch_root_and_drb(
+    fn get_epoch_root(
         _membership: Arc<RwLock<Self>>,
         _block_height: u64,
-        _epoch_height: u64,
         _epoch: TYPES::Epoch,
-    ) -> impl std::future::Future<Output = anyhow::Result<(TYPES::BlockHeader, DrbResult)>> + Send
-    {
+    ) -> impl std::future::Future<Output = anyhow::Result<TYPES::BlockHeader>> + Send {
+        async move { anyhow::bail!("Not implemented") }
+    }
+
+    /// Gets the DRB result for the given epoch
+    fn get_epoch_drb(
+        _membership: Arc<RwLock<Self>>,
+        _block_height: u64,
+        _epoch: TYPES::Epoch,
+    ) -> impl std::future::Future<Output = anyhow::Result<DrbResult>> + Send {
         async move { anyhow::bail!("Not implemented") }
     }
 

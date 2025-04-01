@@ -892,14 +892,13 @@ impl StateCatchup for ParallelStateCatchup {
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: U256,
-        epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         self.on_all_providers(move |provider| {
             let stake_table_clone = stake_table.clone();
 
             async move {
                 provider
-                    .fetch_leaf(height, stake_table_clone, success_threshold, epoch_height)
+                    .fetch_leaf(height, stake_table_clone, success_threshold)
                     .await
             }
         })

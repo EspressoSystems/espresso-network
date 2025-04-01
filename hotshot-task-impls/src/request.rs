@@ -29,7 +29,7 @@ use hotshot_types::{
         node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
     },
-    utils::is_last_block_in_epoch,
+    utils::is_epoch_transition,
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::Result;
@@ -116,18 +116,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
 
                 // Request VID share only if:
                 // 1. we are part of the current epoch or
-                // 2. we are part of the next epoch and this is a proposal for the last block.
+                // 2. we are part of the next epoch and this is a proposal for in transition.
                 let membership = self
                     .membership_coordinator
-                    .membership_for_epoch(prop_epoch)
+                    .stake_table_for_epoch(prop_epoch)
                     .await?;
                 if !membership.has_stake(&self.public_key).await
                     && (!membership
-                        .next_epoch()
+                        .next_epoch_stake_table()
                         .await?
                         .has_stake(&self.public_key)
                         .await
-                        || !is_last_block_in_epoch(
+                        || !is_epoch_transition(
                             proposal.data.block_header().block_number(),
                             self.epoch_height,
                         ))
