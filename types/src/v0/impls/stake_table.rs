@@ -14,6 +14,7 @@ use committable::Committable;
 use contract_bindings_alloy::staketable::StakeTable::{
     ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
 };
+
 use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::{BLSPubKey, SignatureKey as _};
 use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
@@ -32,6 +33,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use indexmap::IndexMap;
+use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use thiserror::Error;
 
 use super::{
@@ -58,7 +60,7 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     let mut bls_keys = HashSet::new();
     let mut schnorr_keys = HashSet::new();
     for event in events {
-        tracing::debug!("Processing stake table event: {:?}", event);
+        tracing::error!("Processing stake table event: {:?}", event);
         match event {
             StakeTableEvent::Register(ValidatorRegistered {
                 account,
@@ -176,6 +178,7 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 fn select_validators(
     validators: &mut IndexMap<Address, Validator<BLSPubKey>>,
 ) -> anyhow::Result<()> {
+    tracing::error!("select_validators: {:?}", validators);
     // Remove invalid validators first
     validators.retain(|address, validator| {
         if validator.delegators.is_empty() {
@@ -756,7 +759,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         max(higher_threshold, normal_threshold)
     }
-
+    //
     #[allow(refining_impl_trait)]
     async fn add_epoch_root(
         &self,
@@ -767,7 +770,11 @@ impl Membership<SeqTypes> for EpochCommittees {
             .await
             .ok()?;
 
-        tracing::error!("`add_epoch_root`: Chain config: {:?}", chain_config);
+        tracing::error!(
+            "`add_epoch_root` epoch: {:?}, Chain config: {:?}",
+            epoch,
+            chain_config
+        );
 
         let Some(address) = chain_config.stake_table_contract else {
             tracing::error!("No stake table contract address found in Chain config");
@@ -938,11 +945,21 @@ impl DAMembers {
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
+    use alloy::{
+        network::EthereumWallet,
+        signers::local::{coins_bip39::English, MnemonicBuilder},
+    };
     use contract_bindings_alloy::staketable::{EdOnBN254::EdOnBN254Point, BN254::G2Point};
     use ethers_conv::ToAlloy as _;
+    use hotshot::{
+        traits::implementations::KeyPair,
+        types::{BLSPrivKey, SignatureKey},
+    };
     use hotshot_contract_adapter::stake_table::{bls_jf_to_alloy2, ParsedEdOnBN254Point};
     use hotshot_types::light_client::StateKeyPair;
     use rand::{Rng as _, RngCore as _};
+
+    use crate::v0_3::InsecureValidator;
 
     use super::*;
 
@@ -980,12 +997,39 @@ pub mod testing {
         }
     }
 
+    // TODO we will need something like this but probably pass in address
     impl Validator<BLSPubKey> {
         pub fn mock() -> Validator<BLSPubKey> {
-            let val = TestValidator::random();
+            InsecureValidator::mock(0).validator
+        }
+    }
+
+    impl InsecureValidator {
+        /// Get the key pair used for signing/verifying consensus
+        pub fn consensus_key_pair(&self) -> BLSKeyPair {
+            self.consensus_key_pair.clone()
+        }
+        /// Get `StateKeyPair` used for signing/verifying stake
+        pub fn state_key_pair(&self) -> StateKeyPair {
+            self.state_key_pair.clone()
+        }
+        ////Instanticiation of mock data. `index `is used to
+        /// differentiate keys since they otherwise share a common
+        /// seed.
+        pub fn mock(index: usize) -> Self {
+            let index: u64 = index.try_into().unwrap();
             let rng = &mut rand::thread_rng();
-            let mut seed = [1u8; 32];
-            rng.fill_bytes(&mut seed);
+
+            let seed = [0u8; 32]; // remove
+
+            let val = TestValidator::random();
+            let bls_key_pair = BLSKeyPair::generate(rng);
+            let state_key_pair = StateKeyPair::generate_from_seed_indexed(seed, index);
+            let schnorr_vk: ParsedEdOnBN254Point = state_key_pair.ver_key().to_affine().into();
+            let point = EdOnBN254Point {
+                x: schnorr_vk.x.to_alloy(),
+                y: schnorr_vk.y.to_alloy(),
+            };
             let mut validator_stake = alloy::primitives::U256::from(0);
             let mut delegators = HashMap::new();
             for _i in 0..=5000 {
@@ -994,16 +1038,27 @@ pub mod testing {
                 validator_stake += alloy::primitives::U256::from(stake);
             }
 
-            let stake_table_key = bls_alloy_to_jf2(val.bls_vk.clone());
-            let state_ver_key = edward_bn254point_to_state_ver(val.schnorr_vk.clone());
+            let stake_table_key = bls_alloy_to_jf2(bls_jf_to_alloy2(bls_key_pair.ver_key()));
+            let state_ver_key = edward_bn254point_to_state_ver(point.clone());
 
-            Validator {
+            let validator = Validator {
                 account: val.account,
                 stake_table_key,
                 state_ver_key,
                 stake: validator_stake,
                 commission: val.commission,
                 delegators,
+            };
+            let signer = MnemonicBuilder::<English>::default()
+                .build_random() // TODO we may need to know the MNEMONIC
+                .unwrap();
+            let wallet = EthereumWallet::from(signer);
+
+            Self {
+                validator,
+                consensus_key_pair: bls_key_pair,
+                state_key_pair,
+                wallet,
             }
         }
     }

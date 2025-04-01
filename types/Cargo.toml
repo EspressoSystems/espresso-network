@@ -36,6 +36,7 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 jf-merkle-tree = { workspace = true }
 jf-utils = { workspace = true }                                      # TODO temporary: used only for test_rng()
+jf-signature = {workspace = true}
 jf-vid = { workspace = true }
 lru = { workspace = true }
 num-traits = { workspace = true }

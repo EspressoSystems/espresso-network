@@ -122,6 +122,7 @@ impl TestSystem {
             self.schnorr_key_pair.ver_key(),
         )
         .await?;
+        tracing::error!("receipt: {:?}", receipt);
         assert!(receipt.status());
         Ok(())
     }
@@ -146,6 +147,7 @@ impl TestSystem {
             .await?
             .get_receipt()
             .await?;
+        tracing::error!("receipt: {:?}", receipt);
         assert!(receipt.status());
         Ok(())
     }
@@ -200,6 +202,12 @@ impl TestSystem {
             .arg("--stake-table-address")
             .arg(self.stake_table.address().to_string());
         cmd
+    }
+}
+
+impl Drop for TestSystem {
+    fn drop(&mut self) {
+        tracing::error!("drop test system: {:?}", self);
     }
 }
 

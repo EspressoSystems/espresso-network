@@ -39,7 +39,7 @@ pub struct Config {
 
     /// Deployed ESP token contract address.
     #[clap(long, env = "ESP_TOKEN_ADDRESS")]
-    token_address: Address,
+    pub token_address: Address,
 
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]

@@ -1748,6 +1748,7 @@ mod test {
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
         v0_1::{UpgradeMode, ViewBasedUpgrade},
+        v0_3::{InsecureValidator, Validator},
         BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState, V0_1,
@@ -1781,6 +1782,7 @@ mod test {
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use time::OffsetDateTime;
     use tokio::time::sleep;
+    use url::Url;
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use self::{
@@ -2893,7 +2895,7 @@ mod test {
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1: Url = anvil.endpoint().parse().unwrap();
 
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
@@ -2907,6 +2909,44 @@ mod test {
         sys.register_validator().await.unwrap();
         let delegate_amount = parse_ether("100").unwrap();
         sys.delegate(delegate_amount).await.unwrap();
+        tracing::error!("address: {:?}", sys.stake_table.address().to_ethers());
+
+        // let v = Validator::mock();
+        // let v = InsecureValidator::mock(1);
+        // let receipt = staking_cli::registration::register_validator(
+        //     sys.stake_table.clone(),
+        //     v.validator.commission.try_into().unwrap(),
+        //     v.validator.account,
+        //     v.consensus_key_pair(),
+        //     v.state_key_pair().ver_key(),
+        // )
+        // .await
+        // .unwrap();
+
+        // tracing::error!("receipt: {:?}", receipt);
+
+        let demo_config = staking_cli::Config {
+            rpc_url: l1.clone(),
+            stake_table_address: *sys.stake_table.address(),
+            token_address: *sys.token.address(),
+            ..Default::default()
+        };
+
+        staking_cli::demo::stake_for_demo(&demo_config, 2)
+            .await
+            .unwrap();
+
+        let validators = sys
+            .stake_table
+            .validators(sys.deployer_address)
+            .send()
+            .await
+            .unwrap()
+            .get_receipt()
+            .await
+            .unwrap();
+
+        tracing::error!("validators: {:?}", validators);
 
         let hotshot_events = HotshotEvents {
             events_service_port: hotshot_event_streaming_port,
@@ -2930,7 +2970,7 @@ mod test {
         let states = std::array::from_fn(|_| state.clone());
 
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1)
+            .l1_url(l1.clone())
             .epoch_height(epoch_height)
             .build();
         let config = TestNetworkConfigBuilder::default()
