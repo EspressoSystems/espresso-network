@@ -69,7 +69,7 @@
 //! streams don't change in a way that would break the client.
 //!
 //! Starting out, there doesn't need to be a lot of data that needs to be
-//! streamed to to the client.  In fact, we might be able to be a little
+//! streamed to the client.  In fact, we might be able to be a little
 //! naive about this, and broadcast general objects in an event stream, as
 //! data may be derivable from the objects that are broadcast.  For example,
 //! if we start out by sending the latest N block information, the client
