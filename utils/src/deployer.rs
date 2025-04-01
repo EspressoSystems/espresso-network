@@ -419,6 +419,67 @@ pub async fn deploy_permissioned_stake_table(
     Ok(stake_table_addr)
 }
 
+/// The primary logic for deploying and initializing an upgradable Espresso Token contract.
+pub async fn deploy_token_proxy(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    owner: Address,
+    init_grant_recipient: Address,
+) -> Result<Address> {
+    let token_addr = contracts
+        .deploy(Contract::EspToken, EspToken::deploy_builder(&provider))
+        .await?;
+    let token = EspToken::new(token_addr, &provider);
+
+    let init_data = token
+        .initialize(owner, init_grant_recipient)
+        .calldata()
+        .to_owned();
+    let token_proxy_addr = contracts
+        .deploy(
+            Contract::EspTokenProxy,
+            ERC1967Proxy::deploy_builder(&provider, token_addr, init_data),
+        )
+        .await?;
+
+    if !is_proxy_contract(&provider, token_proxy_addr).await? {
+        panic!("EspTokenProxy detected not as a proxy, report error!");
+    }
+    Ok(token_proxy_addr)
+}
+
+/// The primary logic for deploying and initializing an upgradable permissionless StakeTable contract.
+pub async fn deploy_stake_table_proxy(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    token_addr: Address,
+    light_client_addr: Address,
+    exit_escrow_period: U256,
+    owner: Address,
+) -> Result<Address> {
+    let stake_table_addr = contracts
+        .deploy(Contract::StakeTable, StakeTable::deploy_builder(&provider))
+        .await?;
+    let stake_table = StakeTable::new(stake_table_addr, &provider);
+
+    let init_data = stake_table
+        .initialize(token_addr, light_client_addr, exit_escrow_period, owner)
+        .calldata()
+        .to_owned();
+    let st_proxy_addr = contracts
+        .deploy(
+            Contract::StakeTableProxy,
+            ERC1967Proxy::deploy_builder(&provider, stake_table_addr, init_data),
+        )
+        .await?;
+
+    if !is_proxy_contract(&provider, st_proxy_addr).await? {
+        panic!("StakeTableProxy detected not as a proxy, report error!");
+    }
+
+    Ok(st_proxy_addr)
+}
+
 /// Common logic for any Ownable contract to transfer ownership
 pub async fn transfer_ownership(
     provider: impl Provider,
@@ -454,6 +515,26 @@ pub async fn transfer_ownership(
                 .get_receipt()
                 .await?
         },
+        Contract::EspToken | Contract::EspTokenProxy => {
+            tracing::info!(%addr, %new_owner, "Transfer EspToken ownership");
+            let token = EspToken::new(addr, &provider);
+            token
+                .transferOwnership(new_owner)
+                .send()
+                .await?
+                .get_receipt()
+                .await?
+        },
+        Contract::StakeTable | Contract::StakeTableProxy => {
+            tracing::info!(%addr, %new_owner, "Transfer StakeTable ownership");
+            let stake_table = StakeTable::new(addr, &provider);
+            stake_table
+                .transferOwnership(new_owner)
+                .send()
+                .await?
+                .get_receipt()
+                .await?
+        },
         _ => return Err(anyhow!("Not Ownable, can't transfer ownership!")),
     };
     Ok(receipt)
@@ -476,7 +557,7 @@ pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result
 
 #[cfg(test)]
 mod tests {
-    use alloy::{providers::ProviderBuilder, sol_types::SolValue};
+    use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
     use hotshot::rand::{rngs::StdRng, SeedableRng};
 
     use super::*;
@@ -755,5 +836,64 @@ mod tests {
     #[tokio::test]
     async fn test_upgrade_mock_light_client_v2() -> Result<()> {
         test_upgrade_light_client_to_v2_helper(true).await
+    }
+
+    #[tokio::test]
+    async fn test_deploy_token_proxy() -> Result<()> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        let init_recipient = provider.get_accounts().await?[0];
+        let rand_owner = Address::random();
+
+        let addr =
+            deploy_token_proxy(&provider, &mut contracts, rand_owner, init_recipient).await?;
+        let token = EspToken::new(addr, &provider);
+
+        assert_eq!(token.owner().call().await?._0, rand_owner);
+        assert_eq!(
+            token.balanceOf(init_recipient).call().await?._0,
+            parse_units("1000000000", "ether").unwrap().into(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deploy_stake_table_proxy() -> Result<()> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        // deploy token
+        let init_recipient = provider.get_accounts().await?[0];
+        let token_owner = Address::random();
+        let token_addr =
+            deploy_token_proxy(&provider, &mut contracts, token_owner, init_recipient).await?;
+
+        // deploy light client
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+
+        // deploy stake table
+        let exit_escrow_period = U256::from(1000);
+        let owner = init_recipient;
+        let stake_table_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+        let stake_table = StakeTable::new(stake_table_addr, &provider);
+
+        assert_eq!(
+            stake_table.exitEscrowPeriod().call().await?._0,
+            exit_escrow_period
+        );
+        assert_eq!(stake_table.owner().call().await?._0, owner);
+        assert_eq!(stake_table.token().call().await?._0, token_addr);
+        assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
+        Ok(())
     }
 }

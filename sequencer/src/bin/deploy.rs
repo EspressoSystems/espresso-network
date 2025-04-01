@@ -2,10 +2,11 @@ use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
 use alloy::{
     network::EthereumWallet,
-    primitives::Address,
+    primitives::{Address, U256},
     providers::ProviderBuilder,
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
+use anyhow::Context;
 use clap::Parser;
 use espresso_types::{config::PublicNetworkConfig, parse_duration, SeqTypes};
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
@@ -104,18 +105,19 @@ struct Options {
     /// Option to deploy fee contracts
     #[clap(long, default_value = "false")]
     deploy_fee: bool,
-
     /// Option to deploy permissioned stake table contracts
     #[clap(long, default_value = "false")]
     deploy_permissioned_stake_table: bool,
-
     /// Option to deploy LightClient V1 and proxy
     #[clap(long, default_value = "false")]
     deploy_light_client_v1: bool,
-
     /// Option to upgrade to LightClient V2
     #[clap(long, default_value = "false")]
     upgrade_light_client_v2: bool,
+    #[clap(long, default_value = "false")]
+    deploy_esp_token: bool,
+    #[clap(long, default_value = "false")]
+    deploy_stake_table: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -289,6 +291,58 @@ async fn main() -> anyhow::Result<()> {
                 &provider,
                 Contract::LightClientProxy,
                 lc_proxy_addr,
+                multisig,
+            )
+            .await?;
+        }
+    }
+
+    if opt.deploy_esp_token {
+        let recipient = match opt.initial_token_grant_recipient {
+            Some(r) => r,
+            None => deployer,
+        };
+        let token_proxy_addr =
+            deployer::deploy_token_proxy(&provider, &mut contracts, deployer, recipient).await?;
+
+        if let Some(multisig) = opt.multisig_address {
+            transfer_ownership(
+                &provider,
+                Contract::EspTokenProxy,
+                token_proxy_addr,
+                multisig,
+            )
+            .await?;
+        }
+    }
+
+    if opt.deploy_stake_table {
+        let token_addr = contracts
+            .address(Contract::EspTokenProxy)
+            .context("no ESP token proxy address")?;
+        let lc_addr = contracts
+            .address(Contract::LightClientProxy)
+            .context("no LightClient proxy address")?;
+        let escrow_period = U256::from(
+            opt.exit_escrow_period
+                .context("no exit escrow period")?
+                .as_secs(),
+        );
+        let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            escrow_period,
+            deployer,
+        )
+        .await?;
+
+        if let Some(multisig) = opt.multisig_address {
+            transfer_ownership(
+                &provider,
+                Contract::StakeTableProxy,
+                stake_table_proxy_addr,
                 multisig,
             )
             .await?;
