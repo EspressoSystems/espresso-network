@@ -55,8 +55,8 @@ impl<F: PrimeField> From<LightClientStateSol> for GenericLightClientState<F> {
 impl<F: PrimeField> From<GenericLightClientState<F>> for LightClientStateSol {
     fn from(v: GenericLightClientState<F>) -> Self {
         Self {
-            viewNum: v.view_number as u64,
-            blockHeight: v.block_height as u64,
+            viewNum: v.view_number,
+            blockHeight: v.block_height,
             blockCommRoot: field_to_u256(v.block_comm_root),
         }
     }

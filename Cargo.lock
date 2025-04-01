@@ -4873,6 +4873,7 @@ dependencies = [
 name = "hotshot-events-service"
 version = "0.1.57"
 dependencies = [
+ "alloy",
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
@@ -4974,6 +4975,7 @@ dependencies = [
 name = "hotshot-libp2p-networking"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-lock 3.4.0",
  "async-trait",
@@ -7190,6 +7192,7 @@ dependencies = [
 name = "marketplace-solver"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-lock 3.4.0",
  "async-trait",

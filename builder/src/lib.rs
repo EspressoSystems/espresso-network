@@ -46,7 +46,10 @@ pub mod testing {
         time::{Duration, Instant},
     };
 
-    use alloy::node_bindings::{Anvil, AnvilInstance};
+    use alloy::{
+        node_bindings::{Anvil, AnvilInstance},
+        primitives::U256,
+    };
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
@@ -80,7 +83,6 @@ pub mod testing {
         },
         HotShotConfig, PeerConfig, ValidatorConfig,
     };
-    use primitive_types::U256;
     use sequencer::{context::Consensus, network, SequencerApiVersion};
     use surf_disco::Client;
     use vbs::version::StaticVersion;

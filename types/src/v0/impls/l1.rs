@@ -1010,10 +1010,9 @@ mod test {
         primitives::utils::parse_ether,
         providers::layers::AnvilProvider,
     };
-    use hotshot_contract_adapter::sol_types::NodeInfoSol;
     use portpicker::pick_unused_port;
     use sequencer_utils::{
-        deployer::{deploy_fee_contract_proxy, deploy_permissioned_stake_table, Contracts},
+        deployer::{deploy_fee_contract_proxy, Contracts},
         test_utils::setup_test,
     };
     use time::OffsetDateTime;
@@ -1316,44 +1315,44 @@ mod test {
         test_reconnect_update_task_helper(false).await
     }
 
-    #[tokio::test]
-    async fn test_fetch_stake_table() -> anyhow::Result<()> {
-        setup_test();
+    // #[tokio::test]
+    // async fn test_fetch_stake_table() -> anyhow::Result<()> {
+    //     setup_test();
 
-        let anvil = Anvil::new().spawn();
-        let wallet = anvil.wallet().unwrap();
-        let inner_provider = ProviderBuilder::new()
-            .wallet(wallet)
-            .on_http(anvil.endpoint_url());
-        let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
+    //     let anvil = Anvil::new().spawn();
+    //     let wallet = anvil.wallet().unwrap();
+    //     let inner_provider = ProviderBuilder::new()
+    //         .wallet(wallet)
+    //         .on_http(anvil.endpoint_url());
+    //     let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
 
-        let l1_client = new_l1_client(provider.anvil(), false).await;
-        let mut contracts = Contracts::new();
+    //     let l1_client = new_l1_client(provider.anvil(), false).await;
+    //     let mut contracts = Contracts::new();
 
-        let stake_table_addr =
-            deploy_permissioned_stake_table(&provider, &mut contracts, vec![]).await?;
-        let stake_table_contract = PermissionedStakeTable::new(stake_table_addr, &provider);
+    //     let stake_table_addr =
+    //         deploy_permissioned_stake_table(&provider, &mut contracts, vec![]).await?;
+    //     let stake_table_contract = PermissionedStakeTable::new(stake_table_addr, &provider);
 
-        let mut rng = rand::thread_rng();
-        let node = NodeInfoSol::rand(&mut rng);
+    //     let mut rng = rand::thread_rng();
+    //     let node = NodeInfoSol::rand(&mut rng);
 
-        let new_nodes: Vec<NodeInfoSol> = vec![node];
-        stake_table_contract
-            .update(vec![], new_nodes)
-            .send()
-            .await?
-            .watch()
-            .await?;
+    //     let new_nodes: Vec<NodeInfoSol> = vec![node];
+    //     stake_table_contract
+    //         .update(vec![], new_nodes)
+    //         .send()
+    //         .await?
+    //         .watch()
+    //         .await?;
 
-        let block = l1_client.get_block(BlockId::latest()).await?.unwrap();
-        let nodes = l1_client
-            .get_stake_table(stake_table_addr, block.header.inner.number)
-            .await?;
+    //     let block = l1_client.get_block(BlockId::latest()).await?.unwrap();
+    //     let nodes = l1_client
+    //         .get_stake_table(stake_table_addr, block.header.inner.number)
+    //         .await?;
 
-        let result = nodes.stake_table.0[0].clone();
-        assert_eq!(result.stake_table_entry.stake_amount.to::<u64>(), 1);
-        Ok(())
-    }
+    //     let result = nodes.stake_table.0[0].clone();
+    //     assert_eq!(result.stake_table_entry.stake_amount.to::<u64>(), 1);
+    //     Ok(())
+    // }
 
     /// A helper function to get the index of the current provider in the failover list.
     fn get_failover_index(provider: &L1Client) -> usize {

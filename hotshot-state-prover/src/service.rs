@@ -596,13 +596,7 @@ mod test {
         .await?;
 
         // upgrade to V2
-        upgrade_light_client_v2(
-            &provider,
-            contracts,
-            is_mock_v2,
-            EPOCH_HEIGHT_FOR_TEST as u64,
-        )
-        .await?;
+        upgrade_light_client_v2(&provider, contracts, is_mock_v2, EPOCH_HEIGHT_FOR_TEST).await?;
 
         Ok(lc_proxy_addr)
     }

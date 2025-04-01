@@ -191,7 +191,7 @@ impl CanonicalSerialize for RewardAccount {
         mut writer: W,
         _compress: Compress,
     ) -> Result<(), SerializationError> {
-        Ok(writer.write_all(&self.0.as_slice())?)
+        Ok(writer.write_all(self.0.as_slice())?)
     }
 
     fn serialized_size(&self, _compress: Compress) -> usize {
@@ -215,7 +215,7 @@ impl ToTraversalPath<256> for RewardAccount {
     fn to_traversal_path(&self, height: usize) -> Vec<usize> {
         self.0
             .as_slice()
-            .into_iter()
+            .iter()
             .take(height)
             .map(|i| *i as usize)
             .collect()
@@ -484,7 +484,7 @@ pub mod tests {
         let validator = Validator::mock();
         let rewards = compute_rewards(validator).unwrap();
         let total = |rewards: Vec<(_, RewardAmount)>| {
-            rewards.iter().fold(U256::zero(), |acc, (_, r)| acc + r.0)
+            rewards.iter().fold(U256::ZERO, |acc, (_, r)| acc + r.0)
         };
         assert_eq!(total(rewards), block_reward().into());
 

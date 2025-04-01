@@ -233,8 +233,8 @@ impl<F: PrimeField> GenericPublicInput<F> {
     /// Convert to a vector of field elements
     pub fn to_vec(&self) -> Vec<F> {
         vec![
-            F::from(self.lc_state.view_number as u64),
-            F::from(self.lc_state.block_height as u64),
+            F::from(self.lc_state.view_number),
+            F::from(self.lc_state.block_height),
             self.lc_state.block_comm_root,
             self.voting_st_state.bls_key_comm,
             self.voting_st_state.schnorr_key_comm,
@@ -251,8 +251,8 @@ impl<F: PrimeField> GenericPublicInput<F> {
 impl<F: PrimeField> From<GenericPublicInput<F>> for Vec<F> {
     fn from(v: GenericPublicInput<F>) -> Self {
         vec![
-            F::from(v.lc_state.view_number as u64),
-            F::from(v.lc_state.block_height as u64),
+            F::from(v.lc_state.view_number),
+            F::from(v.lc_state.block_height),
             v.lc_state.block_comm_root,
             v.voting_st_state.bls_key_comm,
             v.voting_st_state.schnorr_key_comm,

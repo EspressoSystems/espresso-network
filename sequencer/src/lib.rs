@@ -993,7 +993,7 @@ pub mod testing {
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
-                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                chain_config.stake_table_contract,
                 peers.clone(),
                 persistence.clone(),
             );

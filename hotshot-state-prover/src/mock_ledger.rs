@@ -41,14 +41,14 @@ type SchnorrSignKey = jf_signature::schnorr::SignKey<ark_ed_on_bn254::Fr>;
 /// Stake table capacity used for testing
 pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 /// Number of block per epoch for testing
-pub const EPOCH_HEIGHT_FOR_TEST: usize = 4;
+pub const EPOCH_HEIGHT_FOR_TEST: u64 = 4;
 
 /// Mock for system parameter of `MockLedger`
 pub struct MockSystemParam {
     /// max capacity of stake table
     st_cap: usize,
     /// number of block per epoch
-    epoch_height: usize,
+    epoch_height: u64,
 }
 
 impl MockSystemParam {
@@ -109,7 +109,7 @@ impl MockLedger {
     /// attempt to advance epoch, should be invoked at the *beginning* of every `fn elapse_xx()`
     fn try_advance_epoch(&mut self) {
         // if the new block is the first block of an epoch, update epoch
-        if is_last_block(self.state.block_height as u64, self.pp.epoch_height as u64) {
+        if is_last_block(self.state.block_height, self.pp.epoch_height) {
             self.epoch += 1;
             self.st.advance();
         }
@@ -332,7 +332,7 @@ impl MockLedger {
     /// Returns epoch-aware stake table state for the next block.
     /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
-        if is_last_block(self.state.block_height as u64, self.pp.epoch_height as u64) {
+        if is_last_block(self.state.block_height, self.pp.epoch_height) {
             self.st.next_voting_state().unwrap()
         } else {
             self.voting_stake_table_state()
