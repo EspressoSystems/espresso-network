@@ -2888,6 +2888,7 @@ mod test {
         setup_test();
 
         let epoch_height = 10;
+        let wanted_epochs = 10;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let hotshot_event_streaming_port =
@@ -2929,34 +2930,47 @@ mod test {
             .await
             .unwrap();
 
-        let wanted_views = epoch_height * 5;
+        let wanted_views = epoch_height * wanted_epochs; // TODO not sure about this
         let mut views = HashSet::new();
+        let mut epochs = HashSet::new();
         for _ in 0..=300 {
             let event = subscribed_events.next().await.unwrap();
             let event = event.unwrap();
             let view_number = event.view_number;
+            tracing::error!("view number: {}", view_number.u64());
             views.insert(view_number.u64());
 
             if let hotshot::types::EventType::Decide { qc, .. } = event.event {
+                assert!(qc.data.epoch.is_some(), "epochs are live");
+                assert!(qc.data.block_number.is_some());
+
+                let epoch = qc.data.epoch.unwrap().u64();
+                epochs.insert(epoch);
+
                 tracing::error!(
                     "Got decide: epoch: {:?}, block: {:?} ",
-                    qc.data.epoch,
+                    epoch,
                     qc.data.block_number
                 );
-                assert!(qc.data.epoch.is_some());
-                assert!(qc.data.block_number.is_some());
+
                 // Given test setup, view number is equivalent to block number
-                assert_eq!(
-                    epoch_from_block_number(view_number.u64(), epoch_height),
-                    qc.data.epoch.unwrap().u64()
-                )
+                let expected_epoch =
+                    epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
+                tracing::error!(epoch);
+
+                assert_eq!(expected_epoch, qc.data.epoch.unwrap().u64())
             }
             if views.contains(&wanted_views) {
                 tracing::info!("Client Received at least desired views, exiting loop");
                 break;
             }
         }
+
         // prevent false positive when we overflow the range
         assert!(views.contains(&wanted_views), "Views are not progressing");
+        assert!(
+            epochs.contains(&wanted_epochs),
+            "Epochs are not progressing"
+        );
     }
 }
