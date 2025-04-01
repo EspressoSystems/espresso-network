@@ -1,15 +1,31 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use hotshot_types::{traits::states::InstanceState, HotShotConfig};
-use vbs::version::Version;
 #[cfg(any(test, feature = "testing"))]
-use vbs::version::{StaticVersion, StaticVersionType};
-
-use super::state::ValidatedState;
-use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, PubKey,
-    Timestamp, Upgrade, UpgradeMode,
+use async_lock::RwLock;
+use async_trait::async_trait;
+use hotshot::types::BLSPubKey;
+use hotshot_types::{
+    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
+    HotShotConfig,
 };
+use indexmap::IndexMap;
+#[cfg(any(test, feature = "testing"))]
+use vbs::version::StaticVersionType;
+use vbs::version::Version;
+
+use super::{
+    state::ValidatedState,
+    traits::MembershipPersistence,
+    v0_1::NoStorage,
+    v0_3::{IndexedStake, Validator},
+    SeqTypes,
+};
+use crate::v0::{
+    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
+    Upgrade, UpgradeMode,
+};
+#[cfg(any(test, feature = "testing"))]
+use crate::EpochCommittees;
 
 /// Represents the immutable state of a node.
 ///
@@ -24,6 +40,8 @@ pub struct NodeState {
     pub genesis_header: GenesisHeader,
     pub genesis_state: ValidatedState,
     pub l1_genesis: Option<L1BlockInfo>,
+    #[debug(skip)]
+    pub coordinator: EpochMembershipCoordinator<SeqTypes>,
     pub epoch_height: Option<u64>,
 
     /// Map containing all planned and executed upgrades.
@@ -44,6 +62,28 @@ pub struct NodeState {
     pub current_version: Version,
 }
 
+#[async_trait]
+impl MembershipPersistence for NoStorage {
+    async fn load_stake(
+        &self,
+        _epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+        Ok(None)
+    }
+
+    async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
+    }
+
+    async fn store_stake(
+        &self,
+        _epoch: EpochNumber,
+        _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 impl NodeState {
     pub fn new(
         node_id: u64,
@@ -51,6 +91,7 @@ impl NodeState {
         l1_client: L1Client,
         catchup: impl StateCatchup + 'static,
         current_version: Version,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
     ) -> Self {
         Self {
             node_id,
@@ -66,6 +107,7 @@ impl NodeState {
             upgrades: Default::default(),
             current_version,
             epoch_height: None,
+            coordinator,
         }
     }
 
@@ -73,13 +115,27 @@ impl NodeState {
     pub fn mock() -> Self {
         use vbs::version::StaticVersion;
 
+        let chain_config = ChainConfig::default();
+        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+            .expect("Failed to create L1 client");
+
+        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            l1.clone(),
+            chain_config.stake_table_contract,
+            Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
+        )));
+
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
         Self::new(
             0,
-            ChainConfig::default(),
-            L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
-                .expect("Failed to create L1 client"),
-            mock::MockStateCatchup::default(),
+            chain_config,
+            l1,
+            Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 1>::version(),
+            coordinator,
         )
     }
 
@@ -87,27 +143,83 @@ impl NodeState {
     pub fn mock_v2() -> Self {
         use vbs::version::StaticVersion;
 
+        let chain_config = ChainConfig::default();
+        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+            .expect("Failed to create L1 client");
+
+        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            l1.clone(),
+            chain_config.stake_table_contract,
+            Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
+        )));
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+
+        Self::new(
+            0,
+            chain_config,
+            l1,
+            Arc::new(mock::MockStateCatchup::default()),
+            StaticVersion::<0, 2>::version(),
+            coordinator,
+        )
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn mock_v3() -> Self {
+        use vbs::version::StaticVersion;
+
+        let chain_config = ChainConfig::default();
+        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+            .expect("Failed to create L1 client");
+
+        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            l1.clone(),
+            chain_config.stake_table_contract,
+            Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
+        )));
+
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
         Self::new(
             0,
             ChainConfig::default(),
             L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
                 .expect("Failed to create L1 client"),
             mock::MockStateCatchup::default(),
-            StaticVersion::<0, 2>::version(),
+            StaticVersion::<0, 3>::version(),
+            coordinator,
         )
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v99() -> Self {
         use vbs::version::StaticVersion;
+        let chain_config = ChainConfig::default();
+        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+            .expect("Failed to create L1 client");
+
+        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            l1.clone(),
+            chain_config.stake_table_contract,
+            Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
+        )));
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
 
         Self::new(
             0,
-            ChainConfig::default(),
-            L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
-                .expect("Failed to create L1 client"),
-            mock::MockStateCatchup::default(),
+            chain_config,
+            l1,
+            Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 99>::version(),
+            coordinator,
         )
     }
 
@@ -131,13 +243,11 @@ impl NodeState {
         self
     }
 
-    pub fn with_current_version(mut self, ver: Version) -> Self {
-        self.current_version = ver;
+    pub fn with_current_version(mut self, version: Version) -> Self {
+        self.current_version = version;
         self
     }
 
-    // TODO remove following `Memberships` trait update:
-    // https://github.com/EspressoSystems/HotShot/issues/3966
     pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
         self.epoch_height = Some(epoch_height);
         self
@@ -149,13 +259,28 @@ impl NodeState {
 #[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
+        use vbs::version::StaticVersion;
+        let chain_config = ChainConfig::default();
+        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+            .expect("Failed to create L1 client");
+
+        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            l1.clone(),
+            chain_config.stake_table_contract,
+            Arc::new(mock::MockStateCatchup::default()),
+            NoStorage,
+        )));
+        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+
         Self::new(
             1u64,
-            ChainConfig::default(),
-            L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
-                .expect("Failed to create L1 client"),
-            mock::MockStateCatchup::default(),
+            chain_config,
+            l1,
+            Arc::new(mock::MockStateCatchup::default()),
             StaticVersion::<0, 1>::version(),
+            coordinator,
         )
     }
 }
@@ -163,7 +288,7 @@ impl Default for NodeState {
 impl InstanceState for NodeState {}
 
 impl Upgrade {
-    pub fn set_hotshot_config_parameters(&self, config: &mut HotShotConfig<PubKey>) {
+    pub fn set_hotshot_config_parameters(&self, config: &mut HotShotConfig<SeqTypes>) {
         match &self.mode {
             UpgradeMode::View(v) => {
                 config.start_proposing_view = v.start_proposing_view;
@@ -203,8 +328,9 @@ pub mod mock {
 
     use super::*;
     use crate::{
-        retain_accounts, BackoffParams, BlockMerkleTree, FeeAccount, FeeMerkleCommitment,
-        FeeMerkleTree, Leaf2,
+        retain_accounts,
+        v0_1::{RewardAccount, RewardMerkleCommitment, RewardMerkleTree},
+        BackoffParams, BlockMerkleTree, FeeAccount, FeeMerkleCommitment, FeeMerkleTree, Leaf2,
     };
 
     #[derive(Debug, Clone, Default)]
@@ -279,6 +405,18 @@ pub mod mock {
             _commitment: Commitment<ChainConfig>,
         ) -> anyhow::Result<ChainConfig> {
             Ok(ChainConfig::default())
+        }
+
+        async fn try_fetch_reward_accounts(
+            &self,
+            _retry: usize,
+            _instance: &NodeState,
+            _height: u64,
+            _view: ViewNumber,
+            _reward_merkle_tree_root: RewardMerkleCommitment,
+            _accounts: &[RewardAccount],
+        ) -> anyhow::Result<RewardMerkleTree> {
+            anyhow::bail!("unimplemented")
         }
 
         fn backoff(&self) -> &BackoffParams {

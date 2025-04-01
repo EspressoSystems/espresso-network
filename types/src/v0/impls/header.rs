@@ -3,12 +3,14 @@ use std::fmt;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
     data::VidCommitment,
+    light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
-        node_implementation::NodeType,
+        node_implementation::{ConsensusTime, NodeType},
         signature_key::BuilderSignatureKey,
         BlockPayload, ValidatedState as _,
     },
@@ -24,17 +26,20 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
-use super::{instance_state::NodeState, state::ValidatedState};
+use super::{
+    instance_state::NodeState, state::ValidatedState, v0_1::RewardMerkleCommitment, v0_3::Validator,
+};
 use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
+        impls::reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
         MarketplaceVersion,
     },
     v0_1, v0_2, v0_3,
     v0_99::{self, ChainConfig, IterableFeeInfo, SolverAuctionResults},
-    BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
-    L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes, UpgradeType,
+    BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
+    Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -284,6 +289,7 @@ impl Header {
         ns_table: NsTable,
         fee_merkle_tree_root: FeeMerkleCommitment,
         block_merkle_tree_root: BlockMerkleCommitment,
+        reward_merkle_tree_root: Option<RewardMerkleCommitment>,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
         version: Version,
@@ -329,7 +335,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
             }),
             3 => Self::V3(v0_3::Header {
-                chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
+                chain_config: v0_3::ResolvableChainConfig::from(v0_3::ChainConfig::from(
                     chain_config,
                 )),
                 height,
@@ -343,6 +349,7 @@ impl Header {
                 fee_merkle_tree_root,
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
+                reward_merkle_tree_root: reward_merkle_tree_root.unwrap(),
             }),
 
             99 => Self::V99(v0_99::Header {
@@ -407,6 +414,7 @@ impl Header {
         chain_config: ChainConfig,
         version: Version,
         auction_results: Option<SolverAuctionResults>,
+        validator: Option<Validator<BLSPubKey>>,
     ) -> anyhow::Result<Self> {
         ensure!(
             version.major == 0,
@@ -511,6 +519,16 @@ impl Header {
 
         assert!(major == 0, "Invalid major version {major}");
 
+        // DISTRIBUTE REWARDS
+        // TODO(abdul): Change this to version >= EpochVersion::version()
+        // when we deploy the permissionless contract in native demo
+        // so that marketplace version also supports this,
+        // and the marketplace integration test passes
+        if let Some(validator) = validator {
+            let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
+            state.reward_merkle_tree = reward_state;
+        }
+
         let header = match minor {
             1 => Self::V1(v0_1::Header {
                 chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
@@ -545,7 +563,7 @@ impl Header {
                 builder_signature: builder_signature.first().copied(),
             }),
             3 => Self::V3(v0_3::Header {
-                chain_config: v0_1::ResolvableChainConfig::from(v0_1::ChainConfig::from(
+                chain_config: v0_3::ResolvableChainConfig::from(v0_3::ChainConfig::from(
                     chain_config,
                 )),
                 height,
@@ -557,6 +575,7 @@ impl Header {
                 ns_table,
                 block_merkle_tree_root,
                 fee_merkle_tree_root,
+                reward_merkle_tree_root: state.reward_merkle_tree.commitment(),
                 fee_info: fee_info[0],
                 builder_signature: builder_signature.first().copied(),
             }),
@@ -735,6 +754,17 @@ impl Header {
             Self::V2(fields) => vec![fields.fee_info],
             Self::V3(fields) => vec![fields.fee_info],
             Self::V99(fields) => fields.fee_info.clone(),
+        }
+    }
+
+    /// Fee paid by the block builder
+    pub fn reward_merkle_tree_root(&self) -> Option<RewardMerkleCommitment> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(_) => None,
+            Self::V3(fields) => Some(fields.reward_merkle_tree_root),
+            // TODO: add reward commitment to v99
+            Self::V99(_) => None,
         }
     }
 
@@ -935,6 +965,7 @@ impl BlockHeader<SeqTypes> for Header {
             chain_config,
             version,
             auction_results,
+            None,
         )?)
     }
 
@@ -968,6 +999,7 @@ impl BlockHeader<SeqTypes> for Header {
             match instance_state.upgrades.get(&version) {
                 Some(upgrade) => match upgrade.upgrade_type {
                     UpgradeType::Fee { chain_config } => chain_config,
+                    UpgradeType::Epoch { chain_config } => chain_config,
                     _ => Header::get_chain_config(&validated_state, instance_state).await?,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
@@ -1051,6 +1083,22 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
+        // TODO(abdul): Change this to version >= EpochVersion::version()
+        // when we deploy the permissionless contract in native demo
+        // so that marketplace version also supports this,
+        // and the marketplace integration test passes
+        let mut leader_config = None;
+        // Rewards are distributed only if the current epoch is not the first or second epoch
+        // this is because we don't have stake table from the contract for the first two epochs
+        if version == EpochVersion::version()
+            && !first_two_epochs(parent_leaf.height(), instance_state).await?
+        {
+            leader_config = Some(
+                catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)
+                    .await?,
+            );
+        };
+
         Ok(Self::from_info(
             payload_commitment,
             builder_commitment,
@@ -1066,6 +1114,7 @@ impl BlockHeader<SeqTypes> for Header {
             chain_config,
             version,
             None,
+            leader_config,
         )?)
     }
 
@@ -1078,10 +1127,12 @@ impl BlockHeader<SeqTypes> for Header {
         let ValidatedState {
             fee_merkle_tree,
             block_merkle_tree,
+            reward_merkle_tree,
             ..
         } = ValidatedState::genesis(instance_state).0;
         let block_merkle_tree_root = block_merkle_tree.commitment();
         let fee_merkle_tree_root = fee_merkle_tree.commitment();
+        let reward_merkle_tree_root = reward_merkle_tree.commitment();
 
         //  The Header is versioned,
         //  so we create the genesis header for the current version of the sequencer.
@@ -1099,6 +1150,7 @@ impl BlockHeader<SeqTypes> for Header {
             ns_table.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
+            Some(reward_merkle_tree_root),
             vec![FeeInfo::genesis()],
             vec![],
             instance_state.current_version,
@@ -1122,6 +1174,23 @@ impl BlockHeader<SeqTypes> for Header {
     /// Commit over fee_amount, payload_commitment and metadata
     fn builder_commitment(&self) -> BuilderCommitment {
         self.builder_commitment().clone()
+    }
+
+    fn get_light_client_state(
+        &self,
+        view: <SeqTypes as NodeType>::View,
+    ) -> anyhow::Result<LightClientState> {
+        let mut block_comm_root_bytes = vec![];
+        self.block_merkle_tree_root()
+            .serialize_compressed(&mut block_comm_root_bytes)?;
+
+        Ok(LightClientState {
+            view_number: view.u64(),
+            block_height: self.height(),
+            block_comm_root: hotshot_types::light_client::hash_bytes_to_field(
+                &block_comm_root_bytes,
+            )?,
+        })
     }
 }
 
@@ -1183,7 +1252,12 @@ mod test_headers {
     use vbs::{bincode_serializer::BincodeSerializer, version::StaticVersion, BinarySerializer};
 
     use super::*;
-    use crate::{eth_signature_key::EthKeyPair, mock::MockStateCatchup, Leaf};
+    use crate::{
+        eth_signature_key::EthKeyPair,
+        mock::MockStateCatchup,
+        v0_1::{RewardInfo, RewardMerkleTree},
+        Leaf,
+    };
 
     #[derive(Debug, Default)]
     #[must_use]
@@ -1232,9 +1306,20 @@ mod test_headers {
                 Vec::from([(fee_info.account(), fee_info.amount())]),
             )
             .unwrap();
+
+            let reward_info = RewardInfo {
+                account: Default::default(),
+                amount: Default::default(),
+            };
+            let reward_merkle_tree = RewardMerkleTree::from_kv_set(
+                20,
+                Vec::from([(reward_info.account, reward_info.amount)]),
+            )
+            .unwrap();
             let mut validated_state = ValidatedState {
                 block_merkle_tree: block_merkle_tree.clone(),
                 fee_merkle_tree,
+                reward_merkle_tree,
                 chain_config: genesis.instance_state.chain_config.into(),
             };
 
@@ -1263,6 +1348,7 @@ mod test_headers {
                 validated_state.clone(),
                 genesis.instance_state.chain_config,
                 Version { major: 0, minor: 1 },
+                None,
                 None,
             )
             .unwrap();
@@ -1605,6 +1691,7 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
+            None,
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1628,6 +1715,7 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
+            None,
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1651,6 +1739,7 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
+            None,
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,

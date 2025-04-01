@@ -50,6 +50,22 @@ pub struct DeployedContracts {
     /// Use an already-deployed PermissonedStakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::PermissonedStakeTable)]
     permissioned_stake_table: Option<Address>,
+
+    /// Use an already-deployed EspToken.sol instead of deploying a new one.
+    #[clap(long, env = Contract::EspToken)]
+    esp_token: Option<Address>,
+
+    /// Use an already-deployed EspToken.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::EspTokenProxy)]
+    esp_token_proxy: Option<Address>,
+
+    /// Use an already-deployed StakeTable.sol instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTable)]
+    stake_table: Option<Address>,
+
+    /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTableProxy)]
+    stake_table_proxy: Option<Address>,
 }
 
 /// An identifier for a particular contract.
@@ -71,6 +87,14 @@ pub enum Contract {
     FeeContractProxy,
     #[display("ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS")]
     PermissonedStakeTable,
+    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS")]
+    EspToken,
+    #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS")]
+    EspTokenProxy,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS")]
+    StakeTable,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
+    StakeTableProxy,
 }
 
 impl From<Contract> for OsStr {
@@ -109,6 +133,18 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.permissioned_stake_table {
             m.insert(Contract::PermissonedStakeTable, addr);
+        }
+        if let Some(addr) = deployed.esp_token {
+            m.insert(Contract::EspToken, addr);
+        }
+        if let Some(addr) = deployed.esp_token_proxy {
+            m.insert(Contract::EspTokenProxy, addr);
+        }
+        if let Some(addr) = deployed.stake_table {
+            m.insert(Contract::StakeTable, addr);
+        }
+        if let Some(addr) = deployed.stake_table_proxy {
+            m.insert(Contract::StakeTableProxy, addr);
         }
         Self(m)
     }

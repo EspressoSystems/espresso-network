@@ -34,7 +34,7 @@ use hotshot_types::{
         signature_key::StakeTableEntryType,
         stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme as _},
     },
-    utils::is_last_block_in_epoch,
+    utils::is_last_block,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
@@ -351,7 +351,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         .blocks_per_epoch()
         .await
         .map_err(ProverError::NetworkError)?;
-    let next_stake = if is_last_block_in_epoch(bundle.state.block_height as u64, blocks_per_epoch) {
+    let next_stake = if is_last_block(bundle.state.block_height as u64, blocks_per_epoch) {
         st.next_voting_state()?
     } else {
         st_state

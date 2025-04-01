@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
-    signature_key::BLSPubKey,
+    signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub mod config;
 mod header;
 mod impls;
+mod nsproof;
 pub mod traits;
 mod utils;
 pub use header::Header;
@@ -22,6 +23,7 @@ pub use impls::{
     get_l1_deposits, retain_accounts, BuilderValidationError, EpochCommittees, FeeError,
     ProposalValidationError, StateValidationError,
 };
+pub use nsproof::NsProof;
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -97,7 +99,6 @@ reexport_unchanged_types!(
     NsPayloadByteLen,
     NsPayloadOwned,
     NsPayloadRange,
-    NsProof,
     NsTable,
     NsTableBuilder,
     NsTableValidationError,
@@ -123,7 +124,7 @@ reexport_unchanged_types!(
     BlockSize,
 );
 
-pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
+pub(crate) use v0_3::{L1BlockInfoWithParent, L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
@@ -142,6 +143,7 @@ impl NodeType for SeqTypes {
     type Membership = EpochCommittees;
     type BuilderSignatureKey = FeeAccount;
     type AuctionResult = SolverAuctionResults;
+    type StateSignatureKey = SchnorrPubKey;
 }
 
 #[derive(Clone, Default, Debug, Copy)]
@@ -176,8 +178,8 @@ pub type MockSequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVe
 pub type V0_0 = StaticVersion<0, 0>;
 pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
+pub type EpochVersion = StaticVersion<0, 3>;
 pub type MarketplaceVersion = StaticVersion<0, 99>;
-pub type EpochVersion = StaticVersion<0, 100>;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
@@ -187,7 +189,7 @@ pub type Event = hotshot::types::Event<SeqTypes>;
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 
-pub type NetworkConfig = hotshot_types::network::NetworkConfig<PubKey>;
+pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
 pub use self::impls::{NodeState, SolverAuctionResultsProvider, ValidatedState};
 pub use crate::v0_1::{

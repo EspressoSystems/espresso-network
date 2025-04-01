@@ -16,6 +16,7 @@ mod tests {
         },
         PeerConfig,
     };
+    use primitive_types::U256;
     use surf_disco::Client;
     use tide_disco::{App, Url};
     use tokio::spawn;
@@ -96,8 +97,8 @@ mod tests {
         let pub_key = BLSPubKey::from_private(&private_key);
         let state_key_pair = StateKeyPair::generate();
 
-        let peer_config = PeerConfig::<BLSPubKey> {
-            stake_table_entry: pub_key.stake_table_entry(1),
+        let peer_config = PeerConfig::<TestTypes> {
+            stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
         };
 

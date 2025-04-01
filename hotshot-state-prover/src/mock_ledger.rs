@@ -16,7 +16,7 @@ use hotshot_types::{
         GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
     },
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
-    utils::is_last_block_in_epoch,
+    utils::is_last_block,
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -109,7 +109,7 @@ impl MockLedger {
     /// attempt to advance epoch, should be invoked at the *beginning* of every `fn elapse_xx()`
     fn try_advance_epoch(&mut self) {
         // if the new block is the first block of an epoch, update epoch
-        if is_last_block_in_epoch(self.state.block_height as u64, self.pp.epoch_height as u64) {
+        if is_last_block(self.state.block_height as u64, self.pp.epoch_height as u64) {
             self.epoch += 1;
             self.st.advance();
         }
@@ -332,7 +332,7 @@ impl MockLedger {
     /// Returns epoch-aware stake table state for the next block.
     /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
-        if is_last_block_in_epoch(self.state.block_height as u64, self.pp.epoch_height as u64) {
+        if is_last_block(self.state.block_height as u64, self.pp.epoch_height as u64) {
             self.st.next_voting_state().unwrap()
         } else {
             self.voting_stake_table_state()

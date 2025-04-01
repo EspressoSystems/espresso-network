@@ -134,7 +134,7 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^PermissionedStakeTable$"
+REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^PermissionedStakeTable$|^StakeTable$|^EspToken$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -153,9 +153,10 @@ sol-lint:
 
 # Build diff-test binary and forge test
 # Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-sequencer/issues/979
-sol-test:
-    cargo build --profile test --bin diff-test
-    forge test
+sol-test *args:
+    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target} &&\
+    cargo build --release --bin diff-test &&\
+    env PATH="${CARGO_TARGET_DIR}/release:$PATH" forge test {{ args }}
 
 # Deploys the light client contract on Sepolia and call it for profiling purposes.
 NUM_INIT_VALIDATORS := "5"

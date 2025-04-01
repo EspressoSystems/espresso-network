@@ -50,6 +50,7 @@ use hotshot_types::{
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
+use primitive_types::U256;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -163,8 +164,8 @@ async fn init_consensus(
     let known_nodes_with_stake = pub_keys
         .iter()
         .zip(&state_key_pairs)
-        .map(|(pub_key, state_key_pair)| PeerConfig::<BLSPubKey> {
-            stake_table_entry: pub_key.stake_table_entry(1u64),
+        .map(|(pub_key, state_key_pair)| PeerConfig::<MockTypes> {
+            stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
         })
         .collect::<Vec<_>>();
@@ -227,6 +228,10 @@ async fn init_consensus(
             let pub_keys = pub_keys.clone();
             let config = config.clone();
             let master_map = master_map.clone();
+            let state_private_keys = state_key_pairs
+                .iter()
+                .map(|kp| kp.sign_key())
+                .collect::<Vec<_>>();
 
             let membership = membership.clone();
             async move {
@@ -246,6 +251,7 @@ async fn init_consensus(
                 SystemContext::init(
                     pub_keys[node_id],
                     priv_key,
+                    state_private_keys[node_id].clone(),
                     node_id as u64,
                     config,
                     coordinator,

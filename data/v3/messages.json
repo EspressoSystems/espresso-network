@@ -18,7 +18,8 @@
                         "chain_id": "35353",
                         "fee_contract": null,
                         "fee_recipient": "0x0000000000000000000000000000000000000000",
-                        "max_block_size": "30720"
+                        "max_block_size": "30720",
+                        "stake_table_contract": null
                       }
                     }
                   },
@@ -34,6 +35,7 @@
                     "bytes": "AAAAAA=="
                   },
                   "payload_commitment": "HASH~AazstQer_ho1SqgGT0r10_Gs0BnjfbPBHJdSO3HHbp29",
+                  "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
                   "timestamp": 0
                 },
                 "version": {
@@ -98,7 +100,7 @@
         "General": {
           "Vote": {
             "data": {
-              "leaf_commit": "COMMIT~EfU0gW2LYJvl8O-KeUQ7-RWlFZpHufcuRotW-QHXNy80"
+              "leaf_commit": "COMMIT~OUewM-hz-K-l-DFmcV6z0nMfdXOSmDWnTJkwh84nJrbm"
             },
             "signature": [
               "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",

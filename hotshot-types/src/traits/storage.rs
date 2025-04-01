@@ -9,25 +9,22 @@
 //! This modules provides the [`Storage`] trait.
 //!
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use async_trait::async_trait;
-use committable::Commitment;
 
 use super::node_implementation::NodeType;
 use crate::{
-    consensus::{CommitmentMap, View},
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare,
+        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
+        VidCommitment, VidDisperseShare,
     },
     drb::DrbResult,
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, UpgradeCertificate,
     },
 };
 
@@ -114,6 +111,20 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
     async fn update_high_qc2(&self, high_qc: QuorumCertificate2<TYPES>) -> Result<()> {
         self.update_high_qc(high_qc.to_qc()).await
     }
+    /// Update the light client state update certificate in storage.
+    async fn update_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
+    ) -> Result<()>;
+
+    async fn update_high_qc2_and_state_cert(
+        &self,
+        high_qc: QuorumCertificate2<TYPES>,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
+    ) -> Result<()> {
+        self.update_high_qc2(high_qc).await?;
+        self.update_state_cert(state_cert).await
+    }
     /// Update the current high QC in storage.
     async fn update_next_epoch_high_qc2(
         &self,
@@ -121,34 +132,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
     ) -> Result<()> {
         Ok(())
     }
-    /// Update the currently undecided state of consensus.  This includes the undecided leaf chain,
-    /// and the undecided state.
-    async fn update_undecided_state(
-        &self,
-        leaves: CommitmentMap<Leaf<TYPES>>,
-        state: BTreeMap<TYPES::View, View<TYPES>>,
-    ) -> Result<()>;
-    /// Update the currently undecided state of consensus.  This includes the undecided leaf chain,
-    /// and the undecided state.
-    async fn update_undecided_state2(
-        &self,
-        leaves: CommitmentMap<Leaf2<TYPES>>,
-        state: BTreeMap<TYPES::View, View<TYPES>>,
-    ) -> Result<()> {
-        self.update_undecided_state(
-            leaves
-                .iter()
-                .map(|(&commitment, leaf)| {
-                    (
-                        Commitment::from_raw(commitment.into()),
-                        leaf.clone().to_leaf_unsafe(),
-                    )
-                })
-                .collect(),
-            state,
-        )
-        .await
-    }
+
     /// Upgrade the current decided upgrade certificate in storage.
     async fn update_decided_upgrade_certificate(
         &self,

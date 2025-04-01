@@ -22,7 +22,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         BlockPayload, EncodeBytes,
     },
-    utils::BuilderCommitment,
+    utils::{BuilderCommitment, EpochTransitionIndicator},
     vid::advz::advz_scheme,
 };
 use jf_vid::VidScheme;
@@ -128,6 +128,7 @@ pub async fn proposals_with_transactions(
     let quorum_data = QuorumData2 {
         leaf_commit: leaf.commit(),
         epoch,
+        block_number: Some(leaf.height()),
     };
 
     let versioned_data = VersionedVoteData::<_, _, _>::new_infallible(
@@ -148,6 +149,7 @@ pub async fn proposals_with_transactions(
             metadata,
             view_number,
             epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         },
         QuorumProposalWrapper {
             proposal: QuorumProposal2 {

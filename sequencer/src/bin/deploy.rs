@@ -7,7 +7,7 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use clap::Parser;
-use espresso_types::{config::PublicNetworkConfig, parse_duration};
+use espresso_types::{config::PublicNetworkConfig, parse_duration, SeqTypes};
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::light_client_genesis;
 use sequencer_utils::{
@@ -160,6 +160,21 @@ struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH")]
     initial_stake_table_path: Option<PathBuf>,
 
+    /// Exit escrow period for the stake table contract.
+    ///
+    /// This is the period for which stake table contract will retain funds after withdrawals have
+    /// been requested. It should be set to a value that is at least 3 hotshot epochs plus ample
+    /// time to allow for submission of slashing evidence. Initially it will probably be around one
+    /// week.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD", value_parser = parse_duration)]
+    exit_escrow_period: Option<Duration>,
+
+    /// The address that the tokens will be minted to.
+    ///
+    /// If unset the tokens will be minted to the deployer account.
+    #[clap(long, env = "ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
+    initial_token_grant_recipient: Option<Address>,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -193,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
     if opt.deploy_permissioned_stake_table {
         let initial_stake_table = if let Some(path) = opt.initial_stake_table_path {
             tracing::info!("Loading initial stake table from {:?}", path);
-            PermissionedStakeTableConfig::from_toml_file(&path)?.into()
+            PermissionedStakeTableConfig::<SeqTypes>::from_toml_file(&path)?.into()
         } else {
             vec![]
         };

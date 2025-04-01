@@ -18,6 +18,7 @@ committable = "0.2"
 derive_more = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
+hotshot-example-types = { workspace = true }
 hotshot-types = { workspace = true }
 log-panics = { workspace = true }
 portpicker = { workspace = true }

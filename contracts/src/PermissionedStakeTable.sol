@@ -29,6 +29,8 @@ contract PermissionedStakeTable is Ownable, InitializedAt {
     mapping(bytes32 nodeID => bool isStaker) private stakers;
 
     constructor(NodeInfo[] memory initialStakers) Ownable(msg.sender) InitializedAt() {
+        // This contract isn't deployed behind a proxy, so we manually initialize the block number.
+        initializedAtBlock = block.number;
         insert(initialStakers);
     }
 

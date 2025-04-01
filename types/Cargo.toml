@@ -13,6 +13,7 @@ alloy-compat = { path = "../alloy-compat" }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-broadcast = { workspace = true }
+async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64-bytes = { workspace = true }
 bincode = { workspace = true }
@@ -29,6 +30,7 @@ hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 jf-merkle-tree = { workspace = true }
 jf-utils = { workspace = true }                                      # TODO temporary: used only for test_rng()
@@ -55,6 +57,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+vid = { workspace = true }
 
 [dev-dependencies]
 espresso-types = { path = ".", features = [ "testing" ] }

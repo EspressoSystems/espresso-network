@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
-use tokio::task::JoinHandle;
 
 use crate::traits::node_implementation::{ConsensusTime, NodeType};
 
@@ -70,28 +69,18 @@ pub fn compute_drb_result<TYPES: NodeType>(drb_seed_input: DrbSeedInput) -> DrbR
     drb_result
 }
 
-/// Alias for in-progress DRB computation task, if there's any.
-pub type DrbComputation<TYPES> = Option<(<TYPES as NodeType>::Epoch, JoinHandle<DrbResult>)>;
-
 /// Seeds for DRB computation and computed results.
 #[derive(Clone, Debug)]
-pub struct DrbSeedsAndResults<TYPES: NodeType> {
-    /// Stored inputs to computations
-    pub seeds: BTreeMap<TYPES::Epoch, DrbSeedInput>,
-
+pub struct DrbResults<TYPES: NodeType> {
     /// Stored results from computations
     pub results: BTreeMap<TYPES::Epoch, DrbResult>,
 }
 
-impl<TYPES: NodeType> DrbSeedsAndResults<TYPES> {
+impl<TYPES: NodeType> DrbResults<TYPES> {
     #[must_use]
     /// Constructor with initial values for epochs 1 and 2.
     pub fn new() -> Self {
         Self {
-            seeds: BTreeMap::from([
-                (TYPES::Epoch::new(1), INITIAL_DRB_SEED_INPUT),
-                (TYPES::Epoch::new(2), INITIAL_DRB_SEED_INPUT),
-            ]),
             results: BTreeMap::from([
                 (TYPES::Epoch::new(1), INITIAL_DRB_RESULT),
                 (TYPES::Epoch::new(2), INITIAL_DRB_RESULT),
@@ -99,9 +88,8 @@ impl<TYPES: NodeType> DrbSeedsAndResults<TYPES> {
         }
     }
 
-    /// Stores a seed for a particular epoch for later use by `start_drb_task`.
-    pub fn store_seed(&mut self, epoch: TYPES::Epoch, drb_seed_input: DrbSeedInput) {
-        self.seeds.insert(epoch, drb_seed_input);
+    pub fn store_result(&mut self, epoch: TYPES::Epoch, result: DrbResult) {
+        self.results.insert(epoch, result);
     }
 
     /// Garbage collects internal data structures
@@ -115,13 +103,10 @@ impl<TYPES: NodeType> DrbSeedsAndResults<TYPES> {
 
         // Remove result entries older than EPOCH
         self.results = self.results.split_off(&retain_epoch);
-
-        // Remove result entries older than EPOCH+1
-        self.seeds = self.seeds.split_off(&(retain_epoch + 1));
     }
 }
 
-impl<TYPES: NodeType> Default for DrbSeedsAndResults<TYPES> {
+impl<TYPES: NodeType> Default for DrbResults<TYPES> {
     fn default() -> Self {
         Self::new()
     }

@@ -24,6 +24,7 @@ use alloy::sol;
 ///   - see module doc for more explanation on types duplication issue in alloy
 pub use crate::bindings::{
     erc1967proxy::ERC1967Proxy,
+    esptoken::EspToken,
     feecontract::FeeContract::{self, Deposit},
     lightclient::{
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
@@ -43,6 +44,7 @@ pub use crate::bindings::{
     },
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
+    staketable::{self, StakeTable},
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
@@ -172,6 +174,34 @@ impl From<PlonkProofSol> for lightclientv2::IPlonkVerifier::PlonkProof {
 
 impl From<LightClientV2Mock::votingStakeTableStateReturn> for StakeTableStateSol {
     fn from(v: LightClientV2Mock::votingStakeTableStateReturn) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<staketable::BN254::G2Point> for G2PointSol {
+    fn from(v: staketable::BN254::G2Point) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+impl From<G2PointSol> for staketable::BN254::G2Point {
+    fn from(v: G2PointSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<staketable::EdOnBN254::EdOnBN254Point> for EdOnBN254PointSol {
+    fn from(v: staketable::EdOnBN254::EdOnBN254Point) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+impl From<EdOnBN254PointSol> for staketable::EdOnBN254::EdOnBN254Point {
+    fn from(v: EdOnBN254PointSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<G1PointSol> for staketable::BN254::G1Point {
+    fn from(v: G1PointSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }

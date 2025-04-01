@@ -44,7 +44,6 @@ anyhow = { workspace = true }
 vergen = { workspace = true }
 
 [dependencies]
-alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true, features = ["derive"] }
@@ -54,11 +53,13 @@ async-once-cell = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 byteorder = "1"
+staking-cli = { workspace = true }
 
 # CDN imports
 cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = ["global-permits"] }
 cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-marshal" }
 
+alloy = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = "0.2"
@@ -68,6 +69,7 @@ derive_more = { workspace = true }
 dotenvy = { workspace = true }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
+indexmap = { workspace = true }
 
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }

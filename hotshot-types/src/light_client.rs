@@ -12,6 +12,8 @@ use alloy::primitives::U256;
 use ark_ed_on_bn254::EdwardsConfig as Config;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use jf_crhf::CRHF;
+use jf_rescue::{crhf::VariableLengthRescueCRHF, RescueError, RescueParameter};
 use jf_signature::schnorr;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -22,6 +24,8 @@ use tagged_base64::tagged;
 pub type CircuitField = ark_ed_on_bn254::Fq;
 /// Concrete type for light client state
 pub type LightClientState = GenericLightClientState<CircuitField>;
+/// Concreate type for light client state message to sign
+pub type LightClientStateMsg = GenericLightClientStateMsg<CircuitField>;
 /// Concrete type for stake table state
 pub type StakeTableState = GenericStakeTableState<CircuitField>;
 /// Signature scheme
@@ -77,30 +81,46 @@ pub struct StateSignaturesBundle {
 )]
 pub struct GenericLightClientState<F: PrimeField> {
     /// Current view number
-    pub view_number: usize,
+    pub view_number: u64,
     /// Current block height
-    pub block_height: usize,
+    pub block_height: u64,
     /// Root of the block commitment tree
     pub block_comm_root: F,
 }
 
-impl<F: PrimeField> From<GenericLightClientState<F>> for [F; 3] {
+pub type GenericLightClientStateMsg<F> = [F; 3];
+
+impl<F: PrimeField> From<GenericLightClientState<F>> for GenericLightClientStateMsg<F> {
     fn from(state: GenericLightClientState<F>) -> Self {
         [
-            F::from(state.view_number as u64),
-            F::from(state.block_height as u64),
+            F::from(state.view_number),
+            F::from(state.block_height),
             state.block_comm_root,
         ]
     }
 }
 
-impl<F: PrimeField> From<&GenericLightClientState<F>> for [F; 3] {
+impl<F: PrimeField> From<&GenericLightClientState<F>> for GenericLightClientStateMsg<F> {
     fn from(state: &GenericLightClientState<F>) -> Self {
         [
-            F::from(state.view_number as u64),
-            F::from(state.block_height as u64),
+            F::from(state.view_number),
+            F::from(state.block_height),
             state.block_comm_root,
         ]
+    }
+}
+
+impl<F: PrimeField + RescueParameter> GenericLightClientState<F> {
+    pub fn new(
+        view_number: u64,
+        block_height: u64,
+        block_comm_root: &[u8],
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            view_number,
+            block_height,
+            block_comm_root: hash_bytes_to_field(block_comm_root)?,
+        })
     }
 }
 
@@ -249,8 +269,8 @@ impl<F: PrimeField> From<GenericPublicInput<F>> for Vec<F> {
 impl<F: PrimeField> From<Vec<F>> for GenericPublicInput<F> {
     fn from(v: Vec<F>) -> Self {
         let lc_state = GenericLightClientState {
-            view_number: v[0].into_bigint().as_ref()[0] as usize,
-            block_height: v[1].into_bigint().as_ref()[0] as usize,
+            view_number: v[0].into_bigint().as_ref()[0],
+            block_height: v[1].into_bigint().as_ref()[0],
             block_comm_root: v[2],
         };
         let voting_st_state = GenericStakeTableState {
@@ -271,4 +291,14 @@ impl<F: PrimeField> From<Vec<F>> for GenericPublicInput<F> {
             next_st_state,
         }
     }
+}
+
+pub fn hash_bytes_to_field<F: RescueParameter>(bytes: &[u8]) -> Result<F, RescueError> {
+    // make sure that `mod_order` won't happen.
+    let bytes_len = ((<F as PrimeField>::MODULUS_BIT_SIZE + 7) / 8 - 1) as usize;
+    let elem = bytes
+        .chunks(bytes_len)
+        .map(F::from_le_bytes_mod_order)
+        .collect::<Vec<_>>();
+    Ok(VariableLengthRescueCRHF::<_, 1>::evaluate(elem)?[0])
 }

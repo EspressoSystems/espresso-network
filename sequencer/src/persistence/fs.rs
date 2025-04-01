@@ -12,13 +12,13 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    upgrade_commitment_map,
+    traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0_3::{IndexedStake, Validator},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
-use hotshot::InitializerEpochInfo;
+use hotshot::{types::BLSPubKey, InitializerEpochInfo};
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
@@ -28,15 +28,17 @@ use hotshot_types::{
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::{ConsensusTime, NodeType},
     },
-    utils::View,
     vote::HasViewNumber,
 };
+use indexmap::IndexMap;
+use itertools::Itertools;
 
 use crate::ViewNumber;
 
@@ -46,9 +48,6 @@ pub struct Options {
     /// Storage path for persistent data.
     #[clap(long, env = "ESPRESSO_SEQUENCER_STORAGE_PATH")]
     path: PathBuf,
-
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STORE_UNDECIDED_STATE", hide = true)]
-    store_undecided_state: bool,
 
     /// Number of views to retain in consensus storage before data that hasn't been archived is
     /// garbage collected.
@@ -79,7 +78,6 @@ impl Options {
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            store_undecided_state: false,
             consensus_view_retention: 130000,
         }
     }
@@ -99,7 +97,6 @@ impl PersistenceOptions for Options {
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let path = self.path.clone();
-        let store_undecided_state = self.store_undecided_state;
         let view_retention = self.consensus_view_retention;
 
         let migration_path = path.join("migration");
@@ -112,7 +109,6 @@ impl PersistenceOptions for Options {
         };
 
         Ok(Persistence {
-            store_undecided_state,
             inner: Arc::new(RwLock::new(Inner {
                 path,
                 migrated,
@@ -129,8 +125,6 @@ impl PersistenceOptions for Options {
 /// File system backed persistence.
 #[derive(Clone, Debug)]
 pub struct Persistence {
-    store_undecided_state: bool,
-
     // We enforce mutual exclusion on access to the data source, as the current file system
     // implementation does not support transaction isolation for concurrent reads and writes. We can
     // improve this in the future by switching to a SQLite-based file system implementation.
@@ -187,14 +181,6 @@ impl Inner {
         self.path.join("da2")
     }
 
-    fn undecided_state_path(&self) -> PathBuf {
-        self.path.join("undecided_state")
-    }
-
-    fn undecided2_state_path(&self) -> PathBuf {
-        self.path.join("undecided_state2")
-    }
-
     fn quorum_proposals_dir_path(&self) -> PathBuf {
         self.path.join("quorum_proposals")
     }
@@ -207,6 +193,10 @@ impl Inner {
         self.path.join("upgrade_certificate")
     }
 
+    fn stake_table_dir_path(&self) -> PathBuf {
+        self.path.join("stake_table")
+    }
+
     fn next_epoch_qc(&self) -> PathBuf {
         self.path.join("next_epoch_quorum_certificate")
     }
@@ -217,6 +207,10 @@ impl Inner {
 
     fn epoch_root_block_header_dir_path(&self) -> PathBuf {
         self.path.join("epoch_root_block_header")
+    }
+
+    fn light_client_state_update_certificate_dir_path(&self) -> PathBuf {
+        self.path.join("state_cert")
     }
 
     fn update_migration(&mut self) -> anyhow::Result<()> {
@@ -626,20 +620,6 @@ impl SequencerPersistence for Persistence {
         self.inner.read().await.load_anchor_leaf()
     }
 
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>> {
-        let inner = self.inner.read().await;
-        let path = inner.undecided2_state_path();
-        if !path.is_file() {
-            return Ok(None);
-        }
-        let bytes = fs::read(&path).context("read")?;
-        let value: (CommitmentMap<Leaf2>, _) =
-            bincode::deserialize(&bytes).context("deserialize")?;
-        Ok(Some((value.0, value.1)))
-    }
-
     async fn load_da_proposal(
         &self,
         view: ViewNumber,
@@ -768,31 +748,7 @@ impl SequencerPersistence for Persistence {
             },
         )
     }
-    async fn update_undecided_state2(
-        &self,
-        leaves: CommitmentMap<Leaf2>,
-        state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        if !self.store_undecided_state {
-            return Ok(());
-        }
 
-        let mut inner = self.inner.write().await;
-        let path = &inner.undecided2_state_path();
-        inner.replace(
-            path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes =
-                    bincode::serialize(&(leaves, state)).context("serializing undecided state")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
     async fn append_quorum_proposal2(
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
@@ -1166,48 +1122,7 @@ impl SequencerPersistence for Persistence {
         tracing::warn!("successfully migrated vid shares");
         Ok(())
     }
-    async fn migrate_undecided_state(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        if inner.migrated.contains("undecided_state") {
-            tracing::info!("undecided state already migrated");
-            return Ok(());
-        }
 
-        let new_undecided_state_path = &inner.undecided2_state_path();
-
-        let old_undecided_state_path = inner.undecided_state_path();
-
-        if !old_undecided_state_path.is_file() {
-            return Ok(());
-        }
-
-        let bytes = fs::read(&old_undecided_state_path).context("read")?;
-        let (leaves, state): (CommitmentMap<Leaf>, QuorumCertificate<SeqTypes>) =
-            bincode::deserialize(&bytes).context("deserialize")?;
-
-        let leaves2 = upgrade_commitment_map(leaves);
-        let state2 = state.to_qc2();
-
-        tracing::warn!("migrating undecided state..");
-        inner.replace(
-            new_undecided_state_path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes = bincode::serialize(&(leaves2, state2))
-                    .context("serializing undecided state2")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )?;
-
-        inner.migrated.insert("undecided_state".to_string());
-        inner.update_migration()?;
-        tracing::warn!("successfully migrated undecided state");
-        Ok(())
-    }
     async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
 
@@ -1320,6 +1235,28 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn add_state_cert(
+        &self,
+        state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.write().await;
+        let epoch = state_cert.epoch;
+        let dir_path = inner.light_client_state_update_certificate_dir_path();
+
+        fs::create_dir_all(dir_path.clone())
+            .context("failed to create light client state update certificate dir")?;
+
+        let bytes = bincode::serialize(&state_cert)
+            .context("serialize light client state update certificate")?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        fs::write(file_path, bytes).context(format!(
+            "writing light client state update certificate file for epoch {epoch:?}"
+        ))?;
+
+        Ok(())
+    }
+
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         let inner = self.inner.read().await;
         let drb_dir_path = inner.epoch_drb_result_dir_path();
@@ -1338,15 +1275,15 @@ impl SequencerPersistence for Persistence {
                     .join(epoch.to_string())
                     .with_extension("txt");
                 let block_header = if block_header_path.is_file() {
-                    let bytes = fs::read(&path).context(format!(
+                    let bytes = fs::read(&block_header_path).context(format!(
                         "reading epoch root block header {}",
-                        path.display()
+                        block_header_path.display()
                     ))?;
                     Some(
                         bincode::deserialize::<<SeqTypes as NodeType>::BlockHeader>(&bytes)
                             .context(format!(
                                 "parsing epoch root block header {}",
-                                path.display()
+                                block_header_path.display()
                             ))?,
                     )
                 } else {
@@ -1361,7 +1298,107 @@ impl SequencerPersistence for Persistence {
             }
         }
 
+        result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
+
         Ok(result)
+    }
+
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.light_client_state_update_certificate_dir_path();
+
+        let mut result = None;
+
+        if !dir_path.is_dir() {
+            return Ok(result);
+        }
+        for (epoch, path) in epoch_files(dir_path)? {
+            if result.as_ref().is_some_and(|cert| epoch <= cert.epoch) {
+                continue;
+            }
+            let bytes = fs::read(&path).context(format!(
+                "reading light client state update certificate {}",
+                path.display()
+            ))?;
+            result = Some(
+                bincode::deserialize::<LightClientStateUpdateCertificate<SeqTypes>>(&bytes)
+                    .context(format!(
+                        "parsing light client state update certificate {}",
+                        path.display()
+                    ))?,
+            );
+        }
+
+        Ok(result)
+    }
+}
+
+#[async_trait]
+impl MembershipPersistence for Persistence {
+    async fn load_stake(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+        let inner = self.inner.read().await;
+        let path = &inner.stake_table_dir_path();
+        let file_path = path.join(epoch.to_string()).with_extension("txt");
+        let bytes = fs::read(&file_path).context("read")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize combined stake table")?,
+        ))
+    }
+
+    async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        let limit = limit as usize;
+        let inner = self.inner.read().await;
+        let path = &inner.stake_table_dir_path();
+        let sorted: Vec<_> = epoch_files(path)?
+            .sorted_unstable_by_key(|t| t.0)
+            .collect::<Vec<_>>();
+
+        let len = sorted.len();
+        let mut slice = &sorted[..];
+        if len > limit {
+            slice = &sorted[len - limit..len - 1]
+        };
+        slice
+            .iter()
+            .map(|(epoch, path)| -> anyhow::Result<Option<IndexedStake>> {
+                let bytes = fs::read(path).context("read")?;
+                let st =
+                    bincode::deserialize(&bytes).context("deserialize combined stake table")?;
+                Ok(Some((*epoch, st)))
+            })
+            .collect()
+    }
+
+    async fn store_stake(
+        &self,
+        epoch: EpochNumber,
+        stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let dir_path = &inner.stake_table_dir_path();
+
+        fs::create_dir_all(dir_path.clone()).context("failed to create proposals dir")?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+
+        inner.replace(
+            &file_path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                let bytes =
+                    bincode::serialize(&stake).context("serializing combined stake table")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
     }
 }
 
@@ -1643,7 +1680,12 @@ mod test {
 
         let qp_dir_path = inner.quorum_proposals_dir_path();
         fs::create_dir_all(qp_dir_path.clone()).expect("failed to create proposals dir");
+
+        let state_cert_dir_path = inner.light_client_state_update_certificate_dir_path();
+        fs::create_dir_all(state_cert_dir_path.clone()).expect("failed to create state cert dir");
         drop(inner);
+
+        assert!(storage.load_state_cert().await.unwrap().is_none());
 
         for i in 0..rows {
             let view = ViewNumber::new(i);
@@ -1671,6 +1713,13 @@ mod test {
                 builder_commitment,
                 metadata,
             );
+
+            let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
+                epoch: EpochNumber::new(i),
+                light_client_state: Default::default(), // filling arbitrary value
+                signatures: vec![],                     // filling arbitrary value
+            };
+            assert!(storage.add_state_cert(state_cert).await.is_ok());
 
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
@@ -1831,6 +1880,27 @@ mod test {
             qps_count, rows as usize,
             "quorum proposals count does not match",
         );
+
+        let state_certs =
+            fs::read_dir(inner.light_client_state_update_certificate_dir_path()).unwrap();
+        let state_cert_count = state_certs
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_file())
+            .count();
+        assert_eq!(
+            state_cert_count, rows as usize,
+            "light client state update certificate count does not match",
+        );
+
+        assert_eq!(
+            storage.load_state_cert().await.unwrap().unwrap(),
+            LightClientStateUpdateCertificate::<SeqTypes> {
+                epoch: EpochNumber::new(rows - 1),
+                light_client_state: Default::default(),
+                signatures: vec![]
+            },
+            "Wrong light client state update certificate in the storage",
+        )
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1950,5 +2020,40 @@ mod test {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_membership_persistence() -> anyhow::Result<()> {
+        setup_test();
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let validator = Validator::mock();
+        let mut st = IndexMap::new();
+        st.insert(validator.account, validator);
+        storage
+            .store_stake(EpochNumber::new(10), st.clone())
+            .await?;
+
+        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        assert_eq!(st, table);
+
+        let val2 = Validator::mock();
+        let mut st2 = IndexMap::new();
+        st2.insert(val2.account, val2);
+        storage
+            .store_stake(EpochNumber::new(11), st2.clone())
+            .await?;
+
+        let tables = storage.load_latest_stake(4).await?.unwrap();
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
+        assert_eq!(None, iter.next());
+
+        Ok(())
     }
 }

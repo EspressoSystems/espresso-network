@@ -9,7 +9,7 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
-    EpochCommittees, NodeState, PubKey, Transaction, ValidatedState,
+    NodeState, PubKey, Transaction, ValidatedState,
 };
 use futures::{
     future::{join_all, Future},
@@ -26,11 +26,7 @@ use hotshot_types::{
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
-    traits::{
-        metrics::Metrics,
-        network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-    },
+    traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
     PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
@@ -94,19 +90,19 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
 
     node_state: NodeState,
 
-    network_config: NetworkConfig<PubKey>,
+    network_config: NetworkConfig<SeqTypes>,
 
     #[derivative(Debug = "ignore")]
-    validator_config: ValidatorConfig<<SeqTypes as NodeType>::SignatureKey>,
+    validator_config: ValidatorConfig<SeqTypes>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> SequencerContext<N, P, V> {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
-        network_config: NetworkConfig<PubKey>,
-        validator_config: ValidatorConfig<<SeqTypes as NodeType>::SignatureKey>,
-        membership: EpochCommittees,
+        network_config: NetworkConfig<SeqTypes>,
+        validator_config: ValidatorConfig<SeqTypes>,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
         persistence: P,
         network: Arc<N>,
@@ -141,7 +137,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
                 .try_into()
                 .context("stake table capacity out of range")?,
         );
-        let state_key_pair = validator_config.state_key_pair.clone();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             config.known_nodes_with_stake.clone(),
@@ -149,13 +144,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         )));
 
         let persistence = Arc::new(persistence);
-        let coordinator =
-            EpochMembershipCoordinator::new(Arc::new(RwLock::new(membership)), config.epoch_height);
         let membership = coordinator.membership().clone();
 
         let handle = SystemContext::init(
             validator_config.public_key,
             validator_config.private_key.clone(),
+            validator_config.state_private_key.clone(),
             instance_state.node_id,
             config.clone(),
             coordinator,
@@ -168,7 +162,11 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         .await?
         .0;
 
-        let mut state_signer = StateSigner::new(state_key_pair, stake_table_commit);
+        let mut state_signer = StateSigner::new(
+            validator_config.state_private_key.clone(),
+            validator_config.state_public_key.clone(),
+            stake_table_commit,
+        );
         if let Some(url) = state_relay_server {
             state_signer = state_signer.with_relay_server(url);
         }
@@ -247,8 +245,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         >,
         event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
-        network_config: NetworkConfig<PubKey>,
-        validator_config: ValidatorConfig<<SeqTypes as NodeType>::SignatureKey>,
+        network_config: NetworkConfig<SeqTypes>,
+        validator_config: ValidatorConfig<SeqTypes>,
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
@@ -422,7 +420,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 
     /// Get the network config
-    pub fn network_config(&self) -> NetworkConfig<PubKey> {
+    pub fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.network_config.clone()
     }
 }

@@ -1,5 +1,3 @@
-version: "3"
-
 networks:
   default:
     name: espresso-sequencer
@@ -17,13 +15,16 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:main
-    command: deploy --deploy-fee --deploy-permissioned-stake-table
+    command: deploy --deploy-fee --deploy-permissioned-stake-table --deploy-esp-token --deploy-stake-table
     environment:
       - ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH=/data/initial_stake_table.toml
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_DEPLOYER_ACCOUNT_INDEX
+      - ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD
+      - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
+      - ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -58,7 +59,7 @@ services:
         condition: service_completed_successfully
 
   fund-builder:
-    image: ghcr.io/espressosystems/espresso-sequencer/bridge:main
+    image: ghcr.io/espressosystems/espresso-sequencer/bridge:${DOCKER_TAG:-main}
     command: espresso-bridge deposit
     environment:
       - L1_PROVIDER=$ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -77,8 +78,35 @@ services:
       sequencer1:
         condition: service_healthy
 
+  stake:
+    image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
+    command: staking-cli stake-for-demo
+    environment:
+      - L1_PROVIDER=$ESPRESSO_SEQUENCER_L1_PROVIDER
+      - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
+      - ACCOUNT_INDEX=$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX
+      - ESP_TOKEN_ADDRESS=$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+      - STAKE_TABLE_ADDRESS=$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
+      - ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_0
+      - ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_1
+      - ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_2
+      - ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_3
+      - ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_4
+      - ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_0
+      - ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_1
+      - ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_2
+      - ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_3
+      - ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4
+      - RUST_LOG
+      - RUST_LOG_FORMAT
+    depends_on:
+      deploy-sequencer-contracts:
+        condition: service_completed_successfully
+      sequencer1:
+        condition: service_healthy
+
   orchestrator:
-    image: ghcr.io/espressosystems/espresso-sequencer/orchestrator:main
+    image: ghcr.io/espressosystems/espresso-sequencer/orchestrator:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_ORCHESTRATOR_PORT:$ESPRESSO_ORCHESTRATOR_PORT"
     environment:
@@ -109,7 +137,7 @@ services:
     environment:
       - RUST_LOG
       - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-sequencer/cdn-marshal:main
+    image: ghcr.io/espressosystems/espresso-sequencer/cdn-marshal:${DOCKER_TAG:-main}
     command:
       - cdn-marshal
       - -d
@@ -127,7 +155,7 @@ services:
     environment:
       - RUST_LOG
       - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-sequencer/cdn-broker:main
+    image: ghcr.io/espressosystems/espresso-sequencer/cdn-broker:${DOCKER_TAG:-main}
     command:
       - cdn-broker
       - -d
@@ -147,7 +175,7 @@ services:
     environment:
       - RUST_LOG
       - ESPRESSO_CDN_SERVER_METRICS_PORT
-    image: ghcr.io/espressosystems/espresso-sequencer/cdn-broker:main
+    image: ghcr.io/espressosystems/espresso-sequencer/cdn-broker:${DOCKER_TAG:-main}
     command:
       - cdn-broker
       - -d
@@ -164,11 +192,10 @@ services:
 
   # A service to whitelist specific public keys for the CDN
   cdn-whitelist:
-    restart: no
     environment:
       - RUST_LOG
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
-    image: ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist:main
+    image: ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist:${DOCKER_TAG:-main}
     command:
       - cdn-whitelist
       - -d
@@ -180,7 +207,7 @@ services:
         condition: service_healthy
 
   state-relay-server:
-    image: ghcr.io/espressosystems/espresso-sequencer/state-relay-server:main
+    image: ghcr.io/espressosystems/espresso-sequencer/state-relay-server:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_STATE_RELAY_SERVER_PORT:$ESPRESSO_STATE_RELAY_SERVER_PORT"
     environment:
@@ -191,7 +218,7 @@ services:
       - ASYNC_STD_THREAD_COUNT
 
   prover-service:
-    image: ghcr.io/espressosystems/espresso-sequencer/prover-service:main
+    image: ghcr.io/espressosystems/espresso-sequencer/prover-service:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_PROVER_SERVICE_PORT:$ESPRESSO_PROVER_SERVICE_PORT"
     environment:
@@ -221,7 +248,7 @@ services:
         condition: service_completed_successfully
 
   sequencer0:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:main
+    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
       - "$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT"
@@ -282,7 +309,7 @@ services:
         condition: service_completed_successfully
 
   sequencer1:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:main
+    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER1_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
     command: sequencer -- storage-sql -- http -- query -- explorer
@@ -341,7 +368,7 @@ services:
         condition: service_completed_successfully
 
   sequencer2:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:main
+    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER2_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
     command: sequencer -- http
@@ -392,7 +419,7 @@ services:
         condition: service_completed_successfully
 
   sequencer3:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:main
+    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER3_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
     command: sequencer -- http -- query -- storage-fs
@@ -444,7 +471,7 @@ services:
         condition: service_completed_successfully
 
   sequencer4:
-    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:main
+    image: ghcr.io/espressosystems/espresso-sequencer/sequencer:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SEQUENCER4_API_PORT:$ESPRESSO_SEQUENCER_API_PORT"
     command: sequencer -- http -- query -- storage-fs
@@ -495,7 +522,7 @@ services:
         condition: service_completed_successfully
 
   submit-transactions-public:
-    image: ghcr.io/espressosystems/espresso-sequencer/submit-transactions:main
+    image: ghcr.io/espressosystems/espresso-sequencer/submit-transactions:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT:8080"
     environment:
@@ -517,7 +544,7 @@ services:
         condition: service_healthy
 
   submit-transactions-private:
-    image: ghcr.io/espressosystems/espresso-sequencer/submit-transactions:main
+    image: ghcr.io/espressosystems/espresso-sequencer/submit-transactions:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT:8080"
     environment:
@@ -538,7 +565,7 @@ services:
         condition: service_healthy
 
   marketplace-reserve-builder:
-    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder:main
+    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
     profiles: [marketplace]
@@ -569,7 +596,7 @@ services:
         condition: service_completed_successfully
 
   marketplace-fallback-builder:
-    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder:main
+    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_FALLBACK_BUILDER_SERVER_PORT:$ESPRESSO_FALLBACK_BUILDER_SERVER_PORT"
     profiles: [marketplace]
@@ -600,7 +627,7 @@ services:
         condition: service_completed_successfully
 
   permissionless-builder:
-    image: ghcr.io/espressosystems/espresso-sequencer/builder:main
+    image: ghcr.io/espressosystems/espresso-sequencer/builder:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
     environment:
@@ -627,7 +654,7 @@ services:
         condition: service_completed_successfully
 
   nasty-client:
-    image: ghcr.io/espressosystems/espresso-sequencer/nasty-client:main
+    image: ghcr.io/espressosystems/espresso-sequencer/nasty-client:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NASTY_CLIENT_PORT:$ESPRESSO_NASTY_CLIENT_PORT"
     environment:
@@ -642,7 +669,7 @@ services:
         condition: service_healthy
 
   marketplace-solver:
-    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-solver:main
+    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-solver:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_MARKETPLACE_SOLVER_API_PORT:$ESPRESSO_MARKETPLACE_SOLVER_API_PORT"
 
@@ -660,7 +687,7 @@ services:
         condition: service_healthy
 
   node-validator:
-    image: ghcr.io/espressosystems/espresso-sequencer/node-validator:main
+    image: ghcr.io/espressosystems/espresso-sequencer/node-validator:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_VALIDATOR_PORT:$ESPRESSO_NODE_VALIDATOR_PORT"
     environment:
@@ -745,7 +772,7 @@ services:
         condition: service_healthy
 
   dev-rollup:
-    image: ghcr.io/espressosystems/espresso-sequencer/dev-rollup:main
+    image: ghcr.io/espressosystems/espresso-sequencer/dev-rollup:${DOCKER_TAG:-main}
     command: dev-rollup register --ns 1; dev-rollup register --ns 2; dev-rollup register --ns 3
     environment:
       - ESPRESSO_MARKETPLACE_SOLVER_API_URL=http://marketplace-solver:$ESPRESSO_MARKETPLACE_SOLVER_API_PORT

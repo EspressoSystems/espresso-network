@@ -143,10 +143,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     ) {
         match event.as_ref() {
             HotShotEvent::QuorumProposalRecv(proposal, sender) => {
+                // tracing::error!("Quorum proposal recv for view {:?}", proposal.data.view_number());
                 if self.consensus.read().await.cur_view() > proposal.data.view_number()
                     || self.cur_view > proposal.data.view_number()
                 {
-                    tracing::error!("Throwing away old proposal");
+                    tracing::warn!(
+                        "Throwing away old proposal for view {:?}",
+                        proposal.data.view_number()
+                    );
                     return;
                 }
                 let proposal_epoch = option_epoch_from_block_number::<TYPES>(
@@ -181,7 +185,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 .await
                 {
                     Ok(()) => {},
-                    Err(e) => error!(?e, "Failed to validate the proposal"),
+                    Err(e) => tracing::error!(?e, "Failed to validate the proposal"),
                 }
             },
             HotShotEvent::ViewChange(view, epoch) => {

@@ -30,10 +30,10 @@ mod tests {
     };
     use hotshot_types::{
         data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
-        signature_key::BuilderKey,
+        signature_key::{BuilderKey, SchnorrPubKey},
         simple_vote::QuorumData2,
         traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
-        utils::BuilderCommitment,
+        utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use marketplace_builder_shared::{
         block::ParentBlockReferences,
@@ -89,6 +89,7 @@ mod tests {
             type Membership = StaticCommittee<Self>;
             type BuilderSignatureKey = BuilderKey;
             type AuctionResult = TestAuctionResult;
+            type StateSignatureKey = SchnorrPubKey;
         }
         // no of test messages to send
         let num_test_messages = 5;
@@ -300,6 +301,7 @@ mod tests {
                         },
                         view_number: ViewNumber::new(round as u64),
                         epoch: None, // TODO: check if this is okay
+                        epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
                     };
                     let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
                     let seed = [round as u8; 32];
@@ -372,6 +374,7 @@ mod tests {
                         let q_data = QuorumData2::<TestTypes> {
                             leaf_commit: leaf.commit(),
                             epoch: None, // TODO: check if this is okay
+                            block_number: Some(leaf.height()),
                         };
 
                         let previous_quorum_view_number =

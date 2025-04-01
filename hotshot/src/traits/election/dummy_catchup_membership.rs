@@ -1,6 +1,8 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use anyhow::Ok;
+use async_lock::RwLock;
 use hotshot_types::{
     drb::DrbResult,
     traits::{election::Membership, node_implementation::NodeType},
@@ -23,7 +25,7 @@ impl<TYPES: NodeType> DummyCatchupCommittee<TYPES> {
         let pass = self.epochs.contains(&epoch);
         //&& self.drbs.contains(&epoch);
         if !pass {
-            tracing::error!("FAILEAD EPOCH CHECK {epoch}");
+            tracing::error!("FAILED EPOCH CHECK {epoch}");
         }
         assert!(pass);
     }
@@ -38,8 +40,8 @@ where
     fn new(
         // Note: eligible_leaders is currently a haMemck because the DA leader == the quorum leader
         // but they should not have voting power.
-        stake_committee_members: Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>>,
-        da_committee_members: Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>>,
+        stake_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
+        da_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
     ) -> Self {
         Self {
             inner: StaticCommittee::new(stake_committee_members, da_committee_members),
@@ -48,18 +50,12 @@ where
         }
     }
 
-    fn stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_epoch(epoch);
         self.inner.stake_table(epoch)
     }
 
-    fn da_stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_epoch(epoch);
         self.inner.da_stake_table(epoch)
     }
@@ -82,20 +78,11 @@ where
         self.inner.da_committee_members(view_number, epoch)
     }
 
-    fn committee_leaders(
-        &self,
-        view_number: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
-    ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
-        self.assert_has_epoch(epoch);
-        self.inner.committee_leaders(view_number, epoch)
-    }
-
     fn stake(
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_epoch(epoch);
         self.inner.stake(pub_key, epoch)
     }
@@ -104,7 +91,7 @@ where
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
+    ) -> Option<hotshot_types::PeerConfig<TYPES>> {
         self.assert_has_epoch(epoch);
         self.inner.da_stake(pub_key, epoch)
     }
@@ -138,22 +125,22 @@ where
         self.inner.da_total_nodes(epoch)
     }
 
-    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.success_threshold(epoch)
     }
 
-    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.da_success_threshold(epoch)
     }
 
-    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.failure_threshold(epoch)
     }
 
-    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
+    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.assert_has_epoch(epoch);
         self.inner.upgrade_threshold(epoch)
     }
@@ -164,7 +151,7 @@ where
     }
 
     async fn get_epoch_root_and_drb(
-        &self,
+        _membership: Arc<RwLock<Self>>,
         _block_height: u64,
         _epoch_height: u64,
         _epoch: TYPES::Epoch,

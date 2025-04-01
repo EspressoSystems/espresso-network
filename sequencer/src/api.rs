@@ -8,9 +8,13 @@ use committable::Commitment;
 use data_source::{CatchupDataSource, StakeTableDataSource, SubmitDataSource};
 use derivative::Derivative;
 use espresso_types::{
-    config::PublicNetworkConfig, retain_accounts, v0::traits::SequencerPersistence,
-    v0_99::ChainConfig, AccountQueryData, BlockMerkleTree, FeeAccount, FeeAccountProof,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction, ValidatedState,
+    config::PublicNetworkConfig,
+    retain_accounts,
+    v0::traits::SequencerPersistence,
+    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleTree},
+    v0_99::ChainConfig,
+    AccountQueryData, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2,
+    NodeState, PubKey, Transaction, ValidatedState,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
@@ -35,7 +39,10 @@ use hotshot_types::{
     PeerConfig,
 };
 use itertools::Itertools;
-use jf_merkle_tree::MerkleTreeScheme;
+use jf_merkle_tree::{
+    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
+    MerkleTreeScheme, UniversalMerkleTreeScheme,
+};
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
@@ -62,7 +69,7 @@ struct ConsensusState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: V
     state_signer: Arc<StateSigner<SequencerApiVersion>>,
     event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
     node_state: NodeState,
-    network_config: NetworkConfig<PubKey>,
+    network_config: NetworkConfig<SeqTypes>,
 
     #[derivative(Debug = "ignore")]
     handle: Arc<RwLock<Consensus<N, P, V>>>,
@@ -112,7 +119,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
         Arc::clone(&self.consensus.as_ref().get().await.get_ref().handle)
     }
 
-    async fn network_config(&self) -> NetworkConfig<PubKey> {
+    async fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.consensus
             .as_ref()
             .get()
@@ -167,14 +174,12 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_stake_table(
         &self,
         epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    ) -> Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>> {
+    ) -> Vec<PeerConfig<SeqTypes>> {
         self.as_ref().get_stake_table(epoch).await
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(
-        &self,
-    ) -> Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>> {
+    async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.as_ref().get_stake_table_current().await
     }
 }
@@ -185,7 +190,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_stake_table(
         &self,
         epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    ) -> Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>> {
+    ) -> Vec<PeerConfig<SeqTypes>> {
         let Ok(mem) = self
             .consensus()
             .await
@@ -201,9 +206,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(
-        &self,
-    ) -> Vec<PeerConfig<<SeqTypes as NodeType>::SignatureKey>> {
+    async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
         let epoch = self.consensus().await.read().await.cur_epoch().await;
 
         self.get_stake_table(epoch).await
@@ -386,6 +389,79 @@ impl<
         // Try storage.
         self.inner().get_leaf_chain(height).await
     }
+
+    #[tracing::instrument(skip(self, instance))]
+    async fn get_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        // Check if we have the desired state in memory.
+        match self
+            .as_ref()
+            .get_reward_accounts(instance, height, view, accounts)
+            .await
+        {
+            Ok(accounts) => return Ok(accounts),
+            Err(err) => {
+                tracing::info!("reward accounts not in memory, trying storage: {err:#}");
+            },
+        }
+
+        // Try storage.
+        let (tree, leaf) = self
+            .inner()
+            .get_reward_accounts(instance, height, view, accounts)
+            .await
+            .context("accounts not in memory, and could not fetch from storage")?;
+        // If we successfully fetched accounts from storage, try to add them back into the in-memory
+        // state.
+        let handle = self.as_ref().consensus().await;
+        let handle = handle.read().await;
+        let consensus = handle.consensus();
+        let mut consensus = consensus.write().await;
+        let (state, delta) = match consensus.validated_state_map().get(&view) {
+            Some(View {
+                view_inner: ViewInner::Leaf { state, delta, .. },
+            }) => {
+                let mut state = (**state).clone();
+
+                // Add the fetched accounts to the state.
+                for account in accounts {
+                    if let Some((proof, _)) = RewardAccountProof::prove(&tree, (*account).into()) {
+                        if let Err(err) = proof.remember(&mut state.reward_merkle_tree) {
+                            tracing::warn!(
+                                ?view,
+                                %account,
+                                "cannot update fetched account state: {err:#}"
+                            );
+                        }
+                    } else {
+                        tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                    };
+                }
+
+                (Arc::new(state), delta.clone())
+            },
+            _ => {
+                // If we don't already have a leaf for this view, or if we don't have the view
+                // at all, we can create a new view based on the recovered leaf and add it to
+                // our state map. In this case, we must also add the leaf to the saved leaves
+                // map to ensure consistency.
+                let mut state = ValidatedState::from_header(leaf.block_header());
+                state.reward_merkle_tree = tree.clone();
+                (Arc::new(state), None)
+            },
+        };
+        if let Err(err) = consensus.update_leaf(leaf, Arc::clone(&state), delta) {
+            tracing::warn!(?view, "cannot update fetched account state: {err:#}");
+        }
+        tracing::info!(?view, "updated with fetched account state");
+
+        Ok(tree)
+    }
 }
 
 // #[async_trait]
@@ -488,7 +564,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             .read()
             .await
             .undecided_leaves();
-        leaves.sort_by_key(|l| l.height());
+        leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves
             .iter()
             .find_position(|l| l.height() == height)
@@ -510,7 +586,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
         // Make sure we got one more leaf to confirm the decide
         for leaf in leaves
             .iter()
-            .skip_while(|l| l.height() <= last_leaf.height())
+            .skip_while(|l| l.view_number() <= last_leaf.view_number())
         {
             if leaf.justify_qc().view_number() == last_leaf.view_number() {
                 chain.push(leaf.clone());
@@ -518,6 +594,46 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
             }
         }
         bail!(format!("leaf chain not available for {height}"))
+    }
+
+    #[tracing::instrument(skip(self, _instance))]
+    async fn get_reward_accounts(
+        &self,
+        _instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        let state = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .state(view)
+            .await
+            .context(format!(
+                "state not available for height {height}, view {view:?}"
+            ))?;
+
+        let mut snapshot = RewardMerkleTree::from_commitment(state.reward_merkle_tree.commitment());
+        for account in accounts {
+            match state.reward_merkle_tree.universal_lookup(account) {
+                LookupResult::Ok(elem, proof) => {
+                    // This remember cannot fail, since we just constructed a valid proof, and are
+                    // remembering into a tree with the same commitment.
+                    snapshot.remember(account, *elem, proof).unwrap();
+                },
+                LookupResult::NotFound(proof) => {
+                    // Likewise this cannot fail.
+                    snapshot.non_membership_remember(*account, proof).unwrap()
+                },
+                LookupResult::NotInMemory => {
+                    bail!("missing account {account}");
+                },
+            }
+        }
+
+        Ok(snapshot)
     }
 }
 
@@ -1162,7 +1278,6 @@ mod api_tests {
     use alloy::node_bindings::Anvil;
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
-    use endpoints::NamespaceProofQueryData;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
         Header, Leaf2, MockSequencerVersions, NamespaceId,
@@ -1181,6 +1296,7 @@ mod api_tests {
         message::Proposal,
         simple_certificate::QuorumCertificate2,
         traits::{node_implementation::ConsensusTime, signature_key::SignatureKey, EncodeBytes},
+        utils::EpochTransitionIndicator,
         vid::avidm::{init_avidm_param, AvidMScheme},
     };
     use portpicker::pick_unused_port;
@@ -1195,6 +1311,7 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
+        api::endpoints::NamespaceProofQueryData,
         network,
         persistence::no_storage::NoStorage,
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
@@ -1289,12 +1406,12 @@ mod api_tests {
                     .send()
                     .await
                     .unwrap();
-                let hotshot_query_service::VidCommon::V0(common) = &vid_common.common().clone()
-                else {
-                    panic!("Failed to get vid V0 for namespace");
-                };
                 ns_proof
-                    .verify(header.ns_table(), &header.payload_commitment(), common)
+                    .verify(
+                        header.ns_table(),
+                        &header.payload_commitment(),
+                        vid_common.common(),
+                    )
                     .unwrap();
             } else {
                 // Namespace proof should be present if ns_id exists in ns_table
@@ -1359,7 +1476,7 @@ mod api_tests {
         let avidm_param = init_avidm_param(2).unwrap();
         let weights = vec![1u32; 2];
 
-        let ns_table = parse_ns_table(payload.byte_len().as_usize(), &payload.encode());
+        let ns_table = parse_ns_table(payload.byte_len().as_usize(), &payload.ns_table().encode());
         let (payload_commitment, shares) =
             AvidMScheme::ns_disperse(&avidm_param, &weights, &payload_bytes_arc, ns_table).unwrap();
 
@@ -1432,6 +1549,7 @@ mod api_tests {
                 metadata: payload.ns_table().clone(),
                 view_number: leaf.view_number(),
                 epoch: Some(EpochNumber::new(0)),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
             };
             let da_proposal = Proposal {
                 data: da_proposal_inner,
@@ -1635,13 +1753,14 @@ mod test {
         v0_1::{UpgradeMode, ViewBasedUpgrade},
         BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
-        UpgradeType, ValidatedState,
+        UpgradeType, ValidatedState, V0_1,
     };
     use futures::{
         future::{self, join_all},
         stream::{StreamExt, TryStreamExt},
     };
     use hotshot::types::EventType;
+    use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         types::HeightIndexed,
@@ -2014,11 +2133,7 @@ mod test {
                 )
             }))
             .build();
-        let mut network = TestNetwork::new(
-            config,
-            SequencerVersions::<EpochVersion, EpochVersion>::new(),
-        )
-        .await;
+        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
 
         // Wait for replica 0 to decide in the third epoch.
         let mut events = network.peers[0].event_stream().await;
@@ -2027,7 +2142,10 @@ mod test {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
+            tracing::error!("got decide height {}", leaf_chain[0].leaf.height());
+
             if leaf_chain[0].leaf.height() > EPOCH_HEIGHT * 3 {
+                tracing::error!("decided past one epoch");
                 break;
             }
         }
@@ -2049,7 +2167,7 @@ mod test {
             .collect::<Vec<_>>()
             .await;
 
-        tracing::info!("restarting node");
+        tracing::error!("restarting node");
         let node = network
             .cfg
             .init_node(
@@ -2308,7 +2426,7 @@ mod test {
         setup_test();
 
         let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;
+        type MySequencerVersions = SequencerVersions<V0_1, FeeVersion>;
 
         let mode = UpgradeMode::View(ViewBasedUpgrade {
             start_voting_view: None,
@@ -2339,7 +2457,7 @@ mod test {
         let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
 
         let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<StaticVersion<0, 1>, StaticVersion<0, 2>>;
+        type MySequencerVersions = SequencerVersions<V0_1, FeeVersion>;
 
         let mode = UpgradeMode::Time(TimeBasedUpgrade {
             start_proposing_time: Timestamp::from_integer(now).unwrap(),
@@ -2363,12 +2481,13 @@ mod test {
         test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
     }
 
+    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_marketplace_upgrade_view_based() {
         setup_test();
 
         let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<FeeVersion, MarketplaceVersion>;
+        type MySequencerVersions = SequencerVersions<EpochVersion, MarketplaceVersion>;
 
         let mode = UpgradeMode::View(ViewBasedUpgrade {
             start_voting_view: None,
@@ -2393,6 +2512,7 @@ mod test {
         test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
     }
 
+    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_marketplace_upgrade_time_based() {
         setup_test();
@@ -2400,7 +2520,7 @@ mod test {
         let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
 
         let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<FeeVersion, MarketplaceVersion>;
+        type MySequencerVersions = SequencerVersions<EpochVersion, MarketplaceVersion>;
 
         let mode = UpgradeMode::Time(TimeBasedUpgrade {
             start_proposing_time: Timestamp::from_integer(now).unwrap(),

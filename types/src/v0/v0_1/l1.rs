@@ -37,6 +37,12 @@ pub struct L1BlockInfo {
     pub hash: B256,
 }
 
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, Hash, PartialEq, Eq)]
+pub(crate) struct L1BlockInfoWithParent {
+    pub(crate) info: L1BlockInfo,
+    pub(crate) parent_hash: B256,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Hash, PartialEq, Eq)]
 pub struct L1Snapshot {
     /// The relevant snapshot of the L1 includes a reference to the current head of the L1 chain.
@@ -185,13 +191,13 @@ pub struct L1Client {
 #[derive(Debug)]
 pub(crate) struct L1State {
     pub(crate) snapshot: L1Snapshot,
-    pub(crate) finalized: LruCache<u64, L1BlockInfo>,
+    pub(crate) finalized: LruCache<u64, L1BlockInfoWithParent>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) enum L1Event {
     NewHead { head: u64 },
-    NewFinalized { finalized: L1BlockInfo },
+    NewFinalized { finalized: L1BlockInfoWithParent },
 }
 
 #[derive(Debug, Default)]

@@ -544,6 +544,7 @@ impl TestNetwork {
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
+            epoch_height: None,
 
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
@@ -828,7 +829,7 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
         })
         .collect();
 
-    let mut config = NetworkConfig::<PubKey> {
+    let mut config = NetworkConfig::<SeqTypes> {
         indexed_da: false,
         libp2p_config: Some(Libp2pConfig { bootstrap_nodes }),
         ..Default::default()

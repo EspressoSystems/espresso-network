@@ -3,8 +3,12 @@ use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{rand::Rng, UniformRand};
 use hotshot_types::{
-    light_client::StateVerKey, network::PeerConfigKeys, signature_key::BLSPubKey,
-    stake_table::StakeTableEntry, PeerConfig,
+    light_client::StateVerKey,
+    network::PeerConfigKeys,
+    signature_key::{BLSPubKey, SchnorrPubKey},
+    stake_table::StakeTableEntry,
+    traits::node_implementation::NodeType,
+    PeerConfig,
 };
 
 use crate::{sol_types::*, *};
@@ -21,6 +25,14 @@ impl From<G2PointSol> for BLSPubKey {
     }
 }
 
+// unfortunate excessive impl due to missing shared-types in alloy bindings, read `sol_types` module doc
+impl From<staketable::BN254::G2Point> for BLSPubKey {
+    fn from(value: staketable::BN254::G2Point) -> Self {
+        let v: G2PointSol = value.into();
+        v.into()
+    }
+}
+
 impl From<EdOnBN254PointSol> for StateVerKey {
     fn from(value: EdOnBN254PointSol) -> Self {
         let point: ark_ed_on_bn254::EdwardsAffine = value.into();
@@ -28,7 +40,18 @@ impl From<EdOnBN254PointSol> for StateVerKey {
     }
 }
 
-impl From<NodeInfoSol> for PeerConfig<BLSPubKey> {
+// unfortunate excessive impl due to missing shared-types in alloy bindings, read `sol_types` module doc
+impl From<staketable::EdOnBN254::EdOnBN254Point> for StateVerKey {
+    fn from(value: staketable::EdOnBN254::EdOnBN254Point) -> Self {
+        let v: EdOnBN254PointSol = value.into();
+        v.into()
+    }
+}
+
+impl<TYPES> From<NodeInfoSol> for PeerConfig<TYPES>
+where
+    TYPES: NodeType<SignatureKey = BLSPubKey, StateSignatureKey = SchnorrPubKey>,
+{
     fn from(value: NodeInfoSol) -> Self {
         Self {
             stake_table_entry: StakeTableEntry {
@@ -40,7 +63,10 @@ impl From<NodeInfoSol> for PeerConfig<BLSPubKey> {
     }
 }
 
-impl From<NodeInfoSol> for PeerConfigKeys<BLSPubKey> {
+impl<TYPES> From<NodeInfoSol> for PeerConfigKeys<TYPES>
+where
+    TYPES: NodeType<SignatureKey = BLSPubKey, StateSignatureKey = SchnorrPubKey>,
+{
     fn from(value: NodeInfoSol) -> Self {
         Self {
             stake_table_key: value.blsVK.into(),
@@ -51,8 +77,11 @@ impl From<NodeInfoSol> for PeerConfigKeys<BLSPubKey> {
     }
 }
 
-impl From<PeerConfigKeys<BLSPubKey>> for NodeInfoSol {
-    fn from(c: PeerConfigKeys<BLSPubKey>) -> Self {
+impl<TYPES> From<PeerConfigKeys<TYPES>> for NodeInfoSol
+where
+    TYPES: NodeType<SignatureKey = BLSPubKey, StateSignatureKey = SchnorrPubKey>,
+{
+    fn from(c: PeerConfigKeys<TYPES>) -> Self {
         Self {
             blsVK: c.stake_table_key.to_affine().into(),
             schnorrVK: c.state_ver_key.to_affine().into(),

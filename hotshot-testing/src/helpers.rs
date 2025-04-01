@@ -7,7 +7,6 @@
 #![allow(clippy::panic)]
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, sync::Arc};
 
-use alloy::primitives::U256;
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use bitvec::bitvec;
@@ -15,7 +14,7 @@ use committable::Committable;
 use hotshot::{
     traits::{BlockPayload, NodeImplementation, TestableNodeImplementation},
     types::{SignatureKey, SystemContextHandle},
-    HotShotInitializer, InitializerEpochInfo, SystemContext,
+    HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
     auction_results_provider_types::TestAuctionResultsProvider,
@@ -28,14 +27,13 @@ use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseShare},
-    drb::INITIAL_DRB_RESULT,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         EncodeBytes,
     },
     utils::{option_epoch_from_block_number, View, ViewInner},
@@ -108,18 +106,7 @@ pub async fn build_system_handle_from_launcher<
         TestInstanceState::new(launcher.metadata.async_delay_config.clone()),
         launcher.metadata.test_config.epoch_height,
         launcher.metadata.test_config.epoch_start_block,
-        vec![
-            InitializerEpochInfo::<TYPES> {
-                epoch: TYPES::Epoch::new(1),
-                drb_result: INITIAL_DRB_RESULT,
-                block_header: None,
-            },
-            InitializerEpochInfo::<TYPES> {
-                epoch: TYPES::Epoch::new(2),
-                drb_result: INITIAL_DRB_RESULT,
-                block_header: None,
-            },
-        ],
+        vec![],
     )
     .await
     .unwrap();
@@ -128,10 +115,11 @@ pub async fn build_system_handle_from_launcher<
     let is_da = node_id < hotshot_config.da_staked_committee_size as u64;
 
     // We assign node's public key and stake value rather than read from config file since it's a test
-    let validator_config: ValidatorConfig<TYPES::SignatureKey> =
+    let validator_config: ValidatorConfig<TYPES> =
         ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, 1, is_da);
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
+    let state_private_key = validator_config.state_private_key.clone();
 
     let memberships = Arc::new(RwLock::new(TYPES::Membership::new(
         hotshot_config.known_nodes_with_stake.clone(),
@@ -144,6 +132,7 @@ pub async fn build_system_handle_from_launcher<
     let (c, s, r) = SystemContext::init(
         public_key,
         private_key,
+        state_private_key,
         node_id,
         hotshot_config,
         coordinator,
@@ -242,7 +231,7 @@ pub async fn build_assembled_sig<
     let real_qc_pp: <TYPES::SignatureKey as SignatureKey>::QcParams =
         <TYPES::SignatureKey as SignatureKey>::public_parameter(
             StakeTableEntries::<TYPES>::from(stake_table.clone()).0,
-            U256::from(CERT::threshold(epoch_membership).await),
+            CERT::threshold(epoch_membership).await,
         );
 
     let total_nodes = stake_table.len();

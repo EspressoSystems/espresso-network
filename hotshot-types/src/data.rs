@@ -49,7 +49,10 @@ use crate::{
         states::TestableState,
         BlockPayload,
     },
-    utils::{bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number},
+    utils::{
+        bincode_opts, genesis_epoch_from_version, option_epoch_from_block_number,
+        EpochTransitionIndicator,
+    },
     vid::{
         advz::{advz_scheme, ADVZCommitment, ADVZShare},
         avidm::{init_avidm_param, AvidMCommitment, AvidMScheme, AvidMShare},
@@ -171,6 +174,9 @@ pub struct DaProposal2<TYPES: NodeType> {
     pub view_number: TYPES::View,
     /// Epoch this proposal applies to
     pub epoch: Option<TYPES::Epoch>,
+    /// Indicates whether we are in epoch transition
+    /// In epoch transition the next epoch payload commit should be calculated additionally
+    pub epoch_transition_indicator: EpochTransitionIndicator,
 }
 
 impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
@@ -180,6 +186,7 @@ impl<TYPES: NodeType> From<DaProposal<TYPES>> for DaProposal2<TYPES> {
             metadata: da_proposal.metadata,
             view_number: da_proposal.view_number,
             epoch: None,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         }
     }
 }
@@ -334,14 +341,14 @@ impl VidCommitment {
 pub fn vid_commitment<V: Versions>(
     encoded_transactions: &[u8],
     metadata: &[u8],
-    num_storage_nodes: usize,
+    total_weight: usize,
     version: Version,
 ) -> VidCommitment {
     if version < V::Epochs::VERSION {
         let encoded_tx_len = encoded_transactions.len();
-        advz_scheme(num_storage_nodes).commit_only(encoded_transactions).map(VidCommitment::V0).unwrap_or_else(|err| panic!("VidScheme::commit_only failure:(num_storage_nodes,payload_byte_len)=({num_storage_nodes},{encoded_tx_len}) error: {err}"))
+        advz_scheme(total_weight).commit_only(encoded_transactions).map(VidCommitment::V0).unwrap_or_else(|err| panic!("VidScheme::commit_only failure:(total_weight,payload_byte_len)=({total_weight},{encoded_tx_len}) error: {err}"))
     } else {
-        let param = init_avidm_param(num_storage_nodes).unwrap();
+        let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(
             &param,
@@ -990,6 +997,10 @@ pub enum BlockError {
     /// The payload commitment does not match the block header's payload commitment
     #[error("Inconsistent payload commitment")]
     InconsistentPayloadCommitment,
+
+    /// The block header apply failed
+    #[error("Failed to apply block header: {0}")]
+    FailedHeaderApply(String),
 }
 
 /// Additional functions required to use a [`Leaf`] with hotshot-testing.
@@ -1114,9 +1125,16 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             metadata,
         );
 
+        let block_number = if V::Base::VERSION < V::Epochs::VERSION {
+            None
+        } else {
+            Some(0u64)
+        };
+
         let null_quorum_data = QuorumData2 {
             leaf_commit: Commitment::<Leaf2<TYPES>>::default_commitment_no_preimage(),
             epoch,
+            block_number,
         };
 
         let justify_qc = QuorumCertificate2::new(
@@ -1446,11 +1464,16 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
 
         let genesis_view = <TYPES::View as ConsensusTime>::genesis();
 
+        let genesis_leaf = Leaf2::genesis::<V>(validated_state, instance_state).await;
+        let block_number = if upgrade_lock.epochs_enabled(genesis_view).await {
+            Some(genesis_leaf.height())
+        } else {
+            None
+        };
         let data = QuorumData2 {
-            leaf_commit: Leaf2::genesis::<V>(validated_state, instance_state)
-                .await
-                .commit(),
+            leaf_commit: genesis_leaf.commit(),
             epoch: genesis_epoch_from_version::<V, TYPES>(), // #3967 make sure this is enough of a gate for epochs
+            block_number,
         };
 
         let versioned_data =

@@ -38,6 +38,7 @@ members = [
     "node-metrics",
     "request-response",
     "sequencer",
+    "staking-cli",
     "tests",
     "types",
     "utils",
@@ -47,11 +48,12 @@ members = [
 exclude = ["sequencer-sqlite"]
 
 [workspace.dependencies]
-ethers-conv = { path = "./ethers-conv" }
 alloy = { version = "0.12.5", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
+    "getrandom",
+    "network",
     "node-bindings",
     "provider-ws",
     "providers",
@@ -90,6 +92,7 @@ circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
+diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git", tag = "v0.2.0" }
 either = "1"
 hex = "0.4"
 sha2 = "0.10"
@@ -122,6 +125,7 @@ dashmap = "6"
 memoize = { version = "0.4", features = ["full"] }
 derive_builder = "0.20"
 parking_lot = { version = "0.12", features = ["send_guard"] }
+indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
 marketplace-builder-core = { path = "marketplace-builder-core" }
@@ -206,9 +210,10 @@ rand_distr = "0.4"
 reqwest = "0.12"
 serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "^1.0.113"
+staking-cli = { path = "./staking-cli" }
 tempfile = "3.10"
 toml = "0.8"
-url = "2.3"
+url = { version = "2.3", features = [ "serde" ] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "8.3", features = ["git", "gitcl"] }

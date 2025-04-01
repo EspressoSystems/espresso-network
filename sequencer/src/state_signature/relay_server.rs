@@ -105,7 +105,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
         state: LightClientState,
         signature: StateSignature,
     ) -> Result<(), Error> {
-        if (state.block_height as u64) <= self.latest_block_height.unwrap_or(0) {
+        if state.block_height <= self.latest_block_height.unwrap_or(0) {
             // This signature is no longer needed
             return Ok(());
         }
@@ -124,7 +124,7 @@ impl StateRelayServerDataSource for StateRelayServerState {
                 "The posted signature is not valid.".to_owned(),
             ));
         }
-        let block_height = state.block_height as u64;
+        let block_height = state.block_height;
         // TODO(Chengyu): this serialization should be removed once `LightClientState` implements `Eq`.
         let bundles_at_height = self.bundles.entry(block_height).or_insert_with(|| {
             self.queue.insert(block_height);
