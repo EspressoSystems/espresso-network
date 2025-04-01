@@ -1814,7 +1814,7 @@ mod test {
 
             let mut vid = advz_scheme(2);
             let disperse = vid.disperse(payload.encode()).unwrap();
-            let common = Some(disperse.common);
+            let common = disperse.common;
             let share = disperse.shares[0].clone();
 
             let common_bytes = bincode::serialize(&common).unwrap();
