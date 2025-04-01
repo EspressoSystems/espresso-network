@@ -28,10 +28,11 @@ use hotshot_types::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
+        BlockPayload,
     },
     utils::{
         epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block,
-        option_epoch_from_block_number, BuilderCommitment,
+        option_epoch_from_block_number,
     },
     vote::HasViewNumber,
 };
