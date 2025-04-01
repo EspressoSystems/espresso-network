@@ -148,7 +148,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let epoch_number = proposal.data.epoch;
                 let membership = self
                     .membership_coordinator
-                    .membership_for_epoch(epoch_number)
+                    .stake_table_for_epoch(epoch_number)
                     .await
                     .context(warn!("No stake table for epoch"))?;
 

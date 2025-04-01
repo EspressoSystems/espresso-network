@@ -1204,7 +1204,7 @@ impl<
         let committee_topic = Topic::Global;
         let Ok(mem) = self
             .membership_coordinator
-            .membership_for_epoch(self.epoch)
+            .stake_table_for_epoch(self.epoch)
             .await
         else {
             return;
