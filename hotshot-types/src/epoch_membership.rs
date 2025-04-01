@@ -194,7 +194,7 @@ where
             ))
             .await
         else {
-            anytrace::bail!("get epoch drb failed for in epoch {:?}", root_epoch + 1);
+            return anytrace::Err(anytrace::warn!("get epoch drb failed for in epoch {:?}", root_epoch + 1));
         };
 
         self.membership.write().await.add_drb_result(epoch, drb);
