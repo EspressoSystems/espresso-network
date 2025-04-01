@@ -72,7 +72,7 @@ use hotshot_types::{
         states::ValidatedState,
         storage::Storage,
     },
-    utils::{genesis_epoch_from_version, option_epoch_from_block_number},
+    utils::genesis_epoch_from_version,
     HotShotConfig,
 };
 /// Reexport rand crate
@@ -299,13 +299,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let validated_state = initializer.anchor_state;
 
         // #3967 REVIEW NOTE: Should this actually be Some()? How do we know?
-        let epoch = option_epoch_from_block_number::<TYPES>(
-            upgrade_lock
-                .epochs_enabled(anchored_leaf.view_number())
-                .await,
-            anchored_leaf.height(),
-            config.epoch_height,
-        );
+        let epoch = initializer.high_qc.data.block_number.map(|block_number| {
+            TYPES::Epoch::new(epoch_from_block_number(
+                block_number + 1,
+                config.epoch_height,
+            ))
+        });
 
         if epoch.is_some() {
             load_start_epoch_info(

@@ -71,7 +71,7 @@ where
         &self.membership
     }
 
-    /// Get a Membership for a given Epoch, which is guaranteed to have a stake
+    /// Get a Membership for a given Epoch, which is guaranteed to have a randomized stake
     /// table for the given Epoch
     pub async fn membership_for_epoch(
         &self,
@@ -84,7 +84,43 @@ where
         let Some(epoch) = maybe_epoch else {
             return Ok(ret_val);
         };
-        if self.membership.read().await.has_epoch(epoch) {
+        if self
+            .membership
+            .read()
+            .await
+            .has_randomized_stake_table(epoch)
+        {
+            return Ok(ret_val);
+        }
+        if self.catchup_map.lock().await.contains_key(&epoch) {
+            return Err(warn!(
+                "Randomized stake table for epoch {:?} unavailable. Catchup already in progress",
+                epoch
+            ));
+        }
+        let coordinator = self.clone();
+        spawn_catchup(coordinator, epoch);
+
+        Err(warn!(
+            "Randomized stake table for epoch {:?} unavailable. Starting catchup",
+            epoch
+        ))
+    }
+
+    /// Get a Membership for a given Epoch, which is guaranteed to have a stake
+    /// table for the given Epoch
+    pub async fn stake_table_for_epoch(
+        &self,
+        maybe_epoch: Option<TYPES::Epoch>,
+    ) -> Result<EpochMembership<TYPES>> {
+        let ret_val = EpochMembership {
+            epoch: maybe_epoch,
+            coordinator: self.clone(),
+        };
+        let Some(epoch) = maybe_epoch else {
+            return Ok(ret_val);
+        };
+        if self.membership.read().await.has_stake_table(epoch) {
             return Ok(ret_val);
         }
         if self.catchup_map.lock().await.contains_key(&epoch) {
@@ -118,7 +154,7 @@ where
         );
         let root_epoch = TYPES::Epoch::new(*epoch - 2);
 
-        let root_membership = if self.membership.read().await.has_epoch(root_epoch) {
+        let root_membership = if self.membership.read().await.has_stake_table(root_epoch) {
             EpochMembership {
                 epoch: Some(root_epoch),
                 coordinator: self.clone(),
@@ -215,6 +251,16 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
         );
         self.coordinator
             .membership_for_epoch(self.epoch.map(|e| e + 1))
+            .await
+    }
+    /// Get a membership for the next epoch
+    pub async fn next_epoch_stake_table(&self) -> Result<Self> {
+        ensure!(
+            self.epoch().is_some(),
+            "No next epoch because epoch is None"
+        );
+        self.coordinator
+            .stake_table_for_epoch(self.epoch.map(|e| e + 1))
             .await
     }
     pub async fn get_new_epoch(&self, epoch: Option<TYPES::Epoch>) -> Result<Self> {

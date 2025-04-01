@@ -6,7 +6,7 @@ pub use super::v0_1::{
     ChainConfig, ChainId, Delta, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo,
     FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, Header, Index, Iter, L1BlockInfo, L1Client,
     L1ClientOptions, L1Snapshot, NamespaceId, NsIndex, NsIter, NsPayload, NsPayloadBuilder,
-    NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, NsProof, NsTable, NsTableBuilder,
+    NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, ADVZNsProof, NsTable, NsTableBuilder,
     NsTableValidationError, NumNss, NumTxs, NumTxsRange, NumTxsUnchecked, Payload, PayloadByteLen,
     ResolvableChainConfig, TimeBasedUpgrade, Transaction, TxIndex, TxIter, TxPayload,
     TxPayloadRange, TxProof, TxTableEntries, TxTableEntriesRange, Upgrade, UpgradeMode,

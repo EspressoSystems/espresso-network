@@ -331,7 +331,8 @@ pub struct EpochCommittees {
     /// Methods for stake table persistence.
     #[debug(skip)]
     persistence: Arc<dyn MembershipPersistence>,
-    first_epoch: Epoch,
+
+    first_epoch: Option<Epoch>,
 }
 
 /// Holds Stake table and da stake
@@ -369,7 +370,7 @@ pub struct EpochCommittee {
 }
 
 impl EpochCommittees {
-    pub fn first_epoch(&self) -> Epoch {
+    pub fn first_epoch(&self) -> Option<Epoch> {
         self.first_epoch
     }
 
@@ -538,7 +539,7 @@ impl EpochCommittees {
             randomized_committees: BTreeMap::new(),
             peers,
             persistence: Arc::new(persistence),
-            first_epoch: Epoch::genesis(),
+            first_epoch: None,
         }
     }
     fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<SeqTypes>>> {
@@ -786,8 +787,21 @@ impl Membership<SeqTypes> for EpochCommittees {
         }))
     }
 
-    fn has_epoch(&self, epoch: Epoch) -> bool {
+    fn has_stake_table(&self, epoch: Epoch) -> bool {
         self.state.contains_key(&epoch)
+    }
+
+    fn has_randomized_stake_table(&self, epoch: Epoch) -> bool {
+        match self.first_epoch {
+            None => true,
+            Some(first_epoch) => {
+                if epoch < first_epoch {
+                    self.state.contains_key(&epoch)
+                } else {
+                    self.randomized_committees.contains_key(&epoch)
+                }
+            },
+        }
     }
 
     async fn get_epoch_root_and_drb(
@@ -845,7 +859,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     fn set_first_epoch(&mut self, epoch: Epoch, initial_drb_result: DrbResult) {
-        self.first_epoch = epoch;
+        self.first_epoch = Some(epoch);
 
         let epoch_committee = self.state.get(&Epoch::genesis()).unwrap().clone();
         self.state.insert(epoch, epoch_committee.clone());
