@@ -6,6 +6,7 @@ use hotshot_types::{
     drb::DrbResult,
     traits::{election::Membership, node_implementation::NodeType},
 };
+use primitive_types::U256;
 
 use super::static_committee::StaticCommittee;
 
@@ -17,16 +18,23 @@ pub struct DummyCatchupCommittee<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> DummyCatchupCommittee<TYPES> {
-    fn assert_has_epoch(&self, epoch: Option<TYPES::Epoch>) {
+    fn assert_has_stake_table(&self, epoch: Option<TYPES::Epoch>) {
         let Some(epoch) = epoch else {
             return;
         };
-        let pass = self.epochs.contains(&epoch);
-        //&& self.drbs.contains(&epoch);
-        if !pass {
-            tracing::error!("FAILED EPOCH CHECK {epoch}");
-        }
-        assert!(pass);
+        assert!(
+            self.epochs.contains(&epoch),
+            "Failed epoch check for epoch {epoch}"
+        );
+    }
+    fn assert_has_randomized_stake_table(&self, epoch: Option<TYPES::Epoch>) {
+        let Some(epoch) = epoch else {
+            return;
+        };
+        assert!(
+            self.drbs.contains(&epoch),
+            "Failed epoch check for epoch {epoch}"
+        );
     }
 }
 
@@ -39,8 +47,8 @@ where
     fn new(
         // Note: eligible_leaders is currently a haMemck because the DA leader == the quorum leader
         // but they should not have voting power.
-        stake_committee_members: Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>>,
-        da_committee_members: Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>>,
+        stake_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
+        da_committee_members: Vec<hotshot_types::PeerConfig<TYPES>>,
     ) -> Self {
         Self {
             inner: StaticCommittee::new(stake_committee_members, da_committee_members),
@@ -49,19 +57,13 @@ where
         }
     }
 
-    fn stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
-        self.assert_has_epoch(epoch);
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<hotshot_types::PeerConfig<TYPES>> {
+        self.assert_has_stake_table(epoch);
         self.inner.stake_table(epoch)
     }
 
-    fn da_stake_table(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Vec<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
-        self.assert_has_epoch(epoch);
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<hotshot_types::PeerConfig<TYPES>> {
+        self.assert_has_stake_table(epoch);
         self.inner.da_stake_table(epoch)
     }
 
@@ -70,7 +72,7 @@ where
         view_number: TYPES::View,
         epoch: Option<TYPES::Epoch>,
     ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
-        self.assert_has_epoch(epoch);
+        self.assert_has_stake_table(epoch);
         self.inner.committee_members(view_number, epoch)
     }
 
@@ -79,7 +81,7 @@ where
         view_number: TYPES::View,
         epoch: Option<TYPES::Epoch>,
     ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
-        self.assert_has_epoch(epoch);
+        self.assert_has_stake_table(epoch);
         self.inner.da_committee_members(view_number, epoch)
     }
 
@@ -87,8 +89,8 @@ where
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
-        self.assert_has_epoch(epoch);
+    ) -> Option<hotshot_types::PeerConfig<TYPES>> {
+        self.assert_has_stake_table(epoch);
         self.inner.stake(pub_key, epoch)
     }
 
@@ -96,18 +98,18 @@ where
         &self,
         pub_key: &TYPES::SignatureKey,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<hotshot_types::PeerConfig<TYPES::SignatureKey>> {
-        self.assert_has_epoch(epoch);
+    ) -> Option<hotshot_types::PeerConfig<TYPES>> {
+        self.assert_has_stake_table(epoch);
         self.inner.da_stake(pub_key, epoch)
     }
 
     fn has_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<TYPES::Epoch>) -> bool {
-        self.assert_has_epoch(epoch);
+        self.assert_has_stake_table(epoch);
         self.inner.has_stake(pub_key, epoch)
     }
 
     fn has_da_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<TYPES::Epoch>) -> bool {
-        self.assert_has_epoch(epoch);
+        self.assert_has_stake_table(epoch);
         self.inner.has_da_stake(pub_key, epoch)
     }
 
@@ -116,43 +118,48 @@ where
         view: TYPES::View,
         epoch: Option<TYPES::Epoch>,
     ) -> std::result::Result<TYPES::SignatureKey, Self::Error> {
-        self.assert_has_epoch(epoch);
+        self.assert_has_randomized_stake_table(epoch);
         self.inner.lookup_leader(view, epoch)
     }
 
     fn total_nodes(&self, epoch: Option<TYPES::Epoch>) -> usize {
-        self.assert_has_epoch(epoch);
+        self.assert_has_stake_table(epoch);
         self.inner.total_nodes(epoch)
     }
 
     fn da_total_nodes(&self, epoch: Option<TYPES::Epoch>) -> usize {
-        self.assert_has_epoch(epoch);
+        self.assert_has_stake_table(epoch);
         self.inner.da_total_nodes(epoch)
     }
 
-    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
-        self.assert_has_epoch(epoch);
+    fn success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
+        self.assert_has_stake_table(epoch);
         self.inner.success_threshold(epoch)
     }
 
-    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
-        self.assert_has_epoch(epoch);
+    fn da_success_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
+        self.assert_has_stake_table(epoch);
         self.inner.da_success_threshold(epoch)
     }
 
-    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
-        self.assert_has_epoch(epoch);
+    fn failure_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
+        self.assert_has_stake_table(epoch);
         self.inner.failure_threshold(epoch)
     }
 
-    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> std::num::NonZeroU64 {
-        self.assert_has_epoch(epoch);
+    fn upgrade_threshold(&self, epoch: Option<TYPES::Epoch>) -> U256 {
+        self.assert_has_stake_table(epoch);
         self.inner.upgrade_threshold(epoch)
     }
 
-    fn has_epoch(&self, epoch: TYPES::Epoch) -> bool {
-        self.assert_has_epoch(Some(epoch));
+    fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool {
+        self.assert_has_stake_table(Some(epoch));
         self.epochs.contains(&epoch)
+    }
+
+    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> bool {
+        self.assert_has_randomized_stake_table(Some(epoch));
+        self.drbs.contains(&epoch)
     }
 
     async fn get_epoch_root_and_drb(

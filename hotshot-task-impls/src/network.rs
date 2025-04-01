@@ -66,7 +66,18 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
     #[instrument(skip_all, name = "Network message task", level = "trace")]
     /// Handles a (deserialized) message from the network
     pub async fn handle_message(&mut self, message: Message<TYPES>) {
-        tracing::info!("Received message from network:\n\n{:?}\n", message.kind);
+        match &message.kind {
+            MessageKind::Consensus(_) => tracing::info!(
+                "Received consensus message from network:\n\n{:?}\n",
+                message
+            ),
+            MessageKind::Data(_) => {
+                tracing::trace!("Received data message from network:\n\n{:?}\n", message)
+            },
+            MessageKind::External(_) => {
+                tracing::trace!("Received external message from network:\n\n{:?}\n", message)
+            },
+        }
 
         // Match the message kind and send the appropriate event to the internal event stream
         let sender = message.sender;

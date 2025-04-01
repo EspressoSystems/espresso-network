@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeSet, HashMap},
-    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -10,6 +9,7 @@ use hotshot_utils::{
     anytrace::{self, Error, Level, Result, DEFAULT_LOG_LEVEL},
     ensure, line_info, log, warn,
 };
+use primitive_types::U256;
 
 use crate::{
     drb::DrbResult,
@@ -71,7 +71,7 @@ where
         &self.membership
     }
 
-    /// Get a Membership for a given Epoch, which is guaranteed to have a stake
+    /// Get a Membership for a given Epoch, which is guaranteed to have a randomized stake
     /// table for the given Epoch
     pub async fn membership_for_epoch(
         &self,
@@ -84,7 +84,43 @@ where
         let Some(epoch) = maybe_epoch else {
             return Ok(ret_val);
         };
-        if self.membership.read().await.has_epoch(epoch) {
+        if self
+            .membership
+            .read()
+            .await
+            .has_randomized_stake_table(epoch)
+        {
+            return Ok(ret_val);
+        }
+        if self.catchup_map.lock().await.contains_key(&epoch) {
+            return Err(warn!(
+                "Randomized stake table for epoch {:?} unavailable. Catchup already in progress",
+                epoch
+            ));
+        }
+        let coordinator = self.clone();
+        spawn_catchup(coordinator, epoch);
+
+        Err(warn!(
+            "Randomized stake table for epoch {:?} unavailable. Starting catchup",
+            epoch
+        ))
+    }
+
+    /// Get a Membership for a given Epoch, which is guaranteed to have a stake
+    /// table for the given Epoch
+    pub async fn stake_table_for_epoch(
+        &self,
+        maybe_epoch: Option<TYPES::Epoch>,
+    ) -> Result<EpochMembership<TYPES>> {
+        let ret_val = EpochMembership {
+            epoch: maybe_epoch,
+            coordinator: self.clone(),
+        };
+        let Some(epoch) = maybe_epoch else {
+            return Ok(ret_val);
+        };
+        if self.membership.read().await.has_stake_table(epoch) {
             return Ok(ret_val);
         }
         if self.catchup_map.lock().await.contains_key(&epoch) {
@@ -118,7 +154,7 @@ where
         );
         let root_epoch = TYPES::Epoch::new(*epoch - 2);
 
-        let root_membership = if self.membership.read().await.has_epoch(root_epoch) {
+        let root_membership = if self.membership.read().await.has_stake_table(root_epoch) {
             EpochMembership {
                 epoch: Some(root_epoch),
                 coordinator: self.clone(),
@@ -217,6 +253,16 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
             .membership_for_epoch(self.epoch.map(|e| e + 1))
             .await
     }
+    /// Get a membership for the next epoch
+    pub async fn next_epoch_stake_table(&self) -> Result<Self> {
+        ensure!(
+            self.epoch().is_some(),
+            "No next epoch because epoch is None"
+        );
+        self.coordinator
+            .stake_table_for_epoch(self.epoch.map(|e| e + 1))
+            .await
+    }
     pub async fn get_new_epoch(&self, epoch: Option<TYPES::Epoch>) -> Result<Self> {
         self.coordinator.membership_for_epoch(epoch).await
     }
@@ -239,7 +285,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn stake_table(&self) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn stake_table(&self) -> Vec<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -248,7 +294,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn da_stake_table(&self) -> Vec<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn da_stake_table(&self) -> Vec<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -282,10 +328,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
 
     /// Get the stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
-    pub async fn stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn stake(&self, pub_key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -295,10 +338,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
 
     /// Get the DA stake table entry for a public key, returns `None` if the
     /// key is not in the table for a specific epoch
-    pub async fn da_stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-    ) -> Option<PeerConfig<TYPES::SignatureKey>> {
+    pub async fn da_stake(&self, pub_key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
         self.coordinator
             .membership
             .read()
@@ -379,7 +419,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Returns the threshold for a specific `Membership` implementation
-    pub async fn success_threshold(&self) -> NonZeroU64 {
+    pub async fn success_threshold(&self) -> U256 {
         self.coordinator
             .membership
             .read()
@@ -388,7 +428,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Returns the DA threshold for a specific `Membership` implementation
-    pub async fn da_success_threshold(&self) -> NonZeroU64 {
+    pub async fn da_success_threshold(&self) -> U256 {
         self.coordinator
             .membership
             .read()
@@ -397,7 +437,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Returns the threshold for a specific `Membership` implementation
-    pub async fn failure_threshold(&self) -> NonZeroU64 {
+    pub async fn failure_threshold(&self) -> U256 {
         self.coordinator
             .membership
             .read()
@@ -406,7 +446,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Returns the threshold required to upgrade the network protocol
-    pub async fn upgrade_threshold(&self) -> NonZeroU64 {
+    pub async fn upgrade_threshold(&self) -> U256 {
         self.coordinator
             .membership
             .read()

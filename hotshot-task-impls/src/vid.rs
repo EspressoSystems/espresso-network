@@ -21,7 +21,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
         BlockPayload,
     },
-    utils::option_epoch_from_block_number,
+    utils::{is_epoch_transition, option_epoch_from_block_number},
 };
 use hotshot_utils::anytrace::Result;
 use tracing::{debug, error, info, instrument};
@@ -182,7 +182,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
 
             HotShotEvent::QuorumProposalSend(proposal, _) => {
                 let proposed_block_number = proposal.data.block_header().block_number();
-                if proposal.data.epoch().is_none() || proposed_block_number % self.epoch_height != 0
+                if proposal.data.epoch().is_none()
+                    || !is_epoch_transition(proposed_block_number, self.epoch_height)
                 {
                     // This is not the last block in the epoch, do nothing.
                     return None;
