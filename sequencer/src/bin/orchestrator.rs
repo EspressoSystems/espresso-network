@@ -2,7 +2,7 @@ use std::{num::NonZeroUsize, time::Duration};
 
 use clap::Parser;
 use derive_more::From;
-use espresso_types::{parse_duration, PubKey, Ratio};
+use espresso_types::{parse_duration, Ratio, SeqTypes};
 use ethers::utils::hex::{self, FromHexError};
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_types::network::{Libp2pConfig, NetworkConfig};
@@ -117,7 +117,7 @@ async fn main() {
     let args = Args::parse();
     args.logging.init();
 
-    let mut config = NetworkConfig::<PubKey> {
+    let mut config = NetworkConfig::<SeqTypes> {
         manual_start_password: args.manual_start_password,
         indexed_da: false,
         ..Default::default()

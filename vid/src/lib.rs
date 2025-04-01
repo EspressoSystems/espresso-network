@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 use displaydoc::Display;
+use jf_merkle_tree::MerkleTreeError;
 use jf_poseidon2::Poseidon2Error;
 use serde::{Deserialize, Serialize};
 
@@ -28,10 +29,24 @@ pub enum VidError {
     Argument(String),
     /// internal error: {0}
     Internal(anyhow::Error),
+    /// Insufficient shares
+    InsufficientShares,
+    /// Share index out of bound
+    IndexOutOfBound,
+    /// Invalid parameter
+    InvalidParam,
+    /// Invalid VID share
+    InvalidShare,
 }
 
 impl From<Poseidon2Error> for VidError {
     fn from(err: Poseidon2Error) -> Self {
+        VidError::Internal(err.into())
+    }
+}
+
+impl From<MerkleTreeError> for VidError {
+    fn from(err: MerkleTreeError) -> Self {
         VidError::Internal(err.into())
     }
 }

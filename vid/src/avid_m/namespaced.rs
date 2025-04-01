@@ -124,7 +124,7 @@ impl NsAvidMScheme {
         if !(share.ns_commits.len() == share.ns_lens.len()
             && share.ns_commits.len() == share.content.len())
         {
-            return Err(VidError::Argument("Invalid share".to_string()));
+            return Err(VidError::InvalidShare);
         }
         // Verify the share for each namespace
         for (commit, content) in share.ns_commits.iter().zip(share.content.iter()) {
@@ -150,6 +150,9 @@ impl NsAvidMScheme {
 
     /// Recover the entire payload from enough share
     pub fn recover(param: &NsAvidMParam, shares: &[NsAvidMShare]) -> VidResult<Vec<u8>> {
+        if shares.is_empty() {
+            return Err(VidError::InsufficientShares);
+        }
         let mut result = vec![];
         for ns_id in 0..shares[0].ns_lens.len() {
             result.append(&mut Self::ns_recover(param, ns_id, shares)?)
@@ -163,6 +166,9 @@ impl NsAvidMScheme {
         ns_id: usize,
         shares: &[NsAvidMShare],
     ) -> VidResult<Vec<u8>> {
+        if shares.is_empty() {
+            return Err(VidError::InsufficientShares);
+        }
         let ns_commit = shares[0].ns_commits[ns_id];
         let shares: Vec<_> = shares
             .iter()

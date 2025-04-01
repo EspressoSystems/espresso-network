@@ -79,8 +79,8 @@ impl LightClientStateVar {
         state: &GenericLightClientState<F>,
     ) -> Result<Self, CircuitError> {
         Ok(Self {
-            view_num: circuit.create_public_variable(F::from(state.view_number as u64))?,
-            block_height: circuit.create_public_variable(F::from(state.block_height as u64))?,
+            view_num: circuit.create_public_variable(F::from(state.view_number))?,
+            block_height: circuit.create_public_variable(F::from(state.block_height))?,
             block_comm_root: circuit.create_public_variable(state.block_comm_root)?,
         })
     }

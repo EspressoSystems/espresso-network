@@ -23,7 +23,10 @@ use csv::Writer;
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_types::{
     network::{BuilderType, NetworkConfig, PublicKeysFile},
-    traits::signature_key::{SignatureKey, StakeTableEntryType},
+    traits::{
+        node_implementation::NodeType,
+        signature_key::{SignatureKey, StakeTableEntryType},
+    },
     PeerConfig,
 };
 use libp2p_identity::{
@@ -70,13 +73,13 @@ pub fn libp2p_generate_indexed_identity(seed: [u8; 32], index: u64) -> Keypair {
 /// The state of the orchestrator
 #[derive(Default, Clone)]
 #[allow(clippy::struct_excessive_bools)]
-struct OrchestratorState<KEY: SignatureKey> {
+struct OrchestratorState<TYPES: NodeType> {
     /// Tracks the latest node index we have generated a configuration for
     latest_index: u16,
     /// Tracks the latest temporary index we have generated for init validator's key pair
     tmp_latest_index: u16,
     /// The network configuration
-    config: NetworkConfig<KEY>,
+    config: NetworkConfig<TYPES>,
     /// Whether the network configuration has been updated with all the peer's public keys/configs
     peer_pub_ready: bool,
     /// A map from public keys to `(node_index, is_da)`.
@@ -85,7 +88,7 @@ struct OrchestratorState<KEY: SignatureKey> {
     /// Will be set to true once all nodes post they are ready to start
     start: bool,
     /// The total nodes that have posted they are ready to start
-    nodes_connected: HashSet<PeerConfig<KEY>>,
+    nodes_connected: HashSet<PeerConfig<TYPES>>,
     /// The results of the benchmarks
     bench_results: BenchResults,
     /// The number of nodes that have posted their results
@@ -100,9 +103,9 @@ struct OrchestratorState<KEY: SignatureKey> {
     fixed_stake_table: bool,
 }
 
-impl<KEY: SignatureKey + 'static> OrchestratorState<KEY> {
+impl<TYPES: NodeType> OrchestratorState<TYPES> {
     /// create a new [`OrchestratorState`]
-    pub fn new(network_config: NetworkConfig<KEY>) -> Self {
+    pub fn new(network_config: NetworkConfig<TYPES>) -> Self {
         let mut peer_pub_ready = false;
         let mut fixed_stake_table = false;
 
@@ -173,7 +176,7 @@ impl<KEY: SignatureKey + 'static> OrchestratorState<KEY> {
 }
 
 /// An api exposed by the orchestrator
-pub trait OrchestratorApi<KEY: SignatureKey> {
+pub trait OrchestratorApi<TYPES: NodeType> {
     /// Post an identity to the orchestrator. Takes in optional
     /// arguments so others can identify us on the Libp2p network.
     /// # Errors
@@ -186,7 +189,7 @@ pub trait OrchestratorApi<KEY: SignatureKey> {
     /// post endpoint for each node's config
     /// # Errors
     /// if unable to serve
-    fn post_getconfig(&mut self, _node_index: u16) -> Result<NetworkConfig<KEY>, ServerError>;
+    fn post_getconfig(&mut self, _node_index: u16) -> Result<NetworkConfig<TYPES>, ServerError>;
     /// get endpoint for the next available temporary node index
     /// # Errors
     /// if unable to serve
@@ -208,7 +211,7 @@ pub trait OrchestratorApi<KEY: SignatureKey> {
     /// get endpoint for the network config after all peers public keys are collected
     /// # Errors
     /// if unable to serve
-    fn post_config_after_peer_collected(&mut self) -> Result<NetworkConfig<KEY>, ServerError>;
+    fn post_config_after_peer_collected(&mut self) -> Result<NetworkConfig<TYPES>, ServerError>;
     /// get endpoint for whether or not the run has started
     /// # Errors
     /// if unable to serve
@@ -220,7 +223,7 @@ pub trait OrchestratorApi<KEY: SignatureKey> {
     /// A node POSTs its public key to let the orchestrator know that it is ready
     /// # Errors
     /// if unable to serve
-    fn post_ready(&mut self, peer_config: &PeerConfig<KEY>) -> Result<(), ServerError>;
+    fn post_ready(&mut self, peer_config: &PeerConfig<TYPES>) -> Result<(), ServerError>;
     /// post endpoint for manually starting the orchestrator
     /// # Errors
     /// if unable to serve
@@ -235,9 +238,9 @@ pub trait OrchestratorApi<KEY: SignatureKey> {
     fn get_builders(&self) -> Result<Vec<Url>, ServerError>;
 }
 
-impl<KEY> OrchestratorState<KEY>
+impl<TYPES: NodeType> OrchestratorState<TYPES>
 where
-    KEY: serde::Serialize + Clone + SignatureKey + 'static,
+    TYPES::SignatureKey: serde::Serialize + Clone + SignatureKey + 'static,
 {
     /// register a node with an unknown public key.
     /// this method should be used when we don't have a fixed stake table
@@ -264,7 +267,7 @@ where
         let node_index = self.pub_posted.len() as u64;
 
         // Deserialize the public key
-        let staked_pubkey = PeerConfig::<KEY>::from_bytes(pubkey).unwrap();
+        let staked_pubkey = PeerConfig::<TYPES>::from_bytes(pubkey).unwrap();
 
         self.config
             .config
@@ -333,7 +336,7 @@ where
         }
 
         // Deserialize the public key
-        let staked_pubkey = PeerConfig::<KEY>::from_bytes(pubkey).unwrap();
+        let staked_pubkey = PeerConfig::<TYPES>::from_bytes(pubkey).unwrap();
 
         // Check if the node is allowed to connect, returning its index and config entry if so.
         let Some((node_index, node_config)) =
@@ -382,9 +385,9 @@ where
     }
 }
 
-impl<KEY> OrchestratorApi<KEY> for OrchestratorState<KEY>
+impl<TYPES: NodeType> OrchestratorApi<TYPES> for OrchestratorState<TYPES>
 where
-    KEY: serde::Serialize + Clone + SignatureKey + 'static,
+    TYPES::SignatureKey: serde::Serialize + Clone + SignatureKey + 'static,
 {
     /// Post an identity to the orchestrator. Takes in optional
     /// arguments so others can identify us on the Libp2p network.
@@ -425,7 +428,7 @@ where
 
     // Assumes nodes will set their own index that they received from the
     // 'identity' endpoint
-    fn post_getconfig(&mut self, _node_index: u16) -> Result<NetworkConfig<KEY>, ServerError> {
+    fn post_getconfig(&mut self, _node_index: u16) -> Result<NetworkConfig<TYPES>, ServerError> {
         Ok(self.config.clone())
     }
 
@@ -469,7 +472,7 @@ where
         Ok(self.peer_pub_ready)
     }
 
-    fn post_config_after_peer_collected(&mut self) -> Result<NetworkConfig<KEY>, ServerError> {
+    fn post_config_after_peer_collected(&mut self) -> Result<NetworkConfig<TYPES>, ServerError> {
         if !self.peer_pub_ready {
             return Err(ServerError {
                 status: tide_disco::StatusCode::BAD_REQUEST,
@@ -492,7 +495,7 @@ where
     }
 
     // Assumes nodes do not post 'ready' twice
-    fn post_ready(&mut self, peer_config: &PeerConfig<KEY>) -> Result<(), ServerError> {
+    fn post_ready(&mut self, peer_config: &PeerConfig<TYPES>) -> Result<(), ServerError> {
         // If we have not disabled registration verification.
         // Is this node allowed to connect?
         if !self
@@ -657,11 +660,12 @@ where
 
 /// Sets up all API routes
 #[allow(clippy::too_many_lines)]
-fn define_api<KEY, State, VER>() -> Result<Api<State, ServerError, VER>, ApiError>
+fn define_api<TYPES, State, VER>() -> Result<Api<State, ServerError, VER>, ApiError>
 where
+    TYPES: NodeType,
     State: 'static + Send + Sync + ReadState + WriteState,
-    <State as ReadState>::State: Send + Sync + OrchestratorApi<KEY>,
-    KEY: serde::Serialize + SignatureKey,
+    <State as ReadState>::State: Send + Sync + OrchestratorApi<TYPES>,
+    TYPES::SignatureKey: serde::Serialize,
     VER: StaticVersionType + 'static,
 {
     let api_toml = toml::from_str::<toml::Value>(include_str!(concat!(
@@ -735,7 +739,7 @@ where
                 let mut body_bytes = req.body_bytes();
                 body_bytes.drain(..12);
                 // Decode the payload-supplied pubkey
-                let Some(pubkey) = PeerConfig::<KEY>::from_bytes(&body_bytes) else {
+                let Some(pubkey) = PeerConfig::<TYPES>::from_bytes(&body_bytes) else {
                     return Err(ServerError {
                         status: tide_disco::StatusCode::BAD_REQUEST,
                         message: "Malformed body".to_string(),
@@ -817,12 +821,12 @@ where
 /// This errors if tide disco runs into an issue during serving
 /// # Panics
 /// This panics if unable to register the api with tide disco
-pub async fn run_orchestrator<KEY>(
-    mut network_config: NetworkConfig<KEY>,
+pub async fn run_orchestrator<TYPES: NodeType>(
+    mut network_config: NetworkConfig<TYPES>,
     url: Url,
 ) -> io::Result<()>
 where
-    KEY: SignatureKey + 'static + serde::Serialize,
+    TYPES::SignatureKey: 'static + serde::Serialize,
 {
     let env_password = std::env::var("ORCHESTRATOR_MANUAL_START_PASSWORD");
 
@@ -841,8 +845,8 @@ where
             let config_file_as_string: String = fs::read_to_string(filepath.clone())
                 .unwrap_or_else(|_| panic!("Could not read config file located at {filepath}"));
 
-            let file: PublicKeysFile<KEY> =
-                toml::from_str::<PublicKeysFile<KEY>>(&config_file_as_string)
+            let file: PublicKeysFile<TYPES> =
+                toml::from_str::<PublicKeysFile<TYPES>>(&config_file_as_string)
                     .expect("Unable to convert config file to TOML");
 
             network_config.public_keys = file.public_keys;
@@ -871,9 +875,10 @@ where
     let web_api =
         define_api().map_err(|_e| io::Error::new(ErrorKind::Other, "Failed to define api"));
 
-    let state: RwLock<OrchestratorState<KEY>> = RwLock::new(OrchestratorState::new(network_config));
+    let state: RwLock<OrchestratorState<TYPES>> =
+        RwLock::new(OrchestratorState::new(network_config));
 
-    let mut app = App::<RwLock<OrchestratorState<KEY>>, ServerError>::with_state(state);
+    let mut app = App::<RwLock<OrchestratorState<TYPES>>, ServerError>::with_state(state);
     app.register_module::<ServerError, OrchestratorVersion>("api", web_api.unwrap())
         .expect("Error registering api");
     tracing::error!("listening on {:?}", url);

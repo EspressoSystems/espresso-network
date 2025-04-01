@@ -21,13 +21,27 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     // === Events ===
 
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
+
+    // TODO: is this event useful, it currently emits the same data as the UUPSUpgradeable Upgraded
+    // event. Consider making it more useful or removing it.
     event Upgrade(address implementation);
 
     /// @notice A registration of a new validator.
     ///
     /// @notice Signals to the confirmation layer that a new validator is ready to receive
-    /// delegations. The confirmation layer uses this event to keep track of the validator's keys
-    /// for the stake table.
+    /// delegations in the stake table contract. The confirmation layer uses this event to keep
+    /// track of the validator's keys for the stake table.
+    ///
+    /// @notice The commission is in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000).
+    ///
+    /// @notice A validator registration is only valid if the BLS and Schnorr signature are valid.
+    /// The GCL must verify this and otherwise discard the validator registration when it processes
+    /// the event. The contract cannot verify the validity of the registration event and delegators
+    /// will be able to deposit as soon as this event is emitted. In the event that a delegator
+    /// delegates to an invalid validator the delegator can withdraw the delegation again in the
+    /// same way they can withdraw other delegations.
+    ///
+    /// @notice UIs should do their best to prevent invalid, or duplicate registrations.
     ///
     /// @notice The verification key of the BLS keypair used for consensus signing is a
     /// `BN254.G2Point`.
@@ -40,12 +54,15 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         EdOnBN254.EdOnBN254Point schnorrVk,
         uint16 commission
     );
+    // TODO: emit the BLS signature so GCL can verify it.
+    // TODO: emit the Schnorr signature so GCL can verify it.
 
-    /// @notice A validator initiated exit from stake table
+    /// @notice A validator initiated an exit from stake table
     ///
     /// @notice All funds delegated to this validator are marked for withdrawal. Users can no longer
-    /// delegate and undelegate from this validator. After `exitEscrowPeriod` elapsed, the funds can
-    /// be claimed via `claimValidatorExit`.
+    /// delegate to this validator. Their previously delegated funds are automatically undelegated.
+    /// After `exitEscrowPeriod` elapsed, delegators can claim the funds delegated to the exited
+    /// validator via `claimValidatorExit`.
     ///
     /// @notice The GCL removes this validator and all its delegations from the active validator
     /// set.
@@ -53,23 +70,31 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// @notice A Delegator delegated funds to a validator.
     ///
-    /// @notice The tokens are transferred to the stake table contract. The GCL adjusts the weight
-    /// for this validator and the delegators delegation associated with it.
+    /// @notice The tokens are transferred to the stake table contract.
+    ///
+    /// @notice The GCL adjusts the weight for this validator and the delegators delegation
+    /// associated with it.
     event Delegated(address indexed delegator, address indexed validator, uint256 amount);
 
     /// @notice A delegator undelegation funds from a validator.
     ///
-    /// @notice The tokens are marked to be unlocked for withdrawal. The confirmation layer needs to
-    /// update the stake table and adjust the weight for this validator and the delegators
-    /// delegation associated with it.
+    /// @notice The tokens are marked to be unlocked for withdrawal.
+    ///
+    /// @notice The GCL needs to update the stake table and adjust the weight for this validator and
+    /// the delegators delegation associated with it.
     event Undelegated(address indexed delegator, address indexed validator, uint256 amount);
 
     /// @notice A validator updates their signing keys.
+    ///
+    /// @notice Similarly to registration events, the correctness cannot be fully determined by the
+    /// contracts.
     ///
     /// @notice The confirmation layer needs to update the stake table with the new keys.
     event ConsensusKeysUpdated(
         address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
     );
+    // TODO: emit the BLS signature so GCL can verify it.
+    // TODO: emit the Schnorr signature so GCL can verify it.
 
     /// @notice A delegator claims unlocked funds.
     ///
@@ -79,38 +104,37 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     // === Errors ===
 
-    /// Error raised when a user tries to register a validator with the same address
+    /// A user tries to register a validator with the same address
     error ValidatorAlreadyRegistered();
 
-    //// Error raise when a validator is not active.
+    //// A validator is not active.
     error ValidatorInactive();
 
-    /// Error raised when a validator has already exited.
+    /// A validator has already exited.
     error ValidatorAlreadyExited();
 
-    /// Error raised when a validator has not exited yet.
+    /// A validator has not exited yet.
     error ValidatorNotExited();
 
-    // Error raised when a user tries to withdraw funds before the exit escrow period is over.
+    // A user tries to withdraw funds before the exit escrow period is over.
     error PrematureWithdrawal();
 
-    // Error raised when this contract does not have the sufficient allowance on the stake ERC20
-    // token
+    // This contract does not have the sufficient allowance on the staking asset.
     error InsufficientAllowance(uint256, uint256);
 
-    // Error raised when the staker does not have the sufficient balance on the stake ERC20 token
+    // The delegator does not have the sufficient staking asset balance to delegate.
     error InsufficientBalance(uint256);
 
-    // Error raised when the staker does not have the sufficient stake balance to withdraw
+    // A delegator does not have the sufficient balance to withdraw.
     error NothingToWithdraw();
 
-    // Error raised when the staker provides a zero SchnorrVK
+    // A validator provides a zero SchnorrVK.
     error InvalidSchnorrVK();
 
-    /// The BLS key has been previously registered in the contract
+    /// The BLS key has been previously registered in the contract.
     error BlsKeyAlreadyUsed();
 
-    /// The commission is invalid
+    /// The commission value is invalid.
     error InvalidCommission();
 
     /// Contract dependencies initialized with zero address.
@@ -301,7 +325,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         BN254.G1Point memory blsSig,
         uint16 commission
     ) external virtual {
-        ensureValidatorNotRegistered(msg.sender);
+        address validator = msg.sender;
+
+        ensureValidatorNotRegistered(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
         ensureNewKey(blsVK);
 
@@ -309,7 +335,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         // attacks.
         //
         // TODO: we will move this check to the GCL to save gas.
-        bytes memory message = abi.encode(msg.sender);
+        bytes memory message = abi.encode(validator);
         BLSSig.verifyBlsSig(message, blsSig, blsVK);
 
         if (commission > 10000) {
@@ -317,19 +343,20 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
 
         blsKeys[_hashBlsKey(blsVK)] = true;
-        validators[msg.sender] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
+        validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
-        emit ValidatorRegistered(msg.sender, blsVK, schnorrVK, commission);
+        emit ValidatorRegistered(validator, blsVK, schnorrVK, commission);
     }
 
     /// @notice Deregister a validator
     function deregisterValidator() external virtual {
-        ensureValidatorActive(msg.sender);
+        address validator = msg.sender;
+        ensureValidatorActive(validator);
 
-        validators[msg.sender].status = ValidatorStatus.Exited;
-        validatorExits[msg.sender] = block.timestamp + exitEscrowPeriod;
+        validators[validator].status = ValidatorStatus.Exited;
+        validatorExits[validator] = block.timestamp + exitEscrowPeriod;
 
-        emit ValidatorExit(msg.sender);
+        emit ValidatorExit(validator);
     }
 
     /// @notice Delegate to a validator
@@ -337,18 +364,21 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @param amount The amount to delegate
     function delegate(address validator, uint256 amount) external virtual {
         ensureValidatorActive(validator);
+        address delegator = msg.sender;
 
-        uint256 allowance = token.allowance(msg.sender, address(this));
+        // TODO: revert if amount is zero
+
+        uint256 allowance = token.allowance(delegator, address(this));
         if (allowance < amount) {
             revert InsufficientAllowance(allowance, amount);
         }
 
         validators[validator].delegatedAmount += amount;
-        delegations[validator][msg.sender] += amount;
+        delegations[validator][delegator] += amount;
 
-        SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
+        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
 
-        emit Delegated(msg.sender, validator, amount);
+        emit Delegated(delegator, validator, amount);
     }
 
     /// @notice Undelegate from a validator
@@ -356,47 +386,52 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @param amount The amount to undelegate
     function undelegate(address validator, uint256 amount) external virtual {
         ensureValidatorActive(validator);
+        address delegator = msg.sender;
 
-        if (validators[msg.sender].status == ValidatorStatus.Exited) {
+        // TODO: revert if amount is zero
+
+        if (validators[delegator].status == ValidatorStatus.Exited) {
             revert ValidatorAlreadyExited();
         }
 
-        uint256 balance = delegations[validator][msg.sender];
+        uint256 balance = delegations[validator][delegator];
         if (balance < amount) {
             revert InsufficientBalance(balance);
         }
 
-        delegations[validator][msg.sender] -= amount;
-        undelegations[validator][msg.sender] =
+        delegations[validator][delegator] -= amount;
+        undelegations[validator][delegator] =
             Undelegation({ amount: amount, unlocksAt: block.timestamp + exitEscrowPeriod });
 
-        emit Undelegated(msg.sender, validator, amount);
+        emit Undelegated(delegator, validator, amount);
     }
 
     /// @notice Withdraw previously delegated funds after an undelegation.
     /// @param validator The validator to withdraw from
     function claimWithdrawal(address validator) external virtual {
+        address delegator = msg.sender;
         // If entries are missing at any of the levels of the mapping this will return zero
-        uint256 amount = undelegations[validator][msg.sender].amount;
+        uint256 amount = undelegations[validator][delegator].amount;
         if (amount == 0) {
             revert NothingToWithdraw();
         }
 
-        if (block.timestamp < undelegations[validator][msg.sender].unlocksAt) {
+        if (block.timestamp < undelegations[validator][delegator].unlocksAt) {
             revert PrematureWithdrawal();
         }
 
         // Mark funds as spent
-        delete undelegations[validator][msg.sender];
+        delete undelegations[validator][delegator];
 
-        SafeTransferLib.safeTransfer(token, msg.sender, amount);
+        SafeTransferLib.safeTransfer(token, delegator, amount);
 
-        emit Withdrawal(msg.sender, amount);
+        emit Withdrawal(delegator, amount);
     }
 
     /// @notice Withdraw previously delegated funds after a validator has exited
     /// @param validator The validator to withdraw from
     function claimValidatorExit(address validator) external virtual {
+        address delegator = msg.sender;
         uint256 unlocksAt = validatorExits[validator];
         if (unlocksAt == 0) {
             revert ValidatorNotExited();
@@ -406,17 +441,17 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
             revert PrematureWithdrawal();
         }
 
-        uint256 amount = delegations[validator][msg.sender];
+        uint256 amount = delegations[validator][delegator];
         if (amount == 0) {
             revert NothingToWithdraw();
         }
 
         // Mark funds as spent
-        delegations[validator][msg.sender] = 0;
+        delegations[validator][delegator] = 0;
 
-        SafeTransferLib.safeTransfer(token, msg.sender, amount);
+        SafeTransferLib.safeTransfer(token, delegator, amount);
 
-        emit Withdrawal(msg.sender, amount);
+        emit Withdrawal(delegator, amount);
     }
 
     /// @notice Update the consensus keys for a validator
@@ -441,17 +476,19 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         EdOnBN254.EdOnBN254Point memory newSchnorrVK,
         BN254.G1Point memory newBlsSig
     ) external virtual {
-        ensureValidatorActive(msg.sender);
+        address validator = msg.sender;
+
+        ensureValidatorActive(validator);
         ensureNonZeroSchnorrKey(newSchnorrVK);
         ensureNewKey(newBlsVK);
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
-        bytes memory message = abi.encode(msg.sender);
+        bytes memory message = abi.encode(validator);
         BLSSig.verifyBlsSig(message, newBlsSig, newBlsVK);
 
         blsKeys[_hashBlsKey(newBlsVK)] = true;
 
-        emit ConsensusKeysUpdated(msg.sender, newBlsVK, newSchnorrVK);
+        emit ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
     }
 }

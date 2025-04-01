@@ -19,9 +19,7 @@ use crate::{
         ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE, REQUEST_DATA_DELAY,
     },
     hotshot_config_file::HotShotConfigFile,
-    light_client::StateVerKey,
-    traits::signature_key::SignatureKey,
-    HotShotConfig, ValidatorConfig,
+    HotShotConfig, NodeType, ValidatorConfig,
 };
 
 /// Configuration describing a libp2p node
@@ -74,11 +72,11 @@ pub enum BuilderType {
 /// Node PeerConfig keys
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(bound(deserialize = ""))]
-pub struct PeerConfigKeys<KEY: SignatureKey> {
+pub struct PeerConfigKeys<TYPES: NodeType> {
     /// The peer's public key
-    pub stake_table_key: KEY,
+    pub stake_table_key: TYPES::SignatureKey,
     /// the peer's state public key
-    pub state_ver_key: StateVerKey,
+    pub state_ver_key: TYPES::StateSignatureKey,
     /// the peer's stake
     pub stake: u64,
     /// whether the node is a DA node
@@ -109,7 +107,7 @@ impl Default for RandomBuilderConfig {
 /// a network configuration
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(bound(deserialize = ""))]
-pub struct NetworkConfig<KEY: SignatureKey> {
+pub struct NetworkConfig<TYPES: NodeType> {
     /// number of views to run
     pub rounds: usize,
     /// whether DA membership is determined by index.
@@ -142,7 +140,7 @@ pub struct NetworkConfig<KEY: SignatureKey> {
     /// the libp2p config
     pub libp2p_config: Option<Libp2pConfig>,
     /// the hotshot config
-    pub config: HotShotConfig<KEY>,
+    pub config: HotShotConfig<TYPES>,
     /// The address for the Push CDN's "marshal", A.K.A. load balancer
     pub cdn_marshal_address: Option<String>,
     /// combined network config
@@ -154,7 +152,7 @@ pub struct NetworkConfig<KEY: SignatureKey> {
     /// random builder config
     pub random_builder: Option<RandomBuilderConfig>,
     /// The list of public keys that are allowed to connect to the orchestrator
-    pub public_keys: Vec<PeerConfigKeys<KEY>>,
+    pub public_keys: Vec<PeerConfigKeys<TYPES>>,
 }
 
 /// the source of the network config
@@ -165,10 +163,13 @@ pub enum NetworkConfigSource {
     File,
 }
 
-impl<K: SignatureKey> NetworkConfig<K> {
+impl<TYPES: NodeType> NetworkConfig<TYPES> {
     /// Get a temporary node index for generating a validator config
     #[must_use]
-    pub fn generate_init_validator_config(cur_node_index: u16, is_da: bool) -> ValidatorConfig<K> {
+    pub fn generate_init_validator_config(
+        cur_node_index: u16,
+        is_da: bool,
+    ) -> ValidatorConfig<TYPES> {
         // This cur_node_index is only used for key pair generation, it's not bound with the node,
         // later the node with the generated key pair will get a new node_index from orchestrator.
         ValidatorConfig::generated_from_seed_indexed([0u8; 32], cur_node_index.into(), 1, is_da)
@@ -194,14 +195,13 @@ impl<K: SignatureKey> NetworkConfig<K> {
     ///
     /// ```ignore
     /// # use hotshot_orchestrator::config::NetworkConfig;
-    /// # use hotshot_types::signature_key::BLSPubKey;
     /// // # use hotshot::traits::election::static_committee::StaticElectionConfig;
     /// let file = "/path/to/my/config".to_string();
     /// // NOTE: broken due to staticelectionconfig not being importable
     /// // cannot import staticelectionconfig from hotshot without creating circular dependency
     /// // making this work probably involves the `types` crate implementing a dummy
     /// // electionconfigtype just to make this example work
-    /// let config = NetworkConfig::<BLSPubKey, StaticElectionConfig>::from_file(file).unwrap();
+    /// let config = NetworkConfig::<TYPES, StaticElectionConfig>::from_file(file).unwrap();
     /// ```
     pub fn from_file(file: String) -> Result<Self, NetworkConfigError> {
         // read from file
@@ -267,7 +267,7 @@ impl<K: SignatureKey> NetworkConfig<K> {
     }
 }
 
-impl<K: SignatureKey> Default for NetworkConfig<K> {
+impl<TYPES: NodeType> Default for NetworkConfig<TYPES> {
     fn default() -> Self {
         Self {
             rounds: ORCHESTRATOR_DEFAULT_NUM_ROUNDS,
@@ -279,7 +279,7 @@ impl<K: SignatureKey> Default for NetworkConfig<K> {
             manual_start_password: None,
             libp2p_config: None,
             config: HotShotConfigFile::hotshot_config_5_nodes_10_da().into(),
-            key_type_name: std::any::type_name::<K>().to_string(),
+            key_type_name: std::any::type_name::<TYPES>().to_string(),
             cdn_marshal_address: None,
             combined_network_config: None,
             next_view_timeout: 10,
@@ -299,19 +299,19 @@ impl<K: SignatureKey> Default for NetworkConfig<K> {
 #[serde_inline_default]
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(bound(deserialize = ""))]
-pub struct PublicKeysFile<KEY: SignatureKey> {
+pub struct PublicKeysFile<TYPES: NodeType> {
     /// The list of public keys that are allowed to connect to the orchestrator
     ///
     /// If nonempty, this list becomes the stake table and is used to determine DA membership (ignoring the node's request).
     #[serde(default)]
-    pub public_keys: Vec<PeerConfigKeys<KEY>>,
+    pub public_keys: Vec<PeerConfigKeys<TYPES>>,
 }
 
 /// a network config stored in a file
 #[serde_inline_default]
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(bound(deserialize = ""))]
-pub struct NetworkConfigFile<KEY: SignatureKey> {
+pub struct NetworkConfigFile<TYPES: NodeType> {
     /// number of views to run
     #[serde_inline_default(ORCHESTRATOR_DEFAULT_NUM_ROUNDS)]
     pub rounds: usize,
@@ -336,7 +336,7 @@ pub struct NetworkConfigFile<KEY: SignatureKey> {
     pub transaction_size: usize,
     /// the hotshot config file
     #[serde(default = "HotShotConfigFile::hotshot_config_5_nodes_10_da")]
-    pub config: HotShotConfigFile<KEY>,
+    pub config: HotShotConfigFile<TYPES>,
     /// The address of the Push CDN's "marshal", A.K.A. load balancer
     #[serde(default)]
     pub cdn_marshal_address: Option<String>,
@@ -353,11 +353,11 @@ pub struct NetworkConfigFile<KEY: SignatureKey> {
     ///
     /// If nonempty, this list becomes the stake table and is used to determine DA membership (ignoring the node's request).
     #[serde(default)]
-    pub public_keys: Vec<PeerConfigKeys<KEY>>,
+    pub public_keys: Vec<PeerConfigKeys<TYPES>>,
 }
 
-impl<K: SignatureKey> From<NetworkConfigFile<K>> for NetworkConfig<K> {
-    fn from(val: NetworkConfigFile<K>) -> Self {
+impl<TYPES: NodeType> From<NetworkConfigFile<TYPES>> for NetworkConfig<TYPES> {
+    fn from(val: NetworkConfigFile<TYPES>) -> Self {
         NetworkConfig {
             rounds: val.rounds,
             indexed_da: val.indexed_da,
@@ -378,7 +378,7 @@ impl<K: SignatureKey> From<NetworkConfigFile<K>> for NetworkConfig<K> {
                 bootstrap_nodes: Vec::new(),
             }),
             config: val.config.into(),
-            key_type_name: std::any::type_name::<K>().to_string(),
+            key_type_name: std::any::type_name::<TYPES>().to_string(),
             cdn_marshal_address: val.cdn_marshal_address,
             combined_network_config: val.combined_network_config,
             commit_sha: String::new(),

@@ -187,7 +187,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let mut next_epoch_total_weight = total_weight;
                 if epoch_number.is_some() {
                     next_epoch_total_weight = vid_total_weight::<TYPES>(
-                        membership.next_epoch().await?.stake_table().await,
+                        membership
+                            .next_epoch_stake_table()
+                            .await?
+                            .stake_table()
+                            .await,
                         epoch_number.map(|epoch| epoch + 1),
                     );
                 }
@@ -290,7 +294,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     if membership.has_stake(&public_key).await {
                         target_epochs.push(epoch_number);
                     }
-                    if membership.next_epoch().await?.has_stake(&public_key).await {
+                    if membership
+                        .next_epoch_stake_table()
+                        .await?
+                        .has_stake(&public_key)
+                        .await
+                    {
                         target_epochs.push(next_epoch);
                     }
                     if target_epochs.is_empty() {

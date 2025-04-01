@@ -158,7 +158,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                     ViewInner::Leaf {
                         leaf: leaf_commit, ..
                     },
-            }) => consensus_reader.is_leaf_for_last_block(*leaf_commit),
+            }) => consensus_reader.is_epoch_transition(*leaf_commit),
             _ => false,
         };
         drop(consensus_reader);
