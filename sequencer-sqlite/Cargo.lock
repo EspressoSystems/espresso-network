@@ -3728,6 +3728,7 @@ dependencies = [
  "futures",
  "hotshot",
  "hotshot-contract-adapter",
+ "hotshot-libp2p-networking",
  "hotshot-query-service",
  "hotshot-types",
  "indexmap 2.8.0",

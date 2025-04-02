@@ -27,7 +27,6 @@ use espresso_types::{
 use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -513,7 +512,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     let network = {
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
-            DhtNoPersistence,
+            persistence.clone(),
             coordinator.membership().clone(),
             gossip_config,
             request_response_config,

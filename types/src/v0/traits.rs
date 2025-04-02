@@ -10,6 +10,7 @@ use hotshot::{
     types::{BLSPubKey, EventType},
     HotShotInitializer, InitializerEpochInfo,
 };
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
@@ -678,7 +679,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 }
 
 #[async_trait]
-pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
+pub trait SequencerPersistence:
+    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage
+{
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
         self,
