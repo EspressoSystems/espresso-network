@@ -244,6 +244,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.epoch_height,
         );
 
+        // We use this `epoch_membership` to vote,
+        // meaning that we must know the leader for the current view in the current epoch
+        // and must therefore perform the full DRB catchup.
         let epoch_membership = match self
             .membership_coordinator
             .membership_for_epoch(cur_epoch)
@@ -549,7 +552,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 let cert_epoch = cert.data.epoch;
 
-                let epoch_membership = self.membership.membership_for_epoch(cert_epoch).await?;
+                let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch).await?;
                 let membership_da_stake_table = epoch_membership.da_stake_table().await;
                 let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
 

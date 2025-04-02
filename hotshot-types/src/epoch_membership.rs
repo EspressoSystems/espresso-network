@@ -6,7 +6,7 @@ use std::{
 use async_broadcast::{broadcast, InactiveReceiver};
 use async_lock::{Mutex, RwLock};
 use hotshot_utils::{
-    anytrace::{self, Error, Level, Result, DEFAULT_LOG_LEVEL},
+    anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
     ensure, line_info, log, warn,
 };
 use primitive_types::U256;
@@ -17,7 +17,7 @@ use crate::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
     },
-    utils::root_block_in_epoch,
+    utils::{root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
 };
 
@@ -165,12 +165,13 @@ where
 
         // Get the epoch root headers and update our membership with them, finally sync them
         // Verification of the root is handled in get_epoch_root_and_drb
-        let Ok((header, drb)) = root_membership
-            .get_epoch_root_and_drb(root_block_in_epoch(*root_epoch, self.epoch_height))
+        let Ok(header) = root_membership
+            .get_epoch_root(root_block_in_epoch(*root_epoch, self.epoch_height))
             .await
         else {
             anytrace::bail!("get epoch root failed for epoch {:?}", root_epoch);
         };
+
         let updater = self
             .membership
             .read()
@@ -179,6 +180,26 @@ where
             .await
             .ok_or(anytrace::warn!("add epoch root failed"))?;
         updater(&mut *(self.membership.write().await));
+
+        let drb_membership = match root_membership.next_epoch_stake_table().await {
+            Ok(drb_membership) => drb_membership,
+            Err(_) => Box::pin(self.wait_for_catchup(root_epoch + 1)).await?,
+        };
+
+        // get the DRB from the last block of the epoch right before the one we're catching up to
+        let Ok(drb) = drb_membership
+            .get_epoch_drb(transition_block_for_epoch(
+                *(root_epoch + 1),
+                self.epoch_height,
+            ))
+            .await
+        else {
+            return Err(anytrace::warn!(
+                "get epoch drb failed for in epoch {:?}",
+                root_epoch + 1
+            ));
+        };
+
         self.membership.write().await.add_drb_result(epoch, drb);
         Ok(EpochMembership {
             epoch: Some(epoch),
@@ -268,20 +289,30 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_root_and_drb(
-        &self,
-        block_height: u64,
-    ) -> anyhow::Result<(TYPES::BlockHeader, DrbResult)> {
+    async fn get_epoch_root(&self, block_height: u64) -> anyhow::Result<TYPES::BlockHeader> {
         let Some(epoch) = self.epoch else {
             anyhow::bail!("Cannot get root for None epoch");
         };
-        <TYPES::Membership as Membership<TYPES>>::get_epoch_root_and_drb(
+        <TYPES::Membership as Membership<TYPES>>::get_epoch_root(
             self.coordinator.membership.clone(),
             block_height,
-            self.coordinator.epoch_height,
             epoch,
         )
         .await
+    }
+
+    /// Wraps the same named Membership trait fn
+    async fn get_epoch_drb(&self, block_height: u64) -> Result<DrbResult> {
+        let Some(epoch) = self.epoch else {
+            return Err(anytrace::warn!("Cannot get drb for None epoch"));
+        };
+        <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
+            self.coordinator.membership.clone(),
+            block_height,
+            epoch,
+        )
+        .await
+        .wrap()
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch

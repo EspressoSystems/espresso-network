@@ -162,14 +162,22 @@ where
         self.drbs.contains(&epoch)
     }
 
-    async fn get_epoch_root_and_drb(
+    async fn get_epoch_root(
         _membership: Arc<RwLock<Self>>,
         _block_height: u64,
-        _epoch_height: u64,
         _epoch: TYPES::Epoch,
-    ) -> anyhow::Result<(TYPES::BlockHeader, DrbResult)> {
+    ) -> anyhow::Result<TYPES::BlockHeader> {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        Ok((TYPES::BlockHeader::default(), DrbResult::default()))
+        Ok(TYPES::BlockHeader::default())
+    }
+
+    async fn get_epoch_drb(
+        _membership: Arc<RwLock<Self>>,
+        _block_height: u64,
+        _epoch: TYPES::Epoch,
+    ) -> anyhow::Result<DrbResult> {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        Ok(DrbResult::default())
     }
 
     fn add_drb_result(&mut self, epoch: TYPES::Epoch, drb_result: hotshot_types::drb::DrbResult) {
