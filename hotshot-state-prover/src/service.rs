@@ -522,7 +522,7 @@ pub enum ProverError {
     RelayServerError(ServerError),
     /// Internal error with the stake table
     StakeTableError(StakeTableError),
-    /// Internal error when generating the SNARK proof
+    /// Internal error when generating the SNARK proof: {0}
     PlonkError(PlonkError),
     /// Internal error
     Internal(String),
