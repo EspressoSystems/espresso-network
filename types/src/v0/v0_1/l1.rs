@@ -215,14 +215,14 @@ pub struct SwitchingTransport {
 /// This is cloneable and returns a reference to the same underlying data.
 #[derive(Debug, Clone)]
 pub(crate) struct SingleTransport {
+    pub(crate) generation: usize,
     pub(crate) client: Http<Client>,
     pub(crate) status: Arc<RwLock<SingleTransportStatus>>,
 }
 
 /// The status of a single transport
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct SingleTransportStatus {
-    pub(crate) url_index: usize,
     pub(crate) last_failure: Option<Instant>,
     pub(crate) consecutive_failures: usize,
     pub(crate) rate_limited_until: Option<Instant>,

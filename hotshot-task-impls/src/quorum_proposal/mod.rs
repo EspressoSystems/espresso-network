@@ -306,7 +306,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 .next_epoch()
                 .await
                 .context(warn!(
-                    "No Stake Table for Epoch = {:?}",
+                    "Missing the randomized stake table for epoch {:?}",
                     epoch_number.unwrap() + 1
                 ))?
                 .leader(view_number)
@@ -616,7 +616,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let epoch_number = certificate.data.epoch;
                 let epoch_membership = self
                     .membership_coordinator
-                    .membership_for_epoch(epoch_number)
+                    .stake_table_for_epoch(epoch_number)
                     .await
                     .context(warn!("No Stake Table for Epoch = {:?}", epoch_number))?;
 

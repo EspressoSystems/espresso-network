@@ -854,22 +854,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         if self.high_qc == high_qc {
             return Ok(());
         }
-        let same_epoch = high_qc.data.block_number.is_some_and(|new_bn| {
-            let Some(high_bn) = self.high_qc.data.block_number else {
-                return false;
-            };
-            epoch_from_block_number(new_bn + 1, self.epoch_height)
-                == epoch_from_block_number(high_bn + 1, self.epoch_height)
-        });
-        // make sure the we don't update the high QC unless is't a higher view unless it's
-        // the transition block for the same epoch
+        // make sure the we don't update the high QC unless is't a higher view
         ensure!(
-            high_qc.view_number > self.high_qc.view_number
-                || (high_qc
-                    .data
-                    .block_number
-                    .is_some_and(|bn| is_transition_block(bn, self.epoch_height))
-                    && same_epoch),
+            high_qc.view_number > self.high_qc.view_number,
             debug!("High QC with an equal or higher view exists.")
         );
         tracing::debug!("Updating high QC");
@@ -890,29 +877,52 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         if self.next_epoch_high_qc.as_ref() == Some(&high_qc) {
             return Ok(());
         }
-        let same_epoch = high_qc.data.block_number.is_some_and(|bn| {
-            let Some(current_neqc) = self.next_epoch_high_qc() else {
-                return false;
-            };
-            let Some(high_bn) = current_neqc.data.block_number else {
-                return false;
-            };
-            epoch_from_block_number(bn + 1, self.epoch_height)
-                == epoch_from_block_number(high_bn + 1, self.epoch_height)
-        });
         if let Some(next_epoch_high_qc) = self.next_epoch_high_qc() {
             ensure!(
-                high_qc.view_number > next_epoch_high_qc.view_number
-                    || high_qc
-                        .data
-                        .block_number
-                        .is_some_and(|bn| is_transition_block(bn, self.epoch_height))
-                        && same_epoch,
+                high_qc.view_number > next_epoch_high_qc.view_number,
                 debug!("Next epoch high QC with an equal or higher view exists.")
             );
         }
         tracing::debug!("Updating next epoch high QC");
         self.next_epoch_high_qc = Some(high_qc);
+
+        Ok(())
+    }
+
+    /// Resets high qc and next epoch qc to the provided transition qc.
+    /// # Errors
+    /// Can return an error when the provided high_qc is not newer than the existing entry.
+    pub fn reset_high_qc(
+        &mut self,
+        high_qc: QuorumCertificate2<TYPES>,
+        next_epoch_qc: NextEpochQuorumCertificate2<TYPES>,
+    ) -> Result<()> {
+        ensure!(
+            high_qc.data.leaf_commit == next_epoch_qc.data.leaf_commit,
+            error!("High QC's and next epoch QC's leaf commits do not match.")
+        );
+        if self.high_qc == high_qc {
+            return Ok(());
+        }
+        let same_epoch = high_qc.data.block_number.is_some_and(|bn| {
+            let current_qc = self.high_qc();
+            let Some(high_bn) = current_qc.data.block_number else {
+                return false;
+            };
+            epoch_from_block_number(bn + 1, self.epoch_height)
+                == epoch_from_block_number(high_bn + 1, self.epoch_height)
+        });
+        ensure!(
+            high_qc
+                .data
+                .block_number
+                .is_some_and(|bn| is_transition_block(bn, self.epoch_height))
+                && same_epoch,
+            error!("Provided QC is not a transition QC.")
+        );
+        tracing::debug!("Resetting high QC and next epoch high QC");
+        self.high_qc = high_qc;
+        self.next_epoch_high_qc = Some(next_epoch_qc);
 
         Ok(())
     }
