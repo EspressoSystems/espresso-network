@@ -706,18 +706,20 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         }
     }
     let mut consensus_writer = validation_info.consensus.write().await;
-    consensus_writer.update_high_qc(justify_qc.clone())?;
     if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
-        consensus_writer.update_next_epoch_high_qc(next_epoch_justify_qc.clone())?;
         if justify_qc
             .data
             .block_number
             .is_some_and(|bn| is_transition_block(bn, validation_info.epoch_height))
         {
+            consensus_writer.reset_high_qc(justify_qc.clone(), next_epoch_justify_qc.clone())?;
             consensus_writer
                 .update_transition_qc(justify_qc.clone(), next_epoch_justify_qc.clone());
+            return Ok(());
         }
+        consensus_writer.update_next_epoch_high_qc(next_epoch_justify_qc.clone())?;
     }
+    consensus_writer.update_high_qc(justify_qc.clone())?;
 
     Ok(())
 }

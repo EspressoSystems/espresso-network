@@ -174,6 +174,20 @@ pub struct Leaf1QueryData<Types: NodeType> {
     pub(crate) qc: QuorumCertificate<Types>,
 }
 
+impl<Types: NodeType> Leaf1QueryData<Types> {
+    pub fn new(leaf: Leaf<Types>, qc: QuorumCertificate<Types>) -> Self {
+        Self { leaf, qc }
+    }
+
+    pub fn leaf(&self) -> &Leaf<Types> {
+        &self.leaf
+    }
+
+    pub fn qc(&self) -> &QuorumCertificate<Types> {
+        &self.qc
+    }
+}
+
 fn downgrade_leaf<Types: NodeType>(leaf2: Leaf2<Types>) -> Leaf<Types> {
     // TODO do we still need some check here?
     // `drb_seed` no longer exists on `Leaf2`
