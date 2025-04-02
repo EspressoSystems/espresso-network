@@ -27,7 +27,10 @@ use committable::Committable;
 use hotshot_query_service::{availability::QueryablePayload, testing::mocks::MockVersions};
 use hotshot_types::{
     data::{vid_commitment, ViewNumber},
-    traits::{node_implementation::ConsensusTime, signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
+    traits::{
+        node_implementation::ConsensusTime, signature_key::BuilderSignatureKey, BlockPayload,
+        EncodeBytes,
+    },
 };
 use jf_merkle_tree::MerkleTreeScheme;
 use pretty_assertions::assert_eq;
