@@ -2884,13 +2884,13 @@ mod test {
         assert_eq!(receive_count, total_count + 1);
     }
 
-    // TODO when `EpochVersion` becomes base version we can merge the
-    // functionality here w/ above test.
+    // TODO when `EpochVersion` becomes base version we can merge this
+    // w/ above test.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_hotshot_event_streaming_epoch_progression() {
         setup_test();
 
-        let epoch_height = 10;
+        let epoch_height = 20; // TODO may need to increase so first blocks appear in the fetch
         let wanted_epochs = 10;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
@@ -2909,20 +2909,7 @@ mod test {
         sys.delegate(delegate_amount).await.unwrap();
         tracing::error!("address: {:?}", sys.stake_table.address().to_ethers());
 
-        // let v = Validator::mock();
-        // let v = InsecureValidator::mock(1);
-        // let receipt = staking_cli::registration::register_validator(
-        //     sys.stake_table.clone(),
-        //     v.validator.commission.try_into().unwrap(),
-        //     v.validator.account,
-        //     v.consensus_key_pair(),
-        //     v.state_key_pair().ver_key(),
-        // )
-        // .await
-        // .unwrap();
-
-        // tracing::error!("receipt: {:?}", receipt);
-
+        // register and delegate some more accounts
         let demo_config = staking_cli::Config {
             rpc_url: sys.rpc_url.clone(),
             stake_table_address: *sys.stake_table.address(),
@@ -2987,7 +2974,7 @@ mod test {
         let wanted_views = epoch_height * wanted_epochs; // TODO not sure about this
         let mut views = HashSet::new();
         let mut epochs = HashSet::new();
-        for _ in 0..=300 {
+        for _ in 0..=600 {
             let event = subscribed_events.next().await.unwrap();
             let event = event.unwrap();
             let view_number = event.view_number;

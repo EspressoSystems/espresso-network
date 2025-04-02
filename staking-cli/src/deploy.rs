@@ -205,12 +205,6 @@ impl TestSystem {
     }
 }
 
-impl Drop for TestSystem {
-    fn drop(&mut self) {
-        tracing::error!("drop test system: {:?}", self);
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
