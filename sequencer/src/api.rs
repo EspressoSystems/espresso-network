@@ -2890,7 +2890,7 @@ mod test {
     async fn test_hotshot_event_streaming_epoch_progression() {
         setup_test();
 
-        let epoch_height = 20; // TODO may need to increase so first blocks appear in the fetch
+        let epoch_height = 35; // TODO may need to increase so first blocks appear in the fetch
         let wanted_epochs = 10;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
