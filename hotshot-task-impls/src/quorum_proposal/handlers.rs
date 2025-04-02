@@ -449,11 +449,10 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             );
             return Ok(());
         }
-        let is_high_qc_for_last_block = if let Some(block_number) = parent_qc.data.block_number {
-            is_epoch_transition(block_number, self.epoch_height)
-        } else {
-            false
-        };
+        let is_high_qc_for_last_block = parent_qc
+            .data
+            .block_number
+            .is_some_and(|block_number| is_epoch_transition(block_number, self.epoch_height));
         let next_epoch_qc = if self.upgrade_lock.epochs_enabled(self.view_number).await
             && is_high_qc_for_last_block
         {
@@ -548,6 +547,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
         let mut view_sync_finalize_cert = None;
         let mut vid_share = None;
         let mut parent_qc = None;
+        let mut next_epoch_qc = None;
         for event in res.iter().flatten().flatten() {
             match event.as_ref() {
                 HotShotEvent::SendPayloadCommitmentAndMetadata(
@@ -581,6 +581,9 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                 HotShotEvent::VidDisperseSend(share, _) => {
                     vid_share = Some(share.clone());
                 },
+                HotShotEvent::NextEpochQc2Formed(either::Left(qc)) => {
+                    next_epoch_qc = Some(qc.clone());
+                },
                 _ => {},
             }
         }
@@ -607,7 +610,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
             }
         };
 
-        let mut maybe_next_epoch_qc = None;
+        let mut maybe_next_epoch_qc = next_epoch_qc;
 
         let parent_qc = if let Some(qc) = parent_qc {
             qc
@@ -699,7 +702,7 @@ pub(super) async fn handle_eqc_formed<
     cert_view: TYPES::View,
     leaf_commit: Commitment<Leaf2<TYPES>>,
     block_number: Option<u64>,
-    task_state: &QuorumProposalTaskState<TYPES, I, V>,
+    task_state: &mut QuorumProposalTaskState<TYPES, I, V>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
 ) {
     if !task_state.upgrade_lock.epochs_enabled(cert_view).await {
@@ -711,15 +714,20 @@ pub(super) async fn handle_eqc_formed<
         return;
     }
 
-    let consensus_reader = task_state.consensus.read().await;
-    let current_epoch_qc = consensus_reader.high_qc();
+    let Some(current_epoch_qc) = task_state.formed_quorum_certificates.get(&cert_view) else {
+        tracing::debug!("We formed the eQC but we don't have the current epoch QC at all.");
+        return;
+    };
     if current_epoch_qc.view_number() != cert_view
         || current_epoch_qc.data.leaf_commit != leaf_commit
     {
         tracing::debug!("We haven't yet formed the eQC. Do nothing");
         return;
     }
-    let Some(next_epoch_qc) = consensus_reader.next_epoch_high_qc() else {
+    let Some(next_epoch_qc) = task_state
+        .formed_next_epoch_quorum_certificates
+        .get(&cert_view)
+    else {
         tracing::debug!("We formed the eQC but we don't have the next epoch eQC at all.");
         return;
     };
@@ -730,7 +738,17 @@ pub(super) async fn handle_eqc_formed<
         return;
     }
     let current_epoch_qc_clone = current_epoch_qc.clone();
-    drop(consensus_reader);
+
+    let mut consensus_writer = task_state.consensus.write().await;
+    let _ = consensus_writer.update_high_qc(current_epoch_qc_clone.clone());
+    let _ = consensus_writer.update_next_epoch_high_qc(next_epoch_qc.clone());
+    drop(consensus_writer);
+
+    task_state.formed_quorum_certificates =
+        task_state.formed_quorum_certificates.split_off(&cert_view);
+    task_state.formed_next_epoch_quorum_certificates = task_state
+        .formed_next_epoch_quorum_certificates
+        .split_off(&cert_view);
 
     broadcast_event(
         Arc::new(HotShotEvent::ExtendedQc2Formed(current_epoch_qc_clone)),
