@@ -1005,8 +1005,8 @@ impl SequencerPersistence for Persistence {
             return Ok(());
         }
 
-        // Garbage collect data which was not included in any decide event, but which at this point
-        // is old enough to just forget about.
+        // // Garbage collect data which was not included in any decide event, but which at this point
+        // // is old enough to just forget about.
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }

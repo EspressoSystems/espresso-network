@@ -334,6 +334,7 @@ impl<
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         _builder_fee: BuilderFee<TYPES>,
         _version: Version,
+        _view_number: u64,
     ) -> Result<Self, Self::Error> {
         Self::run_delay_settings_from_config(&instance_state.delay_config).await;
         Ok(Self::new(
