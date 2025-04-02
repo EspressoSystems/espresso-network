@@ -164,7 +164,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let Ok(epoch_membership) =
                     self.membership.membership_for_epoch(proposal_epoch).await
                 else {
-                    tracing::warn!("No Stake table for epoch = {:?}", proposal_epoch);
+                    tracing::warn!("No Stake table for epoch = {proposal_epoch:?}");
                     return;
                 };
                 let validation_info = ValidationInfo::<TYPES, I, V> {
