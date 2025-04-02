@@ -1,35 +1,26 @@
-name: Contracts
+name: Check contract bindings
 
 on:
   push:
-    branches:
-      - main
-      - release-*
-    tags:
-      # YYYYMMDD
-      - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+    branches: [ main ]
   pull_request:
-    branches:
-  workflow_dispatch:
+    branches: [ main ]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.ref }}-check-contract-bindings
   cancel-in-progress: true
-
-env:
-  RUST_LOG: info,libp2p=off
 
 jobs:
   contracts:
     timeout-minutes: 120
-    runs-on: ubuntu-latest
+    runs-on: buildjet-8vcpu-ubuntu-2204
     steps:
       - name: Install Nix
         uses: cachix/install-nix-action@v30
 
       - name: Enable Cachix
         uses: cachix/cachix-action@v15
-        # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
+        # If PR is from a non-collaborator (e.g. dependabot) the secrets are missing and the login to cachix fails.
         continue-on-error: true
         with:
           name: espresso-systems-private

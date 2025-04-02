@@ -1,0 +1,39 @@
+name: Release build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency: 
+  group: ${{ github.ref }}-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target: [arm, x86_64]
+
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.target == 'arm' && 'buildjet-8vcpu-ubuntu-2204-arm' || 'buildjet-8vcpu-ubuntu-2204' }}
+    
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Install mold
+        uses: rui314/setup-mold@v1
+
+      - name: Use Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-${{ matrix.target }}-${{ github.ref }}
+
+      - name: Release build
+        run: cargo build --release
+
+      # TODO: Add docker builds

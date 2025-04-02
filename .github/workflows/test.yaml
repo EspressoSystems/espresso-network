@@ -1,0 +1,70 @@
+name: Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test-archive:
+    concurrency: 
+      group: ${{ github.ref }}-build-test-archive
+      cancel-in-progress: true
+
+    name: Build test archive
+    runs-on: buildjet-8vcpu-ubuntu-2204
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Install mold
+        uses: rui314/setup-mold@v1
+
+      - name: Use Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-${{ github.ref }}
+
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
+
+      - name: Build test archive
+        run: cargo nextest archive --locked --archive-file test-archive.tar.zst
+
+      - name: Upload test archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-archive.tar.zst
+          path: test-archive.tar.zst
+
+  test:
+    concurrency: 
+      group: ${{ github.ref }}-test-${{ matrix.partition }}
+      cancel-in-progress: true
+    needs: build-test-archive
+    strategy:
+      matrix:
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+    name: Test (${{ matrix.partition }}/12)
+    runs-on: buildjet-4vcpu-ubuntu-2204
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: test-archive.tar.zst
+
+      - name: Test
+        run: cargo nextest run --archive-file test-archive.tar.zst --partition hash:${{ matrix.partition }}/12 --no-fail-fast

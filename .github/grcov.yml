@@ -1,4 +1,0 @@
-output-type: lcov
-ignore:
-  - contract-bindings/*
-  - contracts/*

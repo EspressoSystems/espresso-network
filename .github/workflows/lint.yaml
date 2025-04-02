@@ -1,0 +1,30 @@
+name: Lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency: 
+  group: ${{ github.ref }}-lint
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint  
+    runs-on: buildjet-8vcpu-ubuntu-2204
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      # We could use caching here, but it takes almost as long to download
+      # the cache as it does to run the lint again.
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --features testing --all-targets -- -D warnings
