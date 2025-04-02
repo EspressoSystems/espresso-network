@@ -70,10 +70,9 @@ impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
     /// Handles a (deserialized) message from the network
     pub async fn handle_message(&mut self, message: Message<TYPES>) {
         match &message.kind {
-            MessageKind::Consensus(_) => tracing::info!(
-                "Received consensus message from network: {:?}",
-                message
-            ),
+            MessageKind::Consensus(_) => {
+                tracing::info!("Received consensus message from network: {:?}", message)
+            },
             MessageKind::Data(_) => {
                 tracing::trace!("Received data message from network: {:?}", message)
             },
