@@ -1002,13 +1002,13 @@ impl HotShotState<SeqTypes> for ValidatedState {
     /// Validate parent against known values (from state) and validate
     /// proposal descends from parent. Returns updated `ValidatedState`.
     #[tracing::instrument(
-        skip_all,
-        fields(
-            node_id = instance.node_id,
-            view = ?parent_leaf.view_number(),
-            height = parent_leaf.height(),
-        ),
-    )]
+    skip_all,
+    fields(
+        node_id = instance.node_id,
+        view = ?parent_leaf.view_number(),
+        height = parent_leaf.height(),
+    ),
+)]
     async fn validate_and_apply_header(
         &self,
         instance: &Self::Instance,
@@ -1041,7 +1041,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
                 version,
             )
             .await
-            .unwrap();
+            .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
         // Validate the proposal.
         let validated_state = ValidatedTransition::new(

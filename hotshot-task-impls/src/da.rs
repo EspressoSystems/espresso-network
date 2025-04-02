@@ -148,7 +148,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let epoch_number = proposal.data.epoch;
                 let membership = self
                     .membership_coordinator
-                    .membership_for_epoch(epoch_number)
+                    .stake_table_for_epoch(epoch_number)
                     .await
                     .context(warn!("No stake table for epoch"))?;
 
@@ -187,7 +187,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let mut next_epoch_total_weight = total_weight;
                 if epoch_number.is_some() {
                     next_epoch_total_weight = vid_total_weight::<TYPES>(
-                        membership.next_epoch().await?.stake_table().await,
+                        membership
+                            .next_epoch_stake_table()
+                            .await?
+                            .stake_table()
+                            .await,
                         epoch_number.map(|epoch| epoch + 1),
                     );
                 }
@@ -287,7 +291,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                     let target_epoch = if membership.has_stake(&public_key).await {
                         epoch_number
-                    } else if membership.next_epoch().await?.has_stake(&public_key).await {
+                    } else if membership
+                        .next_epoch_stake_table()
+                        .await?
+                        .has_stake(&public_key)
+                        .await
+                    {
                         next_epoch
                     } else {
                         bail!("Not calculating VID, the node doesn't belong to the current epoch or the next epoch.");

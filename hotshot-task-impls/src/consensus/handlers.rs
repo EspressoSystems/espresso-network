@@ -12,7 +12,7 @@ use hotshot_types::{
     event::{Event, EventType},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-    utils::{is_last_block_in_epoch, EpochTransitionIndicator},
+    utils::{is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
@@ -78,10 +78,15 @@ pub(crate) async fn handle_quorum_vote_recv<
     )
     .await?;
 
-    if vote.epoch().is_some() {
+    if vote.epoch().is_some()
+        && vote
+            .data
+            .block_number
+            .is_some_and(|b| is_epoch_transition(b, task_state.epoch_height))
+    {
         // If the vote sender belongs to the next epoch, collect it separately to form the second QC
         let has_stake = epoch_membership
-            .next_epoch()
+            .next_epoch_stake_table()
             .await?
             .has_stake(&vote.signing_key())
             .await;
@@ -90,6 +95,10 @@ pub(crate) async fn handle_quorum_vote_recv<
                 &mut task_state.next_epoch_vote_collectors,
                 &vote.clone().into(),
                 task_state.public_key.clone(),
+                // We eventually verify in `handle_vote` that we are the leader before assembling the certificate here,
+                // so we must request the full randomized stake table.
+                //
+                // I'm not sure this is really necessary, but I've opted not to modify the logic.
                 &epoch_membership.next_epoch().await?.clone(),
                 task_state.id,
                 &event,
@@ -168,7 +177,10 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
 
     let consensus_reader = task_state.consensus.read().await;
     let high_qc = consensus_reader.high_qc().clone();
-    let is_eqc = consensus_reader.is_leaf_extended(high_qc.data.leaf_commit);
+    let is_eqc = high_qc
+        .data
+        .block_number
+        .is_some_and(|b| is_last_block(b, task_state.epoch_height));
     drop(consensus_reader);
 
     if is_eqc {
@@ -205,24 +217,29 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             .await?
             .leader(new_view_number)
             .await?;
-        let maybe_next_epoch_qc = if high_qc
+
+        let (high_qc, maybe_next_epoch_qc) = if high_qc
             .data
             .block_number
-            .is_some_and(|b| is_last_block_in_epoch(b, task_state.epoch_height))
+            .is_some_and(|b| is_epoch_transition(b, task_state.epoch_height))
         {
-            Some(
-                task_state
-                    .consensus
-                    .read()
-                    .await
-                    .next_epoch_high_qc()
-                    .ok_or(warn!(
-                        "High QC is for the last block but we don't have next epoch QC."
-                    ))?
-                    .clone(),
+            let Some((qc, next_epoch_qc)) =
+                task_state.consensus.read().await.transition_qc().cloned()
+            else {
+                bail!("We don't have a transition QC");
+            };
+            validate_qc_and_next_epoch_qc(
+                &high_qc,
+                Some(&next_epoch_qc),
+                &task_state.consensus,
+                &task_state.membership_coordinator,
+                &task_state.upgrade_lock,
+                task_state.epoch_height,
             )
+            .await?;
+            (qc, Some(next_epoch_qc))
         } else {
-            None
+            (high_qc, None)
         };
         validate_qc_and_next_epoch_qc(
             &high_qc,
@@ -233,6 +250,11 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             task_state.epoch_height,
         )
         .await?;
+        tracing::trace!(
+            "Sending high QC for view {:?}, height {:?}",
+            high_qc.view_number(),
+            high_qc.data.block_number
+        );
         broadcast_event(
             Arc::new(HotShotEvent::HighQcSend(
                 high_qc,
@@ -399,7 +421,7 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     ensure!(
         task_state
             .membership_coordinator
-            .membership_for_epoch(epoch)
+            .stake_table_for_epoch(epoch)
             .await
             .context(warn!("No stake table for epoch"))?
             .has_stake(&task_state.public_key)

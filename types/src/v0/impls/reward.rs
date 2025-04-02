@@ -401,7 +401,12 @@ pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow
     let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
     let coordinator = instance_state.coordinator.clone();
 
-    let first_epoch = coordinator.membership().read().await.first_epoch();
+    let first_epoch = coordinator
+        .membership()
+        .read()
+        .await
+        .first_epoch()
+        .context("The first epoch was not set.")?;
 
     Ok(epoch == first_epoch || epoch == first_epoch + 1 || epoch == EpochNumber::new(0))
 }
@@ -414,6 +419,7 @@ pub async fn find_validator(
     height: u64,
 ) -> anyhow::Result<Validator<BLSPubKey>> {
     tracing::error!("view={view:?}, height={height:?}");
+    // TODO: MA: not quite sure what view we should be getting here.
     let parent_view = leaf
         .block_header()
         .view()
@@ -451,6 +457,7 @@ pub async fn find_validator(
 
     reward_accounts.extend(delegators.clone());
 
+    // TODO: MA: this shouldn't be commented out
     // let missing_reward_accts = validated_state.forgotten_reward_accounts(reward_accounts);
 
     // if !missing_reward_accts.is_empty() {

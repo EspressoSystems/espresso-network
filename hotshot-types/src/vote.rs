@@ -10,7 +10,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
     marker::PhantomData,
-    num::NonZeroU64,
 };
 
 use bitvec::{bitvec, vec::BitVec};
@@ -21,12 +20,13 @@ use tracing::error;
 
 use crate::{
     epoch_membership::EpochMembership,
+    light_client::LightClientState,
     message::UpgradeLock,
-    simple_certificate::Threshold,
-    simple_vote::{VersionedVoteData, Voteable},
+    simple_certificate::{LightClientStateUpdateCertificate, Threshold},
+    simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
     traits::{
         node_implementation::{NodeType, Versions},
-        signature_key::{SignatureKey, StakeTableEntryType},
+        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
     },
     PeerConfig, StakeTableEntries,
 };
@@ -77,17 +77,17 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     fn is_valid_cert<V: Versions>(
         &self,
         stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
-        threshold: NonZeroU64,
+        threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> impl std::future::Future<Output = Result<()>>;
     /// Returns the amount of stake needed to create this certificate
     // TODO: Make this a static ratio of the total stake of `Membership`
-    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = u64> + Send;
+    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = U256> + Send;
 
     /// Get  Stake Table from Membership implementation.
     fn stake_table(
         membership: &EpochMembership<TYPES>,
-    ) -> impl Future<Output = Vec<PeerConfig<TYPES::SignatureKey>>> + Send;
+    ) -> impl Future<Output = Vec<PeerConfig<TYPES>>> + Send;
 
     /// Get Total Nodes from Membership implementation.
     fn total_nodes(membership: &EpochMembership<TYPES>) -> impl Future<Output = usize> + Send;
@@ -96,7 +96,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     fn stake_table_entry(
         membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-    ) -> impl Future<Output = Option<PeerConfig<TYPES::SignatureKey>>> + Send;
+    ) -> impl Future<Output = Option<PeerConfig<TYPES>>> + Send;
 
     /// Get the commitment which was voted on
     fn data(&self) -> &Self::Voteable;
@@ -213,12 +213,12 @@ impl<
         *total_stake_casted += stake_table_entry.stake_table_entry.stake();
         total_vote_map.insert(key, (vote.signature(), vote_commitment));
 
-        if *total_stake_casted >= threshold.into() {
+        if *total_stake_casted >= threshold {
             // Assemble QC
             let real_qc_pp: <<TYPES as NodeType>::SignatureKey as SignatureKey>::QcParams =
                 <TYPES::SignatureKey as SignatureKey>::public_parameter(
                     StakeTableEntries::<TYPES>::from(stake_table).0,
-                    U256::from(threshold),
+                    threshold,
                 );
 
             let real_qc_sig = <TYPES::SignatureKey as SignatureKey>::assemble(
@@ -241,3 +241,72 @@ impl<
 
 /// Mapping of commitments to vote tokens by key.
 type VoteMap2<COMMITMENT, PK, SIG> = HashMap<COMMITMENT, (U256, BTreeMap<PK, (SIG, COMMITMENT)>)>;
+
+/// Accumulator for light client state update vote
+#[allow(clippy::type_complexity)]
+pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
+    pub vote_outcomes: HashMap<
+        LightClientState,
+        (
+            U256,
+            HashMap<
+                TYPES::StateSignatureKey,
+                <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
+            >,
+        ),
+    >,
+}
+
+impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
+    /// Add a vote to the total accumulated votes for the given epoch.
+    /// Returns the accumulator or the certificate if we
+    /// have accumulated enough votes to exceed the threshold for creating a certificate.
+    pub fn accumulate(
+        &mut self,
+        epoch: TYPES::Epoch,
+        vote: &LightClientStateUpdateVote<TYPES>,
+        key: &TYPES::StateSignatureKey,
+        stake_table: &[PeerConfig<TYPES>],
+        threshold: U256,
+    ) -> Option<LightClientStateUpdateCertificate<TYPES>> {
+        // Find the signer
+        if let Some(key_index) = stake_table
+            .iter()
+            .position(|config| &config.state_ver_key == key)
+        {
+            // Verify the vote validity
+            let state_msg = (&vote.light_client_state).into();
+            if !key.verify_state_sig(&vote.signature, &state_msg) {
+                error!("Invalid light client state update vote {:?}", vote);
+                return None;
+            }
+            let (total_stake_casted, vote_map) = self
+                .vote_outcomes
+                .entry(vote.light_client_state.clone())
+                .or_insert_with(|| (U256::from(0), HashMap::new()));
+
+            // Check for duplicate vote
+            if vote_map.contains_key(key) {
+                tracing::warn!("Duplicate vote (key: {:?}, vote: {:?})", key, vote);
+                return None;
+            }
+
+            *total_stake_casted += stake_table[key_index].stake_table_entry.stake();
+            vote_map.insert(key.clone(), vote.signature.clone());
+
+            if *total_stake_casted >= threshold {
+                return Some(LightClientStateUpdateCertificate {
+                    epoch,
+                    light_client_state: vote.light_client_state.clone(),
+                    signatures: Vec::from_iter(
+                        vote_map.iter().map(|(k, v)| (k.clone(), v.clone())),
+                    ),
+                });
+            }
+            None
+        } else {
+            error!("Light client state update vote with invalid key {:?}", key);
+            None
+        }
+    }
+}

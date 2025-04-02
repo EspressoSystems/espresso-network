@@ -4,19 +4,12 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
-[features]
-testing = [
-  "portpicker",
-  "rand",
-  "ark-ed-on-bn254",
-]
-
 [dependencies]
 alloy = { workspace = true }
 
 anyhow = { workspace = true }
 ark-ec = { workspace = true }
-ark-ed-on-bn254 = { workspace = true, optional = true }
+ark-ed-on-bn254 = { workspace = true }
 clap = { workspace = true }
 clap-serde = "0.5.1"
 clap-serde-derive = "0.2.1"
@@ -32,8 +25,8 @@ git-version = "0.3.9"
 hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
-portpicker = { workspace = true, optional = true }
-rand = { workspace = true, optional = true }
+portpicker = { workspace = true }
+rand = { workspace = true }
 rust_decimal = "1.36.0"
 serde = { workspace = true }
 sysinfo = "0.33.1"
@@ -46,5 +39,4 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-staking-cli = { path = ".", features = [ "testing" ] }
 tempfile = { workspace = true }

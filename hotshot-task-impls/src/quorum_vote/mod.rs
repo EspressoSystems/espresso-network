@@ -17,26 +17,25 @@ use hotshot_task::{
 };
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, OuterConsensus},
-    data::{vid_disperse::vid_total_weight, Leaf2, QuorumProposalWrapper},
+    data::{vid_disperse::vid_total_weight, Leaf2},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
-    message::{Proposal, UpgradeLock},
+    message::UpgradeLock,
     simple_certificate::UpgradeCertificate,
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
     },
-    utils::{epoch_from_block_number, option_epoch_from_block_number},
+    utils::{is_last_block, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
     StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
 use tracing::instrument;
-use vbs::version::StaticVersionType;
 
 use crate::{
     events::HotShotEvent,
@@ -98,6 +97,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Signature key for light client state
+    pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -117,27 +119,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             match event.as_ref() {
                 #[allow(unused_assignments)]
                 HotShotEvent::QuorumProposalValidated(proposal, parent_leaf) => {
-                    let version = match self.upgrade_lock.version(self.view_number).await {
-                        Ok(version) => version,
-                        Err(e) => {
-                            tracing::error!("{e:#}");
-                            return;
-                        },
-                    };
                     let proposal_payload_comm = proposal.data.block_header().payload_commitment();
                     let parent_commitment = parent_leaf.commit();
                     let proposed_leaf = Leaf2::from_quorum_proposal(&proposal.data);
 
-                    if version >= V::Epochs::VERSION
-                        && self
-                            .consensus
-                            .read()
-                            .await
-                            .is_leaf_forming_eqc(proposal.data.justify_qc().data.leaf_commit)
-                    {
-                        tracing::debug!("Do not vote here. Voting for this case is handled in QuorumVoteTaskState");
-                        return;
-                    } else if let Some(ref comm) = payload_commitment {
+                    if let Some(ref comm) = payload_commitment {
                         if proposal_payload_comm != *comm {
                             tracing::error!("Quorum proposal has inconsistent payload commitment with DAC or VID.");
                             return;
@@ -258,6 +244,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.epoch_height,
         );
 
+        // We use this `epoch_membership` to vote,
+        // meaning that we must know the leader for the current view in the current epoch
+        // and must therefore perform the full DRB catchup.
         let epoch_membership = match self
             .membership_coordinator
             .membership_for_epoch(cur_epoch)
@@ -270,16 +259,31 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             },
         };
 
-        tracing::trace!(
-            "Sending ViewChange for view {} and epoch {:?}",
-            self.view_number + 1,
-            cur_epoch
+        let current_epoch = option_epoch_from_block_number::<TYPES>(
+            self.upgrade_lock.epochs_enabled(leaf.view_number()).await,
+            leaf.height(),
+            self.epoch_height,
         );
-        broadcast_event(
-            Arc::new(HotShotEvent::ViewChange(self.view_number + 1, cur_epoch)),
-            &self.sender,
-        )
-        .await;
+
+        let is_vote_leaf_extended = is_last_block(leaf.height(), self.epoch_height);
+        if current_epoch.is_none() || !is_vote_leaf_extended {
+            // We're voting for the proposal that will probably form the eQC. We don't want to change
+            // the view here because we will probably change it when we form the eQC.
+            // The main reason is to handle view change event only once in the transaction task.
+            tracing::trace!(
+                "Sending ViewChange for view {} and epoch {:?}",
+                leaf.view_number() + 1,
+                current_epoch
+            );
+            broadcast_event(
+                Arc::new(HotShotEvent::ViewChange(
+                    leaf.view_number() + 1,
+                    current_epoch,
+                )),
+                &self.sender,
+            )
+            .await;
+        }
 
         if let Err(e) = submit_vote::<TYPES, I, V>(
             self.sender.clone(),
@@ -291,8 +295,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             Arc::clone(&self.storage),
             leaf,
             vid_share,
-            false,
+            is_vote_leaf_extended,
             self.epoch_height,
+            &self.state_private_key,
         )
         .await
         {
@@ -346,6 +351,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Signature key for light client state
+    pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 
     /// Upgrade certificate to enable epochs, staged until we reach the specified block height
     pub staged_epoch_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
@@ -457,6 +465,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 id: self.id,
                 epoch_height: self.epoch_height,
                 consensus_metrics: Arc::clone(&self.consensus_metrics),
+                state_private_key: self.state_private_key.clone(),
             },
         );
         self.vote_dependencies
@@ -506,7 +515,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         match event.as_ref() {
-            HotShotEvent::QuorumProposalValidated(proposal, parent_leaf) => {
+            HotShotEvent::QuorumProposalValidated(proposal, _parent_leaf) => {
                 tracing::trace!(
                     "Received Proposal for view {}",
                     *proposal.data.view_number()
@@ -524,28 +533,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     "We have already voted for this view"
                 );
 
-                let version = self
-                    .upgrade_lock
-                    .version(proposal.data.view_number())
-                    .await?;
-
-                let is_justify_qc_forming_eqc = self
-                    .consensus
-                    .read()
-                    .await
-                    .is_leaf_forming_eqc(proposal.data.justify_qc().data.leaf_commit);
-
-                if version >= V::Epochs::VERSION && is_justify_qc_forming_eqc {
-                    self.handle_eqc_voting(proposal, parent_leaf, event_sender, event_receiver)
-                        .await?;
-                } else {
-                    self.create_dependency_task_if_new(
-                        proposal.data.view_number(),
-                        event_receiver,
-                        &event_sender,
-                        Arc::clone(&event),
-                    );
-                }
+                self.create_dependency_task_if_new(
+                    proposal.data.view_number(),
+                    event_receiver,
+                    &event_sender,
+                    Arc::clone(&event),
+                );
             },
             HotShotEvent::DaCertificateRecv(cert) => {
                 let view = cert.view_number;
@@ -559,7 +552,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 let cert_epoch = cert.data.epoch;
 
-                let epoch_membership = self.membership.membership_for_epoch(cert_epoch).await?;
+                let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch).await?;
                 let membership_da_stake_table = epoch_membership.da_stake_table().await;
                 let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
 
@@ -605,7 +598,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 // Check that the signature is valid
                 ensure!(
                     sender.validate(&share.signature, payload_commitment.as_ref()),
-                    "VID share signature is invalid"
+                    "VID share signature is invalid, sender: {}, signature: {:?}, payload_commitment: {:?}",
+                    sender,
+                    share.signature,
+                    payload_commitment
                 );
 
                 let vid_epoch = share.data.epoch();
@@ -680,132 +676,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             _ => {},
         }
         Ok(())
-    }
-
-    /// Handles voting for the last block in the epoch to form the Extended QC.
-    #[allow(clippy::too_many_lines)]
-    async fn handle_eqc_voting(
-        &self,
-        proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
-        parent_leaf: &Leaf2<TYPES>,
-        event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
-        event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
-    ) -> Result<()> {
-        tracing::info!("Reached end of epoch. Justify QC is for the last block in the epoch.");
-        let proposed_leaf = Leaf2::from_quorum_proposal(&proposal.data);
-        let parent_commitment = parent_leaf.commit();
-
-        ensure!(
-            proposed_leaf.height() == parent_leaf.height() && proposed_leaf.payload_commitment() == parent_leaf.payload_commitment(),
-            error!("Justify QC is for the last block but it's not extended and a new block is proposed. Not voting!")
-        );
-
-        tracing::info!(
-            "Reached end of epoch. Proposed leaf has the same height and payload as its parent."
-        );
-
-        let mut consensus_writer = self.consensus.write().await;
-
-        let vid_shares = consensus_writer
-            .vid_shares()
-            .get(&parent_leaf.view_number())
-            .context(warn!(
-                "Proposed leaf is the same as its parent but we don't have our VID for it"
-            ))?;
-
-        let vid = vid_shares.get(&self.public_key).context(warn!(
-            "Proposed leaf is the same as its parent but we don't have our VID for it"
-        ))?;
-
-        let mut updated_vid = vid.clone();
-        updated_vid
-            .data
-            .set_view_number(proposal.data.view_number());
-        consensus_writer.update_vid_shares(updated_vid.data.view_number(), updated_vid.clone());
-
-        drop(consensus_writer);
-
-        ensure!(
-            proposed_leaf.parent_commitment() == parent_commitment,
-            warn!("Proposed leaf parent commitment does not match parent leaf payload commitment. Aborting vote.")
-        );
-
-        // Update our persistent storage of the proposal. If we cannot store the proposal return
-        // and error so we don't vote
-        self.storage
-            .write()
-            .await
-            .append_proposal_wrapper(proposal)
-            .await
-            .wrap()
-            .context(|e| error!("failed to store proposal, not voting. error = {}", e))?;
-
-        // Update internal state
-        update_shared_state::<TYPES, I, V>(
-            OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
-            event_sender.clone(),
-            event_receiver.clone().deactivate(),
-            self.membership.clone(),
-            self.public_key.clone(),
-            self.private_key.clone(),
-            self.upgrade_lock.clone(),
-            proposal.data.view_number(),
-            Arc::clone(&self.instance_state),
-            &proposed_leaf,
-            &updated_vid,
-            Some(parent_leaf.view_number()),
-            self.epoch_height,
-        )
-        .await
-        .context(|e| error!("Failed to update shared consensus state, error = {}", e))?;
-
-        let current_block_number = proposed_leaf.height();
-        let current_epoch = TYPES::Epoch::new(epoch_from_block_number(
-            current_block_number,
-            self.epoch_height,
-        ));
-
-        let is_vote_leaf_extended = self
-            .consensus
-            .read()
-            .await
-            .is_leaf_extended(proposed_leaf.commit());
-        if !is_vote_leaf_extended {
-            // We're voting for the proposal that will probably form the eQC. We don't want to change
-            // the view here because we will probably change it when we form the eQC.
-            // The main reason is to handle view change event only once in the transaction task.
-            tracing::trace!(
-                "Sending ViewChange for view {} and epoch {}",
-                proposal.data.view_number() + 1,
-                *current_epoch
-            );
-            broadcast_event(
-                Arc::new(HotShotEvent::ViewChange(
-                    proposal.data.view_number() + 1,
-                    Some(current_epoch),
-                )),
-                &event_sender,
-            )
-            .await;
-        }
-
-        submit_vote::<TYPES, I, V>(
-            event_sender.clone(),
-            self.membership
-                .membership_for_epoch(Some(current_epoch))
-                .await?,
-            self.public_key.clone(),
-            self.private_key.clone(),
-            self.upgrade_lock.clone(),
-            proposal.data.view_number(),
-            Arc::clone(&self.storage),
-            proposed_leaf,
-            updated_vid,
-            is_vote_leaf_extended,
-            self.epoch_height,
-        )
-        .await
-        .context(|e| debug!("Failed to submit vote; error = {}", e))
     }
 }
 

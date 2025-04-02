@@ -8,6 +8,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
     data::{VidCommitment, ViewNumber},
+    light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::{ConsensusTime, NodeType},
@@ -1189,6 +1190,23 @@ impl BlockHeader<SeqTypes> for Header {
     /// Commit over fee_amount, payload_commitment and metadata
     fn builder_commitment(&self) -> BuilderCommitment {
         self.builder_commitment().clone()
+    }
+
+    fn get_light_client_state(
+        &self,
+        view: <SeqTypes as NodeType>::View,
+    ) -> anyhow::Result<LightClientState> {
+        let mut block_comm_root_bytes = vec![];
+        self.block_merkle_tree_root()
+            .serialize_compressed(&mut block_comm_root_bytes)?;
+
+        Ok(LightClientState {
+            view_number: view.u64(),
+            block_height: self.height(),
+            block_comm_root: hotshot_types::light_client::hash_bytes_to_field(
+                &block_comm_root_bytes,
+            )?,
+        })
     }
 }
 

@@ -25,7 +25,10 @@ use hotshot_types::{
         signature_key::SignatureKey,
         storage::Storage,
     },
-    utils::{is_last_block_in_epoch, EpochTransitionIndicator},
+    utils::{
+        is_epoch_transition, is_middle_transition_block, is_transition_block,
+        EpochTransitionIndicator,
+    },
     vote::{Certificate, HasViewNumber},
     StakeTableEntries,
 };
@@ -52,8 +55,8 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     /// Formed QCs
     pub formed_quorum_certificates: BTreeMap<TYPES::View, QuorumCertificate2<TYPES>>,
 
-    /// Formed eQCs
-    pub formed_extended_quorum_certificates:
+    /// Formed QCs for the next epoch
+    pub formed_next_epoch_quorum_certificates:
         BTreeMap<TYPES::View, NextEpochQuorumCertificate2<TYPES>>,
 
     /// Immutable instance state
@@ -303,7 +306,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 .next_epoch()
                 .await
                 .context(warn!(
-                    "No Stake Table for Epoch = {:?}",
+                    "Missing the randomized stake table for epoch {:?}",
                     epoch_number.unwrap() + 1
                 ))?
                 .leader(view_number)
@@ -394,15 +397,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             .context(error!(
                 "Failed to update high QC in internal consensus state!"
             ))?;
+        let in_epoch_transition = qc
+            .data
+            .block_number
+            .is_some_and(|bn| is_middle_transition_block(bn, self.epoch_height));
 
-        // Then update the high QC in storage
-        self.storage
-            .write()
-            .await
-            .update_high_qc2(qc)
-            .await
-            .wrap()
-            .context(error!("Failed to update high QC in storage!"))
+        // Don't update storage if we're in the epoch transition
+        if !in_epoch_transition {
+            tracing::error!(
+                "Updating high QC in storage for view {:?} and height {:?}",
+                qc.view_number(),
+                qc.data.block_number
+            );
+            // Then update the high QC in storage
+            self.storage
+                .write()
+                .await
+                .update_high_qc2(qc)
+                .await
+                .wrap()
+                .context(error!("Failed to update high QC in storage!"))?;
+        }
+        Ok(())
     }
 
     async fn update_next_epoch_high_qc(
@@ -417,15 +433,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             .context(error!(
                 "Failed to update next epoch high QC in internal consensus state!"
             ))?;
+        let in_epoch_transition = qc
+            .data
+            .block_number
+            .is_some_and(|bn| is_middle_transition_block(bn, self.epoch_height));
 
         // Then update the next epoch high QC in storage
-        self.storage
-            .write()
-            .await
-            .update_next_epoch_high_qc2(qc)
-            .await
-            .wrap()
-            .context(error!("Failed to update next epoch high QC in storage!"))
+        // Don't update storage if we're in the epoch transition
+        if !in_epoch_transition {
+            tracing::debug!(
+                "Updating next epoch high QC in storage for view {:?} and height {:?}",
+                qc.view_number(),
+                qc.data.block_number
+            );
+            self.storage
+                .write()
+                .await
+                .update_next_epoch_high_qc2(qc)
+                .await
+                .wrap()
+                .context(error!("Failed to update next epoch high QC in storage!"))?;
+        }
+        Ok(())
     }
 
     /// Hanldles checking that both certificates for an eqc exist and stores if they do.  Also handles storing the QC for cases
@@ -442,12 +471,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 };
 
                 if !self.upgrade_lock.epochs_enabled(view_number).await
-                    || !is_last_block_in_epoch(block_number, self.epoch_height)
+                    || !is_epoch_transition(block_number, self.epoch_height)
                 {
                     return self.update_high_qc(qc).await;
                 }
                 let Some(next_epoch_qc) =
-                    self.formed_extended_quorum_certificates.get(&view_number)
+                    self.formed_next_epoch_quorum_certificates.get(&view_number)
                 else {
                     return Ok(());
                 };
@@ -470,10 +499,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
             },
         };
         // clean up old qcs
-        self.formed_extended_quorum_certificates = self
-            .formed_extended_quorum_certificates
+        self.formed_next_epoch_quorum_certificates = self
+            .formed_next_epoch_quorum_certificates
             .split_off(&view_number);
         self.formed_quorum_certificates = self.formed_quorum_certificates.split_off(&view_number);
+
+        if is_transition_block(qc.data.block_number.unwrap(), self.epoch_height) {
+            self.consensus
+                .write()
+                .await
+                .update_transition_qc(qc.clone(), next_epoch_qc.clone());
+        }
         // Store the new eqc
         self.update_high_qc(qc).await?;
         self.update_next_epoch_high_qc(next_epoch_qc).await?;
@@ -535,8 +571,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     self.check_eqc_and_store(qc.view_number(), Either::Left(qc.clone()))
                         .await?;
 
-                    handle_eqc_formed(qc.view_number(), qc.data.leaf_commit, self, &event_sender)
-                        .await;
+                    handle_eqc_formed(
+                        qc.view_number(),
+                        qc.data.leaf_commit,
+                        qc.data.block_number,
+                        self,
+                        &event_sender,
+                    )
+                    .await;
 
                     let view_number = qc.view_number() + 1;
                     self.create_dependency_task_if_new(
@@ -574,7 +616,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let epoch_number = certificate.data.epoch;
                 let epoch_membership = self
                     .membership_coordinator
-                    .membership_for_epoch(epoch_number)
+                    .stake_table_for_epoch(epoch_number)
                     .await
                     .context(warn!("No Stake Table for Epoch = {:?}", epoch_number))?;
 
@@ -665,7 +707,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     debug!("Received a next epoch QC for a view that was not > than our current next epoch high QC")
                 );
 
-                self.formed_extended_quorum_certificates
+                self.formed_next_epoch_quorum_certificates
                     .insert(next_epoch_qc.view_number(), next_epoch_qc.clone());
 
                 self.check_eqc_and_store(
@@ -677,6 +719,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 handle_eqc_formed(
                     next_epoch_qc.view_number(),
                     next_epoch_qc.data.leaf_commit,
+                    next_epoch_qc.data.block_number,
                     self,
                     &event_sender,
                 )
