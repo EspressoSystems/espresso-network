@@ -2894,9 +2894,6 @@ mod test {
         let wanted_epochs = 10;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let anvil = Anvil::new().spawn();
-        let l1: Url = anvil.endpoint().parse().unwrap();
-
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
@@ -2906,6 +2903,7 @@ mod test {
             .unwrap();
 
         let sys = staking_cli::deploy::TestSystem::deploy().await.unwrap();
+        // register and delegate to deployer account
         sys.register_validator().await.unwrap();
         let delegate_amount = parse_ether("100").unwrap();
         sys.delegate(delegate_amount).await.unwrap();
@@ -2926,7 +2924,7 @@ mod test {
         // tracing::error!("receipt: {:?}", receipt);
 
         let demo_config = staking_cli::Config {
-            rpc_url: l1.clone(),
+            rpc_url: sys.rpc_url.clone(),
             stake_table_address: *sys.stake_table.address(),
             token_address: *sys.token.address(),
             ..Default::default()
@@ -2970,7 +2968,7 @@ mod test {
         let states = std::array::from_fn(|_| state.clone());
 
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1.clone())
+            .l1_url(sys.rpc_url.clone())
             .epoch_height(epoch_height)
             .build();
         let config = TestNetworkConfigBuilder::default()
