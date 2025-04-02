@@ -92,9 +92,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
         fetch_leaf_with_callbacks(tx, fetcher, req, None).await
@@ -118,8 +117,8 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
+    S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
     I: IntoIterator<Item = LeafCallback<Types, S, P>> + Send + 'static,
     I::IntoIter: Send,
@@ -226,8 +225,8 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
+    S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     let height = leaf.height();
@@ -386,8 +385,8 @@ impl<Types: NodeType, S, P> Callback<LeafQueryData<Types>> for LeafCallback<Type
 where
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
+    S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     async fn run(self, leaf: LeafQueryData<Types>) {
