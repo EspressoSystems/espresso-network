@@ -1,14 +1,23 @@
 use std::{
     collections::{hash_map::Entry, BTreeSet, HashMap},
     path::PathBuf,
+    time::Duration,
 };
 
 use alloy::primitives::U256;
+use anyhow::Context;
 use async_lock::RwLock;
 use clap::Args;
+use espresso_types::SeqTypes;
 use futures::FutureExt;
-use hotshot_stake_table::vec_based::config::FieldType;
-use hotshot_types::light_client::{StateSignatureScheme, StateSignaturesBundle, StateVerKey};
+use hotshot_stake_table::{utils::one_honest_threshold, vec_based::config::FieldType};
+use hotshot_state_prover::service::{blocks_per_epoch, init_stake_table_from_sequencer};
+use hotshot_types::{
+    light_client::{StateSignatureScheme, StateSignaturesBundle, StateVerKey},
+    traits::stake_table::{SnapshotVersion, StakeTableScheme},
+    utils::epoch_from_block_number,
+    PeerConfig,
+};
 use jf_signature::SignatureScheme;
 use tide_disco::{
     api::ApiError,
@@ -16,20 +25,24 @@ use tide_disco::{
     method::{ReadState, WriteState},
     Api, App, Error as _, StatusCode,
 };
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, time::sleep};
 use url::Url;
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersion, StaticVersionType};
 
 use super::{LightClientState, StateSignatureRequestBody};
 
 /// State that checks the light client state update and the signature collection
-#[derive(Default)]
 struct StateRelayServerState {
-    /// Minimum weight to form an available state signature bundle
-    threshold: U256,
-    /// Stake table
-    known_nodes: HashMap<StateVerKey, U256>,
+    /// Sequencer endpoint to query for stake table info
+    sequencer_url: Url,
+    /// Epoch length (fetched from HotShot config)
+    blocks_per_epoch: u64,
+    /// Minimum weight to form an available state signature bundle, map: epoch_num -> threshold
+    thresholds: HashMap<u64, U256>,
+    /// Stake table: map: epoch_num -> map(vk, weight)
+    known_nodes: HashMap<u64, HashMap<StateVerKey, U256>>,
     /// Signatures bundles for each block height
+    /// NOTE: nested hash-map because state signer could "vote/sign" different light client state for the same height
     bundles: HashMap<u64, HashMap<LightClientState, StateSignaturesBundle>>,
 
     /// The latest state signatures bundle whose total weight exceeds the threshold
@@ -45,10 +58,117 @@ struct StateRelayServerState {
 }
 
 impl StateRelayServerState {
-    pub fn new(threshold: U256) -> Self {
-        Self {
-            threshold,
-            ..Default::default()
+    /// Init the server state
+    pub async fn new(sequencer_url: Url, stake_table_capacity: u64) -> anyhow::Result<Self> {
+        // fetch genesis info from sequencer
+        let blocks_per_epoch = blocks_per_epoch(&sequencer_url).await?;
+        let genesis_stake_table =
+            init_stake_table_from_sequencer(&sequencer_url, stake_table_capacity as usize).await?;
+
+        // init local state
+        // TODO: (alex) confirm with team if epoch number starts with an offset or at strictly block 0
+        let mut thresholds = HashMap::new();
+        thresholds.insert(
+            1, // first epoch
+            one_honest_threshold(genesis_stake_table.total_stake(SnapshotVersion::LastEpochStart)?),
+        );
+
+        let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
+        for (_bls_vk, amt, schnorr_vk) in
+            genesis_stake_table.try_iter(SnapshotVersion::LastEpochStart)?
+        {
+            genesis_known_nodes.insert(schnorr_vk, amt);
+        }
+
+        let mut known_nodes = HashMap::new();
+        known_nodes.insert(1, genesis_known_nodes);
+
+        Ok(Self {
+            sequencer_url,
+            blocks_per_epoch,
+            thresholds,
+            known_nodes,
+            bundles: HashMap::new(),
+            latest_available_bundle: None,
+            latest_block_height: None,
+            queue: BTreeSet::new(),
+            shutdown: None,
+        })
+    }
+
+    /// sync the stake table at `height` for the relayer server, fetching from the sequencer.
+    /// If the requested `height` is older than `latest_block_height`, then does nothing.
+    ///
+    /// NOTE: should not be publicly invocable, always in-sync with `self.queue` for easier garbage collection.
+    async fn sync_stake_table(&mut self, height: u64) -> anyhow::Result<()> {
+        let epoch = epoch_from_block_number(height, self.blocks_per_epoch);
+        let latest_epoch = epoch_from_block_number(
+            self.latest_block_height.unwrap_or_default(),
+            self.blocks_per_epoch,
+        );
+        if epoch <= latest_epoch {
+            tracing::debug!(
+                "Skipped stake table sync: requested epoch: {}, latest: {}",
+                epoch,
+                latest_epoch
+            );
+            return Ok(());
+        }
+        if self.known_nodes.contains_key(&epoch) {
+            tracing::debug!(%epoch, "Skipped stake table sync: already synced ");
+            return Ok(());
+        }
+
+        tracing::info!(%epoch,"Syncing stake table ");
+
+        let endpoint = self
+            .sequencer_url
+            .join(&format!("/node/stake-table/{epoch}"))
+            .with_context(|| "invalid URL")?;
+        let peer_configs = loop {
+            match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(endpoint.clone())
+                .get::<Vec<PeerConfig<SeqTypes>>>(endpoint.as_str())
+                .send()
+                .await
+            {
+                Ok(config) => break config,
+                Err(e) => {
+                    tracing::error!("Failed to fetch stake table: {e}");
+                    sleep(Duration::from_secs(5)).await;
+                },
+            }
+        };
+
+        // now update the local state for that epoch
+        let mut total_weights = U256::ZERO;
+        let mut new_nodes = HashMap::<StateVerKey, U256>::new();
+        for peer in peer_configs.iter() {
+            let weight = peer.stake_table_entry.stake_amount;
+            new_nodes.insert(peer.state_ver_key.clone(), weight);
+            total_weights += weight;
+        }
+        self.known_nodes.insert(epoch, new_nodes);
+        self.thresholds
+            .insert(epoch, one_honest_threshold(total_weights));
+
+        tracing::info!(%epoch, "Stake table synced ");
+        Ok(())
+    }
+
+    /// Centralizing all garbage-collection logic, won't panic, won't error, simply do nothing if nothing to prune.
+    /// `until_height` is inclusive, meaning that would also be pruned.
+    pub fn prune(&mut self, until_height: u64) {
+        while let Some(&height) = self.queue.first() {
+            if height > until_height {
+                return;
+            }
+
+            self.bundles.remove(&height);
+            self.queue.pop_first();
+
+            let epoch = epoch_from_block_number(height, self.blocks_per_epoch);
+            self.thresholds.remove(&epoch);
+            self.known_nodes.remove(&epoch);
         }
     }
 
@@ -64,10 +184,7 @@ impl StateRelayServerState {
     }
 }
 
-// TODO(Chengyu): move this `RwLock` inside `StateRelayServerState` so that when nodes are submitting
-//                signatures, it won't block the prover from fetching the available signatures.
-type State = RwLock<StateRelayServerState>;
-
+#[async_trait::async_trait]
 pub trait StateRelayServerDataSource {
     /// Get the latest available signatures bundle.
     /// # Errors
@@ -77,34 +194,56 @@ pub trait StateRelayServerDataSource {
     /// Post a signature to the relay server
     /// # Errors
     /// Errors if the signature is invalid, already posted, or no longer needed.
-    fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError>;
+    async fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError>;
 }
 
+#[async_trait::async_trait]
 impl StateRelayServerDataSource for StateRelayServerState {
     fn get_latest_signature_bundle(&self) -> Result<StateSignaturesBundle, ServerError> {
         match &self.latest_available_bundle {
             Some(bundle) => Ok(bundle.clone()),
-            None => Err(tide_disco::error::ServerError::catch_all(
+            None => Err(ServerError::catch_all(
                 StatusCode::NOT_FOUND,
                 "The light client state signatures are not ready.".to_owned(),
             )),
         }
     }
 
-    fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError> {
+    async fn post_signature(&mut self, req: StateSignatureRequestBody) -> Result<(), ServerError> {
         let block_height = req.state.block_height;
         if block_height <= self.latest_block_height.unwrap_or(0) {
             // This signature is no longer needed
             return Ok(());
         }
-        let one = U256::from(1);
-        let weight = self.known_nodes.get(&req.key).unwrap_or(&one);
-        // TODO(Chengyu): We don't know where to fetch the stake table yet.
-        // Related issue: [https://github.com/EspressoSystems/espresso-sequencer/issues/1022]
-        // .ok_or(tide_disco::error::ServerError::catch_all(
-        //     StatusCode::Unauthorized,
-        //     "The posted key is not found in the stake table.".to_owned(),
-        // ))?;
+
+        let epoch = epoch_from_block_number(block_height, self.blocks_per_epoch);
+        if !self.known_nodes.contains_key(&epoch) {
+            self.sync_stake_table(block_height).await.map_err(|e| {
+                ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}"))
+            })?;
+        }
+
+        // retrieve the signer/sender's weight from the correct stake table for that epoch
+        let Some(nodes) = self.known_nodes.get(&epoch) else {
+            return Err(ServerError::catch_all(
+                StatusCode::NOT_FOUND,
+                "Stake table not found".to_owned(),
+            ));
+        };
+        let Some(threshold) = self.thresholds.get(&epoch) else {
+            return Err(ServerError::catch_all(
+                StatusCode::NOT_FOUND,
+                "Threshold not found".to_owned(),
+            ));
+        };
+        let Some(weight) = nodes.get(&req.key) else {
+            return Err(ServerError::catch_all(
+                StatusCode::UNAUTHORIZED,
+                "Signature posted by nodes not on the stake table".to_owned(),
+            ));
+        };
+
+        // sanity check the signature validity first before adding in
         let mut msg = Vec::with_capacity(7);
         let state_msg: [FieldType; 3] = (&req.state).into();
         msg.extend_from_slice(&state_msg);
@@ -117,16 +256,15 @@ impl StateRelayServerDataSource for StateRelayServerState {
                 "The posted signature is not valid.".to_owned(),
             ));
         }
-        // TODO(Chengyu): this serialization should be removed once `LightClientState` implements `Eq`.
-        let bundles_at_height = self.bundles.entry(block_height).or_insert_with(|| {
-            self.queue.insert(block_height);
-            Default::default()
-        });
+
+        let bundles_at_height = self.bundles.entry(block_height).or_default();
+        self.queue.insert(block_height);
+
         let bundle = bundles_at_height
             .entry(req.state.clone())
             .or_insert(StateSignaturesBundle {
                 state: req.state.clone(),
-                next_stake: req.next_stake.clone(),
+                next_stake: req.next_stake,
                 signatures: Default::default(),
                 accumulated_weight: U256::from(0),
             });
@@ -149,20 +287,18 @@ impl StateRelayServerDataSource for StateRelayServerState {
             },
         }
 
-        if bundle.accumulated_weight >= self.threshold {
+        if bundle.accumulated_weight >= *threshold {
             tracing::info!(
                 "State signature bundle at block height {} is ready to serve.",
                 block_height
             );
             self.latest_block_height = Some(block_height);
             self.latest_available_bundle = Some(bundle.clone());
-            while let Some(height) = self.queue.pop_first() {
-                self.bundles.remove(&height);
-                if height == block_height {
-                    break;
-                }
-            }
         }
+
+        // garbage collect
+        self.prune(block_height);
+
         Ok(())
     }
 }
@@ -203,12 +339,13 @@ where
     api.get("getlateststate", |_req, state| {
         async move { state.get_latest_signature_bundle() }.boxed()
     })?
-    .post("poststatesignature", |req, state| {
+    .post("poststatesignature", move |req, state| {
         async move {
             let body = req
                 .body_auto::<StateSignatureRequestBody, ApiVer>(ApiVer::instance())
                 .map_err(ServerError::from_request_error)?;
-            state.post_signature(body)
+            state.post_signature(body).await?;
+            Ok(())
         }
         .boxed()
     })?;
@@ -218,23 +355,25 @@ where
 
 pub async fn run_relay_server<ApiVer: StaticVersionType + 'static>(
     shutdown_listener: Option<oneshot::Receiver<()>>,
-    threshold: U256,
+    sequencer_url: Url,
+    stake_table_capacity: u64,
     url: Url,
     bind_version: ApiVer,
-) -> std::io::Result<()> {
+) -> anyhow::Result<()> {
     let options = Options::default();
-
     let api = define_api(&options, bind_version).unwrap();
 
-    // We don't have a stake table yet, putting some temporary value here.
-    // Related issue: [https://github.com/EspressoSystems/espresso-sequencer/issues/1022]
-    let state =
-        State::new(StateRelayServerState::new(threshold).with_shutdown_signal(shutdown_listener));
-    let mut app = App::<State, ServerError>::with_state(state);
+    let state = RwLock::new(
+        StateRelayServerState::new(sequencer_url, stake_table_capacity)
+            .await?
+            .with_shutdown_signal(shutdown_listener),
+    );
+    let mut app = App::<RwLock<StateRelayServerState>, ServerError>::with_state(state);
 
     app.register_module("api", api).unwrap();
 
     let app_future = app.serve(url, bind_version);
 
-    app_future.await
+    app_future.await?;
+    Ok(())
 }

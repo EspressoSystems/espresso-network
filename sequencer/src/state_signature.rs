@@ -107,7 +107,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);
 
                 let consensus = consensus_state.read().await;
-                let cur_block_height = state.block_height as u64;
+                let cur_block_height = state.block_height;
                 let blocks_per_epoch = consensus.epoch_height;
 
                 let next_stake_table = if is_last_block(cur_block_height, blocks_per_epoch) {
@@ -127,16 +127,16 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     )
                 } else {
                     // during non-last-block (most cases), the stake table used for the next block is exactly the same
-                    self.voting_stake_table.clone()
+                    self.voting_stake_table
                 };
 
-                let signature = self.sign_new_state(&state, next_stake_table.clone()).await;
+                let signature = self.sign_new_state(&state, next_stake_table).await;
 
                 if let Some(client) = &self.relay_server_client {
                     let request_body = StateSignatureRequestBody {
                         key: self.ver_key.clone(),
                         state,
-                        next_stake: next_stake_table.clone(),
+                        next_stake: next_stake_table,
                         signature,
                     };
                     if let Err(error) = client
@@ -174,7 +174,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         let mut msg = Vec::with_capacity(7);
         let state_msg: [CircuitField; 3] = state.into();
         msg.extend_from_slice(&state_msg);
-        let next_stake_msg: [CircuitField; 4] = next_stake_table.clone().into();
+        let next_stake_msg: [CircuitField; 4] = next_stake_table.into();
         msg.extend_from_slice(&next_stake_msg);
 
         let signature =
