@@ -585,7 +585,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                 .validated_state_map()
                 .get(&target_view)
                 .context(info!(
-                    "Missing record for view {target_view} in validated state"
+                    "Missing record for view {} in validated state",
+                    target_view
                 ))?;
 
             match &view_data.view_inner {
@@ -596,8 +597,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                     leaf: leaf_commitment,
                     ..
                 } => {
-                    let leaf = consensus_reader.saved_leaves().get(leaf_commitment).context
-                        (info!("Missing leaf with commitment {leaf_commitment} for view {target_view} in saved_leaves"))?;
+                    let leaf = consensus_reader
+                        .saved_leaves()
+                        .get(leaf_commitment)
+                        .context(info!(
+                            "Missing leaf with commitment {} for view {} in saved_leaves",
+                            leaf_commitment, target_view,
+                        ))?;
                     return Ok((target_view, leaf.payload_commitment()));
                 },
                 ViewInner::Failed => {

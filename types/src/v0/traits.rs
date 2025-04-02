@@ -28,7 +28,7 @@ use hotshot_types::{
         storage::Storage,
         ValidatedState as HotShotState,
     },
-    utils::{genesis_epoch_from_version, verify_epoch_root_chain},
+    utils::{genesis_epoch_from_version, verify_leaf_chain},
     PeerConfig,
 };
 use indexmap::IndexMap;
@@ -57,7 +57,6 @@ pub trait StateCatchup: Send + Sync {
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: U256,
-        epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         self.backoff().retry(
             self, |provider, retry| {
@@ -66,11 +65,11 @@ pub trait StateCatchup: Send + Sync {
                     let mut chain = provider.try_fetch_leaves(retry, height).await?;
                     chain.sort_by_key(|l| l.view_number());
                     let leaf_chain = chain.into_iter().rev().collect();
-                    verify_epoch_root_chain(
+                    verify_leaf_chain(
                         leaf_chain,
                         stake_table_clone.clone(),
                         success_threshold,
-                        epoch_height,
+                        height,
                         &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new()).await
                 }.boxed()
             }).await
@@ -244,10 +243,9 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Box<T> {
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: U256,
-        epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         (**self)
-            .fetch_leaf(height, stake_table, success_threshold, epoch_height)
+            .fetch_leaf(height, stake_table, success_threshold)
             .await
     }
     async fn try_fetch_accounts(
@@ -378,10 +376,9 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: U256,
-        epoch_height: u64,
     ) -> anyhow::Result<Leaf2> {
         (**self)
-            .fetch_leaf(height, stake_table, success_threshold, epoch_height)
+            .fetch_leaf(height, stake_table, success_threshold)
             .await
     }
     async fn try_fetch_accounts(

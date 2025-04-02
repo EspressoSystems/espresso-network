@@ -376,7 +376,11 @@ pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
             Some(vid_commitment::<V>(
                 &encoded_transactions,
                 &metadata.encode(),
-                membership.next_epoch().await?.total_nodes().await,
+                membership
+                    .next_epoch_stake_table()
+                    .await?
+                    .total_nodes()
+                    .await,
                 upgrade_lock.version_infallible(view_number).await,
             ))
         } else {
