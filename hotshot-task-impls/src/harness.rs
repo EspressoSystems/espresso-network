@@ -27,7 +27,7 @@ pub struct TestHarnessState<TYPES: NodeType> {
 /// # Arguments
 /// * `event_stream` - if given, will be used to register the task builder.
 /// * `allow_extra_output` - whether to allow an extra output after we've seen all expected
-///     outputs. Should be `false` in most cases.
+///   outputs. Should be `false` in most cases.
 ///
 /// # Panics
 /// Panics if any state the test expects is not set. Panicking causes a test failure
@@ -80,7 +80,7 @@ pub async fn run_harness<TYPES, S: TaskState<Event = HotShotEvent<TYPES>> + Send
 ///
 /// # Arguments
 /// * `allow_extra_output` - whether to allow an extra output after we've seen all expected
-///     outputs. Should be `false` in most cases.
+///   outputs. Should be `false` in most cases.
 ///
 ///  # Panics
 /// Will panic to fail the test when it receives and unexpected event
