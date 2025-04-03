@@ -122,6 +122,7 @@ impl TestSystem {
             self.schnorr_key_pair.ver_key(),
         )
         .await?;
+        tracing::error!("receipt: {:?}", receipt);
         assert!(receipt.status());
         Ok(())
     }
@@ -146,6 +147,7 @@ impl TestSystem {
             .await?
             .get_receipt()
             .await?;
+        tracing::error!("receipt: {:?}", receipt);
         assert!(receipt.status());
         Ok(())
     }

@@ -73,10 +73,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             committee.clone(),
             committee,
             node_state.l1_client,
-            node_state
-                .chain_config
-                .stake_table_contract
-                .map(|a| a.to_alloy()),
+            node_state.chain_config,
             node_state.peers,
             NoStorage,
         ))),
