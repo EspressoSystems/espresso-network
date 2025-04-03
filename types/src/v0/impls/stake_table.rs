@@ -14,7 +14,6 @@ use committable::Committable;
 use contract_bindings_alloy::staketable::StakeTable::{
     ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
 };
-
 use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::{BLSPubKey, SignatureKey as _};
 use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
