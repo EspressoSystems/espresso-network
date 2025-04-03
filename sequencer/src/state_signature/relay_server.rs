@@ -331,10 +331,10 @@ impl StateRelayServerDataSource for StateRelayServerState {
             );
             self.latest_block_height = Some(block_height);
             self.latest_available_bundle = Some(bundle.clone());
-        }
 
-        // garbage collect
-        self.prune(block_height);
+            // garbage collect
+            self.prune(block_height);
+        }
 
         Ok(())
     }
