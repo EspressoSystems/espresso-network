@@ -78,8 +78,7 @@ use crate::network::behaviours::{
 pub const MAX_GOSSIP_MSG_SIZE: usize = 2_000_000_000;
 
 /// Wrapped num of connections
-pub const ESTABLISHED_LIMIT: NonZeroU32 =
-    unsafe { NonZeroU32::new_unchecked(ESTABLISHED_LIMIT_UNWR) };
+pub const ESTABLISHED_LIMIT: NonZeroU32 = NonZeroU32::new(ESTABLISHED_LIMIT_UNWR).unwrap();
 /// Number of connections to a single peer before logging an error
 pub const ESTABLISHED_LIMIT_UNWR: u32 = 10;
 

@@ -257,9 +257,7 @@ mod tests {
         bad_witness[0] = shares[0].content.payload[0][0];
         let bad_proof2 = MalEncodingProof {
             recovered_poly: bad_witness,
-            raw_shares: std::iter::repeat(bad_proof.raw_shares[0].clone())
-                .take(6)
-                .collect(),
+            raw_shares: std::iter::repeat_n(bad_proof.raw_shares[0].clone(), 6).collect(),
         };
         assert!(bad_proof2.verify(&param, &commit).is_err());
     }

@@ -860,13 +860,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
             .map(|r| self.direct_message(message.clone(), r));
         let results = join_all(future_results).await;
 
-        let errors: Vec<_> = results
-            .into_iter()
-            .filter_map(|r| match r {
-                Err(err) => Some(err),
-                _ => None,
-            })
-            .collect();
+        let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
 
         if errors.is_empty() {
             Ok(())
