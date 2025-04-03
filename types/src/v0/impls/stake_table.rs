@@ -10,10 +10,12 @@ use alloy::{
 };
 use anyhow::{bail, Context};
 use async_lock::RwLock;
+use committable::Committable;
 use contract_bindings_alloy::staketable::StakeTable::{
     ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
 };
-use ethers_conv::ToEthers;
+
+use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::{BLSPubKey, SignatureKey as _};
 use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
 use hotshot_types::{
@@ -38,6 +40,7 @@ use thiserror::Error;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{DAMembers, Validator},
+    v0_99::ChainConfig,
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 use crate::{EpochVersion, SequencerVersions};
@@ -321,8 +324,8 @@ pub struct EpochCommittees {
     /// L1 provider
     l1_client: L1Client,
 
-    /// Address of Stake Table Contract
-    contract_address: Option<Address>,
+    /// Verifiable `ChainConfig` holding contract address
+    chain_config: ChainConfig,
 
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
@@ -458,7 +461,7 @@ impl EpochCommittees {
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
         l1_client: L1Client,
-        contract_address: Option<Address>,
+        chain_config: ChainConfig,
         peers: Arc<dyn StateCatchup>,
         persistence: impl MembershipPersistence,
     ) -> Self {
@@ -538,7 +541,7 @@ impl EpochCommittees {
             non_epoch_committee: members,
             state: map,
             l1_client,
-            contract_address,
+            chain_config,
             randomized_committees: BTreeMap::new(),
             peers,
             persistence: Arc::new(persistence),
@@ -764,19 +767,22 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
-        let Some(address) = self.contract_address else {
-            tracing::debug!("`add_epoch_root` called with `self.contract_address` value of `None`");
+        let chain_config = get_chain_config(self.chain_config, &self.peers, &block_header)
+            .await
+            .ok()?;
+
+        let Some(address) = chain_config.stake_table_contract else {
+            tracing::error!("No stake table contract address found in Chain config");
             return None;
         };
 
         let Some(l1_finalized_block_info) = block_header.l1_finalized() else {
             tracing::error!("The epoch root for epoch {} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.", epoch);
-
             return None;
         };
 
         let stake_tables = self
-            .get_stake_table_by_epoch(epoch, address, l1_finalized_block_info.number())
+            .get_stake_table_by_epoch(epoch, address.to_alloy(), l1_finalized_block_info.number())
             .await
             .inspect_err(|e| {
                 tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
@@ -895,6 +901,31 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.add_drb_result(epoch, initial_drb_result);
         self.add_drb_result(epoch + 1, initial_drb_result);
     }
+}
+/// Retrieve and verify `ChainConfig`
+// TODO move to appropriate object (Header?)
+pub(crate) async fn get_chain_config(
+    chain_config: ChainConfig,
+    peers: &impl StateCatchup,
+    header: &Header,
+) -> anyhow::Result<ChainConfig> {
+    let header_cf = header.chain_config();
+    if chain_config.commit() == header_cf.commit() {
+        return Ok(chain_config);
+    }
+
+    let cf = match header_cf.resolve() {
+        Some(cf) => cf,
+        None => peers
+            .fetch_chain_config(header_cf.commit())
+            .await
+            .map_err(|err| {
+                tracing::error!("failed to get chain_config from peers. err: {err:?}");
+                err
+            })?,
+    };
+
+    Ok(cf)
 }
 
 #[cfg(any(test, feature = "testing"))]

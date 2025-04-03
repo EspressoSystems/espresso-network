@@ -483,10 +483,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         l1_client.clone(),
-        genesis
-            .chain_config
-            .stake_table_contract
-            .map(|a| a.to_alloy()),
+        genesis.chain_config,
         peers.clone(),
         persistence.clone(),
     );
@@ -999,7 +996,7 @@ pub mod testing {
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
-                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                chain_config,
                 peers.clone(),
                 persistence.clone(),
             );
