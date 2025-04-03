@@ -138,7 +138,7 @@ pub enum HotShotEvent<TYPES: NodeType> {
     /// The next leader has collected enough votes to form a QC; emitted by the next leader in the consensus task; an internal event only
     Qc2Formed(Either<QuorumCertificate2<TYPES>, TimeoutCertificate2<TYPES>>),
     /// The next leader has collected enough votes to form an epoch root QC; emitted by the next leader in the consensus task; an internal event only
-    EpochRootQcFormed(Either<EpochRootQuorumCertificate<TYPES>, TimeoutCertificate2<TYPES>>),
+    EpochRootQcFormed(EpochRootQuorumCertificate<TYPES>),
     /// The next leader has collected enough votes from the next epoch nodes to form a QC; emitted by the next leader in the consensus task; an internal event only
     NextEpochQc2Formed(Either<NextEpochQuorumCertificate2<TYPES>, TimeoutCertificate<TYPES>>),
     /// A validator formed both a current epoch eQC and a next epoch eQC
@@ -287,7 +287,11 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ),
 
     /// A replica sends us an epoch root QC
-    EpochRootQcSend(EpochRootQuorumCertificate<TYPES>, TYPES::SignatureKey),
+    EpochRootQcSend(
+        EpochRootQuorumCertificate<TYPES>,
+        TYPES::SignatureKey,
+        TYPES::SignatureKey,
+    ),
     /// A replica receives an epoch root QC
     EpochRootQcRecv(EpochRootQuorumCertificate<TYPES>, TYPES::SignatureKey),
 }
@@ -332,10 +336,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
                 either::Left(qc) => Some(qc.view_number()),
                 either::Right(tc) => Some(tc.view_number()),
             },
-            HotShotEvent::EpochRootQcFormed(cert) => match cert {
-                either::Left(qc) => Some(qc.view_number()),
-                either::Right(tc) => Some(tc.view_number()),
-            },
+            HotShotEvent::EpochRootQcFormed(root_qc) => Some(root_qc.view_number()),
             HotShotEvent::ExtendedQc2Formed(cert) => Some(cert.view_number()),
             HotShotEvent::ViewSyncCommitVoteSend(vote)
             | HotShotEvent::ViewSyncCommitVoteRecv(vote) => Some(vote.view_number()),
@@ -384,7 +385,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             | HotShotEvent::HighQcSend(qc, ..)
             | HotShotEvent::ExtendedQcRecv(qc, ..)
             | HotShotEvent::ExtendedQcSend(qc, ..) => Some(qc.view_number()),
-            HotShotEvent::EpochRootQcSend(cert, _) | HotShotEvent::EpochRootQcRecv(cert, _) => {
+            HotShotEvent::EpochRootQcSend(cert, ..) | HotShotEvent::EpochRootQcRecv(cert, _) => {
                 Some(cert.view_number())
             },
         }
@@ -481,13 +482,12 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
                 either::Left(qc) => write!(f, "QcFormed2(view_number={:?})", qc.view_number()),
                 either::Right(tc) => write!(f, "QcFormed2(view_number={:?})", tc.view_number()),
             },
-            HotShotEvent::EpochRootQcFormed(cert) => match cert {
-                either::Left(qc) => {
-                    write!(f, "EpochRootQcFormed(view_number={:?})", qc.view_number())
-                },
-                either::Right(tc) => {
-                    write!(f, "EpochRootQcFormed(view_number={:?})", tc.view_number())
-                },
+            HotShotEvent::EpochRootQcFormed(root_qc) => {
+                write!(
+                    f,
+                    "EpochRootQcFormed(view_number={:?})",
+                    root_qc.view_number()
+                )
             },
             HotShotEvent::NextEpochQc2Formed(cert) => match cert {
                 either::Left(qc) => {
@@ -696,10 +696,10 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             HotShotEvent::ExtendedQcSend(qc, ..) => {
                 write!(f, "ExtendedQcSend(view_number={:?}", qc.view_number())
             },
-            HotShotEvent::EpochRootQcSend(cert, _) => {
+            HotShotEvent::EpochRootQcSend(cert, ..) => {
                 write!(f, "EpochRootQcSend(view_number={:?}", cert.view_number())
             },
-            HotShotEvent::EpochRootQcRecv(cert, _) => {
+            HotShotEvent::EpochRootQcRecv(cert, ..) => {
                 write!(f, "EpochRootQcRecv(view_number={:?}", cert.view_number())
             },
         }

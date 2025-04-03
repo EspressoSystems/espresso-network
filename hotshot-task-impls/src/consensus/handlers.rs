@@ -10,9 +10,10 @@ use async_broadcast::{Receiver, Sender};
 use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
+    simple_certificate::EpochRootQuorumCertificate,
     simple_vote::{EpochRootQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-    utils::{is_epoch_transition, is_last_block, EpochTransitionIndicator},
+    utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
@@ -124,14 +125,12 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
 ) -> Result<()> {
-    let in_transition = task_state
-        .consensus
-        .read()
-        .await
-        .is_high_qc_for_last_block();
     ensure!(
-        !in_transition,
-        warn!("Received epoch root quorum vote in transition, this should not happen.")
+        vote.vote
+            .data
+            .block_number
+            .is_some_and(|bn| is_epoch_root(bn, task_state.epoch_height)),
+        error!("Received epoch root quorum vote for non epoch root block.")
     );
 
     let epoch_membership = task_state
@@ -233,6 +232,16 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
         .data
         .block_number
         .is_some_and(|b| is_last_block(b, task_state.epoch_height));
+    let is_epoch_root = high_qc
+        .data
+        .block_number
+        .is_some_and(|b| is_epoch_root(b, task_state.epoch_height));
+    let state_cert = if is_epoch_root {
+        Some(consensus_reader.state_cert().clone())
+    } else {
+        None
+    };
+    let cur_epoch = consensus_reader.cur_epoch();
     drop(consensus_reader);
 
     if is_eqc {
@@ -302,21 +311,51 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             task_state.epoch_height,
         )
         .await?;
-        tracing::trace!(
-            "Sending high QC for view {:?}, height {:?}",
-            high_qc.view_number(),
-            high_qc.data.block_number
-        );
-        broadcast_event(
-            Arc::new(HotShotEvent::HighQcSend(
-                high_qc,
-                maybe_next_epoch_qc,
-                leader,
-                task_state.public_key.clone(),
-            )),
-            sender,
-        )
-        .await;
+
+        if is_epoch_root {
+            // For epoch root QC, we are sending high QC and state cert
+            let Some(state_cert) = state_cert else {
+                bail!("We are sending an epoch root QC but we don't have the current state cert.");
+            };
+            ensure!(
+                Some(state_cert.epoch) == cur_epoch,
+                "We are sending an epoch root QC but we don't have the current state cert."
+            );
+
+            tracing::trace!(
+                "Sending epoch root QC for epoch {:?}, height {:?}",
+                high_qc.view_number(),
+                high_qc.data.block_number
+            );
+            broadcast_event(
+                Arc::new(HotShotEvent::EpochRootQcSend(
+                    EpochRootQuorumCertificate {
+                        qc: high_qc,
+                        state_cert,
+                    },
+                    leader,
+                    task_state.public_key.clone(),
+                )),
+                sender,
+            )
+            .await;
+        } else {
+            tracing::trace!(
+                "Sending high QC for view {:?}, height {:?}",
+                high_qc.view_number(),
+                high_qc.data.block_number
+            );
+            broadcast_event(
+                Arc::new(HotShotEvent::HighQcSend(
+                    high_qc,
+                    maybe_next_epoch_qc,
+                    leader,
+                    task_state.public_key.clone(),
+                )),
+                sender,
+            )
+            .await;
+        }
     }
     Ok(())
 }

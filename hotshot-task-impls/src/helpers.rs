@@ -1271,6 +1271,8 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     state_cert: &LightClientStateUpdateCertificate<TYPES>,
     membership_coordinator: &EpochMembershipCoordinator<TYPES>,
 ) -> Result<()> {
+    tracing::debug!("Validating light client state update certificate");
+
     let epoch_membership = membership_coordinator
         .membership_for_epoch(state_cert.epoch())
         .await?;

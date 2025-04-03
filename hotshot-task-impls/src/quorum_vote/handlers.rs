@@ -538,7 +538,10 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         )
         .await;
     } else if epoch_root_vote && epoch_enabled {
-        tracing::debug!("sending epoch root vote to everybody",);
+        tracing::debug!(
+            "sending epoch root vote to next quorum leader {:?}",
+            vote.view_number() + 1
+        );
         let light_client_state = leaf
             .block_header()
             .get_light_client_state(view_number)

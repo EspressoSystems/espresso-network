@@ -43,8 +43,8 @@ use vbs::version::StaticVersionType;
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, parent_leaf_and_state, validate_qc_and_next_epoch_qc,
-        wait_for_next_epoch_qc,
+        broadcast_event, parent_leaf_and_state, validate_light_client_state_update_certificate,
+        validate_qc_and_next_epoch_qc, wait_for_next_epoch_qc,
     },
     quorum_proposal::{QuorumProposalTaskState, UpgradeLock, Versions},
 };
@@ -152,7 +152,15 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .is_ok()
             {
                 if let Some(state_cert) = maybe_state_cert {
-                    if self
+                    if validate_light_client_state_update_certificate(
+                        &state_cert,
+                        &self.membership.coordinator,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        tracing::error!("Failed to validate state cert");
+                    } else if self
                         .consensus
                         .write()
                         .await
@@ -300,7 +308,15 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .is_ok()
             {
                 if let Some(state_cert) = maybe_state_cert {
-                    if self
+                    if validate_light_client_state_update_certificate(
+                        &state_cert,
+                        &self.membership.coordinator,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        tracing::error!("Failed to validate state cert");
+                    } else if self
                         .consensus
                         .write()
                         .await
@@ -530,7 +546,15 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .block_number
             .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
         {
-            Some(self.consensus.read().await.state_cert().clone())
+            let consensus_reader = self.consensus.read().await;
+            let state_cert = consensus_reader.state_cert().clone();
+            let cur_epoch = consensus_reader.cur_epoch();
+            drop(consensus_reader);
+            ensure!(
+                Some(state_cert.epoch) == cur_epoch,
+                error!("We are proposing with parent epoch root QC but we don't have the current state cert.")
+            );
+            Some(state_cert)
         } else {
             None
         };
@@ -623,22 +647,17 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                         parent_qc = Some(qc.clone());
                     },
                 },
-                HotShotEvent::EpochRootQcFormed(cert) => match cert {
-                    either::Right(timeout) => {
-                        timeout_certificate = Some(timeout.clone());
-                    },
-                    either::Left(root_qc) => {
-                        if self
-                            .consensus
-                            .write()
-                            .await
-                            .update_state_cert(root_qc.state_cert.clone())
-                            .is_err()
-                        {
-                            tracing::error!("Failed to update state cert");
-                        }
-                        parent_qc = Some(root_qc.qc.clone());
-                    },
+                HotShotEvent::EpochRootQcFormed(root_qc) => {
+                    if self
+                        .consensus
+                        .write()
+                        .await
+                        .update_state_cert(root_qc.state_cert.clone())
+                        .is_err()
+                    {
+                        tracing::error!("Failed to update state cert");
+                    }
+                    parent_qc = Some(root_qc.qc.clone());
                 },
                 HotShotEvent::ViewSyncFinalizeCertificateRecv(cert) => {
                     view_sync_finalize_cert = Some(cert.clone());

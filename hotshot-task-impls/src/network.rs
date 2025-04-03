@@ -788,6 +788,26 @@ impl<
             },
             HotShotEvent::EpochRootQuorumVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::Vote);
+                let view_number = vote.view_number() + 1;
+                let leader = match self
+                    .membership_coordinator
+                    .membership_for_epoch(vote.epoch())
+                    .await
+                    .ok()?
+                    .leader(view_number)
+                    .await
+                {
+                    Ok(l) => l,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to calculate leader for view number {:?}. Error: {:?}",
+                            view_number,
+                            e
+                        );
+                        return None;
+                    },
+                };
+
                 let message = if self.upgrade_lock.epochs_enabled(vote.view_number()).await {
                     MessageKind::<TYPES>::from_consensus_message(SequencingMessage::General(
                         GeneralConsensusMessage::EpochRootQuorumVote(vote.clone()),
@@ -798,7 +818,11 @@ impl<
                     ))
                 };
 
-                Some((vote.vote.signing_key(), message, TransmitType::Broadcast))
+                Some((
+                    vote.vote.signing_key(),
+                    message,
+                    TransmitType::Direct(leader),
+                ))
             },
             HotShotEvent::ExtendedQuorumVoteSend(vote) => {
                 *maybe_action = Some(HotShotAction::Vote);
@@ -1198,6 +1222,13 @@ impl<
                 sender,
                 MessageKind::Consensus(SequencingMessage::General(
                     GeneralConsensusMessage::HighQc(quorum_cert, next_epoch_qc),
+                )),
+                TransmitType::Direct(leader),
+            )),
+            HotShotEvent::EpochRootQcSend(epoch_root_qc, sender, leader) => Some((
+                sender,
+                MessageKind::Consensus(SequencingMessage::General(
+                    GeneralConsensusMessage::EpochRootQc(epoch_root_qc),
                 )),
                 TransmitType::Direct(leader),
             )),
