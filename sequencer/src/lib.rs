@@ -583,6 +583,7 @@ pub mod testing {
         time::Duration,
     };
 
+    use alloy::signers::local::PrivateKeySigner;
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
@@ -592,7 +593,7 @@ pub mod testing {
         Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey, SeqTypes,
         Transaction, Upgrade,
     };
-    use ethers::types::U256;
+    use ethers::{core::k256::ecdsa::SigningKey, types::U256};
     use futures::{
         future::join_all,
         stream::{Stream, StreamExt},
@@ -611,6 +612,7 @@ pub mod testing {
     use hotshot_types::{
         event::LeafInfo,
         light_client::{CircuitField, StateKeyPair, StateVerKey},
+        signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader,
             metrics::NoMetrics,
@@ -625,6 +627,8 @@ pub mod testing {
         service::{BuilderConfig, GlobalState},
     };
     use portpicker::pick_unused_port;
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha20Rng;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -894,6 +898,17 @@ pub mod testing {
 
         pub fn upgrades(&self) -> BTreeMap<Version, Upgrade> {
             self.upgrades.clone()
+        }
+
+        pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+            let seed = [42u8; 32];
+            let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
+            let eth_key_pairs = (0..self.num_nodes()).map(|_| SigningKey::random(&mut rng).into());
+            eth_key_pairs
+                .zip(self.priv_keys.iter())
+                .zip(self.state_key_pairs.iter())
+                .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
+                .collect()
         }
 
         pub async fn init_nodes<V: Versions>(

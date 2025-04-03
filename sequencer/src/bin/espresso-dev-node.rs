@@ -3,16 +3,20 @@ use std::{collections::BTreeMap, io, iter::once, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use clap::Parser;
 use contract_bindings_ethers::light_client_mock::LightClientMock;
-use espresso_types::{parse_duration, MarketplaceVersion, SequencerVersions, V0_1};
+use espresso_types::{
+    parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
+};
 use ethers::{
     middleware::{MiddlewareBuilder, SignerMiddleware},
     providers::{Http, Middleware, Provider},
     signers::{coins_bip39::English, MnemonicBuilder, Signer},
     types::{Address, H160, U256},
 };
+use ethers_conv::{ToAlloy, ToEthers};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_state_prover::service::{
-    one_honest_threshold, run_prover_service_with_stake_table, StateProverConfig,
+    light_client_genesis_from_stake_table, one_honest_threshold,
+    run_prover_service_with_stake_table, StateProverConfig,
 };
 use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableScheme};
 use portpicker::pick_unused_port;
@@ -31,6 +35,7 @@ use sequencer_utils::{
     logging, AnvilOptions,
 };
 use serde::{Deserialize, Serialize};
+use staking_cli::demo::stake_in_contract_for_test;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
 use tokio::spawn;
 use url::Url;
@@ -218,26 +223,13 @@ async fn main() -> anyhow::Result<()> {
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
         .build();
-
-    const NUM_NODES: usize = 2;
-    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-        .api_config(api_options)
-        .network_config(network_config)
-        .with_max_block_size(max_block_size)
-        .build();
-
-    let network =
-        TestNetwork::new(config, SequencerVersions::<MarketplaceVersion, V0_1>::new()).await;
-    let st = network.cfg.stake_table();
-    let total_stake = st.total_stake(SnapshotVersion::LastEpochStart).unwrap();
-    let config = network.cfg.hotshot_config();
-
-    tracing::info!("Hotshot config {config:?}");
-
-    let lc_genesis = network.light_client_genesis();
+    let initial_stake_table = network_config.stake_table();
+    let initial_total_stake = initial_stake_table.total_stake(SnapshotVersion::LastEpochStart)?;
+    let lc_genesis = light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
     let contracts = Contracts::new();
     let mut light_client_addresses = vec![];
+    let mut stake_table_address = alloy::primitives::Address::default();
     let mut prover_ports = Vec::new();
     let mut mock_contracts = BTreeMap::new();
     let mut handles = FuturesUnordered::new();
@@ -253,7 +245,11 @@ async fn main() -> anyhow::Result<()> {
     .chain(
         alt_chain_providers
             .iter()
-            .zip(alt_mnemonics.into_iter().chain(std::iter::repeat(mnemonic)))
+            .zip(
+                alt_mnemonics
+                    .into_iter()
+                    .chain(std::iter::repeat(mnemonic.clone())),
+            )
             .zip(
                 alt_account_indices
                     .into_iter()
@@ -297,6 +293,34 @@ async fn main() -> anyhow::Result<()> {
             None,                           // use deployer as initial token grant recipient
         )
         .await?;
+
+        // fund stake table only on L1
+        if url == l1_url {
+            // Save the stake table address to use in ChainConfig
+            stake_table_address = contracts
+                .get_contract_address(Contract::StakeTableProxy)
+                .expect("stake table deployed")
+                .to_alloy();
+            let deployer_signer_alloy = alloy::signers::local::MnemonicBuilder::<
+                alloy::signers::local::coins_bip39::English,
+            >::default()
+            .phrase(mnemonic.as_str())
+            .index(account_index)?
+            .build()?;
+            let token_address = contracts
+                .get_contract_address(Contract::EspTokenProxy)
+                .expect("ESP token deployed")
+                .to_alloy();
+            let staking_priv_keys = network_config.staking_priv_keys();
+            stake_in_contract_for_test(
+                l1_url.clone(),
+                deployer_signer_alloy,
+                stake_table_address,
+                token_address,
+                staking_priv_keys,
+            )
+            .await?;
+        }
 
         let provider = Provider::<Http>::try_from(url.as_str())
             .unwrap()
@@ -350,15 +374,48 @@ async fn main() -> anyhow::Result<()> {
         let prover_handle = spawn(run_prover_service_with_stake_table(
             prover_config,
             SequencerApiVersion::instance(),
-            Arc::new(st.clone()),
+            Arc::new(initial_stake_table.clone()),
         ));
         handles.push(prover_handle);
     }
 
+    const NUM_NODES: usize = 2;
+    let chain_config = ChainConfig {
+        max_block_size: max_block_size.into(),
+        base_fee: 1.into(),
+        stake_table_contract: Some(stake_table_address.to_ethers()),
+        ..Default::default()
+    };
+
+    let config = network_config.hotshot_config();
+
+    tracing::info!("Hotshot config {config:?}");
+
+    tracing::info!("Chain config: {:?}", chain_config);
+    let state = ValidatedState {
+        chain_config: chain_config.into(),
+        ..Default::default()
+    };
+    tracing::info!("State: {:?}", state);
+
+    let states = std::array::from_fn(|_| state.clone());
+    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+        .api_config(api_options)
+        .network_config(network_config)
+        .states(states)
+        .build();
+
+    // Start the nodes
+    let network = TestNetwork::new(
+        config,
+        SequencerVersions::<EpochVersion, EpochVersion>::new(),
+    )
+    .await;
+
     let relay_server_handle = spawn(async move {
         let _ = run_relay_server(
             None,
-            one_honest_threshold(total_stake),
+            one_honest_threshold(initial_total_stake),
             format!("http://0.0.0.0:{relay_server_port}")
                 .parse()
                 .unwrap(),
