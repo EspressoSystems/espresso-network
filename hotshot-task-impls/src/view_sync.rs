@@ -22,8 +22,8 @@ use hotshot_types::{
         ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        ViewSyncCommitData2, ViewSyncCommitVote2, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
-        ViewSyncPreCommitData2, ViewSyncPreCommitVote2,
+        HasEpoch, ViewSyncCommitData2, ViewSyncCommitVote2, ViewSyncFinalizeData2,
+        ViewSyncFinalizeVote2, ViewSyncPreCommitData2, ViewSyncPreCommitVote2,
     },
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
