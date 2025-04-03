@@ -22,12 +22,14 @@ use hotshot_types::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
+    message::UpgradeLock,
     stake_table::StakeTableEntry,
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
+    utils::verify_leaf_chain,
     PeerConfig,
 };
 use indexmap::IndexMap;
@@ -38,6 +40,7 @@ use super::{
     v0_3::{DAMembers, Validator},
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
+use crate::{EpochVersion, SequencerVersions};
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 
@@ -808,7 +811,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         membership: Arc<RwLock<Self>>,
         block_height: u64,
         epoch: Epoch,
-    ) -> anyhow::Result<Header> {
+    ) -> anyhow::Result<Leaf2> {
         let peers = membership.read().await.peers.clone();
         let stake_table = membership.read().await.stake_table(Some(epoch)).clone();
         let success_threshold = membership.read().await.success_threshold(Some(epoch));
@@ -817,7 +820,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             .fetch_leaf(block_height, stake_table.clone(), success_threshold)
             .await?;
 
-        Ok(leaf.block_header().clone())
+        Ok(leaf)
     }
 
     async fn get_epoch_drb(
@@ -834,9 +837,18 @@ impl Membership<SeqTypes> for EpochCommittees {
             epoch,
             block_height
         );
-        let drb_leaf = peers
-            .fetch_leaf(block_height, stake_table, success_threshold)
-            .await?;
+        let mut drb_leaf_chain = peers.try_fetch_leaves(1, block_height).await?;
+
+        drb_leaf_chain.sort_by_key(|l| l.view_number());
+        let leaf_chain = drb_leaf_chain.into_iter().rev().collect();
+        let drb_leaf = verify_leaf_chain(
+            leaf_chain,
+            stake_table.clone(),
+            success_threshold,
+            block_height,
+            &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+        )
+        .await?;
 
         let Some(drb) = drb_leaf.next_drb_result else {
             tracing::error!(

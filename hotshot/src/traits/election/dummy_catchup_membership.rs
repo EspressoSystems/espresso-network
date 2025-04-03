@@ -3,6 +3,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use anyhow::Ok;
 use async_lock::RwLock;
 use hotshot_types::{
+    data::Leaf2,
     drb::DrbResult,
     traits::{election::Membership, node_implementation::NodeType},
 };
@@ -166,9 +167,9 @@ where
         _membership: Arc<RwLock<Self>>,
         _block_height: u64,
         _epoch: TYPES::Epoch,
-    ) -> anyhow::Result<TYPES::BlockHeader> {
+    ) -> anyhow::Result<Leaf2<TYPES>> {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        Ok(TYPES::BlockHeader::default())
+        anyhow::bail!("Not implemented");
     }
 
     async fn get_epoch_drb(
