@@ -14,6 +14,13 @@
 
 use std::{future::IntoFuture, sync::Arc};
 
+use anyhow::bail;
+use async_trait::async_trait;
+use derive_more::From;
+use futures::future::FutureExt;
+use hotshot_types::traits::node_implementation::{ConsensusTime, NodeType};
+
+use super::Storable;
 use crate::{
     availability::{QueryablePayload, StateCertQueryData},
     data_source::{
@@ -28,13 +35,6 @@ use crate::{
     },
     Payload, QueryError, QueryResult,
 };
-use anyhow::bail;
-use async_trait::async_trait;
-use derive_more::From;
-use futures::future::FutureExt;
-use hotshot_types::traits::node_implementation::{ConsensusTime, NodeType};
-
-use super::Storable;
 
 #[derive(Clone, Copy, Debug, From)]
 pub(super) struct StateCertRequest(u64);
