@@ -770,7 +770,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         let stake_tables = self
-            .get_stake_table_by_epoch(epoch, address, block_header.height())
+            .get_stake_table_by_epoch(epoch, address, block_header.l1_head())
             .await
             .inspect_err(|e| {
                 tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
