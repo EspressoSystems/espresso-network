@@ -91,12 +91,13 @@ impl StateProverConfig {
     }
 
     pub async fn blocks_per_epoch(&self) -> anyhow::Result<u64> {
-        blocks_per_epoch(&self.sequencer_url).await
+        Ok(epoch_config(&self.sequencer_url).await?.0)
     }
 }
 
-/// Get the BLOCKS_PER_EPOCH / EPOCH_HEIGHT from the sequencer's `PublicHotShotConfig` struct
-pub async fn blocks_per_epoch(sequencer_url: &Url) -> anyhow::Result<u64> {
+/// Get the epoch-related  from the sequencer's `PublicHotShotConfig` struct
+/// return (blocks_per_epoch, epoch_start_block)
+pub async fn epoch_config(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
     let config_url = sequencer_url
         .join("/config/hotshot")
         .with_context(|| "Invalid URL")?;
@@ -110,7 +111,10 @@ pub async fn blocks_per_epoch(sequencer_url: &Url) -> anyhow::Result<u64> {
         .send()
         .await
         {
-            Ok(resp) => break resp.hotshot_config().blocks_per_epoch(),
+            Ok(resp) => {
+                let config = resp.hotshot_config();
+                break (config.blocks_per_epoch(), config.epoch_start_block());
+            },
             Err(e) => {
                 tracing::error!("Failed to fetch the network config: {e}");
                 sleep(Duration::from_secs(5)).await;
