@@ -1293,6 +1293,30 @@ impl SequencerPersistence for Persistence {
         tx.commit().await
     }
 
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let result = self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT * FROM high_qc2 where id = true")
+            .await?;
+
+        result
+            .map(|row| {
+                let bytes: Vec<u8> = row.get("data");
+                anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
+            })
+            .transpose()
+    }
+
+    async fn store_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let high_qc_bytes = bincode::serialize(&high_qc).context("serializing high qc")?;
+        let mut tx = self.db.write().await?;
+        tx.upsert("high_qc2", ["id", "data"], ["id"], [(true, high_qc_bytes)])
+            .await?;
+        tx.commit().await
+    }
+
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
         let batch_size: i64 = 10000;
         let mut offset: i64 = 0;

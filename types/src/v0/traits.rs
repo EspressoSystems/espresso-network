@@ -720,6 +720,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
     async fn load_upgrade_certificate(
         &self,
     ) -> anyhow::Result<Option<UpgradeCertificate<SeqTypes>>>;
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>>;
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>>;
     async fn load_state_cert(
         &self,
@@ -755,7 +756,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
             .load_next_epoch_quorum_certificate()
             .await
             .context("loading next epoch qc")?;
-        let (leaf, high_qc, anchor_view) = match self
+        let (leaf, anchor_leaf_high_qc, anchor_view) = match self
             .load_anchor_leaf()
             .await
             .context("loading anchor leaf")?
@@ -831,6 +832,12 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
             .await
             .context("loading light client state update certificate")?
             .unwrap_or(LightClientStateUpdateCertificate::genesis());
+
+        let high_qc = self
+            .load_high_qc2()
+            .await
+            .context("loading high qc")?
+            .unwrap_or(anchor_leaf_high_qc);
 
         tracing::info!(
             ?leaf,
@@ -960,6 +967,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         &self,
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()>;
+    async fn store_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()>;
     async fn migrate_consensus(&self) -> anyhow::Result<()> {
         tracing::warn!("migrating consensus data...");
 
@@ -1113,8 +1121,8 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).append_quorum_proposal2(&proposal_qp_wrapper).await
     }
 
-    async fn update_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        Ok(())
+    async fn update_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        (**self).store_high_qc2(high_qc).await
     }
 
     async fn update_decided_upgrade_certificate(

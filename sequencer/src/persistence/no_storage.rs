@@ -127,6 +127,9 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<Option<UpgradeCertificate<SeqTypes>>> {
         Ok(None)
     }
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
 
     async fn append_vid(
         &self,
@@ -165,6 +168,9 @@ impl SequencerPersistence for NoStorage {
         &self,
         _decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn store_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
     }
 

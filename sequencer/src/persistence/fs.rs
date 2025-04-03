@@ -193,6 +193,10 @@ impl Inner {
         self.path.join("upgrade_certificate")
     }
 
+    fn high_qc2_dir_path(&self) -> PathBuf {
+        self.path.join("high_qc2")
+    }
+
     fn stake_table_dir_path(&self) -> PathBuf {
         self.path.join("stake_table")
     }
@@ -859,6 +863,35 @@ impl SequencerPersistence for Persistence {
             |mut file| {
                 let bytes =
                     bincode::serialize(&certificate).context("serializing upgrade certificate")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let path = inner.high_qc2_dir_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path).context("read")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize high qc")?,
+        ))
+    }
+
+    async fn store_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let path = &inner.high_qc2_dir_path();
+        inner.replace(
+            path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                let bytes = bincode::serialize(&high_qc).context("serializing high qc")?;
                 file.write_all(&bytes)?;
                 Ok(())
             },
