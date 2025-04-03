@@ -108,9 +108,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 );
 
                 if let Some(entry) = self.consensus.read().await.saved_payloads().get(&view) {
-                    ensure!(entry.payload.encode() == proposal.data.encoded_transactions, error!(
-                      "Received DA proposal for view {:?} but we already have a payload for that view and they are not identical.  Throwing it away",
-                      view)
+                    ensure!(
+                        entry.payload.encode() == proposal.data.encoded_transactions,
+                        "Received DA proposal for view {view:?} but we already have a payload for that view and they are not identical.  Throwing it away",
                     );
                 }
 
@@ -119,7 +119,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     .membership_coordinator
                     .membership_for_epoch(proposal.data.epoch)
                     .await
-                    .context(warn!("No stake table for epoch"))?
+                    .context(warn!("No stake table for epoch {:?}", proposal.data.epoch))?
                     .leader(view)
                     .await?;
                 ensure!(
@@ -176,10 +176,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 ensure!(
                     membership.has_da_stake(&self.public_key).await,
-                    debug!(
-                        "We were not chosen for consensus committee for view {:?} in epoch {:?}",
-                        view_number, epoch_number
-                    )
+                    debug!("We were not chosen for consensus committee for view {view_number} in epoch {epoch_number:?}")
                 );
                 let total_weight =
                     vid_total_weight::<TYPES>(membership.stake_table().await, epoch_number);
@@ -377,7 +374,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 );
 
                 if *view - *self.cur_view > 1 {
-                    tracing::info!("View changed by more than 1 going to view {:?}", view);
+                    tracing::info!("View changed by more than 1 going to view {view:?}");
                 }
                 self.cur_view = view;
             },

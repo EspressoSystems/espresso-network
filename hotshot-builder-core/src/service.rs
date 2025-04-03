@@ -717,12 +717,12 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                 .await
             {
                 tracing::warn!(
-                    "Error {e} sending get_available_blocks request for parent {state_id}",
+                    "Error {e} sending get_available_blocks request for parent {state_id}"
                 );
             }
         }
 
-        tracing::debug!("Waiting for response for get_available_blocks with parent {state_id}",);
+        tracing::debug!("Waiting for response for get_available_blocks with parent {state_id}");
 
         let response_received = loop {
             match timeout(check_duration, response_receiver.recv()).await {
@@ -737,7 +737,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                             .builder_state_to_last_built_block
                             .get(&state_id)
                         {
-                            tracing::info!("Returning last built block for parent {state_id}",);
+                            tracing::info!("Returning last built block for parent {state_id}");
                             break Ok(last_built_block.clone());
                         }
                         break Err(AvailableBlocksError::NoBlocksAvailable);

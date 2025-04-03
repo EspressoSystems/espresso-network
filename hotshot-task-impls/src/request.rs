@@ -291,11 +291,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
                     }
                 } else {
                     // This shouldn't be possible `recipients_it.next()` should clone original and start over if `None`
-                    tracing::warn!(
-                        "Sent VID request to all available DA members and got no response for view: {:?}, my id: {:?}",
-                        view,
-                        my_id,
-                    );
+                    tracing::warn!("Sent VID request to all available DA members and got no response for view: {view:?}, my id: {my_id:?}");
                     return;
                 }
             }

@@ -274,25 +274,25 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::ViewSyncPreCommitCertificateRecv(certificate) => {
-                tracing::debug!("Received view sync cert for phase {:?}", certificate);
+                tracing::debug!("Received view sync cert for phase {certificate:?}");
                 let view = certificate.view_number();
                 self.send_to_or_create_replica(event, view, &event_stream)
                     .await;
             },
             HotShotEvent::ViewSyncCommitCertificateRecv(certificate) => {
-                tracing::debug!("Received view sync cert for phase {:?}", certificate);
+                tracing::debug!("Received view sync cert for phase {certificate:?}");
                 let view = certificate.view_number();
                 self.send_to_or_create_replica(event, view, &event_stream)
                     .await;
             },
             HotShotEvent::ViewSyncFinalizeCertificateRecv(certificate) => {
-                tracing::debug!("Received view sync cert for phase {:?}", certificate);
+                tracing::debug!("Received view sync cert for phase {certificate:?}");
                 let view = certificate.view_number();
                 self.send_to_or_create_replica(event, view, &event_stream)
                     .await;
             },
             HotShotEvent::ViewSyncTimeout(view, ..) => {
-                tracing::debug!("view sync timeout in main task {:?}", view);
+                tracing::debug!("view sync timeout in main task {view:?}");
                 let view = *view;
                 self.send_to_or_create_replica(event, view, &event_stream)
                     .await;
@@ -621,7 +621,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     let timeout = self.view_sync_timeout;
                     async move {
                         sleep(timeout).await;
-                        tracing::warn!("Vote sending timed out in ViewSyncPreCommitCertificateRecv, Relay = {}", relay);
+                        tracing::warn!("Vote sending timed out in ViewSyncPreCommitCertificateRecv, Relay = {relay}");
 
                         broadcast_event(
                             Arc::new(HotShotEvent::ViewSyncTimeout(
@@ -726,10 +726,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     let timeout = self.view_sync_timeout;
                     async move {
                         sleep(timeout).await;
-                        tracing::warn!(
-                            "Vote sending timed out in ViewSyncCommitCertificateRecv, relay = {}",
-                            relay
-                        );
+                        tracing::warn!("Vote sending timed out in ViewSyncCommitCertificateRecv, relay = {relay}");
                         broadcast_event(
                             Arc::new(HotShotEvent::ViewSyncTimeout(
                                 TYPES::View::new(*next_view),
@@ -900,8 +897,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                         async move {
                             sleep(timeout).await;
                             tracing::warn!(
-                                "Vote sending timed out in ViewSyncTimeout relay = {}",
-                                relay
+                                "Vote sending timed out in ViewSyncTimeout relay = {relay}"
                             );
                             broadcast_event(
                                 Arc::new(HotShotEvent::ViewSyncTimeout(
