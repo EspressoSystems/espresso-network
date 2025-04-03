@@ -169,8 +169,8 @@ pub async fn main() -> Result<()> {
     let provider = ProviderBuilder::new()
         .wallet(wallet)
         .on_http(config.rpc_url.clone());
-    let stake_table = StakeTableInstance::new(config.stake_table_address, provider.clone());
-    let token = EspTokenInstance::new(config.token_address, provider.clone());
+    let stake_table_addr = config.stake_table_address;
+    let token_addr = config.token_address;
 
     let result = match config.commands {
         // TODO: The info command is not implemented yet. It's not very useful for local testing or
@@ -197,36 +197,36 @@ pub async fn main() -> Result<()> {
         },
         Commands::DeregisterValidator {} => {
             tracing::info!("Deregistering validator {account}");
-            deregister_validator(stake_table).await
+            deregister_validator(&provider, stake_table_addr).await
         },
         Commands::Approve { amount } => {
             tracing::info!(
                 "Approving stake table {} to spend {amount}",
                 config.stake_table_address
             );
-            approve(token, config.stake_table_address, amount).await
+            approve(&provider, token_addr, stake_table_addr, amount).await
         },
         Commands::Delegate {
             validator_address,
             amount,
         } => {
             tracing::info!("Delegating {amount} to {validator_address}");
-            delegate(stake_table, validator_address, amount).await
+            delegate(&provider, stake_table_addr, validator_address, amount).await
         },
         Commands::Undelegate {
             validator_address,
             amount,
         } => {
             tracing::info!("Undelegating {amount} from {validator_address}");
-            undelegate(stake_table, validator_address, amount).await
+            undelegate(&provider, stake_table_addr, validator_address, amount).await
         },
         Commands::ClaimWithdrawal { validator_address } => {
             tracing::info!("Claiming withdrawal for {validator_address}");
-            claim_withdrawal(stake_table, validator_address).await
+            claim_withdrawal(&provider, stake_table_addr, validator_address).await
         },
         Commands::ClaimValidatorExit { validator_address } => {
             tracing::info!("Claiming validator exit for {validator_address}");
-            claim_validator_exit(stake_table, validator_address).await
+            claim_validator_exit(&provider, stake_table_addr, validator_address).await
         },
         Commands::StakeForDemo { num_validators } => {
             tracing::info!("Staking for demo with {num_validators} validators");

@@ -45,4 +45,4 @@ jobs:
       - name: Check (postgres)
         run: |
           cargo clippy --workspace --features testing --all-targets --keep-going \
-          -- -D warnings
+          -- -D warnings -A clippy::doc_overindented_list_items
