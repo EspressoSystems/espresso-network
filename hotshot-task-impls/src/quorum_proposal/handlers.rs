@@ -171,6 +171,11 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         )
                         .await
                         .is_err()
+                            || !check_qc_state_cert_correspondence(
+                                qc,
+                                state_cert,
+                                self.epoch_height,
+                            )
                         {
                             tracing::error!("Failed to validate state cert");
                             return None;
@@ -338,6 +343,11 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         )
                         .await
                         .is_err()
+                            || !check_qc_state_cert_correspondence(
+                                qc,
+                                state_cert,
+                                self.epoch_height,
+                            )
                         {
                             tracing::error!("Failed to validate state cert");
                             continue;
