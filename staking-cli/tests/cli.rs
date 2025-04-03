@@ -206,3 +206,17 @@ async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
         .assert_success();
     Ok(())
 }
+
+#[tokio::test]
+async fn test_cli_approve() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    system
+        .cmd()
+        .arg("approve")
+        .arg("--amount")
+        .arg("1234")
+        .output()?
+        .assert_success();
+    Ok(())
+}
