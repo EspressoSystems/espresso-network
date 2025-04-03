@@ -550,6 +550,61 @@ contract StakeTable_register_Test is Test {
     function test_revertIf_undelegate_AfterValidatorExit() public {
         // TODO
     }
+
+    function test_PoC_Undelegation_Overrides() public {
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed1);
+
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        // register the node
+        vm.prank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+
+        vm.startPrank(delegator);
+
+        // Delegate some funds
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, 3 ether);
+        stakeTable.delegate(validator, 3 ether);
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
+        assertEq(token.balanceOf(address(stakeTable)), 3 ether);
+
+        stakeTable.undelegate(validator, 2 ether);
+        vm.expectRevert(S.UndelegationAlreadyExists.selector);
+        stakeTable.undelegate(validator, 1 ether);
+
+        // can't undelegate until the previous undelegation is withdrawn
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectRevert(S.UndelegationAlreadyExists.selector);
+        stakeTable.undelegate(validator, 1 ether);
+        stakeTable.claimWithdrawal(validator);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether + 2 ether);
+
+        assertEq(stakeTable.delegations(validator, delegator), 1 ether);
+
+        // now the delegator can undelegate again
+        stakeTable.undelegate(validator, 1 ether);
+
+        assertEq(stakeTable.delegations(validator, delegator), 0);
+        assertEq(token.balanceOf(address(stakeTable)), 1 ether);
+
+        vm.expectRevert(S.PrematureWithdrawal.selector);
+        stakeTable.claimWithdrawal(validator);
+
+        vm.stopPrank();
+    }
 }
 
 contract StakeTableV2Test is S {
