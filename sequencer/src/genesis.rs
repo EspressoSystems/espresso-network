@@ -10,7 +10,6 @@ use espresso_types::{
     Upgrade,
 };
 use serde::{Deserialize, Serialize};
-use url::Url;
 use vbs::version::Version;
 
 /// Initial configuration of an Espresso stake table.
@@ -83,14 +82,12 @@ impl Genesis {
 }
 
 impl Genesis {
-    pub async fn validate_fee_contract(&self, l1_rpc_url: Url) -> anyhow::Result<()> {
-        let l1 = L1Client::new(vec![l1_rpc_url]).with_context(|| "failed to create L1 client")?;
-
+    pub async fn validate_fee_contract(&self, l1: &L1Client) -> anyhow::Result<()> {
         if let Some(fee_contract_address) = self.chain_config.fee_contract {
             tracing::info!("validating fee contract at {fee_contract_address:x}");
 
             if !l1
-                .is_proxy_contract(fee_contract_address)
+                .retry_on_all_providers(|| l1.is_proxy_contract(fee_contract_address))
                 .await
                 .context("checking if fee contract is a proxy")?
             {
@@ -112,7 +109,7 @@ impl Genesis {
                 if fee_contract_address == Address::default() {
                     anyhow::bail!("Fee contract cannot use the zero address");
                 } else if !l1
-                    .is_proxy_contract(fee_contract_address)
+                    .retry_on_all_providers(|| l1.is_proxy_contract(fee_contract_address))
                     .await
                     .context(format!(
                         "checking if fee contract is a proxy in upgrade {version}",
@@ -573,7 +570,9 @@ mod test {
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
 
         // Call the validation logic for the fee_contract address
-        let result = genesis.validate_fee_contract(anvil.endpoint_url()).await;
+        let result = genesis
+            .validate_fee_contract(&L1Client::anvil(&anvil).unwrap())
+            .await;
 
         assert!(
             result.is_ok(),
@@ -653,7 +652,9 @@ mod test {
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
 
         // Call the validation logic for the fee_contract address
-        let result = genesis.validate_fee_contract(anvil.endpoint_url()).await;
+        let result = genesis
+            .validate_fee_contract(&L1Client::anvil(&anvil).unwrap())
+            .await;
 
         assert!(
             result.is_ok(),
@@ -717,7 +718,7 @@ mod test {
 
         // validate the fee_contract address
         let result = genesis
-            .validate_fee_contract(rpc_url.parse().unwrap())
+            .validate_fee_contract(&L1Client::new(vec![rpc_url.parse().unwrap()]).unwrap())
             .await;
 
         // check if the result from the validation is an error
@@ -772,7 +773,7 @@ mod test {
 
         // validate the fee_contract address
         let result = genesis
-            .validate_fee_contract(rpc_url.parse().unwrap())
+            .validate_fee_contract(&L1Client::new(vec![rpc_url.parse().unwrap()]).unwrap())
             .await;
 
         // check if the result from the validation is an error
@@ -784,6 +785,62 @@ mod test {
         } else {
             panic!("Expected the fee contract to complain about the zero address but the validation succeeded");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_genesis_fee_contract_l1_failover() -> anyhow::Result<()> {
+        setup_test();
+
+        let anvil = Arc::new(Anvil::new().spawn());
+        let wallet = anvil.wallet().unwrap();
+        let admin = wallet.default_signer().address();
+        let inner_provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .on_http(anvil.endpoint_url());
+        let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
+        let mut contracts = Contracts::new();
+
+        let proxy_addr =
+            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
+
+        let toml = format!(
+            r#"
+            base_version = "0.1"
+            upgrade_version = "0.2"
+
+            [stake_table]
+            capacity = 10
+
+            [chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "{:?}"
+
+            [header]
+            timestamp = 123456
+
+            [l1_finalized]
+            number = 42
+        "#,
+            proxy_addr
+        )
+        .to_string();
+
+        let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
+        genesis
+            .validate_fee_contract(
+                &L1Client::new(vec![
+                    "http://notareall1provider".parse().unwrap(),
+                    anvil.endpoint().parse().unwrap(),
+                ])
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        Ok(())
     }
 
     #[test]

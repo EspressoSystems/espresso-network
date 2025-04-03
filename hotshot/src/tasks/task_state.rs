@@ -328,6 +328,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             timeout_task: spawn(async {}),
             timeout: handle.hotshot.config.next_view_timeout,
             consensus: OuterConsensus::new(consensus),
+            storage: Arc::clone(&handle.storage),
             id: handle.hotshot.id,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,

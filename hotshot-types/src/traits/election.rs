@@ -142,13 +142,20 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height
-    fn get_epoch_root_and_drb(
+    fn get_epoch_root(
         _membership: Arc<RwLock<Self>>,
         _block_height: u64,
-        _epoch_height: u64,
         _epoch: TYPES::Epoch,
-    ) -> impl std::future::Future<Output = anyhow::Result<(TYPES::BlockHeader, DrbResult)>> + Send
-    {
+    ) -> impl std::future::Future<Output = anyhow::Result<TYPES::BlockHeader>> + Send {
+        async move { anyhow::bail!("Not implemented") }
+    }
+
+    /// Gets the DRB result for the given epoch
+    fn get_epoch_drb(
+        _membership: Arc<RwLock<Self>>,
+        _block_height: u64,
+        _epoch: TYPES::Epoch,
+    ) -> impl std::future::Future<Output = anyhow::Result<DrbResult>> + Send {
         async move { anyhow::bail!("Not implemented") }
     }
 

@@ -706,18 +706,20 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         }
     }
     let mut consensus_writer = validation_info.consensus.write().await;
-    consensus_writer.update_high_qc(justify_qc.clone())?;
     if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
-        consensus_writer.update_next_epoch_high_qc(next_epoch_justify_qc.clone())?;
         if justify_qc
             .data
             .block_number
             .is_some_and(|bn| is_transition_block(bn, validation_info.epoch_height))
         {
+            consensus_writer.reset_high_qc(justify_qc.clone(), next_epoch_justify_qc.clone())?;
             consensus_writer
                 .update_transition_qc(justify_qc.clone(), next_epoch_justify_qc.clone());
+            return Ok(());
         }
+        consensus_writer.update_next_epoch_high_qc(next_epoch_justify_qc.clone())?;
     }
+    consensus_writer.update_high_qc(justify_qc.clone())?;
 
     Ok(())
 }
@@ -1220,7 +1222,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
         if qc.view_number() != next_epoch_qc.view_number() || qc.data != *next_epoch_qc.data {
             bail!("Next epoch qc exists but it's not equal with qc.");
         }
-        epoch_membership = epoch_membership.next_epoch().await?;
+        epoch_membership = epoch_membership.next_epoch_stake_table().await?;
         let membership_next_stake_table = epoch_membership.stake_table().await;
         let membership_next_success_threshold = epoch_membership.success_threshold().await;
 

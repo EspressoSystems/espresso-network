@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use clap::Parser;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::{
-    future::Future,
+    future::{Future, TryFuture, TryFutureExt},
     stream::{self, StreamExt},
 };
 use hotshot::types::BLSPubKey;
@@ -210,18 +210,6 @@ impl SwitchingTransport {
 }
 
 impl SingleTransportStatus {
-    /// Create a new `SingleTransportStatus` at the given URL index
-    fn new(url_index: usize) -> Self {
-        Self {
-            url_index,
-            last_failure: None,
-            consecutive_failures: 0,
-            rate_limited_until: None,
-            // Whether or not this transport is being shut down (switching to the next transport)
-            shutting_down: false,
-        }
-    }
-
     /// Log a successful call to the inner transport
     fn log_success(&mut self) {
         self.consecutive_failures = 0;
@@ -270,10 +258,11 @@ impl SingleTransportStatus {
 
 impl SingleTransport {
     /// Create a new `SingleTransport` with the given URL
-    fn new(url: &Url, url_index: usize) -> Self {
+    fn new(url: &Url, generation: usize) -> Self {
         Self {
+            generation,
             client: Http::new(url.clone()),
-            status: Arc::new(RwLock::new(SingleTransportStatus::new(url_index))),
+            status: Default::default(),
         }
     }
 }
@@ -331,7 +320,7 @@ impl Service<RequestPacket> for SwitchingTransport {
                     if let Some(f) = self_clone
                         .metrics
                         .failures
-                        .get(current_transport.status.read().url_index)
+                        .get(current_transport.generation % self_clone.urls.len())
                     {
                         f.add(1);
                     }
@@ -362,12 +351,13 @@ impl Service<RequestPacket> for SwitchingTransport {
                         self_clone.metrics.failovers.add(1);
 
                         // Calculate the next URL index
-                        let next_index =
-                            current_transport.status.read().url_index + 1 % self_clone.urls.len();
+                        let next_gen = current_transport.generation + 1;
+                        let next_index = next_gen % self_clone.urls.len();
                         let url = self_clone.urls[next_index].clone();
+                        tracing::info!(%url, "failing over to next L1 transport");
 
                         // Create a new transport from the next URL and index
-                        let new_transport = SingleTransport::new(&url, next_index);
+                        let new_transport = SingleTransport::new(&url, next_gen);
 
                         // Switch to the next URL
                         *self_clone.current_transport.write() = new_transport;
@@ -408,6 +398,15 @@ impl L1Client {
     /// Construct a new L1 client with the default options.
     pub fn new(url: Vec<Url>) -> anyhow::Result<Self> {
         L1ClientOptions::default().connect(url)
+    }
+
+    /// test only
+    pub fn anvil(anvil: &alloy::node_bindings::AnvilInstance) -> anyhow::Result<Self> {
+        L1ClientOptions {
+            l1_ws_provider: Some(vec![anvil.ws_endpoint().parse()?]),
+            ..Default::default()
+        }
+        .connect(vec![anvil.endpoint().parse()?])
     }
 
     /// Start the background tasks which keep the L1 client up to date.
@@ -946,6 +945,30 @@ impl L1Client {
         Ok(implementation_address != Address::ZERO)
     }
 
+    pub async fn retry_on_all_providers<Fut>(
+        &self,
+        op: impl Fn() -> Fut,
+    ) -> Result<Fut::Ok, Fut::Error>
+    where
+        Fut: TryFuture,
+    {
+        let transport = &self.transport;
+        let start = transport.current_transport.read().generation % transport.urls.len();
+        let end = start + transport.urls.len();
+        loop {
+            match op().into_future().await {
+                Ok(res) => return Ok(res),
+                Err(err) => {
+                    if transport.current_transport.read().generation >= end {
+                        return Err(err);
+                    } else {
+                        self.retry_delay().await;
+                    }
+                },
+            }
+        }
+    }
+
     fn options(&self) -> &L1ClientOptions {
         self.transport.options()
     }
@@ -976,7 +999,7 @@ impl L1State {
         );
 
         if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block) {
-            if old_number == block.info.number {
+            if old_number == block.info.number && block != old_block {
                 tracing::error!(
                     ?old_block,
                     ?block,
@@ -1356,13 +1379,8 @@ mod test {
 
     /// A helper function to get the index of the current provider in the failover list.
     fn get_failover_index(provider: &L1Client) -> usize {
-        provider
-            .transport
-            .current_transport
-            .read()
-            .status
-            .read()
-            .url_index
+        let transport = &provider.transport;
+        provider.transport.current_transport.read().generation % transport.urls.len()
     }
 
     async fn test_failover_update_task_helper(ws: bool) {
