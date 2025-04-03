@@ -5,7 +5,7 @@ pragma solidity ^0.8.0;
 import { BN254 } from "bn254/BN254.sol";
 import { LightClient } from "./LightClient.sol";
 import { IPlonkVerifier } from "./interfaces/IPlonkVerifier.sol";
-import { PlonkVerifierV2 as PV } from "./libraries/PlonkVerifierV2.sol";
+import { PlonkVerifierV2 } from "./libraries/PlonkVerifierV2.sol";
 import { LightClientStateUpdateVKV2 as VkLib } from "./libraries/LightClientStateUpdateVKV2.sol";
 
 /// @notice LightClient V2: with stake table snapshot update during epoch change.
@@ -13,8 +13,6 @@ contract LightClientV2 is LightClient {
     /// @notice When entering a new epoch and a new stake table snapshot.
     event NewEpoch(uint64 epoch);
 
-    /// @notice PlonkVerifier contract address
-    address public _verifier;
     /// @notice number of blocks per epoch
     uint64 public _blocksPerEpoch;
     /// @notice stake table commitments for the current voting stakers
@@ -26,18 +24,17 @@ contract LightClientV2 is LightClient {
     error DeprecatedApi();
 
     /// @notice Initialize V2
-    function initializeV2(uint64 blocksPerEpoch, address verifier) public reinitializer(2) {
-        _initializeV2(blocksPerEpoch, verifier);
+    function initializeV2(uint64 blocksPerEpoch) public reinitializer(2) {
+        _initializeV2(blocksPerEpoch);
     }
 
     /// @dev Avoid initialization problem during testing, avoid always upgrading from V1
-    function _initializeV2(uint64 blocksPerEpoch, address verifier) internal {
-        if (blocksPerEpoch == 0 || verifier == address(0)) {
+    function _initializeV2(uint64 blocksPerEpoch) internal {
+        if (blocksPerEpoch == 0) {
             revert InvalidArgs();
         }
         votingStakeTableState = genesisStakeTableState;
         _blocksPerEpoch = blocksPerEpoch;
-        _verifier = verifier;
     }
 
     function getVersion()
@@ -164,7 +161,7 @@ contract LightClientV2 is LightClient {
         }
 
         // invoking PlonkVerifier2.sol::verify()
-        if (!PV(_verifier).verify(vk, publicInput, proof)) {
+        if (!PlonkVerifierV2.verify(vk, publicInput, proof)) {
             revert InvalidProof();
         }
     }

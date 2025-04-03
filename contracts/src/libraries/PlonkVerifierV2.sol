@@ -14,7 +14,7 @@ import { IPlonkVerifier } from "../interfaces/IPlonkVerifier.sol";
 ///           q_lc0 * w0 + q_lc1 * w1 + q_lc2 * w2 + q_lc3 * w3 +
 ///           q_hash0 * w0 + q_hash1 * w1 + q_hash2 * w2 + q_hash3 * w3 +
 ///           q_ecc * w0 * w1 * w2 * w3 * wo
-contract PlonkVerifierV2 {
+library PlonkVerifierV2 {
     /// Plonk: invalid inputs, either mismatching lengths among input arguments
     /// or empty input.
     error InvalidPlonkArgs();
@@ -69,7 +69,7 @@ contract PlonkVerifierV2 {
         IPlonkVerifier.VerifyingKey memory verifyingKey,
         uint256[11] memory publicInput,
         IPlonkVerifier.PlonkProof memory proof
-    ) public view virtual returns (bool) {
+    ) external view returns (bool) {
         _validateProof(proof);
 
         BN254.validateScalarField(BN254.ScalarField.wrap(publicInput[0]));
@@ -90,7 +90,7 @@ contract PlonkVerifierV2 {
     /// @dev Validate all group points and scalar fields. Revert if
     /// any are invalid.
     /// @param proof A Plonk proof
-    function _validateProof(IPlonkVerifier.PlonkProof memory proof) internal pure virtual {
+    function _validateProof(IPlonkVerifier.PlonkProof memory proof) internal pure {
         BN254.validateG1Point(proof.wire0);
         BN254.validateG1Point(proof.wire1);
         BN254.validateG1Point(proof.wire2);
@@ -173,7 +173,7 @@ contract PlonkVerifierV2 {
         IPlonkVerifier.VerifyingKey memory vk,
         uint256[11] memory pi,
         IPlonkVerifier.PlonkProof memory proof
-    ) internal pure virtual returns (Challenges memory res) {
+    ) internal pure returns (Challenges memory res) {
         uint256 p = BN254.R_MOD;
 
         assembly {

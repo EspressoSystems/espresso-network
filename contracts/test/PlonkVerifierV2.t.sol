@@ -23,15 +23,12 @@ import { PolynomialEvalV2 as Poly } from "../src/libraries/PolynomialEvalV2.sol"
 
 // Target contract
 import { PlonkVerifierV2 as V } from "../src/libraries/PlonkVerifierV2.sol";
-import { PlonkVerifierV2Mock as VMock } from "./mocks/PlonkVerifierV2Mock.sol";
 
 /// @dev Common helpers/utils for PlonkVerifier tests
 contract PlonkVerifierCommonTest is Test {
-    VMock verifier;
     IPlonkVerifier.VerifyingKey vk;
 
     constructor() {
-        verifier = new VMock();
         vk = VkLib.getVk();
     }
 
@@ -76,7 +73,7 @@ contract PlonkVerifierCommonTest is Test {
         )
     {
         IPlonkVerifier.PlonkProof memory proof = dummyProof(seed);
-        V.Challenges memory chal = verifier.computeChallenges(vk, publicInput, proof);
+        V.Challenges memory chal = V._computeChallenges(vk, publicInput, proof);
 
         Poly.EvalDomain memory domain = Poly.newEvalDomain(vk.domainSize);
         // pre-compute evaluation data
@@ -107,14 +104,14 @@ contract PlonkVerifier_constants_Test is PlonkVerifierCommonTest {
             result, (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256)
         );
 
-        assertEq(k1, verifier.COSET_K1());
-        assertEq(k2, verifier.COSET_K2());
-        assertEq(k3, verifier.COSET_K3());
-        assertEq(k4, verifier.COSET_K4());
-        assertEq(betaHX0, verifier.BETA_H_X0());
-        assertEq(betaHX1, verifier.BETA_H_X1());
-        assertEq(betaHY0, verifier.BETA_H_Y0());
-        assertEq(betaHY1, verifier.BETA_H_Y1());
+        assertEq(k1, V.COSET_K1);
+        assertEq(k2, V.COSET_K2);
+        assertEq(k3, V.COSET_K3);
+        assertEq(k4, V.COSET_K4);
+        assertEq(betaHX0, V.BETA_H_X0);
+        assertEq(betaHX1, V.BETA_H_X1);
+        assertEq(betaHY0, V.BETA_H_Y0);
+        assertEq(betaHY1, V.BETA_H_Y1);
     }
 }
 
@@ -137,7 +134,7 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
         );
 
         vm.resumeGasMetering();
-        assert(verifier.verify(verifyingKey, publicInput, proof));
+        assert(V.verify(verifyingKey, publicInput, proof));
     }
 
     /// @dev Test when bad verifying key is supplied, the verification should fail
@@ -174,7 +171,7 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
             mstore(badPointRef, badPoint)
         }
 
-        assert(!verifier.verify(verifyingKey, publicInput, proof));
+        assert(!V.verify(verifyingKey, publicInput, proof));
     }
 
     // @dev Test when bad public input is supplied, the verification should fail
@@ -194,7 +191,7 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
         (IPlonkVerifier.VerifyingKey memory verifyingKey,, IPlonkVerifier.PlonkProof memory proof) =
         abi.decode(result, (IPlonkVerifier.VerifyingKey, uint256[11], IPlonkVerifier.PlonkProof));
 
-        assert(!verifier.verify(verifyingKey, badPublicInput, proof));
+        assert(!V.verify(verifyingKey, badPublicInput, proof));
     }
 
     /// @dev Test when bad proof is supplied, the verification should fail
@@ -209,7 +206,7 @@ contract PlonkVerifier_verify_Test is PlonkVerifierCommonTest {
         (IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[11] memory publicInput,) = abi
             .decode(result, (IPlonkVerifier.VerifyingKey, uint256[11], IPlonkVerifier.PlonkProof));
 
-        assert(!verifier.verify(verifyingKey, publicInput, badProof));
+        assert(!V.verify(verifyingKey, publicInput, badProof));
     }
 }
 
@@ -219,7 +216,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
         // a valid proof
         IPlonkVerifier.PlonkProof memory proof = dummyProof(42);
 
-        verifier.validateProof(proof);
+        V._validateProof(proof);
     }
 
     /// @dev Randomly pick a coordinate of a point among points in a proof
@@ -248,7 +245,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
         }
 
         vm.expectRevert("Bn254: invalid G1 point");
-        verifier.validateProof(proof);
+        V._validateProof(proof);
     }
 
     /// @dev Randomly pick field in a proof mutate it to invalid value
@@ -269,7 +266,7 @@ contract PlonkVerifier_validateProof_Test is PlonkVerifierCommonTest {
         }
 
         vm.expectRevert("Bn254: invalid scalar field");
-        verifier.validateProof(proof);
+        V._validateProof(proof);
     }
 }
 
@@ -291,7 +288,7 @@ contract PlonkVerifier_computeChallenges_Test is PlonkVerifierCommonTest {
         bytes memory result = vm.ffi(cmds);
         V.Challenges memory chal = abi.decode(result, (V.Challenges));
 
-        V.Challenges memory c = verifier.computeChallenges(vk, publicInput, proof);
+        V.Challenges memory c = V._computeChallenges(vk, publicInput, proof);
         assertEq(chal.alpha, c.alpha);
         assertEq(chal.alpha2, c.alpha2);
         assertEq(chal.alpha3, c.alpha3);
