@@ -35,8 +35,11 @@ use super::{LightClientState, StateSignatureRequestBody};
 struct StateRelayServerState {
     /// Sequencer endpoint to query for stake table info
     sequencer_url: Url,
+    /// The capacity for the stake table
+    stake_table_capacity: u64,
+
     /// Epoch length (fetched from HotShot config)
-    blocks_per_epoch: u64,
+    blocks_per_epoch: Option<u64>,
     /// Minimum weight to form an available state signature bundle, map: epoch_num -> threshold
     thresholds: HashMap<u64, U256>,
     /// Stake table: map: epoch_num -> map(vk, weight)
@@ -60,15 +63,39 @@ struct StateRelayServerState {
 impl StateRelayServerState {
     /// Init the server state
     pub async fn new(sequencer_url: Url, stake_table_capacity: u64) -> anyhow::Result<Self> {
+        Ok(Self {
+            sequencer_url,
+            stake_table_capacity,
+            blocks_per_epoch: None,
+            thresholds: HashMap::new(),
+            known_nodes: HashMap::new(),
+            bundles: HashMap::new(),
+            latest_available_bundle: None,
+            latest_block_height: None,
+            queue: BTreeSet::new(),
+            shutdown: None,
+        })
+    }
+
+    /// after relay server started, when the first signature arrive, we query sequencer for the genesis and update local state.
+    /// The main reason we don't initialize at constructor (i.e. `Self::new()`) is due to cyclic dependency:
+    /// seq0 depends on relay server to be running to post light client signatures to;
+    /// relay server depends on seq0 to be running to query stake tables.
+    /// Thus, our strategy is to starts relay server with `None` and empty states and fill it only when needed.
+    async fn init_genesis(&mut self) -> anyhow::Result<()> {
         // fetch genesis info from sequencer
-        let blocks_per_epoch = blocks_per_epoch(&sequencer_url).await?;
-        let genesis_stake_table =
-            init_stake_table_from_sequencer(&sequencer_url, stake_table_capacity as usize).await?;
+        let blocks_per_epoch = blocks_per_epoch(&self.sequencer_url).await?;
+        let genesis_stake_table = init_stake_table_from_sequencer(
+            &self.sequencer_url,
+            self.stake_table_capacity as usize,
+        )
+        .await?;
 
         // init local state
+        self.blocks_per_epoch = Some(blocks_per_epoch);
+
         // TODO: (alex) confirm with team if epoch number starts with an offset or at strictly block 0
-        let mut thresholds = HashMap::new();
-        thresholds.insert(
+        self.thresholds.insert(
             1, // first epoch
             one_honest_threshold(genesis_stake_table.total_stake(SnapshotVersion::LastEpochStart)?),
         );
@@ -80,20 +107,9 @@ impl StateRelayServerState {
             genesis_known_nodes.insert(schnorr_vk, amt);
         }
 
-        let mut known_nodes = HashMap::new();
-        known_nodes.insert(1, genesis_known_nodes);
+        self.known_nodes.insert(1, genesis_known_nodes);
 
-        Ok(Self {
-            sequencer_url,
-            blocks_per_epoch,
-            thresholds,
-            known_nodes,
-            bundles: HashMap::new(),
-            latest_available_bundle: None,
-            latest_block_height: None,
-            queue: BTreeSet::new(),
-            shutdown: None,
-        })
+        Ok(())
     }
 
     /// sync the stake table at `height` for the relayer server, fetching from the sequencer.
@@ -101,10 +117,11 @@ impl StateRelayServerState {
     ///
     /// NOTE: should not be publicly invocable, always in-sync with `self.queue` for easier garbage collection.
     async fn sync_stake_table(&mut self, height: u64) -> anyhow::Result<()> {
-        let epoch = epoch_from_block_number(height, self.blocks_per_epoch);
+        let blocks_per_epoch = self.blocks_per_epoch.expect("forget to init genesis");
+        let epoch = epoch_from_block_number(height, blocks_per_epoch);
         let latest_epoch = epoch_from_block_number(
             self.latest_block_height.unwrap_or_default(),
-            self.blocks_per_epoch,
+            blocks_per_epoch,
         );
         if epoch <= latest_epoch {
             tracing::debug!(
@@ -158,6 +175,8 @@ impl StateRelayServerState {
     /// Centralizing all garbage-collection logic, won't panic, won't error, simply do nothing if nothing to prune.
     /// `until_height` is inclusive, meaning that would also be pruned.
     pub fn prune(&mut self, until_height: u64) {
+        let blocks_per_epoch = self.blocks_per_epoch.expect("forget to init genesis");
+
         while let Some(&height) = self.queue.first() {
             if height > until_height {
                 return;
@@ -166,7 +185,7 @@ impl StateRelayServerState {
             self.bundles.remove(&height);
             self.queue.pop_first();
 
-            let epoch = epoch_from_block_number(height, self.blocks_per_epoch);
+            let epoch = epoch_from_block_number(height, blocks_per_epoch);
             self.thresholds.remove(&epoch);
             self.known_nodes.remove(&epoch);
         }
@@ -216,7 +235,17 @@ impl StateRelayServerDataSource for StateRelayServerState {
             return Ok(());
         }
 
-        let epoch = epoch_from_block_number(block_height, self.blocks_per_epoch);
+        let blocks_per_epoch = match self.blocks_per_epoch {
+            Some(v) => v,
+            None => {
+                self.init_genesis().await.map_err(|e| {
+                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}"))
+                })?;
+                self.blocks_per_epoch
+                    .expect("internal err, init_genesis() wrong")
+            },
+        };
+        let epoch = epoch_from_block_number(block_height, blocks_per_epoch);
         if !self.known_nodes.contains_key(&epoch) {
             self.sync_stake_table(block_height).await.map_err(|e| {
                 ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}"))

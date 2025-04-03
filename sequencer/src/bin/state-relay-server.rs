@@ -2,7 +2,6 @@ use clap::Parser;
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use sequencer::{state_signature::relay_server::run_relay_server, SequencerApiVersion};
 use sequencer_utils::logging;
-use tide_disco::wait_for_server;
 use url::Url;
 use vbs::version::StaticVersionType;
 
@@ -40,11 +39,6 @@ async fn main() {
     args.logging.init();
 
     tracing::info!(port = args.port, "starting state relay server");
-
-    // wait for 20 sec (interval 1 sec) for the sequencer to start.
-    // sadly, we cannot specify this dependency in the `process-compose.yml` as it creates a cyclic dep:
-    // seq0 requires relay server to post signatures to, and relay server requires seq0 to init and further update epoch-specific stake table
-    wait_for_server(&args.sequencer_url, 20, 1000).await;
 
     run_relay_server(
         None,
