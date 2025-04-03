@@ -27,8 +27,8 @@ use vbs::version::StaticVersionType;
 
 use super::Provider;
 use crate::{
-    availability::{LeafQueryData, PayloadQueryData, VidCommonQueryData},
-    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
+    availability::{LeafQueryData, PayloadQueryData, StateCertQueryData, VidCommonQueryData},
+    fetching::request::{LeafRequest, PayloadRequest, StateCertRequest, VidCommonRequest},
     types::HeightIndexed,
     Error, Header, Payload, VidCommon,
 };
@@ -234,6 +234,27 @@ where
             },
             Err(err) => {
                 tracing::error!("failed to fetch VID common {req:?}: {err}");
+                None
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, StateCertRequest> for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: StateCertRequest) -> Option<StateCertQueryData<Types>> {
+        match self
+            .client
+            .get::<StateCertQueryData<Types>>(&format!("availability/state-cert/{}", req.0))
+            .send()
+            .await
+        {
+            Ok(res) => Some(res),
+            Err(err) => {
+                tracing::error!("failed to fetch state cert {req:?}: {err}");
                 None
             },
         }

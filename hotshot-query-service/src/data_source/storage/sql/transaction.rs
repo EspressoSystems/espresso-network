@@ -56,7 +56,8 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryData,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
@@ -629,6 +630,35 @@ where
             )
             .await
         }
+    }
+
+    async fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
+    ) -> anyhow::Result<()> {
+        let height = state_cert.height();
+
+        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
+        // fetcher is racing with the pruner.
+        if let Some(pruned_height) = self.load_pruned_height().await? {
+            if height <= pruned_height {
+                tracing::info!(
+                    height,
+                    pruned_height,
+                    "ignoring state cert which is already pruned"
+                );
+                return Ok(());
+            }
+        }
+        let bytes = bincode::serialize(&state_cert.0).context("failed to serialize state cert")?;
+        self.upsert(
+            "state_cert",
+            ["epoch", "state_cert"],
+            ["epoch"],
+            [(height as i64, bytes)],
+        )
+        .await?;
+        Ok(())
     }
 }
 

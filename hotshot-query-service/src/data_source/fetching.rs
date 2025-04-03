@@ -120,8 +120,8 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream,
         HeaderQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
-        QueryablePayload, TransactionHash, TransactionQueryData, UpdateAvailabilityData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
+        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
     fetching::{self, request, Provider},
@@ -139,12 +139,14 @@ use crate::{
 mod block;
 mod header;
 mod leaf;
+mod state_cert;
 mod transaction;
 mod vid;
 
 use self::{
     block::PayloadFetcher,
     leaf::LeafFetcher,
+    state_cert::StateCertRequest,
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
 };
@@ -782,6 +784,10 @@ where
         hash: TransactionHash<Types>,
     ) -> Fetch<TransactionQueryData<Types>> {
         self.fetcher.get(TransactionRequest::from(hash)).await
+    }
+
+    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>> {
+        self.fetcher.get(StateCertRequest::from(epoch)).await
     }
 }
 
@@ -1724,6 +1730,7 @@ where
     block: Notifier<BlockQueryData<Types>>,
     leaf: Notifier<LeafQueryData<Types>>,
     vid_common: Notifier<VidCommonQueryData<Types>>,
+    state_cert: Notifier<StateCertQueryData<Types>>,
 }
 
 impl<Types> Default for Notifiers<Types>
@@ -1735,6 +1742,7 @@ where
             block: Notifier::new(),
             leaf: Notifier::new(),
             vid_common: Notifier::new(),
+            state_cert: Notifier::new(),
         }
     }
 }
@@ -1964,6 +1972,7 @@ pub trait AvailabilityProvider<Types: NodeType>:
     Provider<Types, request::LeafRequest<Types>>
     + Provider<Types, request::PayloadRequest>
     + Provider<Types, request::VidCommonRequest>
+    + Provider<Types, request::StateCertRequest>
     + Sync
     + 'static
 {
@@ -1972,6 +1981,7 @@ impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
     P: Provider<Types, request::LeafRequest<Types>>
         + Provider<Types, request::PayloadRequest>
         + Provider<Types, request::VidCommonRequest>
+        + Provider<Types, request::StateCertRequest>
         + Sync
         + 'static
 {

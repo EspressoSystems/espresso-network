@@ -49,6 +49,7 @@ use crate::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
         },
+        StateCertQueryData,
     },
     data_source::{update, VersionedDataSource},
     metrics::PrometheusMetrics,
@@ -61,6 +62,7 @@ use crate::{
 const CACHED_LEAVES_COUNT: usize = 100;
 const CACHED_BLOCKS_COUNT: usize = 100;
 const CACHED_VID_COMMON_COUNT: usize = 100;
+const CACHED_STATE_CERT_COUNT: usize = 5;
 
 #[derive(custom_debug::Debug)]
 pub struct FileSystemStorageInner<Types>
@@ -80,6 +82,7 @@ where
     leaf_storage: LedgerLog<LeafQueryData<Types>>,
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
+    state_cert_storage: LedgerLog<StateCertQueryData<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -205,6 +208,11 @@ where
                 leaf_storage: LedgerLog::create(loader, "leaves", CACHED_LEAVES_COUNT)?,
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
+                state_cert_storage: LedgerLog::create(
+                    loader,
+                    "state_cert",
+                    CACHED_STATE_CERT_COUNT,
+                )?,
             }),
             metrics: Default::default(),
         })
@@ -227,6 +235,11 @@ where
             loader,
             "vid_common",
             CACHED_VID_COMMON_COUNT,
+        )?;
+        let state_cert_storage = LedgerLog::<StateCertQueryData<Types>>::open(
+            loader,
+            "state_cert",
+            CACHED_STATE_CERT_COUNT,
         )?;
 
         let mut index_by_block_hash = HashMap::new();
@@ -275,6 +288,7 @@ where
                 leaf_storage,
                 block_storage,
                 vid_storage,
+                state_cert_storage,
                 top_storage: None,
             }),
             metrics: Default::default(),
@@ -595,6 +609,15 @@ where
         // `from` itself if we can, or fail.
         self.get_leaf((from as usize).into()).await
     }
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+        self.inner
+            .state_cert_storage
+            .iter()
+            .nth(epoch as usize)
+            .context(NotFoundSnafu)?
+            .context(MissingSnafu)
+    }
 }
 
 impl<Types: NodeType> UpdateAvailabilityStorage<Types>
@@ -657,6 +680,16 @@ where
         self.inner
             .vid_storage
             .insert(common.height() as usize, (common, share))?;
+        Ok(())
+    }
+
+    async fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .state_cert_storage
+            .insert(state_cert.height() as usize, state_cert)?;
         Ok(())
     }
 }
