@@ -21,6 +21,9 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
 import { LightClientCommonTest } from "./LightClientV2.t.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
@@ -626,11 +629,11 @@ contract StakeTableUpgradeTest is Test {
     }
 
     function test_upgrade_succeeds() public {
-        (uint8 majorVersion,,) = StakeTableV2Test(stakeTableRegisterTest.proxy()).getVersion();
+        (uint8 majorVersion,,) = S(stakeTableRegisterTest.stakeTable()).getVersion();
         assertEq(majorVersion, 1);
 
         vm.startPrank(stakeTableRegisterTest.admin());
-        address proxy = stakeTableRegisterTest.proxy();
+        address proxy = address(stakeTableRegisterTest.stakeTable());
         S(proxy).upgradeToAndCall(address(new StakeTableV2Test()), "");
 
         (uint8 majorVersionNew,,) = StakeTableV2Test(proxy).getVersion();
@@ -643,7 +646,7 @@ contract StakeTableUpgradeTest is Test {
     /// forge-config: default.allow_internal_expect_revert = true
     function test_upgrade_reverts_when_not_admin() public {
         address notAdmin = makeAddr("not_admin");
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         (uint8 majorVersion,,) = proxy.getVersion();
         assertEq(majorVersion, 1);
 
@@ -664,14 +667,14 @@ contract StakeTableUpgradeTest is Test {
     }
 
     function test_initialize_function_is_protected() public {
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         proxy.initialize(address(0), address(0), 0, address(0));
     }
 
     function test_initialize_function_is_protected_when_upgraded() public {
         vm.startPrank(stakeTableRegisterTest.admin());
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         proxy.upgradeToAndCall(address(new StakeTableV2Test()), "");
 
         vm.expectRevert(Initializable.InvalidInitialization.selector);
@@ -734,12 +737,12 @@ contract StakeTableUpgradeTest is Test {
 
     function test_reinitialize_succeeds_only_once() public {
         vm.startPrank(stakeTableRegisterTest.admin());
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         proxy.upgradeToAndCall(
             address(new StakeTableV2Test()), abi.encodeWithSignature("initializeV2(uint256)", 2)
         );
 
-        StakeTableV2Test proxyV2 = StakeTableV2Test(stakeTableRegisterTest.proxy());
+        StakeTableV2Test proxyV2 = StakeTableV2Test(address(stakeTableRegisterTest.stakeTable()));
         assertEq(proxyV2.newValue(), 2);
 
         vm.expectRevert(Initializable.InvalidInitialization.selector);
