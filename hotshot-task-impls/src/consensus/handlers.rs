@@ -322,7 +322,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             );
 
             tracing::trace!(
-                "Sending epoch root QC for epoch {:?}, height {:?}",
+                "Sending epoch root QC for view {:?}, height {:?}",
                 high_qc.view_number(),
                 high_qc.data.block_number
             );

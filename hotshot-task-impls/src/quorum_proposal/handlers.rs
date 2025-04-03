@@ -161,6 +161,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     .is_err()
                     {
                         tracing::error!("Failed to validate state cert");
+                        return None;
                     } else if self
                         .consensus
                         .write()
@@ -169,6 +170,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         .is_err()
                     {
                         tracing::error!("Failed to update state cert");
+                        return None;
                     }
                 }
                 return Some(qc.clone());
@@ -317,6 +319,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                     .is_err()
                     {
                         tracing::error!("Failed to validate state cert");
+                        continue;
                     } else if self
                         .consensus
                         .write()
@@ -325,6 +328,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                         .is_err()
                     {
                         tracing::error!("Failed to update state cert");
+                        continue;
                     }
                 }
                 if qc.view_number() > highest_qc.view_number() {
