@@ -64,7 +64,6 @@ type RelayMap<TYPES, VOTE, CERT, V> = HashMap<
 >;
 
 /// Main view sync task state
-#[derive()]
 pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
     /// View HotShot is currently in
     pub cur_view: TYPES::View,
