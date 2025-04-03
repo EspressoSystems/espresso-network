@@ -114,7 +114,7 @@ pub fn init_stake_table(
     let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(stake_table_capacity);
     st.batch_register(
         bls_keys.iter().cloned(),
-        iter::repeat(U256::one()).take(bls_keys.len()),
+        iter::repeat_n(U256::one(), bls_keys.len()),
         state_keys.iter().cloned(),
     )?;
     st.advance();

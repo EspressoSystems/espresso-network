@@ -12,7 +12,7 @@ use hotshot_utils::anytrace::Result;
 use primitive_types::U256;
 
 use super::node_implementation::NodeType;
-use crate::{drb::DrbResult, traits::signature_key::StakeTableEntryType, PeerConfig};
+use crate::{data::Leaf2, drb::DrbResult, traits::signature_key::StakeTableEntryType, PeerConfig};
 
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
@@ -146,7 +146,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         _membership: Arc<RwLock<Self>>,
         _block_height: u64,
         _epoch: TYPES::Epoch,
-    ) -> impl std::future::Future<Output = anyhow::Result<TYPES::BlockHeader>> + Send {
+    ) -> impl std::future::Future<Output = anyhow::Result<Leaf2<TYPES>>> + Send {
         async move { anyhow::bail!("Not implemented") }
     }
 

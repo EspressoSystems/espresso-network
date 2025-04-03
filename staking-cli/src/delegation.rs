@@ -5,7 +5,22 @@ use alloy::{
     transports::Transport,
 };
 use anyhow::Result;
-use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
+use contract_bindings_alloy::{
+    esptoken::EspToken::EspTokenInstance, staketable::StakeTable::StakeTableInstance,
+};
+
+pub async fn approve<P: Provider<T>, T: Transport + Clone>(
+    token: EspTokenInstance<T, P>,
+    stake_table_address: Address,
+    amount: U256,
+) -> Result<TransactionReceipt> {
+    Ok(token
+        .approve(stake_table_address, amount)
+        .send()
+        .await?
+        .get_receipt()
+        .await?)
+}
 
 pub async fn delegate<P: Provider<T>, T: Transport + Clone>(
     stake_table: StakeTableInstance<T, P>,

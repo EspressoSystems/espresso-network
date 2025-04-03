@@ -8,10 +8,12 @@ use alloy::{
 use anyhow::Result;
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
-use contract_bindings_alloy::staketable::StakeTable::StakeTableInstance;
+use contract_bindings_alloy::{
+    esptoken::EspToken::EspTokenInstance, staketable::StakeTable::StakeTableInstance,
+};
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
-    delegation::{delegate, undelegate},
+    delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
     registration::{deregister_validator, register_validator},
     Commands, Config,
@@ -172,16 +174,21 @@ pub async fn main() -> Result<()> {
         .wallet(wallet)
         .on_http(config.rpc_url.clone());
     let stake_table = StakeTableInstance::new(config.stake_table_address, provider.clone());
+    let token = EspTokenInstance::new(config.token_address, provider.clone());
 
     let result = match config.commands {
         // TODO: The info command is not implemented yet. It's not very useful for local testing or
         // the demo and requires code that is not yet merged into main, so it's left for later.
-        Commands::Info => todo!(),
+        Commands::Info => {
+            tracing::info!("Sorry, Info command not implemented yet");
+            return Ok(());
+        },
         Commands::RegisterValidator {
             consensus_private_key,
             state_private_key,
             commission,
         } => {
+            tracing::info!("Registering validator {account} with commission {commission}");
             register_validator(
                 stake_table,
                 commission,
@@ -191,22 +198,41 @@ pub async fn main() -> Result<()> {
             )
             .await
         },
-        Commands::DeregisterValidator {} => deregister_validator(stake_table).await,
+        Commands::DeregisterValidator {} => {
+            tracing::info!("Deregistering validator {account}");
+            deregister_validator(stake_table).await
+        },
+        Commands::Approve { amount } => {
+            tracing::info!(
+                "Approving stake table {} to spend {amount}",
+                config.stake_table_address
+            );
+            approve(token, config.stake_table_address, amount).await
+        },
         Commands::Delegate {
             validator_address,
             amount,
-        } => delegate(stake_table, validator_address, amount).await,
+        } => {
+            tracing::info!("Delegating {amount} to {validator_address}");
+            delegate(stake_table, validator_address, amount).await
+        },
         Commands::Undelegate {
             validator_address,
             amount,
-        } => undelegate(stake_table, validator_address, amount).await,
+        } => {
+            tracing::info!("Undelegating {amount} from {validator_address}");
+            undelegate(stake_table, validator_address, amount).await
+        },
         Commands::ClaimWithdrawal { validator_address } => {
+            tracing::info!("Claiming withdrawal for {validator_address}");
             claim_withdrawal(stake_table, validator_address).await
         },
         Commands::ClaimValidatorExit { validator_address } => {
+            tracing::info!("Claiming validator exit for {validator_address}");
             claim_validator_exit(stake_table, validator_address).await
         },
         Commands::StakeForDemo { num_validators } => {
+            tracing::info!("Staking for demo with {num_validators} validators");
             stake_for_demo(&config, num_validators).await.unwrap();
             return Ok(());
         },
