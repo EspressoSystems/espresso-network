@@ -89,6 +89,7 @@ impl StateRelayServerState {
         // fetch genesis info from sequencer
         let (blocks_per_epoch, epoch_start_block) = epoch_config(&self.sequencer_url).await?;
         let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
+        tracing::info!(%blocks_per_epoch, %epoch_start_block, "Initializing genesis stake table with ");
 
         let genesis_stake_table = init_stake_table_from_sequencer(
             &self.sequencer_url,
@@ -113,6 +114,7 @@ impl StateRelayServerState {
 
         self.known_nodes.insert(first_epoch, genesis_known_nodes);
 
+        tracing::info!(%first_epoch, "Stake table synced ");
         Ok(())
     }
 
@@ -192,6 +194,8 @@ impl StateRelayServerState {
             let epoch = epoch_from_block_number(height, blocks_per_epoch);
             self.thresholds.remove(&epoch);
             self.known_nodes.remove(&epoch);
+
+            tracing::info!(%height, "garbage collected for ");
         }
     }
 
@@ -259,13 +263,13 @@ impl StateRelayServerDataSource for StateRelayServerState {
         // retrieve the signer/sender's weight from the correct stake table for that epoch
         let Some(nodes) = self.known_nodes.get(&epoch) else {
             return Err(ServerError::catch_all(
-                StatusCode::NOT_FOUND,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 "Stake table not found".to_owned(),
             ));
         };
         let Some(threshold) = self.thresholds.get(&epoch) else {
             return Err(ServerError::catch_all(
-                StatusCode::NOT_FOUND,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 "Threshold not found".to_owned(),
             ));
         };
