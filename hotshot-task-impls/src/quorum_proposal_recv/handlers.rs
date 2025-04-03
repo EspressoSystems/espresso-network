@@ -41,9 +41,10 @@ use super::{QuorumProposalRecvTaskState, ValidationInfo};
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, fetch_proposal, update_high_qc, validate_epoch_transition_qc,
-        validate_light_client_state_update_certificate, validate_proposal_safety_and_liveness,
-        validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc,
+        broadcast_event, check_qc_state_cert_correspondence, fetch_proposal, update_high_qc,
+        validate_epoch_transition_qc, validate_light_client_state_update_certificate,
+        validate_proposal_safety_and_liveness, validate_proposal_view_and_certs,
+        validate_qc_and_next_epoch_qc,
     },
     quorum_proposal_recv::{UpgradeLock, Versions},
 };
@@ -285,7 +286,11 @@ pub(crate) async fn handle_quorum_proposal_recv<
             bail!("Epoch root QC has no state cert");
         };
         ensure!(
-            Some(state_cert.epoch) == justify_qc.data.epoch(),
+            check_qc_state_cert_correspondence(
+                &justify_qc,
+                state_cert,
+                validation_info.epoch_height
+            ),
             "Epoch root QC has no corresponding state cert"
         );
         validate_light_client_state_update_certificate(

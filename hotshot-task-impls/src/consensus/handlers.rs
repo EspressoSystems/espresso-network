@@ -25,7 +25,10 @@ use super::ConsensusTaskState;
 use crate::{
     consensus::Versions,
     events::HotShotEvent,
-    helpers::{broadcast_event, validate_qc_and_next_epoch_qc, wait_for_next_epoch_qc},
+    helpers::{
+        broadcast_event, check_qc_state_cert_correspondence, validate_qc_and_next_epoch_qc,
+        wait_for_next_epoch_qc,
+    },
     vote_collection::{handle_epoch_root_vote, handle_vote},
 };
 
@@ -317,7 +320,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
                 bail!("We are sending an epoch root QC but we don't have the corresponding state cert.");
             };
             ensure!(
-                Some(state_cert.epoch) == high_qc.epoch(),
+                check_qc_state_cert_correspondence(&high_qc, &state_cert, task_state.epoch_height),
                 "We are sending an epoch root QC but we don't have the corresponding state cert."
             );
 
