@@ -302,8 +302,19 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             error!("Epochs are not enabled yet we tried to wait for Highest QC.")
         );
 
-        let mut highest_qc = self.consensus.read().await.high_qc().clone();
-        let mut state_cert = None;
+        let consensus_reader = self.consensus.read().await;
+        let mut highest_qc = consensus_reader.high_qc().clone();
+        let mut state_cert = if highest_qc
+            .data
+            .block_number
+            .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
+        {
+            Some(consensus_reader.state_cert().clone())
+        } else {
+            None
+        };
+        drop(consensus_reader);
+
         let wait_duration = Duration::from_millis(self.timeout / 2);
 
         let mut rx = self.receiver.clone();
