@@ -50,6 +50,8 @@ pub struct StateSignatureRequestBody {
     pub key: StateVerKey,
     /// The associated light client state
     pub state: LightClientState,
+    /// The stake table used for the next HotShot block
+    pub next_stake: StakeTableState,
     /// The associated signature of the light client state
     pub signature: StateSignature,
 }
@@ -59,6 +61,8 @@ pub struct StateSignatureRequestBody {
 pub struct StateSignaturesBundle {
     /// The state for this signatures bundle
     pub state: LightClientState,
+    /// The stake table used in the next block (only different from voting_stake_table at the last block of every epoch)
+    pub next_stake: StakeTableState,
     /// The collected signatures
     pub signatures: HashMap<StateVerKey, StateSignature>,
     /// Total stakes associated with the signer

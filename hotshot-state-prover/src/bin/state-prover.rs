@@ -47,7 +47,7 @@ struct Args {
     l1_provider: Url,
 
     /// Address of LightClient contract on layer 1.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS")]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
     light_client_address: Address,
 
     /// Mnemonic phrase for a funded Ethereum wallet.

@@ -12,9 +12,7 @@ use clap::Parser;
 use espresso_types::{parse_duration, MarketplaceVersion, SequencerVersions, V0_1};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{run_prover_service_with_stake_table, StateProverConfig};
-use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableScheme};
 use portpicker::pick_unused_port;
 use sequencer::{
     api::{
@@ -229,7 +227,6 @@ async fn main() -> anyhow::Result<()> {
     let network =
         TestNetwork::new(config, SequencerVersions::<MarketplaceVersion, V0_1>::new()).await;
     let st = network.cfg.stake_table();
-    let total_stake = st.total_stake(SnapshotVersion::LastEpochStart).unwrap();
     let config = network.cfg.hotshot_config();
 
     tracing::info!("Hotshot config {config:?}");
@@ -377,7 +374,8 @@ async fn main() -> anyhow::Result<()> {
     let relay_server_handle = spawn(async move {
         let _ = run_relay_server(
             None,
-            one_honest_threshold(total_stake),
+            Url::parse(&format!("http://localhost:{}", sequencer_api_port)).unwrap(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
             format!("http://0.0.0.0:{relay_server_port}")
                 .parse()
                 .unwrap(),

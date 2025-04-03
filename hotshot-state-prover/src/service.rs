@@ -90,38 +90,45 @@ impl StateProverConfig {
         Ok(())
     }
 
-    /// Get the BLOCKS_PER_EPOCH / EPOCH_HEIGHT from the sequencer's `PublicHotShotConfig` struct
     pub async fn blocks_per_epoch(&self) -> anyhow::Result<u64> {
-        let config_url = self
-            .sequencer_url
-            .join("/config/hotshot")
-            .with_context(|| "Invalid URL")?;
-
-        // Request the configuration until it is successful
-        let blocks_per_epoch = loop {
-            match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-                config_url.clone(),
-            )
-            .get::<PublicNetworkConfig>(config_url.as_str())
-            .send()
-            .await
-            {
-                Ok(resp) => break resp.hotshot_config().blocks_per_epoch(),
-                Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5)).await;
-                },
-            }
-        };
-        Ok(blocks_per_epoch)
+        Ok(epoch_config(&self.sequencer_url).await?.0)
     }
+}
+
+/// Get the epoch-related  from the sequencer's `PublicHotShotConfig` struct
+/// return (blocks_per_epoch, epoch_start_block)
+pub async fn epoch_config(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
+    let config_url = sequencer_url
+        .join("/config/hotshot")
+        .with_context(|| "Invalid URL")?;
+
+    // Request the configuration until it is successful
+    let blocks_per_epoch = loop {
+        match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+            config_url.clone(),
+        )
+        .get::<PublicNetworkConfig>(config_url.as_str())
+        .send()
+        .await
+        {
+            Ok(resp) => {
+                let config = resp.hotshot_config();
+                break (config.blocks_per_epoch(), config.epoch_start_block());
+            },
+            Err(e) => {
+                tracing::error!("Failed to fetch the network config: {e}");
+                sleep(Duration::from_secs(5)).await;
+            },
+        }
+    };
+    Ok(blocks_per_epoch)
 }
 
 /// Initialize the stake table from a sequencer node that
 /// is currently providing the HotShot config.
 ///
 /// Does not error, runs until the stake table is provided.
-async fn init_stake_table_from_sequencer(
+pub async fn init_stake_table_from_sequencer(
     sequencer_url: &Url,
     stake_table_capacity: usize,
 ) -> Result<StakeTable<BLSPubKey, StateVerKey, CircuitField>> {
@@ -374,7 +381,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             let next_stake_msg: [FieldType; 4] = next_stake.into();
             msg.extend_from_slice(&next_stake_msg);
 
-            if key.verify(&state_msg, sig, CS_ID_SCHNORR).is_ok() {
+            if key.verify(&msg, sig, CS_ID_SCHNORR).is_ok() {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;

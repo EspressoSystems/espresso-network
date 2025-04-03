@@ -171,6 +171,9 @@ impl PublicHotShotConfig {
     pub fn blocks_per_epoch(&self) -> u64 {
         self.epoch_height
     }
+    pub fn epoch_start_block(&self) -> u64 {
+        self.epoch_start_block
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

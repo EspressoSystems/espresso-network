@@ -103,6 +103,9 @@ processes:
 
   state-relay-server:
     command: state-relay-server
+    environment:
+      - ESPRESSO_SEQUENCER_URL
+      - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
     readiness_probe:
       failure_threshold: 10
       period_seconds: 1
