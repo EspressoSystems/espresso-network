@@ -1306,3 +1306,15 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
 
     Ok(())
 }
+
+pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
+    qc: &QuorumCertificate2<TYPES>,
+    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    epoch_height: u64,
+) -> bool {
+    qc.data
+        .block_number
+        .is_some_and(|bn| is_epoch_root(bn, epoch_height))
+        && Some(state_cert.epoch) == qc.data.epoch()
+        && qc.view_number().u64() == state_cert.light_client_state.view_number
+}

@@ -1062,9 +1062,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
 
         let mut reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
         if let Some(root) = block_header.reward_merkle_tree_root() {
-            if !root.size() == 0 {
-                reward_merkle_tree = RewardMerkleTree::from_commitment(root);
-            }
+            reward_merkle_tree = RewardMerkleTree::from_commitment(root);
         }
 
         Self {
