@@ -327,8 +327,18 @@ pub async fn upgrade_light_client_v2(
                 )
                 .await?;
             // then deploy LightClientV2.sol
+            let target_lcv2_bytecode = if is_mock {
+                LightClientV2Mock::BYTECODE.encode_hex()
+            } else {
+                LightClientV2::BYTECODE.encode_hex()
+            };
+            let lcv2_linked_bytecode = Bytes::from_hex(
+                target_lcv2_bytecode.replace(LIBRARY_PLACEHOLDER_ADDRESS, &pv2_addr.encode_hex()),
+            )?;
+
             let lcv2_addr = if is_mock {
                 let addr = LightClientV2Mock::deploy_builder(&provider)
+                    .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
                     .deploy()
                     .await?;
                 tracing::info!("deployed LightClientV2Mock at {addr:#x}");
@@ -337,16 +347,15 @@ pub async fn upgrade_light_client_v2(
                 contracts
                     .deploy(
                         Contract::LightClientV2,
-                        LightClientV2::deploy_builder(&provider),
+                        LightClientV2::deploy_builder(&provider)
+                            .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
                     )
                     .await?
             };
+
             // prepare init calldata
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
-            let init_data = lcv2
-                .initializeV2(blocks_per_epoch, pv2_addr)
-                .calldata()
-                .to_owned();
+            let init_data = lcv2.initializeV2(blocks_per_epoch).calldata().to_owned();
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv2_addr, init_data)
@@ -803,10 +812,6 @@ mod tests {
             next_stake.abi_encode_params()
         );
         assert_eq!(lc.getVersion().call().await?.majorVersion, 2);
-        assert_eq!(
-            lc._verifier().call().await?._0,
-            contracts.address(Contract::PlonkVerifierV2).unwrap()
-        );
         assert_eq!(lc._blocksPerEpoch().call().await?._0, blocks_per_epoch);
 
         // test mock-specific functions
