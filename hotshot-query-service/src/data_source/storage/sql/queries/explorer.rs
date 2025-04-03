@@ -446,7 +446,7 @@ where
         let txns = block.enumerate().map(|(_, txn)| txn).collect::<Vec<_>>();
 
         let (offset, txn) = match target {
-            TransactionIdentifier::Latest => txns.into_iter().enumerate().last().ok_or(
+            TransactionIdentifier::Latest => txns.into_iter().enumerate().next_back().ok_or(
                 GetTransactionDetailError::TransactionNotFound(NotFound {
                     key: "Latest".to_string(),
                 }),

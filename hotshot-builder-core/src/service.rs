@@ -1210,7 +1210,7 @@ async fn handle_da_event<Types: NodeType>(
 /// via [`HandleDaEventError`]. They are as follows:
 /// - [`HandleDaEventError::SignatureValidationFailed`]: The signature validation failed
 /// - [`HandleDaEventError::BroadcastFailed`]: The broadcast failed as no receiver
-///    is in place to receive the message
+///   is in place to receive the message
 ///
 /// This function is the implementation for [`handle_da_event`].
 async fn handle_da_event_implementation<Types: NodeType>(

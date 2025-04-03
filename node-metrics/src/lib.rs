@@ -36,23 +36,23 @@
 //!
 //! What states do we need to track?
 //! 1. Node Information
-//!    a. Node Identity Information
-//!    b. Node State Information (specifically voter participation, latest block
-//!       information, and staking information)
+//!    * Node Identity Information
+//!    * Node State Information (specifically voter participation, latest block
+//!      information, and staking information)
 //! 2. Network Information
-//!    a. Latest Block
-//!    b. The most recent N blocks (N assumed to be 50 at the moment)
-//!        - Information can be derived from these most recent 50 blocks
-//!          that allows us to derive histogram data, producer data, and
-//!          the most recent block information.  We might be able to get away
-//!          with just storing the header information of these blocks, since we
-//!          don't need the full block data.
-//!    c. The most recent N votes participants
-//!    d. The top block producers over the latest N blocks
-//!    e. Histogram data for the latest N blocks
-//!        - Block Size
-//!        - Block Time
-//!        - Block Space Used
+//!    * Latest Block
+//!    * The most recent N blocks (N assumed to be 50 at the moment)
+//!      - Information can be derived from these most recent 50 blocks
+//!        that allows us to derive histogram data, producer data, and
+//!        the most recent block information.  We might be able to get away
+//!        with just storing the header information of these blocks, since we
+//!        don't need the full block data.
+//!    * The most recent N votes participants
+//!    * The top block producers over the latest N blocks
+//!    * Histogram data for the latest N blocks
+//!      - Block Size
+//!      - Block Time
+//!      - Block Space Used
 //!
 //! ## Data Streams
 //!
@@ -86,15 +86,15 @@
 //! What Data Streams do we need to provide to clients?
 //!
 //! 1. Node Information
-//!     a. Node Identity Information
-//!         - Should be able to be sent in an initial batch
-//!         - Should be able to send individual updates as they occur
-//!     b. Node State Information
-//!         - Should be able to be sent in an initial batch
-//!         - Should be able to send individual updates as they occur
-//!     c. Block Information
-//!         - Should be able to be sent in an initial batch
-//!         - Should be able to send individual updates as they occur
+//!    * Node Identity Information
+//!      - Should be able to be sent in an initial batch
+//!      - Should be able to send individual updates as they occur
+//!    * Node State Information
+//!      - Should be able to be sent in an initial batch
+//!      - Should be able to send individual updates as they occur
+//!    * Block Information
+//!      - Should be able to be sent in an initial batch
+//!      - Should be able to send individual updates as they occur
 
 pub mod api;
 pub mod service;
