@@ -14,7 +14,7 @@ services:
       - "./geth-config/test-jwt-secret.txt:/config/test-jwt-secret.txt"
 
   deploy-sequencer-contracts:
-    image: ghcr.io/espressosystems/espresso-sequencer/deploy:main
+    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
     command: deploy --deploy-fee --deploy-permissioned-stake-table --deploy-esp-token --deploy-stake-table
     environment:
       - ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH=/data/initial_stake_table.toml
@@ -35,7 +35,7 @@ services:
         condition: service_healthy
 
   deploy-prover-contracts:
-    image: ghcr.io/espressosystems/espresso-sequencer/deploy:main
+    image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
     command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
