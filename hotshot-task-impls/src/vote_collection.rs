@@ -746,7 +746,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
                 Ok(Some(root_qc))
             },
             _ => Err(error!(
-                "Only one certificate formed during epoch transition, this should not happen."
+                "Only one certificate formed for the epoch root, this should not happen."
             )),
         }
     }
@@ -784,7 +784,7 @@ async fn create_epoch_root_vote_collection_task_state<TYPES: NodeType, V: Versio
     Ok(state)
 }
 
-/// A helper function that handles extended quorum vote collection
+/// A helper function that handles quorum vote collection for epoch root
 ///
 /// # Errors
 /// If we fail to handle the vote

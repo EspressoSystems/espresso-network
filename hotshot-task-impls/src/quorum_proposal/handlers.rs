@@ -24,6 +24,7 @@ use hotshot_types::{
     epoch_membership::EpochMembership,
     message::Proposal,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
@@ -546,13 +547,10 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .block_number
             .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
         {
-            let consensus_reader = self.consensus.read().await;
-            let state_cert = consensus_reader.state_cert().clone();
-            let cur_epoch = consensus_reader.cur_epoch();
-            drop(consensus_reader);
+            let state_cert = self.consensus.read().await.state_cert().clone();
             ensure!(
-                Some(state_cert.epoch) == cur_epoch,
-                error!("We are proposing with parent epoch root QC but we don't have the current state cert.")
+                Some(state_cert.epoch) == parent_qc.data.epoch(),
+                error!("We are proposing with parent epoch root QC but we don't have the corresponding state cert.")
             );
             Some(state_cert)
         } else {

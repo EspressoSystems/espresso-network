@@ -284,6 +284,10 @@ pub(crate) async fn handle_quorum_proposal_recv<
         let Some(state_cert) = proposal.data.state_cert() else {
             bail!("Epoch root QC has no state cert");
         };
+        ensure!(
+            Some(state_cert.epoch) == justify_qc.data.epoch(),
+            "Epoch root QC has no corresponding state cert"
+        );
         validate_light_client_state_update_certificate(
             state_cert,
             &validation_info.membership.coordinator,

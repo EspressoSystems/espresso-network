@@ -247,13 +247,13 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
         Option<NextEpochQuorumCertificate2<TYPES>>,
     ),
 
-    /// Message for the next leader containing our highest QC
+    /// Message containing the highest QC and the next epoch QC
     ExtendedQc(
         QuorumCertificate2<TYPES>,
         NextEpochQuorumCertificate2<TYPES>,
     ),
 
-    /// Message for the next leader containing our highest QC
+    /// Message for the next leader containing the epoch root QC
     EpochRootQc(EpochRootQuorumCertificate<TYPES>),
 
     /// Message with a view sync pre-commit vote

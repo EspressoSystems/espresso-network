@@ -241,7 +241,6 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
     } else {
         None
     };
-    let cur_epoch = consensus_reader.cur_epoch();
     drop(consensus_reader);
 
     if is_eqc {
@@ -315,11 +314,11 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
         if is_epoch_root {
             // For epoch root QC, we are sending high QC and state cert
             let Some(state_cert) = state_cert else {
-                bail!("We are sending an epoch root QC but we don't have the current state cert.");
+                bail!("We are sending an epoch root QC but we don't have the corresponding state cert.");
             };
             ensure!(
-                Some(state_cert.epoch) == cur_epoch,
-                "We are sending an epoch root QC but we don't have the current state cert."
+                Some(state_cert.epoch) == high_qc.epoch(),
+                "We are sending an epoch root QC but we don't have the corresponding state cert."
             );
 
             tracing::trace!(
