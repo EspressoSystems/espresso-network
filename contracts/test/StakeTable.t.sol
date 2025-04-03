@@ -765,18 +765,18 @@ contract StakeTableUpgradeTest is Test {
 }
 
 contract StakeTableTimelockTest is Test {
-    address impl;
-    address proxy;
-    address tokenGrantRecipient;
-    address validator;
-    address delegator;
-    address timelockAdmin;
-    address[] proposers = [makeAddr("proposer")];
-    address[] executors = [makeAddr("executor")];
-    LightClientMock lcMock;
-    EspToken token;
-    StakeTableMock stakeTable;
-    Timelock timelock;
+    address public impl;
+    address public proxy;
+    address public tokenGrantRecipient;
+    address public validator;
+    address public delegator;
+    address public timelockAdmin;
+    address[] public proposers = [makeAddr("proposer")];
+    address[] public executors = [makeAddr("executor")];
+    LightClientMock public lcMock;
+    EspToken public token;
+    StakeTableMock public stakeTable;
+    Timelock public timelock;
     uint256 public constant INITIAL_BALANCE = 5 ether;
     uint256 public constant ESCROW_PERIOD = 1 weeks;
     uint256 public constant DELAY = 15 seconds;
@@ -993,6 +993,110 @@ contract StakeTableTimelockTest is Test {
         vm.startPrank(timelockAdmin);
         timelock.grantRole(timelock.PROPOSER_ROLE(), timelockAdmin);
         timelock.grantRole(timelock.EXECUTOR_ROLE(), timelockAdmin);
+        vm.stopPrank();
+    }
+
+    function test_timelock_cancel_operation_succeeds() public {
+        vm.startPrank(proposers[0]);
+
+        bytes memory data = abi.encodeWithSignature(
+            "upgradeToAndCall(address,bytes)", address(new StakeTableV2Test()), ""
+        );
+
+        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+
+        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        bytes32 cancelRole = timelock.CANCELLER_ROLE();
+        assertFalse(timelock.hasRole(cancelRole, timelockAdmin));
+        vm.startPrank(timelockAdmin);
+        timelock.grantRole(cancelRole, timelockAdmin);
+        assertTrue(timelock.hasRole(cancelRole, timelockAdmin));
+        timelock.cancel(txId);
+        assertEq(timelock.getTimestamp(txId), 0);
+        vm.stopPrank();
+
+        // Attempt to execute the canceled operation
+        vm.warp(block.timestamp + DELAY + 1);
+        vm.startPrank(executors[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TimelockController.TimelockUnexpectedOperationState.selector,
+                txId,
+                bytes32(1 << uint8(TimelockController.OperationState.Ready))
+            )
+        );
+        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+    }
+
+    function test_timelock_role_revocation() public {
+        vm.startPrank(timelockAdmin);
+        timelock.grantRole(timelock.PROPOSER_ROLE(), timelockAdmin);
+        assertTrue(timelock.hasRole(timelock.PROPOSER_ROLE(), timelockAdmin));
+        timelock.revokeRole(timelock.PROPOSER_ROLE(), timelockAdmin);
+        assertFalse(timelock.hasRole(timelock.PROPOSER_ROLE(), timelockAdmin));
+        vm.stopPrank();
+    }
+
+    function test_timelock_successfully_handles_multiple_operations() public {
+        vm.startPrank(proposers[0]);
+
+        bytes memory data1 =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+        bytes32 txId1 =
+            timelock.hashOperation(address(stakeTable), 0, data1, bytes32(0), bytes32(0));
+
+        bytes memory data2 =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+        bytes32 txId2 =
+            timelock.hashOperation(address(stakeTable), 0, data2, bytes32(0), bytes32(0));
+
+        timelock.schedule(address(stakeTable), 0, data1, bytes32(0), bytes32(0), DELAY);
+        timelock.schedule(address(stakeTable), 0, data2, bytes32(0), bytes32(0), DELAY);
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.startPrank(executors[0]);
+        timelock.execute(address(stakeTable), 0, data1, bytes32(0), bytes32(0));
+        timelock.execute(address(stakeTable), 0, data2, bytes32(0), bytes32(0));
+        vm.stopPrank();
+
+        assertTrue(timelock.isOperationDone(txId1));
+        assertTrue(timelock.isOperationDone(txId2));
+    }
+
+    function test_expect_revert_when_timelock_zero_delay_schedule() public {
+        vm.startPrank(proposers[0]);
+
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        vm.expectRevert(
+            abi.encodeWithSelector(TimelockController.TimelockInsufficientDelay.selector, 0, DELAY)
+        );
+        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), 0);
+        vm.stopPrank();
+    }
+
+    function test_expect_revert_when_timelock_invalid_data_operation() public {
+        vm.startPrank(proposers[0]);
+
+        // Encode an upgrade call with invalid data
+        bytes memory invalidData = abi.encodeWithSignature("nonExistentFunction()");
+        timelock.schedule(address(stakeTable), 0, invalidData, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        // Warp time to after the delay
+        vm.warp(block.timestamp + DELAY + 1);
+
+        // Attempt to execute the invalid data operation
+        vm.startPrank(executors[0]);
+        vm.expectRevert();
+        timelock.execute(address(proxy), 0, invalidData, bytes32(0), bytes32(0));
         vm.stopPrank();
     }
 }
