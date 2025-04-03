@@ -4,7 +4,22 @@ use alloy::{
     rpc::types::TransactionReceipt,
 };
 use anyhow::Result;
-use hotshot_contract_adapter::sol_types::StakeTable;
+use hotshot_contract_adapter::sol_types::{EspToken, StakeTable};
+
+pub async fn approve(
+    provider: impl Provider,
+    token_addr: Address,
+    stake_table_address: Address,
+    amount: U256,
+) -> Result<TransactionReceipt> {
+    let token = EspToken::new(token_addr, &provider);
+    Ok(token
+        .approve(stake_table_address, amount)
+        .send()
+        .await?
+        .get_receipt()
+        .await?)
+}
 
 pub async fn delegate(
     provider: impl Provider,
