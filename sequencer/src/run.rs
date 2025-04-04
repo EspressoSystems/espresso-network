@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use espresso_types::EpochVersion;
 #[allow(unused_imports)]
 use espresso_types::{
     traits::NullEventConsumer, FeeVersion, MarketplaceVersion, SequencerVersions,
@@ -34,33 +33,55 @@ pub async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        #[cfg(all(feature = "fee", feature = "marketplace"))]
-        (FeeVersion::VERSION, MarketplaceVersion::VERSION) => {
+        #[cfg(all(feature = "fee", feature = "pos"))]
+        (espresso_types::FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
             run(
                 genesis,
                 modules,
                 opt,
-                SequencerVersions::<FeeVersion, MarketplaceVersion>::new(),
+                SequencerVersions::<espresso_types::FeeVersion, espresso_types::EpochVersion>::new(
+                ),
+            )
+            .await
+        },
+        #[cfg(feature = "pos")]
+        (espresso_types::EpochVersion::VERSION, _) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                // Specifying V0_0 disables upgrades
+                SequencerVersions::<espresso_types::EpochVersion, espresso_types::V0_0>::new(),
+            )
+            .await
+        },
+        #[cfg(all(feature = "fee", feature = "marketplace"))]
+        (espresso_types::FeeVersion::VERSION, espresso_types::MarketplaceVersion::VERSION) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<espresso_types::FeeVersion, espresso_types::MarketplaceVersion>::new(),
             )
             .await
         },
         #[cfg(feature = "fee")]
-        (EpochVersion::VERSION, _) => {
+        (espresso_types::FeeVersion::VERSION, _) => {
             run(
                 genesis,
                 modules,
                 opt,
-                SequencerVersions::<EpochVersion, V0_0>::new(),
+                SequencerVersions::<espresso_types::FeeVersion, espresso_types::V0_0>::new(),
             )
             .await
         },
         #[cfg(feature = "marketplace")]
-        (MarketplaceVersion::VERSION, _) => {
+        (espresso_types::MarketplaceVersion::VERSION, _) => {
             run(
                 genesis,
                 modules,
                 opt,
-                SequencerVersions::<MarketplaceVersion, V0_0>::new(),
+                SequencerVersions::<espresso_types::MarketplaceVersion, espresso_types::V0_0>::new(),
             )
             .await
         },
