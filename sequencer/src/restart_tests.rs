@@ -538,13 +538,13 @@ impl TestNetwork {
                 base_fee: 1.into(),
                 ..Default::default()
             },
+            epoch_height: None,
             stake_table: StakeTableConfig { capacity: 10 },
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
-            epoch_height: None,
 
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]

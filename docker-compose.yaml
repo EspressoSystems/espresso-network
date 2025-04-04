@@ -256,7 +256,7 @@ services:
     command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
-      - ESPRESSO_SEQUENCER_GENESIS_FILE
+      - ESPRESSO_SEQUENCER_GENESIS_FILE=genesis/demo.toml
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_CDN_ENDPOINT
       - ESPRESSO_SEQUENCER_API_PORT

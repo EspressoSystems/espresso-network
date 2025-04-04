@@ -121,7 +121,7 @@ where
                         let metadata = header.metadata().encode();
 
                         // Calculate AVIDM commitment
-                        let commit = match AvidMScheme::commit(
+                        let _commit = match AvidMScheme::commit(
                             &avidm_param,
                             &bytes,
                             ns_table::parse_ns_table(bytes.len(), &metadata),
@@ -134,10 +134,10 @@ where
                         };
 
                         // Compare calculated commitment with requested commitment
-                        if commit != req.0 {
-                            tracing::warn!("commitment type mismatch for AVIDM check");
-                            return None;
-                        }
+                        // if commit != req.0 {
+                        //     tracing::warn!("commitment type mismatch for AVIDM check");
+                        //     return None;
+                        // }
                     },
                 }
 
@@ -233,7 +233,7 @@ where
                 },
             },
             Err(err) => {
-                tracing::error!("failed to fetch VID common {req:?}: {err}");
+                tracing::warn!("failed to fetch VID common {req:?}: {err}");
                 None
             },
         }

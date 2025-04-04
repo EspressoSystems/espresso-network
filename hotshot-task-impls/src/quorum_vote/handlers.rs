@@ -442,7 +442,7 @@ pub(crate) async fn update_shared_state<
         )
         .await
         .wrap()
-        .context(warn!("Block header doesn't extend the proposal!"))?;
+        .context(error!("Block header doesn't extend the proposal!"))?;
 
     // Now that we've rounded everyone up, we need to update the shared state
     let mut consensus_writer = consensus.write().await;
@@ -454,6 +454,10 @@ pub(crate) async fn update_shared_state<
     ) {
         tracing::trace!("{e:?}");
     }
+    tracing::error!(
+        "Updated state using validate and applywith height {}",
+        proposed_leaf.height()
+    );
 
     drop(consensus_writer);
 

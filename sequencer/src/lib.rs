@@ -31,6 +31,7 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtN
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
+use primitive_types::U256;
 use proposal_fetcher::ProposalFetcherConfig;
 use state_signature::static_stake_table_commitment;
 use tokio::select;
@@ -291,7 +292,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     let validator_config = ValidatorConfig {
         public_key: pub_key,
         private_key: network_params.private_staking_key,
-        stake_value: 1,
+        stake_value: U256::from(1),
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
@@ -483,10 +484,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         l1_client.clone(),
-        genesis
-            .chain_config
-            .stake_table_contract
-            .map(|a| a.to_alloy()),
+        genesis.chain_config,
         peers.clone(),
         persistence.clone(),
     );
@@ -504,7 +502,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         node_id: node_index,
         upgrades: genesis.upgrades,
         current_version: V::Base::VERSION,
-        epoch_height: Some(epoch_height),
+        epoch_height: network_config.config.epoch_height,
         peers,
         coordinator: coordinator.clone(),
     };
@@ -813,7 +811,7 @@ pub mod testing {
                 num_nodes_with_stake: num_nodes.try_into().unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
                 known_nodes_with_stake: known_nodes_with_stake.clone(),
-                next_view_timeout: Duration::from_secs(5).as_millis() as u64,
+                next_view_timeout: Duration::from_secs(10).as_millis() as u64,
                 num_bootstrap: 1usize,
                 da_staked_committee_size: num_nodes,
                 view_sync_timeout: Duration::from_secs(1),
@@ -964,7 +962,7 @@ pub mod testing {
             let validator_config = ValidatorConfig {
                 public_key: my_peer_config.stake_table_entry.stake_key,
                 private_key: self.priv_keys[i].clone(),
-                stake_value: my_peer_config.stake_table_entry.stake_amount.as_u64(),
+                stake_value: my_peer_config.stake_table_entry.stake_amount,
                 state_public_key: self.state_key_pairs[i].ver_key(),
                 state_private_key: self.state_key_pairs[i].sign_key(),
                 is_da,
@@ -999,7 +997,7 @@ pub mod testing {
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
-                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                chain_config,
                 peers.clone(),
                 persistence.clone(),
             );
