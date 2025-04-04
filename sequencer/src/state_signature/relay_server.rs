@@ -32,7 +32,7 @@ use vbs::version::{StaticVersion, StaticVersionType};
 use super::{LightClientState, StateSignatureRequestBody};
 
 /// State that checks the light client state update and the signature collection
-struct StateRelayServerState {
+pub struct StateRelayServerState {
     /// Sequencer endpoint to query for stake table info
     sequencer_url: Url,
     /// The capacity for the stake table
@@ -40,6 +40,8 @@ struct StateRelayServerState {
 
     /// Epoch length (fetched from HotShot config)
     blocks_per_epoch: Option<u64>,
+    /// the first block where epoch 1 commence
+    epoch_start_block: Option<u64>,
     /// Minimum weight to form an available state signature bundle, map: epoch_num -> threshold
     thresholds: HashMap<u64, U256>,
     /// Stake table: map: epoch_num -> map(vk, weight)
@@ -62,11 +64,12 @@ struct StateRelayServerState {
 
 impl StateRelayServerState {
     /// Init the server state
-    pub async fn new(sequencer_url: Url, stake_table_capacity: u64) -> anyhow::Result<Self> {
-        Ok(Self {
+    pub fn new(sequencer_url: Url, stake_table_capacity: u64) -> Self {
+        Self {
             sequencer_url,
             stake_table_capacity,
             blocks_per_epoch: None,
+            epoch_start_block: None,
             thresholds: HashMap::new(),
             known_nodes: HashMap::new(),
             bundles: HashMap::new(),
@@ -74,7 +77,7 @@ impl StateRelayServerState {
             latest_block_height: None,
             queue: BTreeSet::new(),
             shutdown: None,
-        })
+        }
     }
 
     /// after relay server started, when the first signature arrive, we query sequencer for the genesis and update local state.
@@ -87,7 +90,16 @@ impl StateRelayServerState {
     /// thus `first_epoch` is not necessarily 1, but the `epoch_from_block_number(epoch_start_block, blocks_per_epoch)`.
     async fn init_genesis(&mut self) -> anyhow::Result<()> {
         // fetch genesis info from sequencer
-        let (blocks_per_epoch, epoch_start_block) = epoch_config(&self.sequencer_url).await?;
+        if self.blocks_per_epoch.is_none() || self.epoch_start_block.is_none() {
+            let (blocks_per_epoch, epoch_start_block) = epoch_config(&self.sequencer_url).await?;
+            self.blocks_per_epoch.get_or_insert(blocks_per_epoch);
+            self.epoch_start_block.get_or_insert(epoch_start_block);
+        }
+        let (blocks_per_epoch, epoch_start_block) = (
+            self.blocks_per_epoch.unwrap(),
+            self.epoch_start_block.unwrap(),
+        );
+
         let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
         tracing::info!(%blocks_per_epoch, %epoch_start_block, "Initializing genesis stake table with ");
 
@@ -207,6 +219,15 @@ impl StateRelayServerState {
             panic!("A shutdown signal is already registered and can not be registered twice");
         }
         self.shutdown = shutdown_listener;
+        self
+    }
+
+    pub fn with_blocks_per_epoch(mut self, blocks_per_epoch: u64) -> Self {
+        self.blocks_per_epoch = Some(blocks_per_epoch);
+        self
+    }
+    pub fn with_epoch_start_block(mut self, epoch_start_block: u64) -> Self {
+        self.epoch_start_block = Some(epoch_start_block);
         self
     }
 }
@@ -402,7 +423,6 @@ pub async fn run_relay_server<ApiVer: StaticVersionType + 'static>(
 
     let state = RwLock::new(
         StateRelayServerState::new(sequencer_url, stake_table_capacity)
-            .await?
             .with_shutdown_signal(shutdown_listener),
     );
     let mut app = App::<RwLock<StateRelayServerState>, ServerError>::with_state(state);
@@ -411,6 +431,22 @@ pub async fn run_relay_server<ApiVer: StaticVersionType + 'static>(
 
     let app_future = app.serve(url, bind_version);
 
+    app_future.await?;
+    Ok(())
+}
+
+pub async fn run_relay_server_with_state<ApiVer: StaticVersionType + 'static>(
+    server_url: Url,
+    bind_version: ApiVer,
+    state: StateRelayServerState,
+) -> anyhow::Result<()> {
+    let options = Options::default();
+    let api = define_api(&options, bind_version).unwrap();
+
+    let mut app = App::<RwLock<StateRelayServerState>, ServerError>::with_state(RwLock::new(state));
+    app.register_module("api", api).unwrap();
+
+    let app_future = app.serve(server_url, bind_version);
     app_future.await?;
     Ok(())
 }

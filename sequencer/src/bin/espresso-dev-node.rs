@@ -20,7 +20,7 @@ use sequencer::{
         test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
     },
     persistence,
-    state_signature::relay_server::run_relay_server,
+    state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
     testing::TestConfigBuilder,
     SequencerApiVersion,
 };
@@ -216,6 +216,8 @@ async fn main() -> anyhow::Result<()> {
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
         .build();
+    let blocks_per_epoch = network_config.hotshot_config().epoch_height;
+    let epoch_start_block = network_config.hotshot_config().epoch_start_block;
 
     const NUM_NODES: usize = 2;
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
@@ -233,12 +235,14 @@ async fn main() -> anyhow::Result<()> {
 
     let (genesis_state, genesis_stake) = network.light_client_genesis();
 
-    let mut contracts = Contracts::new();
+    let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];
     let mut prover_ports = Vec::new();
     let mut client_states = ApiState::default();
     let mut handles = FuturesUnordered::new();
-    // deploy contract for L1 and each alt chain
+
+    // deploy light client contract for L1 and each alt chain,
+    // deploy fee contract, EspToken, stake table contracts on L1 only.
     for (url, mnemonic, account_index, multisig_address, retry_interval) in once((
         l1_url.clone(),
         mnemonic.clone(),
@@ -282,36 +286,17 @@ async fn main() -> anyhow::Result<()> {
             .on_http(url.clone());
         let admin = provider.get_accounts().await?[0];
 
-        // deploy fee contract (and proxy)
-        let fee_proxy_addr =
-            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
-        if let Some(multisig) = multisig_address {
-            deployer::transfer_ownership(
-                &provider,
-                Contract::FeeContractProxy,
-                fee_proxy_addr,
-                multisig,
-            )
-            .await?;
-        }
-
-        // deploy stake table
-        let stake_table_addr =
-            deployer::deploy_permissioned_stake_table(&provider, &mut contracts, vec![]).await?;
-        if let Some(multisig) = multisig_address {
-            deployer::transfer_ownership(
-                &provider,
-                Contract::PermissonedStakeTable,
-                stake_table_addr,
-                multisig,
-            )
-            .await?;
-        }
+        let contracts = if url == l1_url {
+            &mut l1_contracts
+        } else {
+            // alt chains contracts
+            &mut Contracts::new()
+        };
 
         // deploy light client v1, proxy
         let lc_proxy_addr = deployer::deploy_light_client_proxy(
             &provider,
-            &mut contracts,
+            contracts,
             true, // use mock
             genesis_state.clone(),
             genesis_stake.clone(),
@@ -336,47 +321,26 @@ async fn main() -> anyhow::Result<()> {
             relay_server: relay_server_url.clone(),
             update_interval,
             retry_interval,
-            sequencer_url: "http://localhost".parse().unwrap(),
+            sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}")).unwrap(),
             port: Some(prover_port),
             stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST as usize,
             provider_endpoint: url.clone(),
             light_client_address: lc_proxy_addr,
             signer: signer.clone(),
+            blocks_per_epoch: Some(blocks_per_epoch),
         };
 
         // upgrade to LightClientV2
-        let blocks_per_epoch = prover_config.blocks_per_epoch().await?;
         deployer::upgrade_light_client_v2(
             &provider,
-            &mut contracts,
+            contracts,
             true, // use mock
             blocks_per_epoch,
         )
         .await?;
 
-        // deploy EspToken, proxy
-        let token_proxy_addr =
-            deployer::deploy_token_proxy(&provider, &mut contracts, admin, admin).await?;
-
-        // deploy permissionless stake table
-        let exit_escrow_period = U256::from(300); // 300 sec
-        deployer::deploy_stake_table_proxy(
-            &provider,
-            &mut contracts,
-            token_proxy_addr,
-            lc_proxy_addr,
-            exit_escrow_period,
-            admin,
-        )
-        .await?;
-
         let chain_id = provider.get_chain_id().await?;
         client_states.lc_proxy_addr.insert(chain_id, lc_proxy_addr);
-        // for the host (non-alt) chain
-        if url == l1_url {
-            client_states.wallet = wallet;
-            client_states.l1_url = url;
-        }
         light_client_addresses.push((chain_id, lc_proxy_addr));
 
         let prover_handle = spawn(run_prover_service_with_stake_table(
@@ -385,17 +349,59 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(st.clone()),
         ));
         handles.push(prover_handle);
+
+        // L1-only actions and contract deployment
+        if url == l1_url {
+            // deploy fee contract (and proxy)
+            let fee_proxy_addr =
+                deployer::deploy_fee_contract_proxy(&provider, contracts, admin).await?;
+            if let Some(multisig) = multisig_address {
+                deployer::transfer_ownership(
+                    &provider,
+                    Contract::FeeContractProxy,
+                    fee_proxy_addr,
+                    multisig,
+                )
+                .await?;
+            }
+
+            // deploy EspToken, proxy
+            let token_proxy_addr =
+                deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+
+            // deploy permissionless stake table
+            let exit_escrow_period = U256::from(300); // 300 sec
+            deployer::deploy_stake_table_proxy(
+                &provider,
+                contracts,
+                token_proxy_addr,
+                lc_proxy_addr,
+                exit_escrow_period,
+                admin,
+            )
+            .await?;
+
+            client_states.wallet = wallet;
+            client_states.l1_url = url;
+        }
     }
 
     let relay_server_handle = spawn(async move {
-        let _ = run_relay_server(
-            None,
+        // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
+        // since this dev-node didn't expose those APIs
+        let state = StateRelayServerState::new(
             Url::parse(&format!("http://localhost:{}", sequencer_api_port)).unwrap(),
             STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .with_blocks_per_epoch(blocks_per_epoch)
+        .with_epoch_start_block(epoch_start_block);
+
+        let _ = run_relay_server_with_state(
             format!("http://0.0.0.0:{relay_server_port}")
                 .parse()
                 .unwrap(),
             SequencerApiVersion::instance(),
+            state,
         )
         .await;
 

@@ -74,6 +74,8 @@ pub struct StateProverConfig {
     pub port: Option<u16>,
     /// Stake table capacity for the prover circuit.
     pub stake_table_capacity: usize,
+    /// Epoch length in number of Hotshot blocks. If None, config will be fetched from sequencer on demand
+    pub blocks_per_epoch: Option<u64>,
 }
 
 impl StateProverConfig {
@@ -91,7 +93,10 @@ impl StateProverConfig {
     }
 
     pub async fn blocks_per_epoch(&self) -> anyhow::Result<u64> {
-        Ok(epoch_config(&self.sequencer_url).await?.0)
+        match self.blocks_per_epoch {
+            Some(v) => Ok(v),
+            None => Ok(epoch_config(&self.sequencer_url).await?.0),
+        }
     }
 }
 
