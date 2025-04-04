@@ -124,7 +124,11 @@ use crate::{
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
-    fetching::{self, request, Provider},
+    fetching::{
+        self,
+        request::{self, StateCertRequest},
+        Provider,
+    },
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
@@ -146,7 +150,6 @@ mod vid;
 use self::{
     block::PayloadFetcher,
     leaf::LeafFetcher,
-    state_cert::StateCertRequest,
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
 };

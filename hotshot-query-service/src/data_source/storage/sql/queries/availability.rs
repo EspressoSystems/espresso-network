@@ -421,7 +421,7 @@ where
 
     async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
         let row = query(&format!(
-            "SELECT {STATE_CERT_COLUMNS} FROM state_cert WHERE epoch = $1 LIMIT 1"
+            "SELECT {STATE_CERT_COLUMNS} FROM finalized_state_cert WHERE epoch = $1 LIMIT 1"
         ))
         .bind(epoch as i64)
         .fetch_one(self.as_mut())

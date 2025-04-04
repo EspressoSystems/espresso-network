@@ -14,9 +14,7 @@
 
 use std::{future::IntoFuture, sync::Arc};
 
-use anyhow::bail;
 use async_trait::async_trait;
-use derive_more::From;
 use futures::future::FutureExt;
 use hotshot_types::traits::node_implementation::{ConsensusTime, NodeType};
 
@@ -33,11 +31,9 @@ use crate::{
         },
         VersionedDataSource,
     },
-    Payload, QueryError, QueryResult,
+    fetching::request::StateCertRequest,
+    Payload, QueryResult,
 };
-
-#[derive(Clone, Copy, Debug, From)]
-pub(super) struct StateCertRequest(u64);
 
 impl FetchRequest for StateCertRequest {}
 
@@ -55,9 +51,9 @@ where
     }
 
     async fn active_fetch<S, P>(
-        tx: &mut impl AvailabilityStorage<Types>,
-        fetcher: Arc<Fetcher<Types, S, P>>,
-        req: Self::Request,
+        _tx: &mut impl AvailabilityStorage<Types>,
+        _fetcher: Arc<Fetcher<Types, S, P>>,
+        _req: Self::Request,
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
@@ -66,17 +62,7 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        match tx.get_state_cert(req.0).await {
-            Ok(state_cert) => {
-                fetcher.store_and_notify(state_cert).await;
-            },
-            Err(QueryError::NotFound | QueryError::Missing) => {
-                tracing::debug!("state cert not found; trying fetch");
-            },
-            Err(QueryError::Error { message }) => {
-                bail!("failed to get state cert for epoch {}: {message}", req.0);
-            },
-        }
+        // We dont do anything for now if the state cert is not in the database
         Ok(())
     }
 

@@ -70,7 +70,7 @@ impl<Types: NodeType> Request<Types> for LeafRequest<Types> {
 }
 
 /// A request for a light client state update certificate with a given epoch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
 pub struct StateCertRequest(pub u64);
 
 impl<Types: NodeType> Request<Types> for StateCertRequest {
