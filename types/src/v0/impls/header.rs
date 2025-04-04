@@ -7,7 +7,7 @@ use ethers_conv::ToAlloy;
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::VidCommitment,
+    data::{VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
@@ -988,6 +988,7 @@ impl BlockHeader<SeqTypes> for Header {
         metadata: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
         builder_fee: BuilderFee<SeqTypes>,
         version: Version,
+        view_number: u64,
     ) -> Result<Self, Self::Error> {
         tracing::info!("preparing to propose legacy header");
 
@@ -1092,11 +1093,16 @@ impl BlockHeader<SeqTypes> for Header {
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
         if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height(), instance_state).await?
+            && !first_two_epochs(parent_leaf.height() + 1, instance_state).await?
         {
             leader_config = Some(
-                catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)
-                    .await?,
+                catchup_missing_accounts(
+                    instance_state,
+                    &mut validated_state,
+                    parent_leaf,
+                    ViewNumber::new(view_number),
+                )
+                .await?,
             );
         };
 
@@ -1616,6 +1622,7 @@ mod test_headers {
             ns_table,
             builder_fee,
             StaticVersion::<0, 1>::version(),
+            *parent_leaf.view_number() + 1,
         )
         .await
         .unwrap();
