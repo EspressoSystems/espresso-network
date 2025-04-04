@@ -354,6 +354,22 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
+        // deploy EspToken, proxy
+        let token_proxy_addr =
+            deployer::deploy_token_proxy(&provider, &mut contracts, admin, admin).await?;
+
+        // deploy permissionless stake table
+        let exit_escrow_period = U256::from(300); // 300 sec
+        deployer::deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_proxy_addr,
+            lc_proxy_addr,
+            exit_escrow_period,
+            admin,
+        )
+        .await?;
+
         let chain_id = provider.get_chain_id().await?;
         client_states.lc_proxy_addr.insert(chain_id, lc_proxy_addr);
         // for the host (non-alt) chain
