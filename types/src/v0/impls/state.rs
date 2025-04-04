@@ -791,6 +791,7 @@ impl ValidatedState {
         parent_leaf: &Leaf2,
         proposed_header: &Header,
         version: Version,
+        view_number: ViewNumber,
     ) -> anyhow::Result<(Self, Delta)> {
         // Clone state to avoid mutation. Consumer can take update
         // through returned value.
@@ -885,11 +886,11 @@ impl ValidatedState {
         // when we deploy the permissionless contract in native demo
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
-        if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height(), instance).await?
+        if version >= EpochVersion::version()
+            && !first_two_epochs(parent_leaf.height() + 1, instance).await?
         {
             let validator =
-                catchup_missing_accounts(instance, &mut validated_state, parent_leaf, parent_view)
+                catchup_missing_accounts(instance, &mut validated_state, parent_leaf, view_number)
                     .await?;
 
             // apply rewards
@@ -1018,6 +1019,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
                 parent_leaf,
                 proposed_header,
                 version,
+                ViewNumber::new(view_number),
             )
             .await
             .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;

@@ -66,7 +66,14 @@ pub(crate) async fn compute_state_update(
     }
 
     state
-        .apply_header(instance, peers, parent_leaf, header, header.version())
+        .apply_header(
+            instance,
+            peers,
+            parent_leaf,
+            header,
+            header.version(),
+            proposed_leaf.view_number(),
+        )
         .await
 }
 

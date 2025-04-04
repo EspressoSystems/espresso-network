@@ -1771,6 +1771,7 @@ mod test {
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
+    use primitive_types::U256;
     use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
     use surf_disco::Client;
     use test_helpers::{
@@ -2811,7 +2812,8 @@ mod test {
         );
 
         // Fetch the config from node 1, a different node than the one running the service.
-        let validator = ValidatorConfig::generated_from_seed_indexed([0; 32], 1, 1, false);
+        let validator =
+            ValidatorConfig::generated_from_seed_indexed([0; 32], 1, U256::from(1), false);
         let config = peers.fetch_config(validator.clone()).await.unwrap();
 
         // Check the node-specific information in the recovered config is correct.
