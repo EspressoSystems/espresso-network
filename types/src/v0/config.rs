@@ -73,7 +73,12 @@ pub struct PublicHotShotConfig {
     start_voting_time: u64,
     stop_voting_time: u64,
     epoch_height: u64,
+    #[serde(default = "default_epoch_start_block")]
     epoch_start_block: u64,
+}
+
+fn default_epoch_start_block() -> u64 {
+    1
 }
 
 impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
