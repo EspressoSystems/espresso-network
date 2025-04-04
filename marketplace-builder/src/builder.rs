@@ -91,7 +91,7 @@ pub fn build_instance_state<V: Versions>(
                 vec![],
                 vec![],
                 l1_client,
-                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                chain_config,
                 peers,
                 NoStorage,
             ))),
