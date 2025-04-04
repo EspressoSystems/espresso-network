@@ -3,16 +3,20 @@ use std::{collections::BTreeMap, io, iter::once, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use clap::Parser;
 use contract_bindings_ethers::light_client_mock::LightClientMock;
-use espresso_types::{parse_duration, MarketplaceVersion, SequencerVersions, V0_1};
+use espresso_types::{
+    parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
+};
 use ethers::{
     middleware::{MiddlewareBuilder, SignerMiddleware},
     providers::{Http, Middleware, Provider},
     signers::{coins_bip39::English, MnemonicBuilder, Signer},
     types::{Address, H160, U256},
 };
+use ethers_conv::{ToAlloy, ToEthers};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_state_prover::service::{
-    one_honest_threshold, run_prover_service_with_stake_table, StateProverConfig,
+    light_client_genesis_from_stake_table, one_honest_threshold,
+    run_prover_service_with_stake_table, StateProverConfig,
 };
 use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableScheme};
 use portpicker::pick_unused_port;
@@ -31,6 +35,7 @@ use sequencer_utils::{
     logging, AnvilOptions,
 };
 use serde::{Deserialize, Serialize};
+use staking_cli::demo::stake_in_contract_for_test;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
 use tokio::spawn;
 use url::Url;
@@ -48,7 +53,7 @@ struct Args {
         short,
         long,
         env = "ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL",
-        default_value = "7s",
+        default_value = "200ms",
         value_parser = parse_duration
     )]
     l1_interval: Duration,
@@ -214,30 +219,17 @@ async fn main() -> anyhow::Result<()> {
         .unwrap();
 
     let network_config = TestConfigBuilder::default()
-        .marketplace_builder_port(builder_port)
+        .builder_port(builder_port)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
         .build();
-
-    const NUM_NODES: usize = 2;
-    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-        .api_config(api_options)
-        .network_config(network_config)
-        .with_max_block_size(max_block_size)
-        .build();
-
-    let network =
-        TestNetwork::new(config, SequencerVersions::<MarketplaceVersion, V0_1>::new()).await;
-    let st = network.cfg.stake_table();
-    let total_stake = st.total_stake(SnapshotVersion::LastEpochStart).unwrap();
-    let config = network.cfg.hotshot_config();
-
-    tracing::info!("Hotshot config {config:?}");
-
-    let lc_genesis = network.light_client_genesis();
+    let initial_stake_table = network_config.stake_table();
+    let initial_total_stake = initial_stake_table.total_stake(SnapshotVersion::LastEpochStart)?;
+    let lc_genesis = light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
     let contracts = Contracts::new();
     let mut light_client_addresses = vec![];
+    let mut stake_table_address = alloy::primitives::Address::default();
     let mut prover_ports = Vec::new();
     let mut mock_contracts = BTreeMap::new();
     let mut handles = FuturesUnordered::new();
@@ -253,7 +245,11 @@ async fn main() -> anyhow::Result<()> {
     .chain(
         alt_chain_providers
             .iter()
-            .zip(alt_mnemonics.into_iter().chain(std::iter::repeat(mnemonic)))
+            .zip(
+                alt_mnemonics
+                    .into_iter()
+                    .chain(std::iter::repeat(mnemonic.clone())),
+            )
             .zip(
                 alt_account_indices
                     .into_iter()
@@ -279,7 +275,7 @@ async fn main() -> anyhow::Result<()> {
                 (url.clone(), mnc, idx, mlts, update, retry)
             }),
     ) {
-        tracing::info!("deploying the contract for provider: {url:?}");
+        tracing::info!("deploying the contract for provider: {url}");
 
         let contracts = deploy(
             url.clone(),
@@ -297,6 +293,34 @@ async fn main() -> anyhow::Result<()> {
             None,                           // use deployer as initial token grant recipient
         )
         .await?;
+
+        // fund stake table only on L1
+        if url == l1_url {
+            // Save the stake table address to use in ChainConfig
+            stake_table_address = contracts
+                .get_contract_address(Contract::StakeTableProxy)
+                .expect("stake table deployed")
+                .to_alloy();
+            let deployer_signer_alloy = alloy::signers::local::MnemonicBuilder::<
+                alloy::signers::local::coins_bip39::English,
+            >::default()
+            .phrase(mnemonic.as_str())
+            .index(account_index)?
+            .build()?;
+            let token_address = contracts
+                .get_contract_address(Contract::EspTokenProxy)
+                .expect("ESP token deployed")
+                .to_alloy();
+            let staking_priv_keys = network_config.staking_priv_keys();
+            stake_in_contract_for_test(
+                l1_url.clone(),
+                deployer_signer_alloy,
+                stake_table_address,
+                token_address,
+                staking_priv_keys,
+            )
+            .await?;
+        }
 
         let provider = Provider::<Http>::try_from(url.as_str())
             .unwrap()
@@ -350,15 +374,49 @@ async fn main() -> anyhow::Result<()> {
         let prover_handle = spawn(run_prover_service_with_stake_table(
             prover_config,
             SequencerApiVersion::instance(),
-            Arc::new(st.clone()),
+            Arc::new(initial_stake_table.clone()),
         ));
         handles.push(prover_handle);
     }
 
+    const NUM_NODES: usize = 2;
+    let chain_config = ChainConfig {
+        max_block_size: max_block_size.into(),
+        // TODO: MA: the builder has block fee `123` hardcoded so we have to set this to zero for now.
+        base_fee: 0.into(),
+        stake_table_contract: Some(stake_table_address.to_ethers()),
+        ..Default::default()
+    };
+
+    let config = network_config.hotshot_config();
+
+    tracing::info!("Hotshot config {config:?}");
+
+    tracing::info!("Chain config: {:?}", chain_config);
+    let state = ValidatedState {
+        chain_config: chain_config.into(),
+        ..Default::default()
+    };
+    tracing::info!("State: {:?}", state);
+
+    let states = std::array::from_fn(|_| state.clone());
+    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+        .api_config(api_options)
+        .network_config(network_config)
+        .states(states)
+        .build();
+
+    // Start the nodes
+    let network = TestNetwork::new(
+        config,
+        SequencerVersions::<EpochVersion, EpochVersion>::new(),
+    )
+    .await;
+
     let relay_server_handle = spawn(async move {
         let _ = run_relay_server(
             None,
-            one_honest_threshold(total_stake),
+            one_honest_threshold(initial_total_stake),
             format!("http://0.0.0.0:{relay_server_port}")
                 .parse()
                 .unwrap(),
@@ -407,8 +465,8 @@ async fn main() -> anyhow::Result<()> {
     handles.push(dev_node_handle);
 
     // if any of the async task is complete then dev node binary exits
-    if (handles.next().await).is_some() {
-        tracing::error!("exiting dev node");
+    if let Some(item) = handles.next().await {
+        tracing::error!("exiting dev node: {item:?}");
         drop(network);
     }
 
@@ -522,7 +580,15 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static, S: Signer + Cl
     app.register_module("api", api)
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
-    app.serve(format!("0.0.0.0:{port}"), bind_version).await?;
+    tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
+
+    app.serve(format!("0.0.0.0:{port}"), bind_version)
+        .await
+        .map_err(|err| {
+            // If we get an "Address in use" during startup, make it a bit easier to find the cause.
+            tracing::error!("Failed to start dev-node API on http://0.0.0.0:{port} : {err}");
+            err
+        })?;
 
     Ok(())
 }

@@ -34,6 +34,7 @@ use crate::{
 pub type BLSPrivKey = SignKey;
 /// BLS public key used to verify a signature
 pub type BLSPubKey = VerKey;
+pub type BLSKeyPair = KeyPair;
 /// Public parameters for BLS signature scheme
 pub type BLSPublicParam = ();
 
