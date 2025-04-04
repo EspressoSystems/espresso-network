@@ -527,8 +527,9 @@ impl Header {
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
         if let Some(validator) = validator {
-            let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
 
+            let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator.clone())?;
+            tracing::info!("rewards distributed for validator={:?}", validator.account);
             state.reward_merkle_tree = reward_state;
         }
 
@@ -1005,7 +1006,7 @@ impl BlockHeader<SeqTypes> for Header {
         tracing::info!("preparing to propose legacy header");
 
         let height = parent_leaf.height();
-        let view = parent_leaf.block_header().view().unwrap();
+        let view = parent_leaf.view_number();
 
         let mut validated_state = parent_state.clone();
 
@@ -1100,8 +1101,9 @@ impl BlockHeader<SeqTypes> for Header {
         let mut leader_config = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
+        let proposed_header_height = parent_leaf.height() + 1;
         if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height() + 1, instance_state).await?
+            && !first_two_epochs(proposed_header_height, instance_state).await?
         {
             leader_config = Some(
                 find_validator(
@@ -1109,7 +1111,7 @@ impl BlockHeader<SeqTypes> for Header {
                     &mut validated_state,
                     parent_leaf,
                     view_number,
-                    parent_leaf.height() + 1,
+                    proposed_header_height,
                 )
                 .await?,
             );

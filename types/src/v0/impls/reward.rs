@@ -418,12 +418,8 @@ pub async fn find_validator(
     height: u64,
 ) -> anyhow::Result<Validator<BLSPubKey>> {
     tracing::error!("view={view:?}, height={height:?}");
-    let parent_view = leaf
-        .block_header()
-        .view()
-        .unwrap_or_else(|| leaf.view_number());
 
-    // let parent_view = leaf.view_number();
+    let parent_view = leaf.view_number();
 
     let epoch_height = instance_state.epoch_height;
     if epoch_height == 0 {
@@ -443,6 +439,7 @@ pub async fn find_validator(
     let validator = membership
         .get_validator_config(&epoch, leader)
         .context("validator not found")?;
+    drop(membership);
 
     let mut reward_accounts = HashSet::new();
     reward_accounts.insert(validator.account.to_ethers().into());

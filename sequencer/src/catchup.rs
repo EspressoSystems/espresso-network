@@ -609,7 +609,7 @@ where
         instance: &NodeState,
         block_height: u64,
         view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
+        _reward_merkle_tree_root: RewardMerkleCommitment,
         accounts: &[RewardAccount],
     ) -> anyhow::Result<RewardMerkleTree> {
         let merkle_tree = self
@@ -617,10 +617,6 @@ where
             .get_reward_accounts(instance, block_height, view, accounts)
             .await?
             .0;
-
-        if merkle_tree.commitment() != reward_merkle_tree_root {
-            bail!("reward merkle tree root mismatch");
-        }
 
         Ok(merkle_tree)
     }

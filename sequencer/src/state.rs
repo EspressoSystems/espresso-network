@@ -133,14 +133,6 @@ async fn store_state_update(
         .context("failed to store block merkle nodes")?;
     }
 
-    tracing::debug!(block_number, "updating state height");
-    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
-        tx,
-        block_number as usize,
-    )
-    .await
-    .context("setting state height")?;
-
     for delta in rewards_delta {
         let proof = match reward_merkle_tree.universal_lookup(delta) {
             LookupResult::Ok(_, proof) => proof,
@@ -153,7 +145,7 @@ async fn store_state_update(
                 reward_merkle_tree.height(),
             );
 
-        tracing::debug!(%delta, "inserting fee account");
+        tracing::debug!(%delta, "inserting reward account");
         UpdateStateData::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
@@ -161,8 +153,17 @@ async fn store_state_update(
             block_number,
         )
         .await
-        .context("failed to store fee merkle nodes")?;
+        .context("failed to store reward merkle nodes")?;
     }
+
+    tracing::debug!(block_number, "updating state height");
+    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
+        tx,
+        block_number as usize,
+    )
+    .await
+    .context("setting state height")?;
+
     Ok(())
 }
 
@@ -247,6 +248,25 @@ where
 
         UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes(
             &mut tx, proof, path, 0,
+        )
+        .await
+        .context("failed to store fee merkle nodes")?;
+    }
+
+    for (account, _) in state.reward_merkle_tree.iter() {
+        let proof = match state.reward_merkle_tree.universal_lookup(account) {
+            LookupResult::Ok(_, proof) => proof,
+            LookupResult::NotFound(proof) => proof,
+            LookupResult::NotInMemory => bail!("missing merkle path for reward account {account}"),
+        };
+        let path: Vec<usize> =
+            <RewardAccount as ToTraversalPath<{ RewardMerkleTree::ARITY }>>::to_traversal_path(
+                account,
+                state.reward_merkle_tree.height(),
+            );
+
+        UpdateStateData::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::insert_merkle_nodes(
+            &mut tx, proof, path, 119,
         )
         .await
         .context("failed to store fee merkle nodes")?;

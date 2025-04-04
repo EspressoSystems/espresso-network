@@ -826,10 +826,7 @@ impl ValidatedState {
         );
 
         let parent_height = parent_leaf.height();
-        let parent_view = parent_leaf
-            .block_header()
-            .view()
-            .unwrap_or_else(|| parent_leaf.view_number());
+        let parent_view = parent_leaf.view_number();
 
         // Ensure merkle tree has frontier
         if self.need_to_fetch_blocks_mt_frontier() {
@@ -903,8 +900,9 @@ impl ValidatedState {
             // apply rewards
 
             validated_state
-                .distribute_rewards(&mut delta, validator)
-                .context("failed to distribute rewards")?
+                .distribute_rewards(&mut delta, validator.clone())
+                .context("failed to distribute rewards")?;
+            tracing::info!(">>Rewards distributed for validator={:?}", validator.account);
         }
 
         Ok((validated_state, delta))
