@@ -57,22 +57,26 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
+nextest *args:
+    # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
+    cargo nextest run --locked --workspace --exclude hotshot-testing --verbose {{args}}
+
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --workspace --features embedded-db --verbose {{args}}
-    cargo nextest run --locked --workspace --verbose {{args}}
+    just nextest --features embedded-db  {{args}}
+    just nextest {{args}}
 
 test-slow:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --release --workspace --features embedded-db --verbose --profile slow
-    cargo nextest run --locked --release --workspace --verbose --profile slow
+    just nextest --features embedded-db --profile slow
+    just nextest --profile slow
 
 test-all:
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --release --workspace --features embedded-db --verbose --profile all
-    cargo nextest run --locked --release --workspace --verbose --profile all
+    just nextest --features embedded-db --profile all
+    just nextest --profile all
 
 test-integration:
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
