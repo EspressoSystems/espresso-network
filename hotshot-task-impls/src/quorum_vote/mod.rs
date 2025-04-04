@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender};
 use async_lock::RwLock;
@@ -29,7 +29,7 @@ use hotshot_types::{
         signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
     },
-    utils::{is_epoch_root, is_last_block, option_epoch_from_block_number},
+    utils::{is_epoch_root, is_epoch_transition, is_last_block, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
     StakeTableEntries,
 };
@@ -39,7 +39,7 @@ use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
-    helpers::broadcast_event,
+    helpers::{broadcast_event, wait_for_second_vid_share},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
 };
 
@@ -100,6 +100,12 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Signature key for light client state
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+
+    /// View timeout from config.
+    pub timeout: u64,
+
+    /// The time this view started
+    pub view_start_time: Instant,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -114,6 +120,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
         let mut next_epoch_payload_commitment = None;
         let mut leaf = None;
         let mut vid_share = None;
+        let mut da_cert = None;
         let mut parent_view_number = None;
         for event in res {
             match event.as_ref() {
@@ -172,6 +179,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     } else {
                         next_epoch_payload_commitment = next_epoch_cert_payload_comm;
                     }
+                    da_cert = Some(cert.clone());
                 },
                 HotShotEvent::VidShareValidated(share) => {
                     let vid_payload_commitment = &share.data.payload_commitment();
@@ -217,6 +225,80 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             return;
         };
 
+        let Some(da_cert) = da_cert else {
+            tracing::error!(
+                "We don't have the DA cert for this view {:?}, but we should, because the vote dependencies have completed.",
+                self.view_number
+            );
+            return;
+        };
+
+        let mut maybe_next_epoch_vid_share = None;
+        // If this is the last block in the epoch, we might need two VID shares.
+        if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
+            && is_epoch_transition(leaf.block_header().block_number(), self.epoch_height)
+        {
+            let current_epoch = option_epoch_from_block_number::<TYPES>(
+                leaf.with_epoch,
+                leaf.block_header().block_number(),
+                self.epoch_height,
+            );
+            let next_epoch = current_epoch.map(|e| e + 1);
+
+            let Ok(current_epoch_membership) = self
+                .membership_coordinator
+                .membership_for_epoch(current_epoch)
+                .await
+            else {
+                tracing::warn!("Couldn't acquire current epoch membership. Do not vote!");
+                return;
+            };
+            let Ok(next_epoch_membership) = self
+                .membership_coordinator
+                .membership_for_epoch(next_epoch)
+                .await
+            else {
+                tracing::warn!("Couldn't acquire next epoch membership. Do not vote!");
+                return;
+            };
+
+            // If we belong to both epochs, we require VID shares from both epochs.
+            if current_epoch_membership.has_stake(&self.public_key).await
+                && next_epoch_membership.has_stake(&self.public_key).await
+            {
+                let other_target_epoch = if vid_share.data.target_epoch() == current_epoch {
+                    next_epoch
+                } else {
+                    maybe_next_epoch_vid_share = Some(vid_share.clone());
+                    current_epoch
+                };
+                match wait_for_second_vid_share(
+                    other_target_epoch,
+                    &vid_share,
+                    &da_cert,
+                    &self.consensus,
+                    self.timeout,
+                    self.view_start_time,
+                    &self.receiver.activate_cloned(),
+                )
+                .await
+                {
+                    Ok(other_vid_share) => {
+                        if maybe_next_epoch_vid_share.is_none() {
+                            maybe_next_epoch_vid_share = Some(other_vid_share);
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "This is the last block in epoch, we are in both epochs \
+                             but we received only one VID share. Do not vote! Error: {e:?}"
+                        );
+                        return;
+                    },
+                }
+            }
+        }
+
         // Update internal state
         if let Err(e) = update_shared_state::<TYPES, I, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
@@ -229,7 +311,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.view_number,
             Arc::clone(&self.instance_state),
             &leaf,
-            &vid_share,
+            maybe_next_epoch_vid_share.as_ref().unwrap_or(&vid_share),
             parent_view_number,
             self.epoch_height,
         )
@@ -295,7 +377,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.view_number,
             Arc::clone(&self.storage),
             leaf,
-            vid_share,
+            maybe_next_epoch_vid_share.unwrap_or(vid_share),
             is_vote_leaf_extended,
             is_vote_epoch_root,
             self.epoch_height,
@@ -362,6 +444,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Block height at which to enable the epoch upgrade
     pub epoch_upgrade_block_height: u64,
+
+    /// View timeout from config.
+    pub timeout: u64,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -468,6 +553,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 epoch_height: self.epoch_height,
                 consensus_metrics: Arc::clone(&self.consensus_metrics),
                 state_private_key: self.state_private_key.clone(),
+                timeout: self.timeout,
+                view_start_time: Instant::now(),
             },
         );
         self.vote_dependencies

@@ -199,7 +199,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
                 &task_state.public_key,
                 version >= V::Epochs::VERSION,
-                task_state.membership.membership(),
+                &task_state.membership,
                 &task_state.storage,
             )
             .await
@@ -215,6 +215,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             version >= V::Epochs::VERSION,
             task_state.membership.membership(),
             &task_state.storage,
+            task_state.epoch_height,
         )
         .await
     };

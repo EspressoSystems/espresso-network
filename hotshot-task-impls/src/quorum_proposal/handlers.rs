@@ -568,14 +568,20 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             if maybe_next_epoch_qc.is_some() {
                 maybe_next_epoch_qc
             } else {
-                wait_for_next_epoch_qc(
-                    &parent_qc,
-                    &self.consensus,
-                    self.timeout,
-                    self.view_start_time,
-                    &self.receiver,
+                Some(
+                    wait_for_next_epoch_qc(
+                        &parent_qc,
+                        &self.consensus,
+                        self.timeout,
+                        self.view_start_time,
+                        &self.receiver,
+                    )
+                    .await
+                    .context(
+                        "Jusify QC on our proposal is for the last block in the epoch \
+                    but we don't have the corresponding next epoch QC. Do not propose.",
+                    )?,
                 )
-                .await
             }
         } else {
             None
