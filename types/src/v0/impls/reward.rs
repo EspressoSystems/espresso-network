@@ -423,7 +423,9 @@ pub async fn find_validator_info(
     let parent_view = parent_leaf.view_number();
     let new_height = parent_height + 1;
 
-    let epoch_height = instance_state.epoch_height.context("epoch height")?;
+    let epoch_height = instance_state
+        .epoch_height
+        .context("epoch height not found")?;
     if epoch_height == 0 {
         bail!("epoch height is 0. can not catchup reward accounts");
     }
