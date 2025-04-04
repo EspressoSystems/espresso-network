@@ -301,6 +301,7 @@ where
         inner.leaf_storage.skip_version()?;
         inner.block_storage.skip_version()?;
         inner.vid_storage.skip_version()?;
+        inner.state_cert_storage.skip_version()?;
         if let Some(store) = &mut inner.top_storage {
             store.commit_version()?;
         }
@@ -321,6 +322,7 @@ where
         self.leaf_storage.revert_version().unwrap();
         self.block_storage.revert_version().unwrap();
         self.vid_storage.revert_version().unwrap();
+        self.state_cert_storage.revert_version().unwrap();
     }
 }
 
@@ -353,6 +355,7 @@ where
         self.inner.leaf_storage.commit_version().await?;
         self.inner.block_storage.commit_version().await?;
         self.inner.vid_storage.commit_version().await?;
+        self.inner.state_cert_storage.commit_version().await?;
         if let Some(store) = &mut self.inner.top_storage {
             store.commit_version()?;
         }
