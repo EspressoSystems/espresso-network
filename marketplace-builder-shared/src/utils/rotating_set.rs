@@ -48,9 +48,8 @@ where
     /// Force garbage collection, even if the time elapsed since
     ///  the last garbage collection is less than `self.period`
     pub fn force_rotate(&mut self) {
-        let now_stale = mem::take(&mut self.fresh);
-        let now_expiring = mem::replace(&mut self.stale, now_stale);
-        self.expiring = now_expiring;
+        // Move items through the rotation cycle
+        self.expiring = mem::replace(&mut self.stale, mem::take(&mut self.fresh));
         self.last_rotation = Instant::now();
     }
 
