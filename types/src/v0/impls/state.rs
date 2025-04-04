@@ -886,7 +886,7 @@ impl ValidatedState {
         // when we deploy the permissionless contract in native demo
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
-        if version == EpochVersion::version()
+        if version >= EpochVersion::version()
             && !first_two_epochs(parent_leaf.height() + 1, instance).await?
         {
             let validator =
