@@ -45,7 +45,6 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
 
     use async_lock::RwLock;
     use espresso_types::{EpochCommittees, Leaf, Payload, SeqTypes, Transaction};
-    use ethers_conv::ToAlloy;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::vid_disperse::{ADVZDisperse, ADVZDisperseShare},
