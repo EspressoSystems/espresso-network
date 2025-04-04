@@ -453,8 +453,6 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
 ) -> Result<()> {
     let stake_table_capacity = config.stake_table_capacity;
     tracing::info!("Stake table capacity: {}", stake_table_capacity);
-    // TODO(#1022): maintain the following stake table
-    // TODO: (alex) use `/node/stake-table/:epoch` to reconstruct the `st: StakeTable` locally before passing in.
     let st = Arc::new(
         init_stake_table_from_sequencer(&config.sequencer_url, stake_table_capacity)
             .await
