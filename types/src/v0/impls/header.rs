@@ -33,7 +33,7 @@ use super::{
 use crate::{
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
+        impls::reward::{apply_rewards, find_validator_info, first_two_epochs},
         MarketplaceVersion,
     },
     v0_1, v0_2, v0_3,
@@ -526,7 +526,8 @@ impl Header {
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
         if let Some(validator) = validator {
-            let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
+            let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator.clone())?;
+            tracing::info!("rewards distributed for validator={:?}", validator.account);
             state.reward_merkle_tree = reward_state;
         }
 
@@ -1092,15 +1093,17 @@ impl BlockHeader<SeqTypes> for Header {
         let mut leader_config = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
+        let proposed_header_height = parent_leaf.height() + 1;
         if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height() + 1, instance_state).await?
+            && !first_two_epochs(proposed_header_height, instance_state).await?
         {
             leader_config = Some(
-                catchup_missing_accounts(
+                find_validator_info(
                     instance_state,
                     &mut validated_state,
                     parent_leaf,
                     ViewNumber::new(view_number),
+                    proposed_header_height,
                 )
                 .await?,
             );
