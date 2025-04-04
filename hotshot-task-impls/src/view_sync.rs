@@ -59,8 +59,19 @@ pub enum ViewSyncPhase {
 
 /// Type alias for a map from View Number to Relay to Vote Task
 type RelayMap<TYPES, VOTE, CERT, V> = HashMap<
-    <TYPES as NodeType>::View,
+    (
+        <TYPES as NodeType>::View,
+        Option<<TYPES as NodeType>::Epoch>,
+    ),
     BTreeMap<u64, VoteCollectionTaskState<TYPES, VOTE, CERT, V>>,
+>;
+
+type ReplicaTaskMap<TYPES, V> = HashMap<
+    (
+        <TYPES as NodeType>::View,
+        Option<<TYPES as NodeType>::Epoch>,
+    ),
+    ViewSyncReplicaTaskState<TYPES, V>,
 >;
 
 /// Main view sync task state
@@ -90,7 +101,7 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
     pub num_timeouts_tracked: u64,
 
     /// Map of running replica tasks
-    pub replica_task_map: RwLock<HashMap<TYPES::View, ViewSyncReplicaTaskState<TYPES, V>>>,
+    pub replica_task_map: RwLock<ReplicaTaskMap<TYPES, V>>,
 
     /// Map of pre-commit vote accumulates for the relay
     pub pre_commit_relay_map: RwLock<
@@ -200,6 +211,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
         view: TYPES::View,
+        epoch: Option<TYPES::Epoch>,
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     ) {
         // This certificate is old, we can throw it away
@@ -211,7 +223,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
         let mut task_map = self.replica_task_map.write().await;
 
-        if let Some(replica_task) = task_map.get_mut(&view) {
+        if let Some(replica_task) = task_map.get_mut(&(view, epoch)) {
             // Forward event then return
             tracing::debug!("Forwarding message");
             let result = replica_task
@@ -220,7 +232,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
             if result == Some(HotShotTaskCompleted) {
                 // The protocol has finished
-                task_map.remove(&view);
+                task_map.remove(&(view, epoch));
                 return;
             }
 
@@ -253,7 +265,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
             return;
         }
 
-        task_map.insert(view, replica_state);
+        task_map.insert((view, epoch), replica_state);
     }
 
     #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "View Sync Main Task", level = "error")]
@@ -268,33 +280,55 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
             HotShotEvent::ViewSyncPreCommitCertificateRecv(certificate) => {
                 tracing::debug!("Received view sync cert for phase {:?}", certificate);
                 let view = certificate.view_number();
-                self.send_to_or_create_replica(event, view, &event_stream)
-                    .await;
+                self.send_to_or_create_replica(
+                    Arc::clone(&event),
+                    view,
+                    certificate.epoch(),
+                    &event_stream,
+                )
+                .await;
             },
             HotShotEvent::ViewSyncCommitCertificateRecv(certificate) => {
                 tracing::debug!("Received view sync cert for phase {:?}", certificate);
                 let view = certificate.view_number();
-                self.send_to_or_create_replica(event, view, &event_stream)
-                    .await;
+                self.send_to_or_create_replica(
+                    Arc::clone(&event),
+                    view,
+                    certificate.epoch(),
+                    &event_stream,
+                )
+                .await;
             },
             HotShotEvent::ViewSyncFinalizeCertificateRecv(certificate) => {
                 tracing::debug!("Received view sync cert for phase {:?}", certificate);
                 let view = certificate.view_number();
-                self.send_to_or_create_replica(event, view, &event_stream)
-                    .await;
+                self.send_to_or_create_replica(
+                    Arc::clone(&event),
+                    view,
+                    certificate.epoch(),
+                    &event_stream,
+                )
+                .await;
             },
             HotShotEvent::ViewSyncTimeout(view, ..) => {
                 tracing::debug!("view sync timeout in main task {:?}", view);
                 let view = *view;
-                self.send_to_or_create_replica(event, view, &event_stream)
-                    .await;
+                self.send_to_or_create_replica(
+                    Arc::clone(&event),
+                    view,
+                    self.cur_epoch,
+                    &event_stream,
+                )
+                .await;
             },
 
             HotShotEvent::ViewSyncPreCommitVoteRecv(ref vote) => {
                 let mut map = self.pre_commit_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
-                let relay_map = map.entry(vote_view).or_insert(BTreeMap::new());
+                let relay_map = map
+                    .entry((vote_view, vote.date().epoch))
+                    .or_insert(BTreeMap::new());
                 if let Some(relay_task) = relay_map.get_mut(&relay) {
                     tracing::debug!("Forwarding message");
 
@@ -304,7 +338,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                         .await?
                         .is_some()
                     {
-                        map.remove(&vote_view);
+                        map.remove(&(vote_view, vote.date().epoch));
                     }
 
                     return Ok(());
@@ -312,7 +346,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
                 let epoch_mem = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
+                    .membership_for_epoch(vote.date().epoch)
                     .await?;
                 // We do not have a relay task already running, so start one
                 ensure!(
@@ -342,7 +376,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 let mut map = self.commit_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
-                let relay_map = map.entry(vote_view).or_insert(BTreeMap::new());
+                let relay_map = map
+                    .entry((vote_view, vote.date().epoch))
+                    .or_insert(BTreeMap::new());
                 if let Some(relay_task) = relay_map.get_mut(&relay) {
                     tracing::debug!("Forwarding message");
 
@@ -352,7 +388,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                         .await?
                         .is_some()
                     {
-                        map.remove(&vote_view);
+                        map.remove(&(vote_view, vote.date().epoch));
                     }
 
                     return Ok(());
@@ -361,7 +397,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 // We do not have a relay task already running, so start one
                 let epoch_mem = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
+                    .membership_for_epoch(vote.date().epoch)
                     .await?;
                 ensure!(
                     epoch_mem.leader(vote_view + relay).await? == self.public_key,
@@ -390,7 +426,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 let mut map = self.finalize_relay_map.write().await;
                 let vote_view = vote.view_number();
                 let relay = vote.date().relay;
-                let relay_map = map.entry(vote_view).or_insert(BTreeMap::new());
+                let relay_map = map
+                    .entry((vote_view, vote.date().epoch))
+                    .or_insert(BTreeMap::new());
                 if let Some(relay_task) = relay_map.get_mut(&relay) {
                     tracing::debug!("Forwarding message");
 
@@ -400,7 +438,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                         .await?
                         .is_some()
                     {
-                        map.remove(&vote_view);
+                        map.remove(&(vote_view, vote.date().epoch));
                     }
 
                     return Ok(());
@@ -408,7 +446,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 
                 let epoch_mem = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
+                    .membership_for_epoch(vote.date().epoch)
                     .await?;
                 // We do not have a relay task already running, so start one
                 ensure!(
@@ -458,19 +496,19 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                         self.replica_task_map
                             .write()
                             .await
-                            .remove_entry(&TYPES::View::new(i));
+                            .remove_entry(&(TYPES::View::new(i), epoch));
                         self.pre_commit_relay_map
                             .write()
                             .await
-                            .remove_entry(&TYPES::View::new(i));
+                            .remove_entry(&(TYPES::View::new(i), epoch));
                         self.commit_relay_map
                             .write()
                             .await
-                            .remove_entry(&TYPES::View::new(i));
+                            .remove_entry(&(TYPES::View::new(i), epoch));
                         self.finalize_relay_map
                             .write()
                             .await
-                            .remove_entry(&TYPES::View::new(i));
+                            .remove_entry(&(TYPES::View::new(i), epoch));
                     }
 
                     self.last_garbage_collected_view = self.cur_view - 1;
@@ -508,6 +546,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                     self.send_to_or_create_replica(
                         Arc::new(HotShotEvent::ViewSyncTrigger(view_number + 1)),
                         view_number + 1,
+                        self.cur_epoch,
                         &event_stream,
                     )
                     .await;
