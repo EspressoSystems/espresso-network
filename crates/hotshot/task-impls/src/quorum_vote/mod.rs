@@ -279,25 +279,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             .await;
         }
 
-        if let Err(e) = submit_vote::<TYPES, I, V>(
-            self.sender.clone(),
-            epoch_membership,
-            self.public_key.clone(),
-            self.private_key.clone(),
-            self.upgrade_lock.clone(),
-            self.view_number,
-            Arc::clone(&self.storage),
-            leaf,
-            vid_share,
-            is_vote_leaf_extended,
-            is_vote_epoch_root,
-            self.epoch_height,
-            &self.state_private_key,
+        log!(
+            submit_vote::<TYPES, I, V>(
+                self.sender.clone(),
+                epoch_membership,
+                self.public_key.clone(),
+                self.private_key.clone(),
+                self.upgrade_lock.clone(),
+                self.view_number,
+                Arc::clone(&self.storage),
+                leaf,
+                vid_share,
+                is_vote_leaf_extended,
+                is_vote_epoch_root,
+                self.epoch_height,
+                &self.state_private_key,
+            )
+            .await
         )
-        .await
-        {
-            tracing::debug!("Failed to vote; error = {e:#}");
-        }
     }
 }
 
