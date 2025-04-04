@@ -16,7 +16,7 @@ use espresso_types::{
 use futures::stream::StreamExt;
 use hotshot::{types::BLSPubKey, InitializerEpochInfo};
 use hotshot_query_service::{
-    availability::{LeafQueryData, StateCertQueryData},
+    availability::LeafQueryData,
     data_source::{
         storage::{
             pruning::PrunerCfg,
@@ -28,7 +28,7 @@ use hotshot_query_service::{
         Transaction as _, VersionedDataSource,
     },
     fetching::{
-        request::{LeafRequest, PayloadRequest, StateCertRequest, VidCommonRequest},
+        request::{LeafRequest, PayloadRequest, VidCommonRequest},
         Provider,
     },
     merklized_state::MerklizedState,
@@ -2061,42 +2061,6 @@ impl Provider<SeqTypes, LeafRequest<SeqTypes>> for Persistence {
             Ok(leaf) => Some(leaf),
             Err(err) => {
                 tracing::warn!("fetched invalid leaf: {err:#}");
-                None
-            },
-        }
-    }
-}
-
-#[async_trait]
-impl Provider<SeqTypes, StateCertRequest> for Persistence {
-    #[tracing::instrument(skip(self))]
-    async fn fetch(&self, req: StateCertRequest) -> Option<StateCertQueryData<SeqTypes>> {
-        let mut tx = match self.db.read().await {
-            Ok(tx) => tx,
-            Err(err) => {
-                tracing::warn!("could not open transaction: {err:#}");
-                return None;
-            },
-        };
-
-        match query_as::<(Vec<u8>,)>("SELECT state_cert FROM state_cert WHERE epoch = $1 LIMIT 1")
-            .bind(req.0 as i64)
-            .fetch_optional(tx.as_mut())
-            .await
-            .context("fetching state cert")
-        {
-            Ok(Some((bytes,))) => {
-                match bincode::deserialize::<LightClientStateUpdateCertificate<SeqTypes>>(&bytes) {
-                    Ok(state_cert) => Some(state_cert.into()),
-                    Err(err) => {
-                        tracing::error!("error deserializing state cert: {err:#}");
-                        None
-                    },
-                }
-            },
-            Ok(None) => None,
-            Err(err) => {
-                tracing::error!("error loading state cert: {err:#}");
                 None
             },
         }

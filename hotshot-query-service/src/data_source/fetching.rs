@@ -1972,7 +1972,6 @@ pub trait AvailabilityProvider<Types: NodeType>:
     Provider<Types, request::LeafRequest<Types>>
     + Provider<Types, request::PayloadRequest>
     + Provider<Types, request::VidCommonRequest>
-    + Provider<Types, request::StateCertRequest>
     + Sync
     + 'static
 {
@@ -1981,7 +1980,6 @@ impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
     P: Provider<Types, request::LeafRequest<Types>>
         + Provider<Types, request::PayloadRequest>
         + Provider<Types, request::VidCommonRequest>
-        + Provider<Types, request::StateCertRequest>
         + Sync
         + 'static
 {

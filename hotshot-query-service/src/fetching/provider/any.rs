@@ -18,9 +18,9 @@ use hotshot_types::traits::node_implementation::NodeType;
 
 use super::{Provider, Request};
 use crate::{
-    availability::{LeafQueryData, StateCertQueryData},
+    availability::LeafQueryData,
     data_source::AvailabilityProvider,
-    fetching::request::{LeafRequest, PayloadRequest, StateCertRequest, VidCommonRequest},
+    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     Payload, VidCommon,
 };
 
@@ -47,7 +47,6 @@ where
 type PayloadProvider<Types> = Arc<dyn DebugProvider<Types, PayloadRequest>>;
 type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest<Types>>>;
 type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
-type StateCertProvider<Types> = Arc<dyn DebugProvider<Types, StateCertRequest>>;
 
 /// Adaptor combining multiple data availability providers.
 ///
@@ -96,7 +95,6 @@ where
     payload_providers: Vec<PayloadProvider<Types>>,
     leaf_providers: Vec<LeafProvider<Types>>,
     vid_common_providers: Vec<VidCommonProvider<Types>>,
-    state_cert_providers: Vec<StateCertProvider<Types>>,
 }
 
 #[async_trait]
@@ -129,16 +127,6 @@ where
     }
 }
 
-#[async_trait]
-impl<Types> Provider<Types, StateCertRequest> for AnyProvider<Types>
-where
-    Types: NodeType,
-{
-    async fn fetch(&self, req: StateCertRequest) -> Option<StateCertQueryData<Types>> {
-        any_fetch(&self.state_cert_providers, req).await
-    }
-}
-
 impl<Types> AnyProvider<Types>
 where
     Types: NodeType,
@@ -151,8 +139,7 @@ where
         let provider = Arc::new(provider);
         self.payload_providers.push(provider.clone());
         self.leaf_providers.push(provider.clone());
-        self.vid_common_providers.push(provider.clone());
-        self.state_cert_providers.push(provider);
+        self.vid_common_providers.push(provider);
         self
     }
 
@@ -180,15 +167,6 @@ where
         P: Provider<Types, VidCommonRequest> + Debug + 'static,
     {
         self.vid_common_providers.push(Arc::new(provider));
-        self
-    }
-
-    /// Add a sub-provider which fetches light client state update certificates.
-    pub fn with_state_cert_provider<P>(mut self, provider: P) -> Self
-    where
-        P: Provider<Types, StateCertRequest> + Debug + 'static,
-    {
-        self.state_cert_providers.push(Arc::new(provider));
         self
     }
 }
