@@ -69,7 +69,7 @@ jobs:
         with:
           prefix-key: v1-rust
 
-      - Name: Build
+      - name: Build
         run: |
           cargo nextest run --locked --workspace --no-run
         timeout-minutes: 90
