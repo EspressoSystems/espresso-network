@@ -39,6 +39,9 @@ demo-native-benchmark:
     cargo build --release --features benchmarking
     scripts/demo-native
 
+demo-native-pos-base *args: build
+    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 down *args:
     docker compose down {{args}}
 
