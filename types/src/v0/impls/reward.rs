@@ -391,7 +391,8 @@ pub fn compute_rewards(
 
     Ok(rewards)
 }
-/// Checks whether the given height belongs to the first or second epoch.
+/// Checks whether the given height belongs to the first or second epoch. or
+/// the Genesis epoch (EpochNumber::new(0))
 ///
 /// Rewards are not distributed for these epochs because the stake table
 /// is built from the contract only when `add_epoch_root()` is called
