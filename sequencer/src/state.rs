@@ -253,25 +253,7 @@ where
         .context("failed to store fee merkle nodes")?;
     }
 
-    for (account, _) in state.reward_merkle_tree.iter() {
-        let proof = match state.reward_merkle_tree.universal_lookup(account) {
-            LookupResult::Ok(_, proof) => proof,
-            LookupResult::NotFound(proof) => proof,
-            LookupResult::NotInMemory => bail!("missing merkle path for reward account {account}"),
-        };
-        let path: Vec<usize> =
-            <RewardAccount as ToTraversalPath<{ RewardMerkleTree::ARITY }>>::to_traversal_path(
-                account,
-                state.reward_merkle_tree.height(),
-            );
-
-        UpdateStateData::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::insert_merkle_nodes(
-            &mut tx, proof, path, 119,
-        )
-        .await
-        .context("failed to store fee merkle nodes")?;
-    }
-
+   
     tx.insert_chain_config(chain_config).await?;
 
     tx.commit().await?;
