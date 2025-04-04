@@ -714,6 +714,7 @@ pub mod testing {
         let url: Url = format!("http://localhost:{port}")
             .parse()
             .expect("Failed to parse builder URL");
+        tracing::info!("Starting test builder on {url}");
 
         (
             <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(

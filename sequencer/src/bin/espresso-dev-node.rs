@@ -53,7 +53,7 @@ struct Args {
         short,
         long,
         env = "ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL",
-        default_value = "7s",
+        default_value = "200ms",
         value_parser = parse_duration
     )]
     l1_interval: Duration,
@@ -219,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap();
 
     let network_config = TestConfigBuilder::default()
-        .marketplace_builder_port(builder_port)
+        .builder_port(builder_port)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
         .build();
@@ -275,7 +275,7 @@ async fn main() -> anyhow::Result<()> {
                 (url.clone(), mnc, idx, mlts, update, retry)
             }),
     ) {
-        tracing::info!("deploying the contract for provider: {url:?}");
+        tracing::info!("deploying the contract for provider: {url}");
 
         let contracts = deploy(
             url.clone(),
@@ -464,8 +464,8 @@ async fn main() -> anyhow::Result<()> {
     handles.push(dev_node_handle);
 
     // if any of the async task is complete then dev node binary exits
-    if (handles.next().await).is_some() {
-        tracing::error!("exiting dev node");
+    if let Some(item) = handles.next().await {
+        tracing::error!("exiting dev node: {item:?}");
         drop(network);
     }
 
@@ -579,7 +579,15 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static, S: Signer + Cl
     app.register_module("api", api)
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
-    app.serve(format!("0.0.0.0:{port}"), bind_version).await?;
+    tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
+
+    app.serve(format!("0.0.0.0:{port}"), bind_version)
+        .await
+        .map_err(|err| {
+            // If we get an "Address in use" during startup, make it a bit easier to find the cause.
+            tracing::error!("Failed to start dev-node API on http://0.0.0.0:{port} : {err}");
+            err
+        })?;
 
     Ok(())
 }
