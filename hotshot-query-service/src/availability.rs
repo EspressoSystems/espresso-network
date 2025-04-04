@@ -140,6 +140,11 @@ pub enum Error {
     Query {
         source: QueryError,
     },
+    #[snafu(display("State cert for epoch {epoch} not found"))]
+    #[from(ignore)]
+    FetchStateCert {
+        epoch: u64,
+    },
     Custom {
         message: String,
         status: StatusCode,
@@ -160,7 +165,8 @@ impl Error {
             Self::FetchLeaf { .. }
             | Self::FetchBlock { .. }
             | Self::FetchTransaction { .. }
-            | Self::FetchHeader { .. } => StatusCode::NOT_FOUND,
+            | Self::FetchHeader { .. }
+            | Self::FetchStateCert { .. } => StatusCode::NOT_FOUND,
             Self::InvalidTransactionIndex { .. } | Self::Query { .. } => StatusCode::NOT_FOUND,
             Self::Custom { status, .. } => *status,
         }
@@ -676,6 +682,19 @@ where
                 small_object_range_limit,
                 large_object_range_limit,
             })
+        }
+        .boxed()
+    })?
+    .at("get_state_cert", move |req, state| {
+        async move {
+            let epoch = req.integer_param("epoch")?;
+            let fetch = state
+                .read(|state| state.get_state_cert(epoch).boxed())
+                .await;
+            fetch
+                .with_timeout(timeout)
+                .await
+                .context(FetchStateCertSnafu { epoch })
         }
         .boxed()
     })?;

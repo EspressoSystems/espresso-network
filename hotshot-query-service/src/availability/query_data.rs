@@ -20,7 +20,7 @@ use hotshot_types::{
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         EncodeBytes,
     },
     vid::advz::{advz_scheme, ADVZCommitment, ADVZCommon},
@@ -813,6 +813,6 @@ pub struct Limits {
 
 impl<Types: NodeType> HeightIndexed for StateCertQueryData<Types> {
     fn height(&self) -> u64 {
-        self.0.epoch.u64()
+        self.0.light_client_state.block_height
     }
 }
