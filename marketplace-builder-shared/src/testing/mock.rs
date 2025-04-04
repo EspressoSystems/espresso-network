@@ -121,6 +121,7 @@ pub async fn proposals_with_transactions(
             next_drb_result: None,
             next_epoch_justify_qc: None,
             epoch,
+            state_cert: None,
         },
     };
     let leaf = Leaf2::from_quorum_proposal(&parent_proposal);
@@ -161,6 +162,7 @@ pub async fn proposals_with_transactions(
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch,
+                state_cert: None,
             },
         },
     )

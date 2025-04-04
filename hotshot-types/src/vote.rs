@@ -261,52 +261,45 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
-    pub fn accumulate(
+    pub async fn accumulate(
         &mut self,
-        epoch: TYPES::Epoch,
+        key: &TYPES::SignatureKey,
         vote: &LightClientStateUpdateVote<TYPES>,
-        key: &TYPES::StateSignatureKey,
-        stake_table: &[PeerConfig<TYPES>],
-        threshold: U256,
+        membership: &EpochMembership<TYPES>,
     ) -> Option<LightClientStateUpdateCertificate<TYPES>> {
-        // Find the signer
-        if let Some(key_index) = stake_table
-            .iter()
-            .position(|config| &config.state_ver_key == key)
-        {
-            // Verify the vote validity
-            let state_msg = (&vote.light_client_state).into();
-            if !key.verify_state_sig(&vote.signature, &state_msg) {
-                error!("Invalid light client state update vote {:?}", vote);
-                return None;
-            }
-            let (total_stake_casted, vote_map) = self
-                .vote_outcomes
-                .entry(vote.light_client_state.clone())
-                .or_insert_with(|| (U256::from(0), HashMap::new()));
+        let epoch = membership.epoch()?;
+        let threshold = membership.success_threshold().await;
+        let PeerConfig {
+            stake_table_entry,
+            state_ver_key,
+        } = membership.stake(key).await?;
 
-            // Check for duplicate vote
-            if vote_map.contains_key(key) {
-                tracing::warn!("Duplicate vote (key: {:?}, vote: {:?})", key, vote);
-                return None;
-            }
-
-            *total_stake_casted += stake_table[key_index].stake_table_entry.stake();
-            vote_map.insert(key.clone(), vote.signature.clone());
-
-            if *total_stake_casted >= threshold {
-                return Some(LightClientStateUpdateCertificate {
-                    epoch,
-                    light_client_state: vote.light_client_state.clone(),
-                    signatures: Vec::from_iter(
-                        vote_map.iter().map(|(k, v)| (k.clone(), v.clone())),
-                    ),
-                });
-            }
-            None
-        } else {
-            error!("Light client state update vote with invalid key {:?}", key);
-            None
+        let state_msg = (&vote.light_client_state).into();
+        if !state_ver_key.verify_state_sig(&vote.signature, &state_msg) {
+            error!("Invalid light client state update vote {:?}", vote);
+            return None;
         }
+        let (total_stake_casted, vote_map) = self
+            .vote_outcomes
+            .entry(vote.light_client_state.clone())
+            .or_insert_with(|| (U256::from(0), HashMap::new()));
+
+        // Check for duplicate vote
+        if vote_map.contains_key(&state_ver_key) {
+            tracing::warn!("Duplicate vote (key: {:?}, vote: {:?})", key, vote);
+            return None;
+        }
+
+        *total_stake_casted += stake_table_entry.stake();
+        vote_map.insert(state_ver_key.clone(), vote.signature.clone());
+
+        if *total_stake_casted >= threshold {
+            return Some(LightClientStateUpdateCertificate {
+                epoch,
+                light_client_state: vote.light_client_state.clone(),
+                signatures: Vec::from_iter(vote_map.iter().map(|(k, v)| (k.clone(), v.clone()))),
+            });
+        }
+        None
     }
 }

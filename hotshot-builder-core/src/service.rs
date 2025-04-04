@@ -4112,6 +4112,7 @@ mod test {
                     next_epoch_justify_qc: None,
                     next_drb_result: None,
                     epoch: None,
+                    state_cert: None,
                 },
             }
         };
@@ -4187,6 +4188,7 @@ mod test {
                     next_epoch_justify_qc: None,
                     next_drb_result: None,
                     epoch: None,
+                    state_cert: None,
                 },
             }
         };
@@ -4253,6 +4255,7 @@ mod test {
                     next_epoch_justify_qc: None,
                     next_drb_result: None,
                     epoch: None,
+                    state_cert: None,
                 },
             }
         };

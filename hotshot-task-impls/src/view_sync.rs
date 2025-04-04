@@ -22,8 +22,8 @@ use hotshot_types::{
         ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        ViewSyncCommitData2, ViewSyncCommitVote2, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
-        ViewSyncPreCommitData2, ViewSyncPreCommitVote2,
+        HasEpoch, ViewSyncCommitData2, ViewSyncCommitVote2, ViewSyncFinalizeData2,
+        ViewSyncFinalizeVote2, ViewSyncPreCommitData2, ViewSyncPreCommitVote2,
     },
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
@@ -159,7 +159,7 @@ pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
     pub id: u64,
 
     /// Membership for the quorum
-    pub membership: EpochMembership<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// This Nodes Public Key
     pub public_key: TYPES::SignatureKey,
@@ -169,6 +169,9 @@ pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
+
+    /// Epoch HotShot was in when this task was created
+    pub cur_epoch: Option<TYPES::Epoch>,
 }
 
 #[async_trait]
@@ -224,18 +227,6 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
             return;
         }
 
-        let membership = match self
-            .membership_coordinator
-            .membership_for_epoch(self.cur_epoch)
-            .await
-        {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(e.message);
-                return;
-            },
-        };
-
         // We do not have a replica task already running, so start one
         let mut replica_state: ViewSyncReplicaTaskState<TYPES, V> = ViewSyncReplicaTaskState {
             cur_view: view,
@@ -244,12 +235,13 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
             finalized: false,
             sent_view_change_event: false,
             timeout_task: None,
-            membership,
+            membership_coordinator: self.membership_coordinator.clone(),
             public_key: self.public_key.clone(),
             private_key: self.private_key.clone(),
             view_sync_timeout: self.view_sync_timeout,
             id: self.id,
             upgrade_lock: self.upgrade_lock.clone(),
+            cur_epoch: self.cur_epoch,
         };
 
         let result = replica_state
@@ -537,7 +529,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
 }
 
 impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
-    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.membership.epoch().map(|x| *x)), name = "View Sync Replica Task", level = "error")]
+    #[instrument(skip_all, fields(id = self.id, view = *self.cur_view, epoch = self.cur_epoch.map(|x| *x)), name = "View Sync Replica Task", level = "error")]
     /// Handle incoming events for the view sync replica task
     pub async fn handle(
         &mut self,
@@ -555,8 +547,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     return None;
                 }
 
-                let membership_stake_table = self.membership.stake_table().await;
-                let membership_failure_threshold = self.membership.failure_threshold().await;
+                let membership = self.membership_for_epoch(certificate.epoch()).await?;
+                let membership_stake_table = membership.stake_table().await;
+                let membership_failure_threshold = membership.failure_threshold().await;
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate
@@ -646,8 +639,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     return None;
                 }
 
-                let membership_stake_table = self.membership.stake_table().await;
-                let membership_success_threshold = self.membership.success_threshold().await;
+                let membership = self.membership_for_epoch(certificate.epoch()).await?;
+                let membership_stake_table = membership.stake_table().await;
+                let membership_success_threshold = membership.success_threshold().await;
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate
@@ -709,7 +703,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                 broadcast_event(
                     Arc::new(HotShotEvent::ViewChange(
                         self.next_view,
-                        self.membership.epoch(),
+                        certificate.epoch(),
                     )),
                     &event_stream,
                 )
@@ -751,8 +745,9 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     return None;
                 }
 
-                let membership_stake_table = self.membership.stake_table().await;
-                let membership_success_threshold = self.membership.success_threshold().await;
+                let membership = self.membership_for_epoch(certificate.epoch()).await?;
+                let membership_stake_table = membership.stake_table().await;
+                let membership_success_threshold = membership.success_threshold().await;
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate
@@ -790,7 +785,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                 broadcast_event(
                     Arc::new(HotShotEvent::ViewChange(
                         self.next_view,
-                        self.membership.epoch(),
+                        certificate.epoch(),
                     )),
                     &event_stream,
                 )
@@ -805,12 +800,11 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     return None;
                 }
 
-                let epoch = self.membership.epoch();
                 let Ok(vote) = ViewSyncPreCommitVote2::<TYPES>::create_signed_vote(
                     ViewSyncPreCommitData2 {
                         relay: 0,
                         round: view_number,
-                        epoch,
+                        epoch: self.cur_epoch,
                     },
                     view_number,
                     &self.public_key,
@@ -866,7 +860,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                                 ViewSyncPreCommitData2 {
                                     relay: self.relay,
                                     round: self.next_view,
-                                    epoch: self.membership.epoch(),
+                                    epoch: self.cur_epoch,
                                 },
                                 self.next_view,
                                 &self.public_key,
@@ -921,5 +915,22 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
             _ => return None,
         }
         None
+    }
+
+    pub async fn membership_for_epoch(
+        &self,
+        epoch: Option<TYPES::Epoch>,
+    ) -> Option<EpochMembership<TYPES>> {
+        match self
+            .membership_coordinator
+            .membership_for_epoch(epoch)
+            .await
+        {
+            Ok(m) => Some(m),
+            Err(e) => {
+                tracing::warn!(e.message);
+                None
+            },
+        }
     }
 }

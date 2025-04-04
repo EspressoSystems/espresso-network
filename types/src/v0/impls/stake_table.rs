@@ -769,8 +769,14 @@ impl Membership<SeqTypes> for EpochCommittees {
             return None;
         };
 
+        let Some(l1_finalized_block_info) = block_header.l1_finalized() else {
+            tracing::error!("The epoch root for epoch {} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.", epoch);
+
+            return None;
+        };
+
         let stake_tables = self
-            .get_stake_table_by_epoch(epoch, address, block_header.height())
+            .get_stake_table_by_epoch(epoch, address, l1_finalized_block_info.number())
             .await
             .inspect_err(|e| {
                 tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
