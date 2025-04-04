@@ -488,6 +488,10 @@ contract StakeTable_register_Test is Test {
 
         vm.startPrank(delegator);
 
+        // Delegating zero amount fails
+        vm.expectRevert(S.ZeroAmount.selector);
+        stakeTable.delegate(validator, 0);
+
         // Delegate some funds
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator, 3 ether);
@@ -496,31 +500,35 @@ contract StakeTable_register_Test is Test {
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
         assertEq(token.balanceOf(address(stakeTable)), 3 ether);
 
-        // Withdraw from non-existent validator
+        // Withdraw from non-existent validator fails
         vm.expectRevert(S.NothingToWithdraw.selector);
         stakeTable.claimWithdrawal(makeAddr("nobody"));
 
-        // Withdraw without undelegation
+        // Withdraw without undelegation fails
         vm.expectRevert(S.NothingToWithdraw.selector);
         stakeTable.claimWithdrawal(validator);
 
-        // Request partial undelegation of funds
+        // Undelegating zero amount fails
+        vm.expectRevert(S.ZeroAmount.selector);
+        stakeTable.undelegate(validator, 0);
+
+        // Partial undelegation of funds ok
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Undelegated(delegator, validator, 1 ether);
         stakeTable.undelegate(validator, 1 ether);
 
-        // Withdraw too early
+        // Withdraw too early fails
         vm.expectRevert(S.PrematureWithdrawal.selector);
         stakeTable.claimWithdrawal(validator);
 
-        // Withdraw after escrow period
+        // Withdraw after escrow period ok
         vm.warp(block.timestamp + ESCROW_PERIOD);
         stakeTable.claimWithdrawal(validator);
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 2 ether);
 
         vm.stopPrank();
 
-        // Validator exit
+        // Validator exit succeeds
         vm.prank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.ValidatorExit(validator);
@@ -528,15 +536,15 @@ contract StakeTable_register_Test is Test {
 
         vm.startPrank(delegator);
 
-        // Withdraw too early
+        // Claim validator exit too early fails
         vm.expectRevert(S.PrematureWithdrawal.selector);
         stakeTable.claimValidatorExit(validator);
 
-        // Try to undelegate after validator exit
+        // Undelegate after validator exit fails
         vm.expectRevert(S.ValidatorInactive.selector);
         stakeTable.undelegate(validator, 1);
 
-        // Withdraw after escrow period
+        // Claim validator exit after escrow period ok
         vm.warp(block.timestamp + ESCROW_PERIOD);
         stakeTable.claimValidatorExit(validator);
 

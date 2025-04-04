@@ -143,6 +143,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// An undelegation already exists for this validator and delegator.
     error UndelegationAlreadyExists();
 
+    /// A zero amount would lead to a no-op.
+    error ZeroAmount();
+
     // === Structs ===
 
     /// @notice Represents an Espresso validator and tracks funds currently delegated to them.
@@ -369,7 +372,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         ensureValidatorActive(validator);
         address delegator = msg.sender;
 
-        // TODO: revert if amount is zero
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
 
         uint256 allowance = token.allowance(delegator, address(this));
         if (allowance < amount) {
@@ -391,16 +396,15 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         ensureValidatorActive(validator);
         address delegator = msg.sender;
 
-        // TODO: revert if amount is zero
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
 
         if (validators[delegator].status == ValidatorStatus.Exited) {
             revert ValidatorAlreadyExited();
         }
 
-        if (
-            undelegations[validator][delegator].amount > 0
-                || undelegations[validator][delegator].unlocksAt > block.timestamp
-        ) {
+        if (undelegations[validator][delegator].amount != 0) {
             revert UndelegationAlreadyExists();
         }
 
