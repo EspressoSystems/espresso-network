@@ -77,7 +77,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
                 .chain_config
                 .stake_table_contract
                 .map(|a| a.to_alloy()),
-            node_state.peers,
+            node_state.state_catchup,
             NoStorage,
         ))),
         10,

@@ -148,7 +148,7 @@ impl BlockPayload<SeqTypes> for Payload {
             match validated_state_cf.resolve() {
                 Some(cf) => cf,
                 None => instance_state
-                    .peers
+                    .state_catchup
                     .as_ref()
                     .fetch_chain_config(validated_state_cf.commit())
                     .await
