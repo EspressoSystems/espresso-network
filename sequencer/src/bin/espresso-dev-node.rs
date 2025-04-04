@@ -382,7 +382,8 @@ async fn main() -> anyhow::Result<()> {
     const NUM_NODES: usize = 2;
     let chain_config = ChainConfig {
         max_block_size: max_block_size.into(),
-        base_fee: 1.into(),
+        // TODO: MA: the builder has block fee `123` hardcoded so we have to set this to zero for now.
+        base_fee: 0.into(),
         stake_table_contract: Some(stake_table_address.to_ethers()),
         ..Default::default()
     };
