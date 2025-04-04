@@ -21,6 +21,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_LOG: info,libp2p=off,node=error
+  NEXTEST_PROFILE: slow
 
 jobs:
   slow-tests-sqlite:
@@ -40,14 +41,11 @@ jobs:
         with:
           prefix-key: v1-rust
 
-      - name: Build
-        run: |
-          cargo nextest run --locked  --workspace --features embedded-db --no-run
-        timeout-minutes: 90
+      - name: Build slow test
+        run: cargo nextest run --locked --workspace --features embedded-db --verbose --nocapture --no-run
+        timeout-minutes: 40
 
-      - name: Slow Test
-        env:
-          NEXTEST_PROFILE: slow
+      - name: Run slow test
         run: cargo nextest run --locked --workspace --features embedded-db --verbose --no-fail-fast --nocapture
         timeout-minutes: 40
 
@@ -56,8 +54,6 @@ jobs:
     steps:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: nightly
 
       - uses: taiki-e/install-action@nextest
 
@@ -69,13 +65,10 @@ jobs:
         with:
           prefix-key: v1-rust
 
-      - name: Build
-        run: |
-          cargo nextest run --locked --workspace --no-run
-        timeout-minutes: 90
+      - name: Build slow test
+        run: cargo nextest run --locked --release --workspace --verbose --nocapture --no-run
+        timeout-minutes: 40
 
-      - name: Slow Test
-        env:
-          NEXTEST_PROFILE: slow
+      - name: Run slow test
         run: cargo nextest run --locked --release --workspace --verbose --no-fail-fast --nocapture
         timeout-minutes: 40
