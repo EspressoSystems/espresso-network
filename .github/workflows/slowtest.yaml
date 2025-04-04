@@ -32,6 +32,7 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - uses: taiki-e/install-action@nextest
+      - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -42,7 +43,7 @@ jobs:
           prefix-key: v1-rust
 
       - name: Build slow test
-        run: cargo nextest run --locked --workspace --features embedded-db --verbose --nocapture --no-run
+        run: cargo nextest run --locked --workspace --features embedded-db --no-run
         timeout-minutes: 40
 
       - name: Run slow test
@@ -56,6 +57,7 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - uses: taiki-e/install-action@nextest
+      - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -66,7 +68,7 @@ jobs:
           prefix-key: v1-rust
 
       - name: Build slow test
-        run: cargo nextest run --locked --release --workspace --verbose --nocapture --no-run
+        run: cargo nextest run --locked --release --workspace --no-run
         timeout-minutes: 40
 
       - name: Run slow test
