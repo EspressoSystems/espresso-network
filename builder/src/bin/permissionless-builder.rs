@@ -120,11 +120,8 @@ async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        (FeeVersion::VERSION, _) => {
+        (FeeVersion::VERSION, FeeVersion::VERSION) => {
             run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await
-        },
-        (FeeVersion::VERSION, EpochVersion::VERSION) => {
-            run::<SequencerVersions<FeeVersion, MarketplaceVersion>>(genesis, opt).await
         },
         (EpochVersion::VERSION, _) => {
             run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await
