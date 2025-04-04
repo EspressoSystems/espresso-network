@@ -40,6 +40,7 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber, Vote},
     StakeTableEntries, ValidatorConfig,
 };
+use primitive_types::U256;
 use serde::Serialize;
 use vbs::version::Version;
 
@@ -116,7 +117,7 @@ pub async fn build_system_handle_from_launcher<
 
     // We assign node's public key and stake value rather than read from config file since it's a test
     let validator_config: ValidatorConfig<TYPES> =
-        ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, 1, is_da);
+        ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, U256::from(1), is_da);
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();

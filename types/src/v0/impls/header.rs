@@ -1639,6 +1639,7 @@ mod test_headers {
                 &parent_leaf,
                 &proposal,
                 StaticVersion::<0, 1>::version(),
+                parent_leaf.view_number() + 1,
             )
             .await
             .unwrap()

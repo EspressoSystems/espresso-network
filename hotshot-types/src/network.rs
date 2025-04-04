@@ -9,6 +9,7 @@ use std::{fs, ops::Range, path::Path, time::Duration, vec};
 use clap::ValueEnum;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
+use primitive_types::U256;
 use serde_inline_default::serde_inline_default;
 use thiserror::Error;
 use tracing::error;
@@ -172,7 +173,12 @@ impl<TYPES: NodeType> NetworkConfig<TYPES> {
     ) -> ValidatorConfig<TYPES> {
         // This cur_node_index is only used for key pair generation, it's not bound with the node,
         // later the node with the generated key pair will get a new node_index from orchestrator.
-        ValidatorConfig::generated_from_seed_indexed([0u8; 32], cur_node_index.into(), 1, is_da)
+        ValidatorConfig::generated_from_seed_indexed(
+            [0u8; 32],
+            cur_node_index.into(),
+            U256::from(1),
+            is_da,
+        )
     }
 
     /// Loads a `NetworkConfig` from a file.

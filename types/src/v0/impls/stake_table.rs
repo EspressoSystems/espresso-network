@@ -35,9 +35,11 @@ use hotshot_types::{
 use indexmap::IndexMap;
 use thiserror::Error;
 
+#[cfg(any(test, feature = "testing"))]
+use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{DAMembers, Validator},
+    v0_3::Validator,
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 use crate::{EpochVersion, SequencerVersions};
