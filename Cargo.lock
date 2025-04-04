@@ -5174,6 +5174,7 @@ dependencies = [
 name = "hotshot-task-impls"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-broadcast",
  "async-lock 3.4.0",

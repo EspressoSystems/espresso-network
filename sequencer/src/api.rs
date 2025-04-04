@@ -1499,6 +1499,7 @@ mod api_tests {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: None,
+                state_cert: None,
             },
         };
         let mut qc = QuorumCertificate2::genesis::<MockSequencerVersions>(
@@ -1712,6 +1713,7 @@ mod api_tests {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: None,
+                state_cert: None,
             },
         };
 

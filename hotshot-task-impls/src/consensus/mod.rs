@@ -9,6 +9,7 @@ use std::{sync::Arc, time::Instant};
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use async_trait::async_trait;
+use handlers::handle_epoch_root_quorum_vote_recv;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -35,7 +36,7 @@ use self::handlers::{
 use crate::{
     events::HotShotEvent,
     helpers::{broadcast_event, validate_qc_and_next_epoch_qc},
-    vote_collection::VoteCollectorsMap,
+    vote_collection::{EpochRootVoteCollectorsMap, VoteCollectorsMap},
 };
 
 /// Event handlers for use in the `handle` method.
@@ -60,6 +61,9 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
 
     /// A map of `QuorumVote` collector tasks.
     pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>,
+
+    /// A map of `EpochRootQuorumVote` collector tasks.
+    pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES, V>,
 
     /// A map of `QuorumVote` collector tasks. They collect votes from the nodes in the next epoch.
     pub next_epoch_vote_collectors: VoteCollectorsMap<
@@ -125,6 +129,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     handle_quorum_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {
                     tracing::debug!("Failed to handle QuorumVoteRecv event; error = {e}");
+                }
+            },
+            HotShotEvent::EpochRootQuorumVoteRecv(ref vote) => {
+                if let Err(e) =
+                    handle_epoch_root_quorum_vote_recv(vote, Arc::clone(&event), &sender, self)
+                        .await
+                {
+                    tracing::debug!("Failed to handle EpochRootQuorumVoteRecv event; error = {e}");
                 }
             },
             HotShotEvent::TimeoutVoteRecv(ref vote) => {

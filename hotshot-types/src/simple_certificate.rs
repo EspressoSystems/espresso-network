@@ -777,3 +777,22 @@ impl<TYPES: NodeType> LightClientStateUpdateCertificate<TYPES> {
         }
     }
 }
+
+#[derive(Serialize, Deserialize, Eq, Hash, PartialEq, Debug, Clone)]
+#[serde(bound(deserialize = "QuorumCertificate2<TYPES>:for<'a> Deserialize<'a>"))]
+pub struct EpochRootQuorumCertificate<TYPES: NodeType> {
+    pub qc: QuorumCertificate2<TYPES>,
+    pub state_cert: LightClientStateUpdateCertificate<TYPES>,
+}
+
+impl<TYPES: NodeType> HasViewNumber<TYPES> for EpochRootQuorumCertificate<TYPES> {
+    fn view_number(&self) -> TYPES::View {
+        self.qc.view_number()
+    }
+}
+
+impl<TYPES: NodeType> HasEpoch<TYPES> for EpochRootQuorumCertificate<TYPES> {
+    fn epoch(&self) -> Option<TYPES::Epoch> {
+        self.qc.epoch()
+    }
+}
