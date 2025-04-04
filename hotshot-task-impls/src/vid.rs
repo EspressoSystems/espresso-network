@@ -10,7 +10,7 @@ use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
-    consensus::OuterConsensus,
+    consensus::{OuterConsensus, PayloadWithMetadata},
     data::{PackedBundle, VidDisperse, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
@@ -114,7 +114,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 .ok()?;
                 let payload_commitment = vid_disperse.payload_commitment();
                 let shares = VidDisperseShare::from_vid_disperse(vid_disperse.clone());
+                let payload_with_metadata = Arc::new(PayloadWithMetadata {
+                    payload,
+                    metadata: metadata.clone(),
+                });
+
                 let mut consensus_writer = self.consensus.write().await;
+                // Make sure we save the payload; we might need it to send the next epoch VID shares.
+                if let Err(e) =
+                    consensus_writer.update_saved_payloads(*view_number, payload_with_metadata)
+                {
+                    tracing::debug!(error=?e);
+                }
                 for share in shares {
                     if let Some(share) = share.to_proposal(&self.private_key) {
                         consensus_writer.update_vid_shares(*view_number, share);
