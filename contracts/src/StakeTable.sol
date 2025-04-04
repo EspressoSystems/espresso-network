@@ -6,6 +6,10 @@ import { OwnableUpgradeable } from
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { VotesUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/governance/utils/VotesUpgradeable.sol";
+import { Checkpoints } from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
+
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 import { LightClient } from "../src/LightClient.sol";
@@ -14,10 +18,16 @@ import { InitializedAt } from "./InitializedAt.sol";
 
 using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 
-/// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
+/// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) delegate table.
 ///
 /// @dev All functions are marked as virtual so that future upgrades can override them.
-contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
+contract StakeTable is
+    Initializable,
+    InitializedAt,
+    OwnableUpgradeable,
+    UUPSUpgradeable,
+    VotesUpgradeable
+{
     // === Events ===
 
     /// @notice upgrade event when the proxy updates the implementation it's pointing to
@@ -29,8 +39,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice A registration of a new validator.
     ///
     /// @notice Signals to the confirmation layer that a new validator is ready to receive
-    /// delegations in the stake table contract. The confirmation layer uses this event to keep
-    /// track of the validator's keys for the stake table.
+    /// delegations in the delegate table contract. The confirmation layer uses this event to keep
+    /// track of the validator's keys for the delegate table.
     ///
     /// @notice The commission is in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000).
     ///
@@ -57,7 +67,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     // TODO: emit the BLS signature so GCL can verify it.
     // TODO: emit the Schnorr signature so GCL can verify it.
 
-    /// @notice A validator initiated an exit from stake table
+    /// @notice A validator initiated an exit from delegate table
     ///
     /// @notice All funds delegated to this validator are marked for withdrawal. Users can no longer
     /// delegate to this validator. Their previously delegated funds are automatically undelegated.
@@ -70,17 +80,18 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// @notice A Delegator delegated funds to a validator.
     ///
-    /// @notice The tokens are transferred to the stake table contract.
+    /// @notice The tokens are transferred to the delegate table contract.
     ///
     /// @notice The GCL adjusts the weight for this validator and the delegators delegation
     /// associated with it.
-    event Delegated(address indexed delegator, address indexed validator, uint256 amount);
+    event Staked(address indexed delegator, address indexed validator, uint256 amount);
 
     /// @notice A delegator undelegation funds from a validator.
     ///
     /// @notice The tokens are marked to be unlocked for withdrawal.
     ///
-    /// @notice The GCL needs to update the stake table and adjust the weight for this validator and
+    /// @notice The GCL needs to update the delegate table and adjust the weight for this validator
+    /// and
     /// the delegators delegation associated with it.
     event Undelegated(address indexed delegator, address indexed validator, uint256 amount);
 
@@ -89,7 +100,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Similarly to registration events, the correctness cannot be fully determined by the
     /// contracts.
     ///
-    /// @notice The confirmation layer needs to update the stake table with the new keys.
+    /// @notice The confirmation layer needs to update the delegate table with the new keys.
     event ConsensusKeysUpdated(
         address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
     );
@@ -98,7 +109,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// @notice A delegator claims unlocked funds.
     ///
-    /// @notice This event is not relevant for the GCL. The events that remove stake from the stake
+    /// @notice This event is not relevant for the GCL. The events that remove delegate from the
+    /// delegate
     /// table are `Undelegated` and `ValidatorExit`.
     event Withdrawal(address indexed account, uint256 amount);
 
@@ -115,6 +127,12 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// A validator has not exited yet.
     error ValidatorNotExited();
+
+    /// A validator cannot delegate.
+    error ValidatorCannotDelegate();
+
+    /// A delegator has already delegated to a validator.
+    error DelegatorAlreadyStaked();
 
     // A user tries to withdraw funds before the exit escrow period is over.
     error PrematureWithdrawal();
@@ -194,18 +212,22 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     mapping(address validator => uint256 unlocksAt) public validatorExits;
 
     /// Currently active delegation amounts.
-    mapping(address validator => mapping(address delegator => uint256 amount)) delegations;
+    mapping(address validator => mapping(address delegator => uint256 amount)) public delegations;
 
     /// Delegations held in escrow that are to be unlocked at a later time.
     //
     // @dev these are stored indexed by validator so we can keep track of them for slashing later
-    mapping(address validator => mapping(address delegator => Undelegation)) undelegations;
+    mapping(address validator => mapping(address delegator => Undelegation)) public undelegations;
+
+    mapping(address delegator => address validator) public delegatorValidator;
 
     /// The time the contract will hold funds after undelegations are requested.
     ///
     /// Must allow ample time for node to exit active validator set and slashing
     /// evidence to be submitted.
     uint256 public exitEscrowPeriod;
+
+    // TODO should there be a total delegated amount?
 
     /// @notice since the constructor initializes storage on this contract we disable it
     /// @dev storage is on the proxy contract since it calls this contract via delegatecall
@@ -293,7 +315,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     }
 
     // @dev We don't check the validity of the schnorr verifying key but providing a zero key is
-    // definitely a mistake by the caller, therefore we revert.
+    // definitely a midelegate by the caller, therefore we revert.
     function ensureNonZeroSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK) internal pure {
         EdOnBN254.EdOnBN254Point memory zeroSchnorrKey = EdOnBN254.EdOnBN254Point(0, 0);
 
@@ -302,7 +324,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
     }
 
-    /// @notice Register a validator in the stake table
+    /// @notice Register a validator in the delegate table
     ///
     /// @param blsVK The BLS verification key
     /// @param schnorrVK The Schnorr verification key (as the auxiliary info)
@@ -325,7 +347,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         BN254.G1Point memory blsSig,
         uint16 commission
     ) external virtual {
-        address validator = msg.sender;
+        address validator = _msgSender();
 
         ensureValidatorNotRegistered(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
@@ -350,7 +372,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// @notice Deregister a validator
     function deregisterValidator() external virtual {
-        address validator = msg.sender;
+        address validator = _msgSender();
         ensureValidatorActive(validator);
 
         validators[validator].status = ValidatorStatus.Exited;
@@ -359,12 +381,25 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         emit ValidatorExit(validator);
     }
 
-    /// @notice Delegate to a validator
+    /// @notice delegate to a validator
     /// @param validator The validator to delegate to
     /// @param amount The amount to delegate
-    function delegate(address validator, uint256 amount) external virtual {
+    function _delegateStake(address validator, uint256 amount) internal virtual {
         ensureValidatorActive(validator);
-        address delegator = msg.sender;
+        address delegator = _msgSender();
+
+        // ensure the _msgSender() is not a validator
+        if (validators[delegator].status == ValidatorStatus.Active) {
+            revert ValidatorCannotDelegate();
+        }
+
+        // ensure the delegator hasn't already delegated to a validator
+        if (
+            delegatorValidator[delegator] != address(0)
+                && delegatorValidator[delegator] != validator
+        ) {
+            revert DelegatorAlreadyStaked();
+        }
 
         // TODO: revert if amount is zero
 
@@ -373,20 +408,43 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
             revert InsufficientAllowance(allowance, amount);
         }
 
+        // remove all voting units from the delegator to the validator
+        // so that later we can delegate the full staked
+        super.delegate(address(0));
+
         validators[validator].delegatedAmount += amount;
         delegations[validator][delegator] += amount;
+        delegatorValidator[delegator] = validator;
 
         SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
 
-        emit Delegated(delegator, validator, amount);
+        emit Staked(delegator, validator, amount);
+
+        // delegate voting units to the validator
+        super.delegate(validator);
+        super._transferVotingUnits(address(0), validator, amount);
     }
 
-    /// @notice Undelegate from a validator
+    /// @notice Override the delegate function from VotesUpgradeable
+    /// @dev This function is used to stake all of the sender's token balance
+    /// @dev delegate voting units to a validator
+    /// @param validator The validator to delegate to
+    function delegate(address validator) public virtual override {
+        // get delegators balance and call this contract's delegate function with the amount
+        uint256 balance = token.balanceOf(_msgSender());
+        _delegateStake(validator, balance);
+    }
+
+    function delegate(address validator, uint256 amount) external virtual {
+        _delegateStake(validator, amount);
+    }
+
+    /// @notice Undelegate from a validator and remove the voting delegation relationship
     /// @param validator The validator to undelegate from
     /// @param amount The amount to undelegate
-    function undelegate(address validator, uint256 amount) external virtual {
+    function _undelegateStake(address validator, uint256 amount) internal virtual {
         ensureValidatorActive(validator);
-        address delegator = msg.sender;
+        address delegator = _msgSender();
 
         // TODO: revert if amount is zero
 
@@ -399,17 +457,50 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
             revert InsufficientBalance(balance);
         }
 
+        // before updating the delegations, remove the delegation relationship
+        super.delegate(address(0));
+
         delegations[validator][delegator] -= amount;
         undelegations[validator][delegator] =
             Undelegation({ amount: amount, unlocksAt: block.timestamp + exitEscrowPeriod });
+        validators[validator].delegatedAmount -= amount;
 
         emit Undelegated(delegator, validator, amount);
+
+        // delegate the voting units that have been undelegated to address(0) if not all of the
+        // delegator's tokens have been undelegated
+        if (amount != balance) {
+            super.delegate(validator);
+        } else {
+            // if all of the delegator's tokens have been undelegated, remove the delegation
+            // relationship in the contract
+            delegatorValidator[delegator] = address(0);
+        }
+        // remove the voting units
+        super._transferVotingUnits(validator, address(0), amount);
+        // if(amount == balance){
+        //     super.delegate(address(0));
+        // }
+    }
+
+    /// @notice Undelegate from a validator and remove the voting delegation relationship
+    /// @param validator The validator to undelegate from
+    /// @param amount The amount to undelegate
+    function undelegate(address validator, uint256 amount) external virtual {
+        _undelegateStake(validator, amount);
+    }
+
+    /// @notice Undelegate all of the sender's tokens from a validator and remove the voting
+    /// delegation relationship
+    /// @param validator The validator to undelegate from
+    function undelegate(address validator) external virtual {
+        _undelegateStake(validator, delegations[validator][_msgSender()]);
     }
 
     /// @notice Withdraw previously delegated funds after an undelegation.
     /// @param validator The validator to withdraw from
     function claimWithdrawal(address validator) external virtual {
-        address delegator = msg.sender;
+        address delegator = _msgSender();
         // If entries are missing at any of the levels of the mapping this will return zero
         uint256 amount = undelegations[validator][delegator].amount;
         if (amount == 0) {
@@ -431,7 +522,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Withdraw previously delegated funds after a validator has exited
     /// @param validator The validator to withdraw from
     function claimValidatorExit(address validator) external virtual {
-        address delegator = msg.sender;
+        address delegator = _msgSender();
         uint256 unlocksAt = validatorExits[validator];
         if (unlocksAt == 0) {
             revert ValidatorNotExited();
@@ -476,7 +567,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         EdOnBN254.EdOnBN254Point memory newSchnorrVK,
         BN254.G1Point memory newBlsSig
     ) external virtual {
-        address validator = msg.sender;
+        address validator = _msgSender();
 
         ensureValidatorActive(validator);
         ensureNonZeroSchnorrKey(newSchnorrVK);
@@ -490,5 +581,41 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         blsKeys[_hashBlsKey(newBlsVK)] = true;
 
         emit ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
+    }
+
+    /// @notice Get the voting units for a delegator
+    /// @dev A token holder only has voting units once they delegate
+    /// @dev so this returns the amount delegated to a validator
+    /// @dev but only the validator can vote on their behalf so the delegate() function
+    /// @dev also delegates voting units to the validator
+    /// @param account The address of the delegatee (the validator they delegated to)
+    /// @return The voting units for the delegator
+    function _getVotingUnits(address account) internal view virtual override returns (uint256) {
+        // address delegator = _msgSender();
+        // return delegations[account][delegator];
+        address validator = delegatorValidator[account];
+        return validators[validator].delegatedAmount;
+    }
+
+    /// @notice override the numCheckpoints function from VotesUpgradeable
+    /// @dev this is used to get the number of checkpoints for a given account
+    /// @param account The address of the account to get the number of checkpoints for
+    /// @return The number of checkpoints for the given account
+    function numCheckpoints(address account) public view virtual returns (uint256) {
+        return _numCheckpoints(account);
+    }
+
+    /// @notice override the getCheckpoint function from VotesUpgradeable
+    /// @dev this is used to get the checkpoint for a given account and index
+    /// @param account The address of the account to get the checkpoint for
+    /// @param pos The position of the checkpoint to get
+    /// @return The checkpoint for the given account and index
+    function checkpoints(address account, uint32 pos)
+        public
+        view
+        virtual
+        returns (Checkpoints.Checkpoint208 memory)
+    {
+        return _checkpoints(account, pos);
     }
 }
