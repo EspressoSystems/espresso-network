@@ -375,6 +375,8 @@ pub fn option_epoch_from_block_number<TYPES: NodeType>(
     if with_epoch {
         if epoch_height == 0 {
             None
+        } else if block_number == 0 {
+            Some(1u64)
         } else if block_number % epoch_height == 0 {
             Some(block_number / epoch_height)
         } else {

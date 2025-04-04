@@ -23,13 +23,16 @@ use hotshot_types::{
     event::{Event, EventType, LeafInfo},
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    simple_certificate::{
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        UpgradeCertificate,
+    },
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
         storage::Storage,
         BlockPayload, ValidatedState,
     },
@@ -41,6 +44,7 @@ use hotshot_types::{
     StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
+use primitive_types::U256;
 use tokio::time::timeout;
 use tracing::instrument;
 use vbs::version::StaticVersionType;
@@ -690,6 +694,29 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         {
             bail!("Failed to store High QC, not voting; error = {:?}", e);
         }
+        if justify_qc
+            .data
+            .block_number
+            .is_some_and(|bn| is_epoch_root(bn, validation_info.epoch_height))
+        {
+            let Some(state_cert) = proposal.data.state_cert() else {
+                bail!("Epoch root QC has no state cert, not voting!");
+            };
+            if let Err(e) = validation_info
+                .storage
+                .write()
+                .await
+                .update_state_cert(state_cert.clone())
+                .await
+            {
+                bail!("Failed to store the light client state update certificate, not voting; error = {:?}", e);
+            }
+            validation_info
+                .consensus
+                .write()
+                .await
+                .update_state_cert(state_cert.clone())?;
+        }
         if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
             if let Err(e) = validation_info
                 .storage
@@ -1237,4 +1264,57 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
             .context(|e| warn!("Invalid next epoch certificate: {}", e))?;
     }
     Ok(())
+}
+
+/// Validates the light client state update certificate
+pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
+    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    membership_coordinator: &EpochMembershipCoordinator<TYPES>,
+) -> Result<()> {
+    tracing::debug!("Validating light client state update certificate");
+
+    let epoch_membership = membership_coordinator
+        .membership_for_epoch(state_cert.epoch())
+        .await?;
+
+    let membership_stake_table = epoch_membership.stake_table().await;
+    let membership_success_threshold = epoch_membership.success_threshold().await;
+
+    let mut state_key_map = HashMap::new();
+    membership_stake_table.into_iter().for_each(|config| {
+        state_key_map.insert(
+            config.state_ver_key.clone(),
+            config.stake_table_entry.stake(),
+        );
+    });
+
+    let mut accumulated_stake = U256::from(0);
+    let state_msg = (&state_cert.light_client_state).into();
+    for (key, sig) in state_cert.signatures.iter() {
+        if let Some(stake) = state_key_map.get(key) {
+            accumulated_stake += *stake;
+            if !key.verify_state_sig(sig, &state_msg) {
+                bail!("Invalid light client state update certificate signature");
+            }
+        } else {
+            bail!("Invalid light client state update certificate signature");
+        }
+    }
+    if accumulated_stake < membership_success_threshold {
+        bail!("Light client state update certificate does not meet the success threshold");
+    }
+
+    Ok(())
+}
+
+pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
+    qc: &QuorumCertificate2<TYPES>,
+    state_cert: &LightClientStateUpdateCertificate<TYPES>,
+    epoch_height: u64,
+) -> bool {
+    qc.data
+        .block_number
+        .is_some_and(|bn| is_epoch_root(bn, epoch_height))
+        && Some(state_cert.epoch) == qc.data.epoch()
+        && qc.view_number().u64() == state_cert.light_client_state.view_number
 }

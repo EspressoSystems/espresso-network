@@ -35,9 +35,9 @@ use crate::{
     impl_has_epoch, impl_has_none_epoch,
     message::{convert_proposal, Proposal, UpgradeLock},
     simple_certificate::{
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, TimeoutCertificate,
-        TimeoutCertificate2, UpgradeCertificate, ViewSyncFinalizeCertificate,
-        ViewSyncFinalizeCertificate2,
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate,
+        ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumData, QuorumData2, UpgradeProposalData, VersionedVoteData},
     traits::{
@@ -774,6 +774,10 @@ pub struct QuorumProposal2<TYPES: NodeType> {
     /// consistent with the result from their computations.
     #[serde(with = "serde_bytes")]
     pub next_drb_result: Option<DrbResult>,
+
+    /// The light client state update certificate for the next epoch.
+    /// This is required for the epoch root.
+    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
 }
 
 /// Wrapper around a proposal to append a block
@@ -854,6 +858,11 @@ impl<TYPES: NodeType> QuorumProposalWrapper<TYPES> {
             .validate_epoch(upgrade_lock, epoch_height)
             .await
     }
+
+    /// Helper function to get the proposal's light client state update certificate
+    pub fn state_cert(&self) -> &Option<LightClientStateUpdateCertificate<TYPES>> {
+        &self.proposal.state_cert
+    }
 }
 
 impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposalWrapper<TYPES> {
@@ -897,6 +906,7 @@ impl<TYPES: NodeType> From<QuorumProposal<TYPES>> for QuorumProposal2<TYPES> {
                 .proposal_certificate
                 .map(ViewChangeEvidence::to_evidence2),
             next_drb_result: None,
+            state_cert: None,
         }
     }
 }
@@ -1769,6 +1779,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
                     upgrade_certificate,
                     view_change_evidence,
                     next_drb_result,
+                    state_cert: _,
                 },
         } = quorum_proposal;
 
