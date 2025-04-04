@@ -19,6 +19,9 @@ import { LightClientMock } from "../test/mocks/LightClientMock.sol";
 import { InitializedAt } from "../src/InitializedAt.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
@@ -28,7 +31,6 @@ import { StakeTable as S } from "../src/StakeTable.sol";
 import { StakeTableMock } from "../test/mocks/StakeTableMock.sol";
 import { DeployStakeTableScript } from "./script/StakeTable.s.sol";
 import { DeployEspTokenScript } from "./script/EspToken.s.sol";
-
 // TODO: currently missing several tests
 // TODO: test only owner methods access control
 
@@ -94,7 +96,7 @@ contract StakeTable_register_Test is Test {
         lcMock = new LightClientMock(genesis, genesisStakeTableState, 864000);
 
         DeployEspTokenScript tokenDeployer = new DeployEspTokenScript();
-        (address tokenAddress, address admin) = tokenDeployer.run(tokenGrantRecipient);
+        (address tokenAddress,) = tokenDeployer.run(tokenGrantRecipient);
         token = EspToken(tokenAddress);
 
         vm.prank(tokenGrantRecipient);
@@ -547,5 +549,209 @@ contract StakeTable_register_Test is Test {
     // solhint-disable-next-line no-empty-blocks
     function test_revertIf_undelegate_AfterValidatorExit() public {
         // TODO
+    }
+}
+
+contract StakeTableV2Test is S {
+    uint256 public newValue;
+
+    function initializeV2(uint256 _newValue) public reinitializer(2) {
+        newValue = _newValue;
+    }
+
+    function getVersion()
+        public
+        pure
+        virtual
+        override
+        returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
+    {
+        return (2, 0, 0);
+    }
+}
+
+contract StakeTableMissingFieldTest is Test {
+    struct Validator {
+        uint256 delegatedAmount;
+        ValidatorStatus status;
+    }
+
+    enum ValidatorStatus {
+        Unknown,
+        Active,
+        Exited
+    }
+
+    struct Undelegation {
+        uint256 amount;
+        uint256 unlocksAt;
+    }
+
+    LightClient public lightClient;
+    ERC20 public token;
+    mapping(address account => Validator validator) public validators;
+    mapping(bytes32 blsKeyHash => bool used) public blsKeys;
+    mapping(address validator => uint256 unlocksAt) public validatorExits;
+    mapping(address validator => mapping(address delegator => uint256 amount)) delegations;
+    mapping(address validator => mapping(address delegator => Undelegation)) undelegations;
+    // missing field: exitEscrowPeriod
+}
+
+contract StakeTableFieldsReorderedTest is Test {
+    struct Validator {
+        uint256 delegatedAmount;
+        ValidatorStatus status;
+    }
+
+    enum ValidatorStatus {
+        Unknown,
+        Active,
+        Exited
+    }
+
+    struct Undelegation {
+        uint256 amount;
+        uint256 unlocksAt;
+    }
+
+    ERC20 public token;
+    mapping(address account => Validator validator) public validators;
+    mapping(bytes32 blsKeyHash => bool used) public blsKeys;
+    mapping(address validator => uint256 unlocksAt) public validatorExits;
+    mapping(address validator => mapping(address delegator => uint256 amount)) delegations;
+    mapping(address validator => mapping(address delegator => Undelegation)) undelegations;
+    uint256 exitEscrowPeriod;
+    LightClient public lightClient; //re-ordered field
+}
+
+contract StakeTableUpgradeTest is Test {
+    StakeTable_register_Test stakeTableRegisterTest;
+
+    function setUp() public {
+        stakeTableRegisterTest = new StakeTable_register_Test();
+        stakeTableRegisterTest.setUp();
+    }
+
+    function test_upgrade_succeeds() public {
+        (uint8 majorVersion,,) = StakeTableV2Test(stakeTableRegisterTest.proxy()).getVersion();
+        assertEq(majorVersion, 1);
+
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = stakeTableRegisterTest.proxy();
+        S(proxy).upgradeToAndCall(address(new StakeTableV2Test()), "");
+
+        (uint8 majorVersionNew,,) = StakeTableV2Test(proxy).getVersion();
+        assertEq(majorVersionNew, 2);
+
+        assertNotEq(majorVersion, majorVersionNew);
+        vm.stopPrank();
+    }
+
+    /// forge-config: default.allow_internal_expect_revert = true
+    function test_upgrade_reverts_when_not_admin() public {
+        address notAdmin = makeAddr("not_admin");
+        S proxy = S(stakeTableRegisterTest.proxy());
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 1);
+
+        vm.startPrank(notAdmin);
+
+        address impl = address(new StakeTableV2Test());
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+        );
+
+        proxy.upgradeToAndCall(impl, "");
+
+        (uint8 majorVersionNew,,) = proxy.getVersion();
+        assertEq(majorVersionNew, 1);
+
+        assertEq(majorVersion, majorVersionNew);
+        vm.stopPrank();
+    }
+
+    function test_initialize_function_is_protected() public {
+        S proxy = S(stakeTableRegisterTest.proxy());
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxy.initialize(address(0), address(0), 0, address(0));
+    }
+
+    function test_initialize_function_is_protected_when_upgraded() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = S(stakeTableRegisterTest.proxy());
+        proxy.upgradeToAndCall(address(new StakeTableV2Test()), "");
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxy.initialize(address(0), address(0), 0, address(0));
+
+        vm.stopPrank();
+    }
+
+    function test_storage_layout_is_compatible() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableV2Test";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "true");
+    }
+
+    function test_storage_layout_is_incompatible_if_field_is_missing() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableMissingFieldTest";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_storage_layout_is_incompatible_if_fields_are_reordered() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableFieldsReorderedTest";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_storage_layout_is_incompatible_between_diff_contracts() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "LightClient";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_reinitialize_succeeds_only_once() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = S(stakeTableRegisterTest.proxy());
+        proxy.upgradeToAndCall(
+            address(new StakeTableV2Test()), abi.encodeWithSignature("initializeV2(uint256)", 2)
+        );
+
+        StakeTableV2Test proxyV2 = StakeTableV2Test(stakeTableRegisterTest.proxy());
+        assertEq(proxyV2.newValue(), 2);
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxyV2.initializeV2(3);
+
+        vm.stopPrank();
     }
 }

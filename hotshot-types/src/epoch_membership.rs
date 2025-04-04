@@ -12,7 +12,8 @@ use hotshot_utils::{
 use primitive_types::U256;
 
 use crate::{
-    drb::DrbResult,
+    data::Leaf2,
+    drb::{compute_drb_result, DrbResult},
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
@@ -165,7 +166,7 @@ where
 
         // Get the epoch root headers and update our membership with them, finally sync them
         // Verification of the root is handled in get_epoch_root_and_drb
-        let Ok(header) = root_membership
+        let Ok(root_leaf) = root_membership
             .get_epoch_root(root_block_in_epoch(*root_epoch, self.epoch_height))
             .await
         else {
@@ -176,7 +177,7 @@ where
             .membership
             .read()
             .await
-            .add_epoch_root(epoch, header)
+            .add_epoch_root(epoch, root_leaf.block_header().clone())
             .await
             .ok_or(anytrace::warn!("add epoch root failed"))?;
         updater(&mut *(self.membership.write().await));
@@ -187,17 +188,27 @@ where
         };
 
         // get the DRB from the last block of the epoch right before the one we're catching up to
-        let Ok(drb) = drb_membership
+        // or compute it if it's not available
+        let drb = if let Ok(drb) = drb_membership
             .get_epoch_drb(transition_block_for_epoch(
                 *(root_epoch + 1),
                 self.epoch_height,
             ))
             .await
-        else {
-            return Err(anytrace::warn!(
-                "get epoch drb failed for in epoch {:?}",
-                root_epoch + 1
-            ));
+        {
+            drb
+        } else {
+            let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures)
+            else {
+                return Err(anytrace::error!("Failed to serialize the QC signature."));
+            };
+
+            let mut drb_seed_input = [0u8; 32];
+            let len = drb_seed_input_vec.len().min(32);
+            drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+            tokio::task::spawn_blocking(move || compute_drb_result::<TYPES>(drb_seed_input))
+                .await
+                .unwrap()
         };
 
         self.membership.write().await.add_drb_result(epoch, drb);
@@ -289,7 +300,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Wraps the same named Membership trait fn
-    async fn get_epoch_root(&self, block_height: u64) -> anyhow::Result<TYPES::BlockHeader> {
+    async fn get_epoch_root(&self, block_height: u64) -> anyhow::Result<Leaf2<TYPES>> {
         let Some(epoch) = self.epoch else {
             anyhow::bail!("Cannot get root for None epoch");
         };
