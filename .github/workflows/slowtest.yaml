@@ -44,7 +44,6 @@ jobs:
 
       - name: Build slow test
         run: cargo nextest run --locked --workspace --features embedded-db --no-run
-        timeout-minutes: 40
 
       - name: Run slow test
         run: cargo nextest run --locked --workspace --features embedded-db --verbose --no-fail-fast --nocapture
@@ -69,7 +68,6 @@ jobs:
 
       - name: Build slow test
         run: cargo nextest run --locked --release --workspace --no-run
-        timeout-minutes: 40
 
       - name: Run slow test
         run: cargo nextest run --locked --release --workspace --verbose --no-fail-fast --nocapture
