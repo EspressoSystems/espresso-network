@@ -512,6 +512,11 @@ async fn reconstruct_state<Mode: TransactionMode>(
     }
 
     if let Some(accounts) = reward_accounts {
+        tracing::debug!(
+            "reconstructing reward accounts for from height {} to view {}",
+            from_height,
+            to_view
+        );
         // TODO: don't think this is needed?
         // What if we are reconstructing a state from the leaf which is on pre-epoch version?
         // that is okie?
@@ -644,7 +649,7 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
     let mut reward_accounts = HashSet::default();
     let epoch_height = instance.epoch_height;
 
-    let Some(epoch_height) = epoch_height else {
+    if epoch_height == 0 {
         bail!("epoch height not set");
     };
 

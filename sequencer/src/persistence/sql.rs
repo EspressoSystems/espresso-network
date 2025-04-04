@@ -1005,8 +1005,8 @@ impl SequencerPersistence for Persistence {
             return Ok(());
         }
 
-        // Garbage collect data which was not included in any decide event, but which at this point
-        // is old enough to just forget about.
+        // // Garbage collect data which was not included in any decide event, but which at this point
+        // // is old enough to just forget about.
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
@@ -1290,6 +1290,30 @@ impl SequencerPersistence for Persistence {
             [(true, upgrade_certificate_bytes)],
         )
         .await?;
+        tx.commit().await
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let result = self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT * FROM high_qc2 where id = true")
+            .await?;
+
+        result
+            .map(|row| {
+                let bytes: Vec<u8> = row.get("data");
+                anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
+            })
+            .transpose()
+    }
+
+    async fn store_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let high_qc_bytes = bincode::serialize(&high_qc).context("serializing high qc")?;
+        let mut tx = self.db.write().await?;
+        tx.upsert("high_qc2", ["id", "data"], ["id"], [(true, high_qc_bytes)])
+            .await?;
         tx.commit().await
     }
 

@@ -179,7 +179,13 @@ pub async fn verify_leaf_chain<T: NodeType, V: Versions>(
         }
         last_leaf = leaf;
     }
-    Err(anyhow!("Epoch Root was not found in the decided chain"))
+    let leaf_views = leaf_chain
+        .iter()
+        .map(|l| (l.view_number(), l.height()))
+        .collect::<Vec<_>>();
+    Err(anyhow!(
+        "Epoch Root was not found in the decided chain views, heights: {leaf_views:?}"
+    ))
 }
 
 impl<TYPES: NodeType> ViewInner<TYPES> {

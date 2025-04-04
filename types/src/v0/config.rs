@@ -38,7 +38,7 @@ impl From<ValidatorConfig<SeqTypes>> for PublicValidatorConfig {
 
         Self {
             public_key,
-            stake_value,
+            stake_value: stake_value.as_u64(),
             is_da,
             state_public_key: state_public_key.to_string(),
             private_key: "*****".into(),
@@ -231,10 +231,7 @@ impl PublicNetworkConfig {
             .known_nodes_with_stake
             .iter()
             .position(|peer| peer.stake_table_entry.stake_key == my_own_validator_config.public_key)
-            .context(format!(
-                "the node {} is not in the stake table",
-                my_own_validator_config.public_key
-            ))? as u64;
+            .unwrap_or(0) as u64;
 
         Ok(NetworkConfig {
             rounds: self.rounds,

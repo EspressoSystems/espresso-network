@@ -174,6 +174,7 @@ pub trait BlockHeader<TYPES: NodeType>:
         metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
         builder_fee: BuilderFee<TYPES>,
         version: Version,
+        view_number: u64,
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
     /// Build a header with the parent validate state, instance-level state, parent leaf, payload

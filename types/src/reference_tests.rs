@@ -26,8 +26,11 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 use committable::Committable;
 use hotshot_query_service::{availability::QueryablePayload, testing::mocks::MockVersions};
 use hotshot_types::{
-    data::vid_commitment,
-    traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
+    data::{vid_commitment, ViewNumber},
+    traits::{
+        node_implementation::ConsensusTime, signature_key::BuilderSignatureKey, BlockPayload,
+        EncodeBytes,
+    },
 };
 use jf_merkle_tree::MerkleTreeScheme;
 use pretty_assertions::assert_eq;
@@ -149,6 +152,7 @@ async fn reference_header(version: Version) -> Header {
         vec![fee_info],
         vec![builder_signature],
         version,
+        Some(ViewNumber::genesis()),
     )
 }
 

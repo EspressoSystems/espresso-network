@@ -6,7 +6,7 @@
 
 //! This module provides types for VID disperse related data structures.
 
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData};
+use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, time::Instant};
 
 use hotshot_utils::anytrace::*;
 use jf_vid::{VidDisperse as JfVidDisperse, VidScheme};
@@ -406,6 +406,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         data_epoch: Option<TYPES::Epoch>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<Self> {
+        let start = Instant::now();
         let target_mem = membership.membership_for_epoch(target_epoch).await?;
         let stake_table = target_mem.stake_table().await;
         let approximate_weights = approximate_weights(stake_table);
@@ -431,6 +432,9 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         .context(error!("Join error"))?
         .wrap()
         .context(|err| error!("Failed to calculate VID disperse. Error: {}", err))?;
+
+        let duration = start.elapsed();
+        tracing::info!("VID disperse calculation time: {:?}", duration);
 
         Ok(Self::from_membership(
             view,

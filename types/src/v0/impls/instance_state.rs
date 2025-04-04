@@ -18,7 +18,7 @@ use super::{
     traits::MembershipPersistence,
     v0_1::NoStorage,
     v0_3::{IndexedStake, Validator},
-    SeqTypes,
+    SeqTypes, UpgradeType,
 };
 use crate::v0::{
     traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
@@ -42,7 +42,7 @@ pub struct NodeState {
     pub l1_genesis: Option<L1BlockInfo>,
     #[debug(skip)]
     pub coordinator: EpochMembershipCoordinator<SeqTypes>,
-    pub epoch_height: Option<u64>,
+    pub epoch_height: u64,
 
     /// Map containing all planned and executed upgrades.
     ///
@@ -106,16 +106,15 @@ impl NodeState {
             l1_genesis: None,
             upgrades: Default::default(),
             current_version,
-            epoch_height: None,
+            epoch_height: 150,
             coordinator,
         }
     }
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
-        use ethers_conv::ToAlloy;
+        use async_lock::RwLock;
         use vbs::version::StaticVersion;
-
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -124,7 +123,7 @@ impl NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
@@ -142,7 +141,6 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
-        use ethers_conv::ToAlloy;
         use vbs::version::StaticVersion;
 
         let chain_config = ChainConfig::default();
@@ -153,7 +151,7 @@ impl NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
@@ -171,7 +169,6 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
-        use ethers_conv::ToAlloy;
         use vbs::version::StaticVersion;
 
         let chain_config = ChainConfig::default();
@@ -182,7 +179,7 @@ impl NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
@@ -201,7 +198,6 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v99() -> Self {
-        use ethers_conv::ToAlloy;
         use vbs::version::StaticVersion;
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -211,7 +207,7 @@ impl NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
@@ -253,8 +249,21 @@ impl NodeState {
     }
 
     pub fn with_epoch_height(mut self, epoch_height: u64) -> Self {
-        self.epoch_height = Some(epoch_height);
+        self.epoch_height = epoch_height;
         self
+    }
+
+    pub fn upgrade_chain_config(&self, version: Version) -> Option<ChainConfig> {
+        let chain_config = (version > self.current_version).then(|| {
+            self.upgrades
+                .get(&version)
+                .map(|upgrade| match upgrade.upgrade_type {
+                    UpgradeType::Fee { chain_config } => chain_config,
+                    UpgradeType::Epoch { chain_config } => chain_config,
+                    UpgradeType::Marketplace { chain_config } => chain_config,
+                })
+        });
+        chain_config?
     }
 }
 
@@ -263,7 +272,6 @@ impl NodeState {
 #[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
-        use ethers_conv::ToAlloy;
         use vbs::version::StaticVersion;
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -273,7 +281,7 @@ impl Default for NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));

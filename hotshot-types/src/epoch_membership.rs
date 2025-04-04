@@ -164,6 +164,12 @@ where
             Box::pin(self.wait_for_catchup(root_epoch)).await?
         };
 
+        tracing::error!(
+            "Catching up to epoch {:?}, getting root from rootepoch {:?}",
+            epoch,
+            root_epoch
+        );
+
         // Get the epoch root headers and update our membership with them, finally sync them
         // Verification of the root is handled in get_epoch_root_and_drb
         let Ok(root_leaf) = root_membership
