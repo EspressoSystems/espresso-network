@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use espresso_types::EpochVersion;
 #[allow(unused_imports)]
 use espresso_types::{
     traits::NullEventConsumer, FeeVersion, MarketplaceVersion, SequencerVersions,
@@ -44,12 +45,12 @@ pub async fn main() -> anyhow::Result<()> {
             .await
         },
         #[cfg(feature = "fee")]
-        (FeeVersion::VERSION, _) => {
+        (EpochVersion::VERSION, _) => {
             run(
                 genesis,
                 modules,
                 opt,
-                SequencerVersions::<FeeVersion, V0_0>::new(),
+                SequencerVersions::<EpochVersion, V0_0>::new(),
             )
             .await
         },
