@@ -418,16 +418,16 @@ pub async fn find_validator_info(
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
     view: ViewNumber,
-    height: u64,
 ) -> anyhow::Result<Validator<BLSPubKey>> {
     let parent_height = parent_leaf.height();
     let parent_view = parent_leaf.view_number();
+    let new_height = parent_height + 1;
 
     let epoch_height = instance_state.epoch_height.context("epoch height")?;
     if epoch_height == 0 {
         bail!("epoch height is 0. can not catchup reward accounts");
     }
-    let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+    let epoch = EpochNumber::new(epoch_from_block_number(new_height, epoch_height));
 
     let coordinator = instance_state.coordinator.clone();
 

@@ -889,21 +889,16 @@ impl ValidatedState {
         if version >= EpochVersion::version()
             && !first_two_epochs(parent_leaf.height() + 1, instance).await?
         {
-            let validator = find_validator_info(
-                instance,
-                &mut validated_state,
-                parent_leaf,
-                view_number,
-                proposed_header.height(),
-            )
-            .await?;
+            let validator =
+                find_validator_info(instance, &mut validated_state, parent_leaf, view_number)
+                    .await?;
 
             // apply rewards
 
             validated_state
                 .distribute_rewards(&mut delta, validator.clone())
                 .context("failed to distribute rewards")?;
-            tracing::info!("Rewards distributed for validator={:?}", validator.account);
+            tracing::debug!("Rewards distributed for validator={:?}", validator.account);
         }
 
         Ok((validated_state, delta))

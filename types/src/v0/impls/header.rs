@@ -527,7 +527,7 @@ impl Header {
         // and the marketplace integration test passes
         if let Some(validator) = validator {
             let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator.clone())?;
-            tracing::info!("rewards distributed for validator={:?}", validator.account);
+            tracing::debug!("rewards distributed for validator={:?}", validator.account);
             state.reward_merkle_tree = reward_state;
         }
 
@@ -1097,13 +1097,13 @@ impl BlockHeader<SeqTypes> for Header {
         if version == EpochVersion::version()
             && !first_two_epochs(proposed_header_height, instance_state).await?
         {
+            tracing::error!("leader config");
             leader_config = Some(
                 find_validator_info(
                     instance_state,
                     &mut validated_state,
                     parent_leaf,
                     ViewNumber::new(view_number),
-                    proposed_header_height,
                 )
                 .await?,
             );

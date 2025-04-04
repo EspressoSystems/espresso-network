@@ -512,7 +512,7 @@ async fn reconstruct_state<Mode: TransactionMode>(
     }
 
     if let Some(accounts) = reward_accounts {
-        tracing::error!(
+        tracing::info!(
             "reconstructing reward accounts for from height {} to view {}",
             from_height,
             to_view
