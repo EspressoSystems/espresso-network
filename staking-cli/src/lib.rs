@@ -39,7 +39,7 @@ pub struct Config {
 
     /// Deployed ESP token contract address.
     #[clap(long, env = "ESP_TOKEN_ADDRESS")]
-    token_address: Address,
+    pub token_address: Address,
 
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
@@ -83,6 +83,11 @@ pub enum Commands {
     /// Deregister a validator.
     DeregisterValidator {},
     /// Delegate funds to a validator.
+    /// Approve stake table contract to move tokens
+    Approve {
+        #[clap(long)]
+        amount: U256,
+    },
     Delegate {
         #[clap(long)]
         validator_address: Address,

@@ -17,7 +17,7 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    simple_vote::{QuorumData2, QuorumVote2},
+    simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
     traits::{
         block_contents::BlockHeader,
         election::Membership,
@@ -104,7 +104,7 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     if let Some(epoch_val) = epoch {
         let has_stake_current_epoch = task_state
             .membership
-            .membership_for_epoch(epoch)
+            .stake_table_for_epoch(epoch)
             .await
             .context(warn!("No stake table for epoch"))?
             .has_stake(&task_state.public_key)
@@ -474,15 +474,20 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     leaf: Leaf2<TYPES>,
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
+    epoch_root_vote: bool,
     epoch_height: u64,
-    _state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+    state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 ) -> Result<()> {
     let committee_member_in_current_epoch = membership.has_stake(&public_key).await;
     // If the proposed leaf is for the last block in the epoch and the node is part of the quorum committee
     // in the next epoch, the node should vote to achieve the double quorum.
     let committee_member_in_next_epoch = leaf.with_epoch
         && is_epoch_transition(leaf.height(), epoch_height)
-        && membership.next_epoch().await?.has_stake(&public_key).await;
+        && membership
+            .next_epoch_stake_table()
+            .await?
+            .has_stake(&public_key)
+            .await;
 
     ensure!(
         committee_member_in_current_epoch || committee_member_in_next_epoch,
@@ -522,10 +527,42 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .wrap()
         .context(error!("Failed to store VID share"))?;
 
-    if extended_vote && upgrade_lock.epochs_enabled(view_number).await {
+    // Make epoch root vote
+
+    let epoch_enabled = upgrade_lock.epochs_enabled(view_number).await;
+    if extended_vote && epoch_enabled {
         tracing::debug!("sending extended vote to everybody",);
         broadcast_event(
             Arc::new(HotShotEvent::ExtendedQuorumVoteSend(vote)),
+            &sender,
+        )
+        .await;
+    } else if epoch_root_vote && epoch_enabled {
+        tracing::debug!(
+            "sending epoch root vote to next quorum leader {:?}",
+            vote.view_number() + 1
+        );
+        let light_client_state = leaf
+            .block_header()
+            .get_light_client_state(view_number)
+            .wrap()
+            .context(error!("Failed to generate light client state"))?;
+        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
+            state_private_key,
+            &(&light_client_state).into(),
+        )
+        .wrap()
+        .context(error!("Failed to sign the light client state"))?;
+        let state_vote = LightClientStateUpdateVote {
+            epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
+            light_client_state,
+            signature,
+        };
+        broadcast_event(
+            Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {
+                vote,
+                state_vote,
+            })),
             &sender,
         )
         .await;

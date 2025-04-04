@@ -33,15 +33,15 @@ use crate::{
     epoch_membership::EpochMembership,
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate, DaCertificate2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate, ViewSyncCommitCertificate, ViewSyncCommitCertificate2,
-        ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate,
-        ViewSyncPreCommitCertificate2,
+        DaCertificate, DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate, ViewSyncCommitCertificate,
+        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate, ViewSyncFinalizeCertificate2,
+        ViewSyncPreCommitCertificate, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote, DaVote2, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote, TimeoutVote2, UpgradeVote,
-        ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote, ViewSyncFinalizeVote2,
-        ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
+        DaVote, DaVote2, EpochRootQuorumVote, HasEpoch, QuorumVote, QuorumVote2, TimeoutVote,
+        TimeoutVote2, UpgradeVote, ViewSyncCommitVote, ViewSyncCommitVote2, ViewSyncFinalizeVote,
+        ViewSyncFinalizeVote2, ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
     },
     traits::{
         election::Membership,
@@ -235,6 +235,9 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
     /// Message with a quorum vote.
     Vote2(QuorumVote2<TYPES>),
 
+    /// Message with an epoch root quorum vote.
+    EpochRootQuorumVote(EpochRootQuorumVote<TYPES>),
+
     /// A replica has responded with a valid proposal.
     ProposalResponse2(Proposal<TYPES, QuorumProposal2<TYPES>>),
 
@@ -244,11 +247,14 @@ pub enum GeneralConsensusMessage<TYPES: NodeType> {
         Option<NextEpochQuorumCertificate2<TYPES>>,
     ),
 
-    /// Message for the next leader containing our highest QC
+    /// Message containing the highest QC and the next epoch QC
     ExtendedQc(
         QuorumCertificate2<TYPES>,
         NextEpochQuorumCertificate2<TYPES>,
     ),
+
+    /// Message for the next leader containing the epoch root QC
+    EpochRootQc(EpochRootQuorumCertificate<TYPES>),
 
     /// Message with a view sync pre-commit vote
     ViewSyncPreCommitVote2(ViewSyncPreCommitVote2<TYPES>),
@@ -377,6 +383,8 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::UpgradeVote(message) => message.view_number(),
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.view_number(),
+                    GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.view_number(),
+                    GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.view_number(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -448,6 +456,8 @@ impl<TYPES: NodeType> SequencingMessage<TYPES> {
                     GeneralConsensusMessage::UpgradeVote(message) => message.epoch(),
                     GeneralConsensusMessage::HighQc(qc, _)
                     | GeneralConsensusMessage::ExtendedQc(qc, _) => qc.epoch(),
+                    GeneralConsensusMessage::EpochRootQuorumVote(vote) => vote.epoch(),
+                    GeneralConsensusMessage::EpochRootQc(root_qc) => root_qc.epoch(),
                 }
             },
             SequencingMessage::Da(da_message) => {
@@ -551,36 +561,6 @@ where
         Ok(())
     }
 }
-
-/*impl<TYPES> Proposal<TYPES, QuorumProposal2<TYPES>>
-where
-    TYPES: NodeType,
-{
-    /// Checks that the signature of the quorum proposal is valid.
-    /// # Errors
-    /// Returns an error when the proposal signature is invalid.
-    pub fn validate_signature(
-        &self,
-        membership: &TYPES::Membership,
-        epoch_height: u64,
-    ) -> Result<()> {
-        let view_number = self.data.view_number();
-        let proposal_epoch = option_epoch_from_block_number::<TYPES>(
-            true,
-            self.data.block_header.block_number(),
-            epoch_height,
-        );
-        let view_leader_key = membership.leader(view_number, proposal_epoch)?;
-        let proposed_leaf = Leaf2::from_quorum_proposal(&self.data);
-
-        ensure!(
-            view_leader_key.validate(&self.signature, proposed_leaf.commit().as_ref()),
-            "Proposal signature is invalid."
-        );
-
-        Ok(())
-    }
-}*/
 
 impl<TYPES> Proposal<TYPES, QuorumProposalWrapper<TYPES>>
 where

@@ -22,12 +22,14 @@ use hotshot_types::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
+    message::UpgradeLock,
     stake_table::StakeTableEntry,
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StakeTableEntryType,
     },
+    utils::verify_leaf_chain,
     PeerConfig,
 };
 use indexmap::IndexMap;
@@ -38,6 +40,7 @@ use super::{
     v0_3::{DAMembers, Validator},
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
+use crate::{EpochVersion, SequencerVersions};
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 
@@ -766,8 +769,14 @@ impl Membership<SeqTypes> for EpochCommittees {
             return None;
         };
 
+        let Some(l1_finalized_block_info) = block_header.l1_finalized() else {
+            tracing::error!("The epoch root for epoch {} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.", epoch);
+
+            return None;
+        };
+
         let stake_tables = self
-            .get_stake_table_by_epoch(epoch, address, block_header.height())
+            .get_stake_table_by_epoch(epoch, address, l1_finalized_block_info.number())
             .await
             .inspect_err(|e| {
                 tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
@@ -804,40 +813,59 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
     }
 
-    async fn get_epoch_root_and_drb(
+    async fn get_epoch_root(
         membership: Arc<RwLock<Self>>,
         block_height: u64,
-        epoch_height: u64,
         epoch: Epoch,
-    ) -> anyhow::Result<(Header, DrbResult)> {
+    ) -> anyhow::Result<Leaf2> {
         let peers = membership.read().await.peers.clone();
         let stake_table = membership.read().await.stake_table(Some(epoch)).clone();
         let success_threshold = membership.read().await.success_threshold(Some(epoch));
         // Fetch leaves from peers
         let leaf: Leaf2 = peers
-            .fetch_leaf(
-                block_height,
-                stake_table.clone(),
-                success_threshold,
-                epoch_height,
-            )
+            .fetch_leaf(block_height, stake_table.clone(), success_threshold)
             .await?;
-        //DRB height is decided in the next epoch's last block
-        let drb_height = block_height + epoch_height + 3;
-        let drb_leaf = peers
-            .fetch_leaf(drb_height, stake_table, success_threshold, epoch_height)
-            .await?;
+
+        Ok(leaf)
+    }
+
+    async fn get_epoch_drb(
+        membership: Arc<RwLock<Self>>,
+        block_height: u64,
+        epoch: Epoch,
+    ) -> anyhow::Result<DrbResult> {
+        let peers = membership.read().await.peers.clone();
+        let stake_table = membership.read().await.stake_table(Some(epoch)).clone();
+        let success_threshold = membership.read().await.success_threshold(Some(epoch));
+
+        tracing::debug!(
+            "Getting DRB for epoch {:?}, block height {:?}",
+            epoch,
+            block_height
+        );
+        let mut drb_leaf_chain = peers.try_fetch_leaves(1, block_height).await?;
+
+        drb_leaf_chain.sort_by_key(|l| l.view_number());
+        let leaf_chain = drb_leaf_chain.into_iter().rev().collect();
+        let drb_leaf = verify_leaf_chain(
+            leaf_chain,
+            stake_table.clone(),
+            success_threshold,
+            block_height,
+            &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),
+        )
+        .await?;
 
         let Some(drb) = drb_leaf.next_drb_result else {
             tracing::error!(
-              "We received a leaf that should contain a DRB result, but the DRB result is missing: {:?}",
-              drb_leaf
-            );
+          "We received a leaf that should contain a DRB result, but the DRB result is missing: {:?}",
+          drb_leaf
+        );
 
             bail!("DRB leaf is missing the DRB result.");
         };
 
-        Ok((leaf.block_header().clone(), drb))
+        Ok(drb)
     }
 
     fn add_drb_result(&mut self, epoch: Epoch, drb: DrbResult) {

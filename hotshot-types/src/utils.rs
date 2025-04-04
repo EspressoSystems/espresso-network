@@ -103,11 +103,11 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
 
-pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
+pub async fn verify_leaf_chain<T: NodeType, V: Versions>(
     leaf_chain: Vec<Leaf2<T>>,
     stake_table: Vec<PeerConfig<T>>,
     success_threshold: U256,
-    epoch_height: u64,
+    expected_height: u64,
     upgrade_lock: &crate::message::UpgradeLock<T, V>,
 ) -> anyhow::Result<Leaf2<T>> {
     // Check we actually have a chain long enough for deciding
@@ -174,7 +174,7 @@ pub async fn verify_epoch_root_chain<T: NodeType, V: Versions>(
                 upgrade_lock,
             )
             .await?;
-        if leaf.height() % epoch_height == epoch_height - 2 {
+        if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }
         last_leaf = leaf;
@@ -354,6 +354,16 @@ pub fn root_block_in_epoch(epoch: u64, epoch_height: u64) -> u64 {
     }
 }
 
+/// Get the block height of the transition block for the given epoch
+#[must_use]
+pub fn transition_block_for_epoch(epoch: u64, epoch_height: u64) -> u64 {
+    if epoch_height == 0 || epoch < 1 {
+        0
+    } else {
+        epoch_height * epoch - 3
+    }
+}
+
 /// Returns an Option<Epoch> based on a boolean condition of whether or not epochs are enabled, a block number,
 /// and the epoch height. If epochs are disabled or the epoch height is zero, returns None.
 #[must_use]
@@ -378,7 +388,7 @@ pub fn option_epoch_from_block_number<TYPES: NodeType>(
     }
 }
 
-/// Returns Some(0) if epochs are enabled by V::Base, otherwise returns None
+/// Returns Some(1) if epochs are enabled by V::Base, otherwise returns None
 #[must_use]
 pub fn genesis_epoch_from_version<V: Versions, TYPES: NodeType>() -> Option<TYPES::Epoch> {
     (V::Base::VERSION >= V::Epochs::VERSION).then(|| TYPES::Epoch::new(1))

@@ -212,6 +212,7 @@ async fn test_pruning() {
             next_epoch_justify_qc: None,
             next_drb_result: None,
             epoch: None,
+            state_cert: None,
         },
     });
     event_stream_sender

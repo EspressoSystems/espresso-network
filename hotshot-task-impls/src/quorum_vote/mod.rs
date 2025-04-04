@@ -29,7 +29,7 @@ use hotshot_types::{
         signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
     },
-    utils::{is_last_block, option_epoch_from_block_number},
+    utils::{is_epoch_root, is_last_block, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
     StakeTableEntries,
 };
@@ -244,6 +244,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.epoch_height,
         );
 
+        // We use this `epoch_membership` to vote,
+        // meaning that we must know the leader for the current view in the current epoch
+        // and must therefore perform the full DRB catchup.
         let epoch_membership = match self
             .membership_coordinator
             .membership_for_epoch(cur_epoch)
@@ -263,6 +266,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
         );
 
         let is_vote_leaf_extended = is_last_block(leaf.height(), self.epoch_height);
+        let is_vote_epoch_root = is_epoch_root(leaf.height(), self.epoch_height);
         if current_epoch.is_none() || !is_vote_leaf_extended {
             // We're voting for the proposal that will probably form the eQC. We don't want to change
             // the view here because we will probably change it when we form the eQC.
@@ -293,6 +297,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             leaf,
             vid_share,
             is_vote_leaf_extended,
+            is_vote_epoch_root,
             self.epoch_height,
             &self.state_private_key,
         )
@@ -549,7 +554,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 let cert_epoch = cert.data.epoch;
 
-                let epoch_membership = self.membership.membership_for_epoch(cert_epoch).await?;
+                let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch).await?;
                 let membership_da_stake_table = epoch_membership.da_stake_table().await;
                 let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
 

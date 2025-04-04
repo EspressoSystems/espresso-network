@@ -331,7 +331,7 @@ where
             .head
             .schnorr_keys
             .iter()
-            .chain(ark_std::iter::repeat(&K2::default()).take(padding_len))
+            .chain(ark_std::iter::repeat_n(&K2::default(), padding_len))
             .flat_map(ToFields::to_fields)
             .collect::<Vec<_>>();
         let schnorr_comm =
