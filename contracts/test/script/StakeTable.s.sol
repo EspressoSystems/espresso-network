@@ -10,28 +10,29 @@ contract DeployStakeTableScript is Script {
     /// @notice deploys the impl, proxy & initializes the impl
     /// @return proxyAddress The address of the proxy
     /// @return admin The address of the admin
-    function run(address tokenAddress, address lightClientAddress, uint256 escrowPeriod)
-        external
-        returns (address payable proxyAddress, address admin)
-    {
-        string memory seedPhrase = vm.envString("MNEMONIC");
-        (admin,) = deriveRememberKey(seedPhrase, 0);
-        vm.startBroadcast(admin);
-
+    function run(
+        address tokenAddress,
+        address lightClientAddress,
+        uint256 escrowPeriod,
+        address timelockAddress
+    ) external returns (address payable proxyAddress, address admin) {
         //Our implementation(logic).Proxy will point here to delegate
         StakeTable stakeTableContract = new StakeTable();
 
         // Encode the initializer function call
         bytes memory data = abi.encodeWithSelector(
-            StakeTable.initialize.selector, tokenAddress, lightClientAddress, escrowPeriod, admin
+            StakeTable.initialize.selector,
+            tokenAddress,
+            lightClientAddress,
+            escrowPeriod,
+            timelockAddress
         );
 
         // our proxy
         ERC1967Proxy proxy = new ERC1967Proxy(address(stakeTableContract), data);
-        vm.stopBroadcast();
 
         proxyAddress = payable(address(proxy));
 
-        return (proxyAddress, admin);
+        return (proxyAddress, timelockAddress);
     }
 }
