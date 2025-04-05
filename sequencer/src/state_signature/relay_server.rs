@@ -92,10 +92,12 @@ impl StateRelayServerState {
         // fetch genesis info from sequencer
         if self.blocks_per_epoch.is_none() || self.epoch_start_block.is_none() {
             let (blocks_per_epoch, epoch_start_block) = epoch_config(&self.sequencer_url).await?;
+            // set local state
             self.blocks_per_epoch.get_or_insert(blocks_per_epoch);
             self.epoch_start_block.get_or_insert(epoch_start_block);
         }
         let (blocks_per_epoch, epoch_start_block) = (
+            // both safe unwrap
             self.blocks_per_epoch.unwrap(),
             self.epoch_start_block.unwrap(),
         );
@@ -110,8 +112,6 @@ impl StateRelayServerState {
         .await?;
 
         // init local state
-        self.blocks_per_epoch = Some(blocks_per_epoch);
-
         self.thresholds.insert(
             first_epoch,
             one_honest_threshold(genesis_stake_table.total_stake(SnapshotVersion::LastEpochStart)?),
@@ -194,20 +194,28 @@ impl StateRelayServerState {
     /// `until_height` is inclusive, meaning that would also be pruned.
     pub fn prune(&mut self, until_height: u64) {
         let blocks_per_epoch = self.blocks_per_epoch.expect("forget to init genesis");
+        let oldest_epoch = if let Some(&height) = self.queue.first() {
+            epoch_from_block_number(height, blocks_per_epoch)
+        } else {
+            1
+        };
 
         while let Some(&height) = self.queue.first() {
             if height > until_height {
                 return;
             }
-
             self.bundles.remove(&height);
             self.queue.pop_first();
+            tracing::debug!(%height, "garbage collected for ");
+        }
 
-            let epoch = epoch_from_block_number(height, blocks_per_epoch);
-            self.thresholds.remove(&epoch);
-            self.known_nodes.remove(&epoch);
-
-            tracing::info!(%height, "garbage collected for ");
+        let newest_epoch = epoch_from_block_number(until_height + 1, blocks_per_epoch);
+        if newest_epoch > oldest_epoch {
+            for epoch in oldest_epoch..newest_epoch {
+                self.thresholds.remove(&epoch);
+                self.known_nodes.remove(&epoch);
+                tracing::debug!(%epoch, "garbage collected for ");
+            }
         }
     }
 
@@ -228,6 +236,17 @@ impl StateRelayServerState {
     }
     pub fn with_epoch_start_block(mut self, epoch_start_block: u64) -> Self {
         self.epoch_start_block = Some(epoch_start_block);
+        self
+    }
+    pub fn with_thresholds(mut self, thresholds: HashMap<u64, U256>) -> Self {
+        self.thresholds = thresholds;
+        self
+    }
+    pub fn with_known_nodes(
+        mut self,
+        known_nodes: HashMap<u64, HashMap<StateVerKey, U256>>,
+    ) -> Self {
+        self.known_nodes = known_nodes;
         self
     }
 }
@@ -429,9 +448,11 @@ pub async fn run_relay_server<ApiVer: StaticVersionType + 'static>(
 
     app.register_module("api", api).unwrap();
 
-    let app_future = app.serve(url, bind_version);
-
+    let app_future = app.serve(url.clone(), bind_version);
     app_future.await?;
+
+    tracing::info!(%url, "Relay server starts serving at ");
+
     Ok(())
 }
 
@@ -446,7 +467,10 @@ pub async fn run_relay_server_with_state<ApiVer: StaticVersionType + 'static>(
     let mut app = App::<RwLock<StateRelayServerState>, ServerError>::with_state(RwLock::new(state));
     app.register_module("api", api).unwrap();
 
-    let app_future = app.serve(server_url, bind_version);
+    let app_future = app.serve(server_url.clone(), bind_version);
     app_future.await?;
+
+    tracing::info!(%server_url, "Relay server starts serving at ");
+
     Ok(())
 }

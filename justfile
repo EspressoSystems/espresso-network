@@ -198,3 +198,9 @@ download-srs:
 dev-download-srs:
     @echo "Check existence or download SRS for dev/test"
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
+
+# quick local test
+alex:
+    RUST_LOG=hotshot_state_prover=info,espresso_dev_node=info,sequencer::state_signature=info,sequencer::state_signature::relay_server=info,sequencer_utils::deployer=info, \
+    just test --profile slow --features "embedded-db testing" --nocapture -- dev_node_test tests::slow_dev_node_test \
+    2>&1 | tee log.txt

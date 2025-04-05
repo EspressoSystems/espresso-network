@@ -23,6 +23,18 @@ contract LightClientV2Mock is LCV2 {
         hotShotDown = false;
     }
 
+    /// @dev override the production-implementation with frozen data
+    function lagOverEscapeHatchThreshold(uint256 blockNumber, uint256 threshold)
+        public
+        view
+        override
+        returns (bool)
+    {
+        return hotShotDown
+            ? blockNumber - frozenL1Height > threshold
+            : super.lagOverEscapeHatchThreshold(blockNumber, threshold);
+    }
+
     /// @dev Directly mutate finalizedState variable for test
     function setFinalizedState(LC.LightClientState memory state) public {
         finalizedState = state;

@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, io, iter::once, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io,
+    iter::once,
+    sync::Arc,
+    time::Duration,
+};
 
 use alloy::{
     network::EthereumWallet,
@@ -12,7 +18,13 @@ use clap::Parser;
 use espresso_types::{parse_duration, MarketplaceVersion, SequencerVersions, V0_1};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
+use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{run_prover_service_with_stake_table, StateProverConfig};
+use hotshot_types::{
+    light_client::StateVerKey,
+    traits::stake_table::{SnapshotVersion, StakeTableScheme},
+    utils::epoch_from_block_number,
+};
 use portpicker::pick_unused_port;
 use sequencer::{
     api::{
@@ -82,7 +94,7 @@ struct Args {
     multisig_address: Option<Address>,
 
     /// The frequency of updating the light client state, expressed in update interval
-    #[clap( long, value_parser = parse_duration, default_value = "20s", env = "ESPRESSO_STATE_PROVER_UPDATE_INTERVAL")]
+    #[clap( long, value_parser = parse_duration, default_value = "10s", env = "ESPRESSO_STATE_PROVER_UPDATE_INTERVAL")]
     update_interval: Duration,
 
     /// Interval between retries if a state update fails
@@ -304,6 +316,14 @@ async fn main() -> anyhow::Result<()> {
             None, // no permissioned prover
         )
         .await?;
+        // upgrade to LightClientV2
+        deployer::upgrade_light_client_v2(
+            &provider,
+            contracts,
+            true, // use mock
+            blocks_per_epoch,
+        )
+        .await?;
         if let Some(multisig) = multisig_address {
             deployer::transfer_ownership(
                 &provider,
@@ -313,6 +333,11 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
+
+        // append to the list of light client contract addresses
+        let chain_id = provider.get_chain_id().await?;
+        client_states.lc_proxy_addr.insert(chain_id, lc_proxy_addr);
+        light_client_addresses.push((chain_id, lc_proxy_addr));
 
         // init the prover config
         let prover_port = prover_port.unwrap_or_else(|| pick_unused_port().unwrap());
@@ -330,19 +355,7 @@ async fn main() -> anyhow::Result<()> {
             blocks_per_epoch: Some(blocks_per_epoch),
         };
 
-        // upgrade to LightClientV2
-        deployer::upgrade_light_client_v2(
-            &provider,
-            contracts,
-            true, // use mock
-            blocks_per_epoch,
-        )
-        .await?;
-
-        let chain_id = provider.get_chain_id().await?;
-        client_states.lc_proxy_addr.insert(chain_id, lc_proxy_addr);
-        light_client_addresses.push((chain_id, lc_proxy_addr));
-
+        // spawn off prover service for this chain
         let prover_handle = spawn(run_prover_service_with_stake_table(
             prover_config,
             SequencerApiVersion::instance(),
@@ -368,10 +381,19 @@ async fn main() -> anyhow::Result<()> {
             // deploy EspToken, proxy
             let token_proxy_addr =
                 deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+            if let Some(multisig) = multisig_address {
+                deployer::transfer_ownership(
+                    &provider,
+                    Contract::EspTokenProxy,
+                    token_proxy_addr,
+                    multisig,
+                )
+                .await?;
+            }
 
             // deploy permissionless stake table
             let exit_escrow_period = U256::from(300); // 300 sec
-            deployer::deploy_stake_table_proxy(
+            let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
                 &provider,
                 contracts,
                 token_proxy_addr,
@@ -380,24 +402,51 @@ async fn main() -> anyhow::Result<()> {
                 admin,
             )
             .await?;
+            if let Some(multisig) = multisig_address {
+                deployer::transfer_ownership(
+                    &provider,
+                    Contract::StakeTableProxy,
+                    stake_table_proxy_addr,
+                    multisig,
+                )
+                .await?;
+            }
 
             client_states.wallet = wallet;
             client_states.l1_url = url;
+            client_states.l1_chain_id = chain_id;
         }
     }
 
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
-        // since this dev-node didn't expose those APIs
+        // during `init_genesis()`, since this dev-node didn't expose those APIs.
+        let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
+        let mut thresholds = HashMap::new();
+        thresholds.insert(
+            first_epoch,
+            one_honest_threshold(st.total_stake(SnapshotVersion::LastEpochStart)?),
+        );
+
+        let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
+        for (_bls_vk, amt, schnorr_vk) in st.try_iter(SnapshotVersion::LastEpochStart)? {
+            genesis_known_nodes.insert(schnorr_vk, amt);
+        }
+        let mut known_nodes = HashMap::new();
+        known_nodes.insert(first_epoch, genesis_known_nodes);
+
+        // manually fill up the relay server state
         let state = StateRelayServerState::new(
             Url::parse(&format!("http://localhost:{}", sequencer_api_port)).unwrap(),
             STAKE_TABLE_CAPACITY_FOR_TEST,
         )
         .with_blocks_per_epoch(blocks_per_epoch)
-        .with_epoch_start_block(epoch_start_block);
+        .with_epoch_start_block(epoch_start_block)
+        .with_thresholds(thresholds)
+        .with_known_nodes(known_nodes);
 
         let _ = run_relay_server_with_state(
-            format!("http://0.0.0.0:{relay_server_port}")
+            format!("http://localhost:{relay_server_port}")
                 .parse()
                 .unwrap(),
             SequencerApiVersion::instance(),
@@ -413,8 +462,6 @@ async fn main() -> anyhow::Result<()> {
     // so only alt chain light client addresses are left
     let (_, l1_lc) = light_client_addresses.remove(0);
     let l1_prover_port = prover_ports.remove(0);
-    // we remove the first entry which is for primary L1 chain signing key
-    // so only alt signing keys are left
 
     let dev_info = DevInfo {
         builder_url: network.cfg.hotshot_config().builder_urls[0].clone(),
@@ -463,6 +510,8 @@ pub struct ApiState {
     pub wallet: EthereumWallet,
     /// L1 endpoint
     pub l1_url: Url,
+    /// L1 chain id
+    pub l1_chain_id: u64,
 }
 impl Default for ApiState {
     fn default() -> Self {
@@ -470,6 +519,7 @@ impl Default for ApiState {
             lc_proxy_addr: BTreeMap::new(),
             wallet: EthereumWallet::default(),
             l1_url: Url::parse("http://localhost:8545").unwrap(),
+            l1_chain_id: 31337,
         }
     }
 }
@@ -489,15 +539,12 @@ impl ApiState {
                 )
             })?
         } else {
-            self.lc_proxy_addr
-                .first_key_value()
-                .ok_or_else(|| {
-                    ServerError::catch_all(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "L1 light client contract not found ".to_string(),
-                    )
-                })?
-                .1
+            self.lc_proxy_addr.get(&self.l1_chain_id).ok_or_else(|| {
+                ServerError::catch_all(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "L1 light client contract not found ".to_string(),
+                )
+            })?
         };
         let provider = ProviderBuilder::new()
             .wallet(self.wallet.clone())

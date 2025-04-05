@@ -226,11 +226,11 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
         .0
         .num_gates();
 
-        std::println!("Loading SRS from Aztec's ceremony...");
+        tracing::info!("Loading SRS from Aztec's ceremony...");
         let srs_timer = Instant::now();
         let srs = ark_srs::kzg10::aztec20::setup(num_gates + 2).expect("Aztec SRS fail to load");
         let srs_elapsed = Instant::now().signed_duration_since(srs_timer);
-        std::println!("Done in {srs_elapsed:.3}");
+        tracing::info!("Done in {srs_elapsed:.3}");
 
         // convert to Jellyfish type
         // TODO: (alex) use constructor instead https://github.com/EspressoSystems/jellyfish/issues/440
@@ -242,12 +242,12 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
         }
     };
 
-    std::println!("Generating proving key and verification key.");
+    tracing::info!("Generating proving key and verification key.");
     let key_gen_timer = Instant::now();
     let (pk, _) = crate::snark::preprocess(&srs, stake_table_capacity)
         .expect("Fail to preprocess state prover circuit");
     let key_gen_elapsed = Instant::now().signed_duration_since(key_gen_timer);
-    std::println!("Done in {key_gen_elapsed:.3}");
+    tracing::info!("Done in {key_gen_elapsed:.3}");
     pk
 }
 
