@@ -76,7 +76,7 @@ pub struct ValidatorConfig<TYPES: NodeType> {
     /// The validator's private key, should be in the mempool, not public
     pub private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     /// The validator's stake
-    pub stake_value: u64,
+    pub stake_value: U256,
     /// the validator's key pairs for state verification
     pub state_public_key: TYPES::StateSignatureKey,
     /// the validator's key pairs for state verification
@@ -91,7 +91,7 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
     pub fn generated_from_seed_indexed(
         seed: [u8; 32],
         index: u64,
-        stake_value: u64,
+        stake_value: U256,
         is_da: bool,
     ) -> Self {
         let (public_key, private_key) =
@@ -111,9 +111,7 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
     /// get the public config of the validator
     pub fn public_config(&self) -> PeerConfig<TYPES> {
         PeerConfig {
-            stake_table_entry: self
-                .public_key
-                .stake_table_entry(U256::from(self.stake_value)),
+            stake_table_entry: self.public_key.stake_table_entry(self.stake_value),
             state_ver_key: self.state_public_key.clone(),
         }
     }
@@ -121,7 +119,7 @@ impl<TYPES: NodeType> ValidatorConfig<TYPES> {
 
 impl<TYPES: NodeType> Default for ValidatorConfig<TYPES> {
     fn default() -> Self {
-        Self::generated_from_seed_indexed([0u8; 32], 0, 1, true)
+        Self::generated_from_seed_indexed([0u8; 32], 0, U256::from(1), true)
     }
 }
 

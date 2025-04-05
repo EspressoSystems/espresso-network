@@ -123,7 +123,7 @@ impl NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract,
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
@@ -151,7 +151,7 @@ impl NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract,
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
@@ -179,7 +179,7 @@ impl NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract,
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
@@ -207,7 +207,7 @@ impl NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract,
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
@@ -268,7 +268,7 @@ impl Default for NodeState {
             vec![],
             vec![],
             l1.clone(),
-            chain_config.stake_table_contract,
+            chain_config,
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));

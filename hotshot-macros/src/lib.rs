@@ -16,7 +16,7 @@ use syn::{
     Expr, ExprArray, ExprPath, ExprTuple, Ident, LitBool, PathArguments, Token, TypePath,
 };
 
-/// Bracketed types, e.g. [A, B, C<D>]
+/// Bracketed types, e.g. [A, B, `C<D>`]
 /// These types can have generic parameters, whereas ExprArray items must be Expr.
 #[derive(derive_builder::Builder, Debug, Clone)]
 struct TypePathBracketedArray {

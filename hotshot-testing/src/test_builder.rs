@@ -6,6 +6,7 @@
 
 use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use hotshot::{
     tasks::EventTransformerState,
@@ -100,8 +101,12 @@ pub fn gen_node_lists<TYPES: NodeType>(
     let mut da_nodes = Vec::new();
 
     for n in 0..num_staked_nodes {
-        let validator_config: ValidatorConfig<TYPES> =
-            ValidatorConfig::generated_from_seed_indexed([0u8; 32], n, 1, n < num_da_nodes);
+        let validator_config: ValidatorConfig<TYPES> = ValidatorConfig::generated_from_seed_indexed(
+            [0u8; 32],
+            n,
+            U256::from(1),
+            n < num_da_nodes,
+        );
 
         let peer_config = validator_config.public_config();
         staked_nodes.push(peer_config.clone());
@@ -248,7 +253,7 @@ pub async fn create_test_handle<
     let is_da = node_id < config.da_staked_committee_size as u64;
 
     let validator_config: ValidatorConfig<TYPES> =
-        ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, 1, is_da);
+        ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, U256::from(1), is_da);
 
     // Get key pair for certificate aggregation
     let private_key = validator_config.private_key.clone();
@@ -560,7 +565,7 @@ where
             ValidatorConfig::<TYPES>::generated_from_seed_indexed(
                 [0u8; 32],
                 node_id,
-                1,
+                U256::from(1),
                 // This is the config for node 0
                 node_id < test_config.da_staked_committee_size as u64,
             )

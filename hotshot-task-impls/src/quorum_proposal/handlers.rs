@@ -517,6 +517,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 metadata,
                 commitment_and_metadata.fees.first().clone(),
                 version,
+                *self.view_number,
             )
             .await
             .wrap()
@@ -627,7 +628,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             signature,
             _pd: PhantomData,
         };
-        tracing::debug!(
+        tracing::info!(
             "Sending proposal for view {:?}, height {:?}, justify_qc view: {:?}",
             proposed_leaf.view_number(),
             proposed_leaf.height(),

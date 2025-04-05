@@ -2819,7 +2819,8 @@ mod test {
         );
 
         // Fetch the config from node 1, a different node than the one running the service.
-        let validator = ValidatorConfig::generated_from_seed_indexed([0; 32], 1, 1, false);
+        let validator =
+            ValidatorConfig::generated_from_seed_indexed([0; 32], 1, U256::from(1), false);
         let config = peers.fetch_config(validator.clone()).await.unwrap();
 
         // Check the node-specific information in the recovered config is correct.

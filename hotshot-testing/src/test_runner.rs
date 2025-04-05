@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::{broadcast, Receiver, Sender};
 use async_lock::RwLock;
 use futures::future::join_all;
@@ -482,8 +483,12 @@ where
                     let is_da = node_id < config.da_staked_committee_size as u64;
 
                     // We assign node's public key and stake value rather than read from config file since it's a test
-                    let validator_config =
-                        ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, 1, is_da);
+                    let validator_config = ValidatorConfig::generated_from_seed_indexed(
+                        [0u8; 32],
+                        node_id,
+                        U256::from(1),
+                        is_da,
+                    );
 
                     let hotshot = Self::add_node_with_config(
                         node_id,

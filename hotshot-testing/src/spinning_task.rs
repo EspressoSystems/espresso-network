@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::broadcast;
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -188,7 +189,7 @@ where
                                             ValidatorConfig::generated_from_seed_indexed(
                                                 [0u8; 32],
                                                 node_id,
-                                                1,
+                                                U256::from(1),
                                                 // For tests, make the node DA based on its index
                                                 node_id < config.da_staked_committee_size as u64,
                                             );
@@ -298,7 +299,7 @@ where
                                 let validator_config = ValidatorConfig::generated_from_seed_indexed(
                                     [0u8; 32],
                                     node_id,
-                                    1,
+                                    U256::from(1),
                                     // For tests, make the node DA based on its index
                                     node_id < config.da_staked_committee_size as u64,
                                 );
