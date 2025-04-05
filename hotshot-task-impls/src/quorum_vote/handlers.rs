@@ -390,7 +390,7 @@ pub(crate) async fn update_shared_state<
         Some(p) => Some(p),
         None => {
             match fetch_proposal(
-                justify_qc.view_number(),
+                justify_qc,
                 sender.clone(),
                 receiver.activate_cloned(),
                 membership.clone(),

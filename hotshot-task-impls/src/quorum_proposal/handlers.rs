@@ -425,7 +425,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             self.private_key.clone(),
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             &self.upgrade_lock,
-            parent_qc.view_number(),
+            &parent_qc,
             self.epoch_height,
         )
         .await?;
