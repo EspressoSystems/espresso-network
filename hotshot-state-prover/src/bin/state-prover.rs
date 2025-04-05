@@ -1,12 +1,15 @@
 use std::time::Duration;
 
+use alloy::{
+    primitives::Address,
+    providers::{Provider, ProviderBuilder},
+    signers::{
+        local::{coins_bip39::English, MnemonicBuilder},
+        Signer,
+    },
+};
 use clap::Parser;
 use espresso_types::parse_duration;
-use ethers::{
-    providers::{Http, Middleware, Provider},
-    signers::{coins_bip39::English, MnemonicBuilder, Signer},
-    types::Address,
-};
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::{run_prover_once, run_prover_service, StateProverConfig};
 use sequencer_utils::logging;
@@ -44,7 +47,7 @@ struct Args {
     l1_provider: Url,
 
     /// Address of LightClient contract on layer 1.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS")]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
     light_client_address: Address,
 
     /// Mnemonic phrase for a funded Ethereum wallet.
@@ -88,27 +91,26 @@ async fn main() {
     args.logging.init();
 
     // prepare config for state prover from user options
-    let provider = Provider::<Http>::try_from(args.l1_provider.to_string()).unwrap();
-    let chain_id = provider.get_chainid().await.unwrap().as_u64();
+    let l1_provider = ProviderBuilder::new().on_http(args.l1_provider.clone());
+    let chain_id = l1_provider.get_chain_id().await.unwrap();
+    let signer = MnemonicBuilder::<English>::default()
+        .phrase(args.eth_mnemonic)
+        .index(args.eth_account_index)
+        .expect("wrong mnemonic or index")
+        .build()
+        .expect("fail to build signer")
+        .with_chain_id(Some(chain_id));
     let config = StateProverConfig {
         relay_server: args.relay_server,
         update_interval: args.update_interval,
         retry_interval: args.retry_interval,
-        provider: args.l1_provider,
+        provider_endpoint: args.l1_provider,
         light_client_address: args.light_client_address,
-        signing_key: MnemonicBuilder::<English>::default()
-            .phrase(args.eth_mnemonic.as_str())
-            .index(args.eth_account_index)
-            .expect("error building wallet")
-            .build()
-            .expect("error opening wallet")
-            .with_chain_id(chain_id)
-            .signer()
-            .clone(),
-
+        signer,
         sequencer_url: args.sequencer_url,
         port: args.port,
         stake_table_capacity: args.stake_table_capacity,
+        blocks_per_epoch: None, // fetch from sequencer on-demand
     };
 
     // validate that the light client contract is a proxy, panics otherwise

@@ -17,6 +17,7 @@ use std::{
     time::Duration,
 };
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
@@ -857,7 +858,9 @@ where
         .public_keys
         .iter()
         .map(|keys| PeerConfig {
-            stake_table_entry: keys.stake_table_key.stake_table_entry(keys.stake.into()),
+            stake_table_entry: keys
+                .stake_table_key
+                .stake_table_entry(U256::from(keys.stake)),
             state_ver_key: keys.state_ver_key.clone(),
         })
         .collect();
@@ -867,7 +870,9 @@ where
         .iter()
         .filter(|keys| keys.da)
         .map(|keys| PeerConfig {
-            stake_table_entry: keys.stake_table_key.stake_table_entry(keys.stake.into()),
+            stake_table_entry: keys
+                .stake_table_key
+                .stake_table_entry(U256::from(keys.stake)),
             state_ver_key: keys.state_ver_key.clone(),
         })
         .collect();

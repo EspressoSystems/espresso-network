@@ -9,7 +9,6 @@ use espresso_types::{
     v0_99::{ChainConfig, IterableFeeInfo},
     BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
-use ethers_conv::ToEthers;
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
     availability::LeafId,
@@ -674,9 +673,9 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
             let delegators: Vec<RewardAccount> = config
                 .delegators
                 .keys()
-                .map(|d| RewardAccount(d.to_ethers()))
+                .map(|d| RewardAccount(*d))
                 .collect();
-            reward_accounts.insert(RewardAccount(validator.to_ethers()));
+            reward_accounts.insert(RewardAccount(validator));
             reward_accounts.extend(delegators);
         }
     }

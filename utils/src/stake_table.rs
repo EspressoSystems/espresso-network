@@ -1,21 +1,18 @@
-use std::{fs, path::Path, sync::Arc, time::Duration};
+use std::{fs, path::Path};
 
+use alloy::{
+    network::EthereumWallet,
+    primitives::Address,
+    providers::ProviderBuilder,
+    signers::local::{coins_bip39::English, MnemonicBuilder},
+};
 /// Utilities for loading an initial permissioned stake table from a toml file.
 ///
 /// The initial stake table is passed to the permissioned stake table contract
 /// on deployment.
-use contract_bindings_ethers::permissioned_stake_table::{
-    G2Point, NodeInfo, PermissionedStakeTable,
-};
 use derive_more::derive::From;
-use ethers::{
-    middleware::SignerMiddleware,
-    providers::{Http, Middleware as _, Provider},
-    signers::{coins_bip39::English, MnemonicBuilder, Signer as _},
-    types::Address,
-};
 use hotshot::types::{BLSPubKey, SchnorrPubKey};
-use hotshot_contract_adapter::stake_table::{bls_jf_to_sol, NodeInfoJf};
+use hotshot_contract_adapter::sol_types::{G2PointSol, NodeInfoSol, PermissionedStakeTable};
 use hotshot_types::{network::PeerConfigKeys, traits::node_implementation::NodeType};
 use url::Url;
 
@@ -48,7 +45,7 @@ where
     }
 }
 
-impl<TYPES> From<PermissionedStakeTableConfig<TYPES>> for Vec<NodeInfo>
+impl<TYPES> From<PermissionedStakeTableConfig<TYPES>> for Vec<NodeInfoSol>
 where
     TYPES: NodeType<SignatureKey = BLSPubKey, StateSignatureKey = SchnorrPubKey>,
 {
@@ -57,8 +54,8 @@ where
             .public_keys
             .into_iter()
             .map(|peer_config| {
-                let node_info: NodeInfoJf = peer_config.clone().into();
-                node_info.into()
+                let node_info: NodeInfoSol = peer_config.clone().into();
+                node_info
             })
             .collect()
     }
@@ -103,45 +100,42 @@ where
         )
     }
 
-    fn stakers_to_remove(&self) -> Vec<G2Point> {
+    fn stakers_to_remove(&self) -> Vec<G2PointSol> {
         self.stakers_to_remove
             .iter()
-            .map(|v| bls_jf_to_sol(v.clone().into()))
+            .map(|v| {
+                let staker: BLSPubKey = v.clone().into();
+                staker.to_affine().into()
+            })
             .collect()
     }
 
-    fn new_stakers(&self) -> Vec<NodeInfo> {
+    fn new_stakers(&self) -> Vec<NodeInfoSol> {
         self.new_stakers
             .iter()
-            .map(|peer_config| {
-                let node_info: NodeInfoJf = peer_config.clone().into();
-                node_info.into()
-            })
+            .map(|peer_config| peer_config.clone().into())
             .collect()
     }
 }
 
 pub async fn update_stake_table<TYPES>(
     l1url: Url,
-    l1_interval: Duration,
     mnemonic: String,
     account_index: u32,
-    contract_address: Address,
+    address: Address,
     update: PermissionedStakeTableUpdate<TYPES>,
 ) -> anyhow::Result<()>
 where
     TYPES: NodeType<SignatureKey = BLSPubKey, StateSignatureKey = SchnorrPubKey>,
 {
-    let provider = Provider::<Http>::try_from(l1url.to_string())?.interval(l1_interval);
-    let chain_id = provider.get_chainid().await?.as_u64();
-    let wallet = MnemonicBuilder::<English>::default()
+    let signer = MnemonicBuilder::<English>::default()
         .phrase(mnemonic.as_str())
         .index(account_index)?
-        .build()?
-        .with_chain_id(chain_id);
-    let l1 = Arc::new(SignerMiddleware::new(provider.clone(), wallet));
+        .build()?;
+    let wallet = EthereumWallet::from(signer);
+    let provider = ProviderBuilder::new().wallet(wallet).on_http(l1url);
 
-    let contract = PermissionedStakeTable::new(contract_address, l1);
+    let contract = PermissionedStakeTable::new(address, &provider);
 
     tracing::info!("sending stake table update transaction");
 
@@ -149,6 +143,7 @@ where
         .update(update.stakers_to_remove(), update.new_stakers())
         .send()
         .await?
+        .get_receipt()
         .await?;
     tracing::info!("Transaction receipt: {:?}", tx_receipt);
     Ok(())

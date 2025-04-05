@@ -15,12 +15,7 @@ ark-serialize = { workspace = true, features = ["derive"] }
 async-trait = { workspace = true }
 clap = { workspace = true }
 committable = "0.2"
-contract-bindings-alloy = { workspace = true }
-contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 derive_more = { workspace = true }
-ethers = { workspace = true }
-ethers-conv = { workspace = true }
-futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true }

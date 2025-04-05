@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
+use alloy::primitives::{Address, U256};
 use committable::Commitment;
 use derive_more::{derive::AddAssign, Add, Display, From, Into, Mul, Sub};
-use ethers::{abi::Address, types::U256};
 use jf_merkle_tree::{
     prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,

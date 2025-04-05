@@ -128,7 +128,7 @@ impl<TYPES: NodeType> Default for DrbResults<TYPES> {
 ///   is strictly smaller than the cdf entry
 /// - return the corresponding node as the leader for that view
 pub mod election {
-    use primitive_types::{U256, U512};
+    use alloy::primitives::{U256, U512};
     use sha2::{Digest, Sha256, Sha512};
 
     use crate::traits::signature_key::{SignatureKey, StakeTableEntryType};
@@ -204,10 +204,10 @@ pub mod election {
 
         // then calculate the remainder modulo the total stake as a U512
         let remainder: U512 =
-            U512::from_little_endian(&raw_breakpoint) % U512::from(cdf.last().unwrap().1);
+            U512::from_le_bytes(raw_breakpoint) % U512::from(cdf.last().unwrap().1);
 
         // and drop the top 32 bytes, downcasting to a U256
-        let breakpoint: U256 = U256::try_from(remainder).unwrap();
+        let breakpoint: U256 = U256::from_le_slice(&remainder.to_le_bytes_vec()[32..]);
 
         // now find the first index where the breakpoint is strictly smaller than the cdf
         //

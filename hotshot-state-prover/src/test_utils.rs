@@ -1,18 +1,13 @@
+use alloy::primitives::U256;
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_std::rand::{CryptoRng, RngCore};
-use ethers::types::U256;
 use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::{
-    light_client::GenericStakeTableState,
-    traits::stake_table::{SnapshotVersion, StakeTableScheme},
-};
+use hotshot_types::traits::stake_table::StakeTableScheme;
 use jf_signature::{
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey as BLSVerKey},
     schnorr::SchnorrSignatureScheme,
     SignatureScheme,
 };
-
-use crate::{circuit::u256_to_field, service::one_honest_threshold};
 
 type F = ark_ed_on_bn254::Fq;
 type SchnorrVerKey = jf_signature::schnorr::VerKey<EdwardsConfig>;
@@ -57,19 +52,4 @@ pub(crate) fn stake_table_for_testing(
     st.advance();
     st.advance();
     st
-}
-
-pub(crate) fn genesis_stake_table_state(
-    st: &StakeTable<BLSVerKey, SchnorrVerKey, F>,
-) -> GenericStakeTableState<F> {
-    let (bls_key_comm, schnorr_key_comm, amount_comm) =
-        st.commitment(SnapshotVersion::LastEpochStart).unwrap();
-    let threshold = one_honest_threshold(st.total_stake(SnapshotVersion::LastEpochStart).unwrap());
-
-    GenericStakeTableState {
-        bls_key_comm,
-        schnorr_key_comm,
-        amount_comm,
-        threshold: u256_to_field(&threshold),
-    }
 }

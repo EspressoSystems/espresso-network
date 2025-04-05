@@ -11,11 +11,11 @@ use alloy::{
     eips::BlockId,
     hex,
     primitives::{Address, B256, U256},
-    providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
+    providers::{Provider, ProviderBuilder, WsConnect},
     rpc::{
         client::RpcClient,
         json_rpc::{RequestPacket, ResponsePacket},
-        types::{Block, BlockTransactionsKind},
+        types::Block,
     },
     transports::{http::Http, RpcError, TransportErrorKind},
 };
@@ -23,16 +23,12 @@ use anyhow::Context;
 use async_trait::async_trait;
 use clap::Parser;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use contract_bindings_alloy::{
-    feecontract::FeeContract::FeeContractInstance, staketable::StakeTable::StakeTableInstance,
-};
-use ethers::utils::AnvilInstance;
-use ethers_conv::ToEthers;
 use futures::{
     future::{Future, TryFuture, TryFutureExt},
     stream::{self, StreamExt},
 };
 use hotshot::types::BLSPubKey;
+use hotshot_contract_adapter::sol_types::{FeeContract, StakeTable};
 use hotshot_types::traits::metrics::Metrics;
 use indexmap::IndexMap;
 use lru::LruCache;
@@ -70,8 +66,8 @@ impl From<&Block> for L1BlockInfo {
     fn from(block: &Block) -> Self {
         Self {
             number: block.header.number,
-            timestamp: ethers::types::U256::from(block.header.timestamp),
-            hash: block.header.hash.to_ethers(),
+            timestamp: U256::from(block.header.timestamp),
+            hash: block.header.hash,
         }
     }
 }
@@ -87,8 +83,7 @@ impl From<&Block> for L1BlockInfoWithParent {
 
 impl Committable for L1BlockInfo {
     fn commit(&self) -> Commitment<Self> {
-        let mut timestamp = [0u8; 32];
-        self.timestamp.to_little_endian(&mut timestamp);
+        let timestamp: [u8; 32] = self.timestamp.to_le_bytes();
 
         RawCommitmentBuilder::new(&Self::tag())
             .u64_field("number", self.number)
@@ -110,11 +105,11 @@ impl L1BlockInfo {
         self.number
     }
 
-    pub fn timestamp(&self) -> ethers::types::U256 {
+    pub fn timestamp(&self) -> U256 {
         self.timestamp
     }
 
-    pub fn hash(&self) -> ethers::types::H256 {
+    pub fn hash(&self) -> B256 {
         self.hash
     }
 }
@@ -142,16 +137,11 @@ impl L1ClientOptions {
 
     /// Instantiate an `L1Client` for a given list of provider `Url`s.
     pub fn connect(self, urls: Vec<Url>) -> anyhow::Result<L1Client> {
-        // Create a new RPC client with the given URLs
-        let rpc_client = RpcClient::new(
-            SwitchingTransport::new(self, urls)
-                .with_context(|| "failed to create switching transport")?,
-            false,
-        );
-        // Create a new provider with that RPC client
-        let provider = ProviderBuilder::new().on_client(rpc_client);
-        // Create a new L1 client with the provider
-        Ok(L1Client::with_provider(provider))
+        // create custom transport
+        let t = SwitchingTransport::new(self, urls)
+            .with_context(|| "failed to create switching transport")?;
+        // Create a new L1 client with the transport
+        Ok(L1Client::with_transport(t))
     }
 
     fn rate_limit_delay(&self) -> Duration {
@@ -277,8 +267,10 @@ impl SingleTransport {
     }
 }
 
-/// We need to implement this trait from `tower_service`. It is what `alloy_provider` expects
-/// from a transport
+/// `SwitchingTransport` is an alternative [`Client`](https://docs.rs/alloy/0.12.5/alloy/transports/http/struct.Client.html)
+/// which by implementing `tower_service::Service`, traits like [`Transport`](https://docs.rs/alloy/0.12.5/alloy/transports/trait.Transport.html)
+/// are auto-derived, thus can be used as an alt [`RpcClient`](https://docs.rs/alloy/0.12.5/alloy/rpc/client/struct.RpcClient.html#method.new)
+/// that can be further hooked with `Provider` via `Provider::on_client()`.
 #[async_trait]
 impl Service<RequestPacket> for SwitchingTransport {
     type Error = RpcError<TransportErrorKind>;
@@ -382,8 +374,12 @@ impl Service<RequestPacket> for SwitchingTransport {
 }
 
 impl L1Client {
-    fn with_provider(provider: RootProvider<SwitchingTransport>) -> Self {
-        let opt = provider.client().transport().options().clone();
+    fn with_transport(transport: SwitchingTransport) -> Self {
+        // Create a new provider with that RPC client using the custom transport
+        let rpc_client = RpcClient::new(transport.clone(), false);
+        let provider = ProviderBuilder::new().on_client(rpc_client);
+
+        let opt = transport.options().clone();
 
         let (sender, mut receiver) = async_broadcast::broadcast(opt.l1_events_channel_capacity);
         receiver.set_await_active(false);
@@ -391,6 +387,7 @@ impl L1Client {
 
         Self {
             provider,
+            transport,
             state: Arc::new(Mutex::new(L1State::new(opt.l1_blocks_cache_size))),
             sender,
             receiver: receiver.deactivate(),
@@ -403,7 +400,8 @@ impl L1Client {
         L1ClientOptions::default().connect(url)
     }
 
-    pub fn anvil(anvil: &AnvilInstance) -> anyhow::Result<Self> {
+    /// test only
+    pub fn anvil(anvil: &alloy::node_bindings::AnvilInstance) -> anyhow::Result<Self> {
         L1ClientOptions {
             l1_ws_provider: Some(vec![anvil.ws_endpoint().parse()?]),
             ..Default::default()
@@ -430,7 +428,7 @@ impl L1Client {
     }
 
     fn update_loop(&self) -> impl Future<Output = ()> {
-        let opt = self.options();
+        let opt = self.options().clone();
         let rpc = self.provider.clone();
         let ws_urls = opt.l1_ws_provider.clone();
         let retry_delay = opt.l1_retry_delay;
@@ -439,6 +437,7 @@ impl L1Client {
         let sender = self.sender.clone();
         let metrics = self.metrics().clone();
         let polling_interval = opt.l1_polling_interval;
+        let transport = self.transport.clone();
 
         let span = tracing::warn_span!("L1 client update");
         async move {
@@ -479,7 +478,7 @@ impl L1Client {
                                 stream.map(stream::iter).flatten().filter_map(move |hash| {
                                     let rpc = rpc.clone();
                                     async move {
-                                        match rpc.get_block(BlockId::hash(hash), BlockTransactionsKind::Hashes).await {
+                                        match rpc.get_block(BlockId::hash(hash)).await {
                                             Ok(Some(block)) => Some(block.header),
                                             // If we can't fetch the block for some reason, we can
                                             // just skip it.
@@ -495,7 +494,7 @@ impl L1Client {
                                     }
                                 })
                                 // Take until the transport is switched, so we will call `watch_blocks` instantly on it
-                            }.take_until(rpc.client().transport().wait_switch())
+                            }.take_until(transport.wait_switch())
                             .boxed())
                         }
                     };
@@ -680,7 +679,7 @@ impl L1Client {
             {
                 let state = self.state.lock().await;
                 if let Some(finalized) = state.snapshot.finalized {
-                    if finalized.timestamp >= timestamp.to_ethers() {
+                    if finalized.timestamp >= timestamp {
                         break 'outer (state, finalized);
                     }
                 }
@@ -696,7 +695,7 @@ impl L1Client {
                 let L1Event::NewFinalized { finalized } = event else {
                     continue;
                 };
-                if finalized.info.timestamp >= timestamp.to_ethers() {
+                if finalized.info.timestamp >= timestamp {
                     tracing::info!(%timestamp, ?finalized, "got finalized block");
                     break 'outer (self.state.lock().await, finalized.info);
                 }
@@ -712,7 +711,7 @@ impl L1Client {
         // backwards until we find the true earliest block.
         loop {
             let (state_lock, parent) = self.get_finalized_block(state, block.number - 1).await;
-            if parent.timestamp < timestamp.to_ethers() {
+            if parent.timestamp < timestamp {
                 return block;
             }
             state = state_lock;
@@ -777,11 +776,7 @@ impl L1Client {
         while successor.info.number > number {
             drop(state);
             successor = loop {
-                let block = match self
-                    .provider
-                    .get_block(successor.parent_hash.into(), BlockTransactionsKind::Hashes)
-                    .await
-                {
+                let block = match self.provider.get_block(successor.parent_hash.into()).await {
                     Ok(Some(block)) => block,
                     Ok(None) => {
                         tracing::warn!(
@@ -845,8 +840,7 @@ impl L1Client {
         // Fetch events for each chunk.
         let events = stream::iter(chunks).then(|(from, to)| {
             let retry_delay = opt.l1_retry_delay;
-            let fee_contract =
-                FeeContractInstance::new(fee_contract_address, self.provider.clone());
+            let fee_contract = FeeContract::new(fee_contract_address, self.provider.clone());
             async move {
                 tracing::debug!(from, to, "fetch events in range");
 
@@ -884,7 +878,7 @@ impl L1Client {
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         // TODO stake_table_address needs to be passed in to L1Client
         // before update loop starts.
-        let stake_table_contract = StakeTableInstance::new(contract, self.provider.clone());
+        let stake_table_contract = StakeTable::new(contract, self.provider.clone());
 
         let registered = stake_table_contract
             .ValidatorRegistered_filter()
@@ -958,7 +952,7 @@ impl L1Client {
     where
         Fut: TryFuture,
     {
-        let transport = self.provider.client().transport();
+        let transport = &self.transport;
         let start = transport.current_transport.read().generation % transport.urls.len();
         let end = start + transport.urls.len();
         loop {
@@ -976,11 +970,11 @@ impl L1Client {
     }
 
     fn options(&self) -> &L1ClientOptions {
-        self.provider.client().transport().options()
+        self.transport.options()
     }
 
     fn metrics(&self) -> &L1ClientMetrics {
-        self.provider.client().transport().metrics()
+        self.transport.metrics()
     }
 
     async fn retry_delay(&self) {
@@ -1016,13 +1010,8 @@ impl L1State {
     }
 }
 
-async fn get_finalized_block(
-    rpc: &RootProvider<SwitchingTransport>,
-) -> anyhow::Result<Option<L1BlockInfoWithParent>> {
-    let Some(block) = rpc
-        .get_block(BlockId::finalized(), BlockTransactionsKind::Hashes)
-        .await?
-    else {
+async fn get_finalized_block(rpc: &impl Provider) -> anyhow::Result<Option<L1BlockInfoWithParent>> {
+    let Some(block) = rpc.get_block(BlockId::finalized()).await? else {
         // This can happen in rare cases where the L1 chain is very young and has not finalized a
         // block yet. This is more common in testing and demo environments. In any case, we proceed
         // with a null L1 block rather than wait for the L1 to finalize a block, which can take a
@@ -1038,205 +1027,130 @@ async fn get_finalized_block(
 mod test {
     use std::{ops::Add, time::Duration};
 
-    use ethers::{
-        middleware::SignerMiddleware,
-        providers::Middleware,
-        signers::LocalWallet,
-        types::{H160, U64},
-        utils::{parse_ether, Anvil, AnvilInstance},
+    use alloy::{
+        eips::BlockNumberOrTag,
+        node_bindings::{Anvil, AnvilInstance},
+        primitives::utils::parse_ether,
+        providers::layers::AnvilProvider,
     };
-    use ethers_conv::ToAlloy;
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
+    use sequencer_utils::{
+        deployer::{deploy_fee_contract_proxy, Contracts},
+        test_utils::setup_test,
+    };
     use time::OffsetDateTime;
 
     use super::*;
 
-    async fn new_l1_client(anvil: &AnvilInstance, ws: bool) -> L1Client {
-        let client = L1ClientOptions {
+    async fn new_l1_client(anvil: &Arc<AnvilInstance>, include_ws: bool) -> L1Client {
+        let l1_client = L1ClientOptions {
             l1_events_max_block_range: 1,
             l1_polling_interval: Duration::from_secs(1),
             subscription_timeout: Duration::from_secs(5),
-            l1_ws_provider: if ws {
-                Some(vec![anvil.ws_endpoint().parse().unwrap()])
+            l1_ws_provider: if include_ws {
+                Some(vec![anvil.ws_endpoint_url()])
             } else {
                 None
             },
             ..Default::default()
         }
-        .connect(vec![anvil.endpoint().parse().unwrap()])
+        .connect(vec![anvil.endpoint_url()])
         .expect("Failed to create L1 client");
 
-        client.spawn_tasks().await;
-        client
+        l1_client.spawn_tasks().await;
+        l1_client
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_get_finalized_deposits() -> anyhow::Result<()> {
-        use ethers::signers::Signer;
-
         setup_test();
-
-        // how many deposits will we make
-        let deposits = 5;
-        let deploy_txn_count = 2;
+        let num_deposits = 5;
 
         let anvil = Anvil::new().spawn();
-        let wallet_address = anvil.addresses().first().cloned().unwrap();
-        let l1_client = new_l1_client(&anvil, false).await;
-        let wallet: LocalWallet = anvil.keys()[0].clone().into();
+        let wallet = anvil.wallet().unwrap();
+        let deployer = wallet.default_signer().address();
+        let inner_provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .on_http(anvil.endpoint_url());
+        // a provider that holds both anvil (to avoid accidental drop) and wallet-enabled L1 provider
+        let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
+        // cache store for deployed contracts
+        let mut contracts = Contracts::new();
 
-        // In order to deposit we need a provider that can sign.
-        let provider =
-            ethers::providers::Provider::<ethers::providers::Http>::try_from(anvil.endpoint())?
-                .interval(Duration::from_millis(10u64));
-        let client =
-            SignerMiddleware::new(provider.clone(), wallet.with_chain_id(anvil.chain_id()));
-        let client = Arc::new(client);
+        // init and kick off the L1Client which wraps around standard L1 provider with more app-specific state management
+        let l1_client = new_l1_client(provider.anvil(), false).await;
 
         // Initialize a contract with some deposits
-
-        // deploy the fee contract
-        let fee_contract = contract_bindings_ethers::fee_contract::FeeContract::deploy(
-            Arc::new(client.clone()),
-            (),
-        )
-        .unwrap()
-        .send()
-        .await?;
-
-        // prepare the initialization data to be sent with the proxy when the proxy is deployed
-        let initialize_data = fee_contract
-            .initialize(wallet_address) // Here, you simulate the call to get the transaction data without actually sending it.
-            .calldata()
-            .expect("Failed to encode initialization data");
-
-        // deploy the proxy contract and set the implementation address as the address of the fee contract and send the initialization data
-        let proxy_contract = contract_bindings_ethers::erc1967_proxy::ERC1967Proxy::deploy(
-            client.clone(),
-            (fee_contract.address(), initialize_data),
-        )
-        .unwrap()
-        .send()
-        .await?;
-
-        // cast the proxy to be of type fee contract so that we can interact with the implementation methods via the proxy
-        let fee_contract_proxy = contract_bindings_ethers::fee_contract::FeeContract::new(
-            proxy_contract.address(),
-            client.clone(),
-        );
-
-        // confirm that the owner of the contract is the address that was sent as part of the initialization data
-        let owner = fee_contract_proxy.owner().await;
-        assert_eq!(owner.unwrap(), wallet_address.clone());
-
-        // confirm that the implementation address is the address of the fee contract deployed above
-        // using the implementation slot, 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc, which is the keccak-256 hash of "eip1967.proxy.implementation" subtracted by 1
-        let hex_bytes =
-            hex::decode("360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc")
-                .expect("Failed to decode hex string");
-        let implementation_slot = ethers::types::H256::from_slice(&hex_bytes);
-        let storage = provider
-            .clone()
-            .get_storage_at(
-                fee_contract_proxy.clone().address(),
-                implementation_slot,
-                None,
-            )
-            .await?;
-        let implementation_address = H160::from_slice(&storage[12..]);
-        assert_eq!(fee_contract.clone().address(), implementation_address);
-
-        // Anvil will produce a bock for every transaction.
-        let head = l1_client.provider.get_block_number().await.unwrap();
-        // there are two transactions, deploying the implementation contract, FeeContract, and deploying the proxy contract
-        assert_eq!(deploy_txn_count, head);
+        let fee_proxy_addr = deploy_fee_contract_proxy(&provider, &mut contracts, deployer).await?;
+        let fee_proxy = FeeContract::new(fee_proxy_addr, &provider);
+        let num_tx_for_deploy = provider.get_block_number().await?;
 
         // make some deposits.
-        for n in 1..=deposits {
+        for n in 1..=num_deposits {
             // Varied amounts are less boring.
             let amount = n as f32 / 10.0;
-            let receipt = fee_contract_proxy
-                .deposit(wallet_address)
-                .value(parse_ether(amount).unwrap())
+            let receipt = fee_proxy
+                .deposit(deployer)
+                .value(parse_ether(&amount.to_string())?)
                 .send()
                 .await?
+                .get_receipt()
                 .await?;
-
-            // Successful transactions have `status` of `1`.
-            assert_eq!(Some(U64::from(1)), receipt.clone().unwrap().status);
+            assert!(receipt.inner.is_success());
         }
 
-        let head = l1_client.provider.get_block_number().await.unwrap();
-        // Anvil will produce a block for every transaction.
-        assert_eq!(deposits + deploy_txn_count, head);
+        let cur_height = provider.get_block_number().await?;
+        assert_eq!(num_deposits + num_tx_for_deploy, cur_height);
 
-        // Use non-signing `L1Client` to retrieve data.
-        let l1_client = new_l1_client(&anvil, false).await;
         // Set prev deposits to `None` so `Filter` will start at block
         // 0. The test would also succeed if we pass `0` (b/c first
         // block did not deposit).
         let pending = l1_client
-            .get_finalized_deposits(
-                fee_contract_proxy.address().to_alloy(),
-                None,
-                deposits + deploy_txn_count,
-            )
+            .get_finalized_deposits(fee_proxy_addr, None, cur_height)
             .await;
 
-        assert_eq!(deposits as usize, pending.len(), "{pending:?}");
-        assert_eq!(&wallet_address, &pending[0].account().into());
+        assert_eq!(num_deposits as usize, pending.len(), "{pending:?}");
+        assert_eq!(deployer, pending[0].account().0);
         assert_eq!(
             U256::from(1500000000000000000u64),
-            pending.iter().fold(U256::from(0), |total, info| total
-                .add(info.amount().0.to_alloy()))
+            pending
+                .iter()
+                .fold(U256::from(0), |total, info| total.add(info.amount().0))
         );
 
         // check a few more cases
         let pending = l1_client
-            .get_finalized_deposits(
-                fee_contract_proxy.address().to_alloy(),
-                Some(0),
-                deposits + deploy_txn_count,
-            )
+            .get_finalized_deposits(fee_proxy_addr, Some(0), cur_height)
             .await;
-        assert_eq!(deposits as usize, pending.len());
+        assert_eq!(num_deposits as usize, pending.len());
 
         let pending = l1_client
-            .get_finalized_deposits(fee_contract_proxy.address().to_alloy(), Some(0), 0)
+            .get_finalized_deposits(fee_proxy_addr, Some(0), 0)
             .await;
         assert_eq!(0, pending.len());
 
         let pending = l1_client
-            .get_finalized_deposits(fee_contract_proxy.address().to_alloy(), Some(0), 1)
+            .get_finalized_deposits(fee_proxy_addr, Some(0), 1)
             .await;
         assert_eq!(0, pending.len());
 
         let pending = l1_client
-            .get_finalized_deposits(
-                fee_contract_proxy.address().to_alloy(),
-                Some(deploy_txn_count),
-                deploy_txn_count,
-            )
+            .get_finalized_deposits(fee_proxy_addr, Some(num_tx_for_deploy), num_tx_for_deploy)
             .await;
         assert_eq!(0, pending.len());
 
         let pending = l1_client
             .get_finalized_deposits(
-                fee_contract_proxy.address().to_alloy(),
-                Some(deploy_txn_count),
-                deploy_txn_count + 1,
+                fee_proxy_addr,
+                Some(num_tx_for_deploy),
+                num_tx_for_deploy + 1,
             )
             .await;
         assert_eq!(1, pending.len());
 
         // what happens if `new_finalized` is `0`?
         let pending = l1_client
-            .get_finalized_deposits(
-                fee_contract_proxy.address().to_alloy(),
-                Some(deploy_txn_count),
-                0,
-            )
+            .get_finalized_deposits(fee_proxy_addr, Some(num_tx_for_deploy), 0)
             .await;
         assert_eq!(0, pending.len());
 
@@ -1246,7 +1160,7 @@ mod test {
     async fn test_wait_for_finalized_block_helper(ws: bool) {
         setup_test();
 
-        let anvil = Anvil::new().block_time(1u32).spawn();
+        let anvil = Arc::new(Anvil::new().block_time_f64(0.1).spawn());
         let l1_client = new_l1_client(&anvil, ws).await;
         let provider = &l1_client.provider;
 
@@ -1257,18 +1171,17 @@ mod test {
 
         // Compare against underlying provider.
         let true_block = provider
-            .get_block(
-                BlockId::Number(alloy::eips::BlockNumberOrTag::Number(block_height + 10)),
-                BlockTransactionsKind::Hashes,
-            )
+            .get_block(BlockId::Number(BlockNumberOrTag::Number(block_height + 10)))
+            .full()
             .await
             .unwrap()
             .unwrap();
+
         assert_eq!(
-            block.timestamp,
-            ethers::types::U256::from(true_block.header.inner.timestamp)
+            block.timestamp.to::<u64>(),
+            true_block.header.inner.timestamp
         );
-        assert_eq!(block.hash, true_block.header.hash.to_ethers());
+        assert_eq!(block.hash, true_block.header.hash);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1284,46 +1197,41 @@ mod test {
     async fn test_wait_for_finalized_block_by_timestamp_helper(ws: bool) {
         setup_test();
 
-        let anvil = Anvil::new().block_time(1u32).spawn();
+        let anvil = Arc::new(Anvil::new().block_time_f64(0.2).spawn());
         let l1_client = new_l1_client(&anvil, ws).await;
         let provider = &l1_client.provider;
 
-        // Wait for a block 10 blocks in the future.
-        let timestamp = U256::from(OffsetDateTime::now_utc().unix_timestamp() as u64 + 10);
+        // Wait for a block 5 blocks in the future.
+        let timestamp = U256::from(OffsetDateTime::now_utc().unix_timestamp() as u64 + 5);
         let block = l1_client
             .wait_for_finalized_block_with_timestamp(timestamp)
             .await;
         assert!(
-            block.timestamp >= timestamp.to_ethers(),
-            "wait_for_finalized_block_with_timestamp({timestamp}) returned too early a block: {block:?}",
-        );
+                block.timestamp >= timestamp,
+                "wait_for_finalized_block_with_timestamp({timestamp}) returned too early a block: {block:?}",
+            );
         let parent = provider
-            .get_block(
-                BlockId::Number(alloy::eips::BlockNumberOrTag::Number(block.number - 1)),
-                BlockTransactionsKind::Hashes,
-            )
+            .get_block(BlockId::Number(BlockNumberOrTag::Number(block.number - 1)))
+            .full()
             .await
             .unwrap()
             .unwrap();
         assert!(
-            U256::from(parent.header.inner.timestamp) < timestamp,
-            "wait_for_finalized_block_with_timestamp({timestamp}) did not return the earliest possible block: returned {block:?}, but earlier block {parent:?} has an acceptable timestamp too",
-        );
+                parent.header.inner.timestamp < timestamp.to::<u64>(),
+                "wait_for_finalized_block_with_timestamp({timestamp}) did not return the earliest possible block: returned {block:?}, but earlier block {parent:?} has an acceptable timestamp too",
+            );
 
         // Compare against underlying provider.
         let true_block = provider
-            .get_block(
-                BlockId::Number(alloy::eips::BlockNumberOrTag::Number(block.number)),
-                BlockTransactionsKind::Hashes,
-            )
+            .get_block(BlockId::Number(BlockNumberOrTag::Number(block.number)))
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
-            block.timestamp,
-            ethers::types::U256::from(true_block.header.inner.timestamp)
+            block.timestamp.to::<u64>(),
+            true_block.header.inner.timestamp
         );
-        assert_eq!(block.hash, true_block.header.hash.to_ethers());
+        assert_eq!(block.hash, true_block.header.hash);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1339,7 +1247,7 @@ mod test {
     async fn test_wait_for_block_helper(ws: bool) {
         setup_test();
 
-        let anvil = Anvil::new().block_time(1u32).spawn();
+        let anvil = Arc::new(Anvil::new().block_time_f64(0.1).spawn());
         let l1_client = new_l1_client(&anvil, ws).await;
         let provider = &l1_client.provider;
 
@@ -1349,9 +1257,9 @@ mod test {
 
         let new_block_height = provider.get_block_number().await.unwrap();
         assert!(
-            new_block_height >= block_height + 10,
-            "wait_for_block returned too early; initial height = {block_height}, new height = {new_block_height}",
-        );
+                new_block_height >= block_height + 10,
+                "wait_for_block returned too early; initial height = {block_height}, new height = {new_block_height}",
+            );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1368,7 +1276,7 @@ mod test {
         setup_test();
 
         let port = pick_unused_port().unwrap();
-        let anvil = Anvil::new().block_time(1u32).port(port).spawn();
+        let anvil = Arc::new(Anvil::new().block_time(1).port(port).spawn());
         let client = new_l1_client(&anvil, ws).await;
 
         let initial_state = client.snapshot().await;
@@ -1403,7 +1311,7 @@ mod test {
 
         // Once a connection is reestablished, the state will eventually start to update again.
         tracing::info!("restarting L1");
-        let _anvil = Anvil::new().block_time(1u32).port(port).spawn();
+        let _anvil = Anvil::new().block_time(1).port(port).spawn();
 
         let mut retry = 0;
         let final_state = loop {
@@ -1420,80 +1328,6 @@ mod test {
         tracing::info!(?final_state, "state updated");
     }
 
-    // #[tokio::test]
-    // async fn test_fetch_stake_table() -> anyhow::Result<()> {
-    //     use ethers::signers::Signer;
-    //     setup_test();
-
-    //     let anvil = Anvil::new().spawn();
-    //     let l1_client = L1Client::new(vec![anvil.endpoint().parse().unwrap()])
-    //         .expect("Failed to create L1 client");
-    //     let wallet: LocalWallet = anvil.keys()[0].clone().into();
-
-    //     // In order to deposit we need a provider that can sign.
-    //     let deployer_provider =
-    //         ethers::providers::Provider::<ethers::providers::Http>::try_from(anvil.endpoint())?
-    //             .interval(Duration::from_millis(10u64));
-    //     let deployer_client = SignerMiddleware::new(
-    //         deployer_provider.clone(),
-    //         wallet.with_chain_id(anvil.chain_id()),
-    //     );
-    //     let deployer_client = Arc::new(deployer_client);
-
-    //     // deploy the stake_table contract
-
-    //     // MA: The first deployment may run out of gas, it's not currently clear
-    //     // to me why. Likely the gas estimation for the deployment transaction
-    //     // is off, maybe because block.number is incorrect when doing the gas
-    //     // estimation but this would be quite surprising.
-    //     //
-    //     // This only happens on block 0, so we can first send a TX to increment
-    //     // the block number and then do the deployment.
-    //     deployer_client
-    //         .send_transaction(
-    //             ethers::types::TransactionRequest::new()
-    //                 .to(deployer_client.address())
-    //                 .value(0),
-    //             None,
-    //         )
-    //         .await?
-    //         .await?;
-
-    //     let stake_table_contract =
-    //         contract_bindings_ethers::permissioned_stake_table::PermissionedStakeTable::deploy(
-    //             deployer_client.clone(),
-    //             Vec::<contract_bindings_ethers::permissioned_stake_table::NodeInfo>::new(),
-    //         )
-    //         .unwrap()
-    //         .send()
-    //         .await?;
-
-    //     let address = stake_table_contract.address();
-
-    //     let mut rng = rand::thread_rng();
-    //     let node = NodeInfoJf::random(&mut rng);
-
-    //     let new_nodes: Vec<contract_bindings_ethers::permissioned_stake_table::NodeInfo> =
-    //         vec![node.into()];
-    //     let updater = stake_table_contract.update(vec![], new_nodes);
-    //     updater.send().await?.await?;
-
-    //     let block = l1_client
-    //         .get_block(BlockId::latest(), BlockTransactionsKind::Hashes)
-    //         .await?
-    //         .unwrap();
-    //     let nodes = l1_client
-    //         .get_stake_table(address.to_alloy(), block.header.inner.number)
-    //         .await
-    //         .unwrap();
-
-    //     assert_eq!(nodes.len(), 1);
-
-    //     let result = nodes.stake_table.0[0].clone();
-    //     assert_eq!(result.stake_table_entry.stake_amount.as_u64(), 1);
-    //     Ok(())
-    // }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn test_reconnect_update_task_ws() {
         test_reconnect_update_task_helper(true).await
@@ -1504,16 +1338,55 @@ mod test {
         test_reconnect_update_task_helper(false).await
     }
 
+    // #[tokio::test]
+    // async fn test_fetch_stake_table() -> anyhow::Result<()> {
+    //     setup_test();
+
+    //     let anvil = Anvil::new().spawn();
+    //     let wallet = anvil.wallet().unwrap();
+    //     let inner_provider = ProviderBuilder::new()
+    //         .wallet(wallet)
+    //         .on_http(anvil.endpoint_url());
+    //     let provider = AnvilProvider::new(inner_provider, Arc::new(anvil));
+
+    //     let l1_client = new_l1_client(provider.anvil(), false).await;
+    //     let mut contracts = Contracts::new();
+
+    //     let stake_table_addr =
+    //         deploy_permissioned_stake_table(&provider, &mut contracts, vec![]).await?;
+    //     let stake_table_contract = PermissionedStakeTable::new(stake_table_addr, &provider);
+
+    //     let mut rng = rand::thread_rng();
+    //     let node = NodeInfoSol::rand(&mut rng);
+
+    //     let new_nodes: Vec<NodeInfoSol> = vec![node];
+    //     stake_table_contract
+    //         .update(vec![], new_nodes)
+    //         .send()
+    //         .await?
+    //         .watch()
+    //         .await?;
+
+    //     let block = l1_client.get_block(BlockId::latest()).await?.unwrap();
+    //     let nodes = l1_client
+    //         .get_stake_table(stake_table_addr, block.header.inner.number)
+    //         .await?;
+
+    //     let result = nodes.stake_table.0[0].clone();
+    //     assert_eq!(result.stake_table_entry.stake_amount.to::<u64>(), 1);
+    //     Ok(())
+    // }
+
     /// A helper function to get the index of the current provider in the failover list.
     fn get_failover_index(provider: &L1Client) -> usize {
-        let transport = provider.provider.client().transport();
-        transport.current_transport.read().generation % transport.urls.len()
+        let transport = &provider.transport;
+        provider.transport.current_transport.read().generation % transport.urls.len()
     }
 
     async fn test_failover_update_task_helper(ws: bool) {
         setup_test();
 
-        let anvil = Anvil::new().block_time(1u32).spawn();
+        let anvil = Anvil::new().block_time(1).spawn();
 
         // Create an L1 client with fake providers, and check that the state is still updated after
         // it correctly fails over to the real providers.
@@ -1525,7 +1398,7 @@ mod test {
             l1_ws_provider: if ws {
                 Some(vec![
                     "ws://notarealurl:1234".parse().unwrap(),
-                    anvil.ws_endpoint().parse().unwrap(),
+                    anvil.ws_endpoint_url(),
                 ])
             } else {
                 None
@@ -1534,7 +1407,7 @@ mod test {
         }
         .connect(vec![
             "http://notarealurl:1234".parse().unwrap(),
-            anvil.endpoint().parse().unwrap(),
+            anvil.endpoint_url(),
         ])
         .expect("Failed to create L1 client");
 
@@ -1573,7 +1446,7 @@ mod test {
     async fn test_failover_consecutive_failures() {
         setup_test();
 
-        let anvil = Anvil::new().block_time(1u32).spawn();
+        let anvil = Anvil::new().block_time(1).spawn();
 
         let l1_options = L1ClientOptions {
             l1_polling_interval: Duration::from_secs(1),
@@ -1585,7 +1458,7 @@ mod test {
         let provider = l1_options
             .connect(vec![
                 "http://notarealurl:1234".parse().unwrap(),
-                anvil.endpoint().parse().unwrap(),
+                anvil.endpoint_url(),
             ])
             .expect("Failed to create L1 client");
 
@@ -1607,7 +1480,7 @@ mod test {
     async fn test_failover_frequent_failures() {
         setup_test();
 
-        let anvil = Anvil::new().block_time(1u32).spawn();
+        let anvil = Anvil::new().block_time(1).spawn();
         let provider = L1ClientOptions {
             l1_polling_interval: Duration::from_secs(1),
             l1_frequent_failure_tolerance: Duration::from_millis(100),
@@ -1615,7 +1488,7 @@ mod test {
         }
         .connect(vec![
             "http://notarealurl:1234".parse().unwrap(),
-            anvil.endpoint().parse().unwrap(),
+            anvil.endpoint_url(),
         ])
         .expect("Failed to create L1 client");
 

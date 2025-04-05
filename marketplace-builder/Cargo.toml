@@ -18,8 +18,6 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types", features = ["testing"] }
-ethers = { workspace = true }
-ethers-conv = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
@@ -46,6 +44,7 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
+alloy = { workspace = true }
 hotshot-query-service = { workspace = true }
 marketplace-solver = { path = "../marketplace-solver", features = ["testing"] }
 sequencer = { path = "../sequencer", features = ["testing"] }

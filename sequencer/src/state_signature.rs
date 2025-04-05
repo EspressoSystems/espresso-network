@@ -1,22 +1,30 @@
 //! Utilities for generating and storing the most recent light client state signatures.
 
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use async_lock::RwLock;
+use espresso_types::{traits::SequencerPersistence, PubKey};
 use hotshot::types::{Event, EventType};
 use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
+    data::EpochNumber,
     event::LeafInfo,
     light_client::{
-        CircuitField, LightClientState, StateSignKey, StateSignature, StateSignatureRequestBody,
-        StateSignatureScheme, StateVerKey,
+        CircuitField, LightClientState, StakeTableState, StateSignKey, StateSignature,
+        StateSignatureRequestBody, StateSignatureScheme, StateVerKey,
     },
     signature_key::BLSPubKey,
     traits::{
         block_contents::BlockHeader,
+        network::ConnectedNetwork,
+        node_implementation::{ConsensusTime, Versions},
         signature_key::StakeTableEntryType,
-        stake_table::{SnapshotVersion, StakeTableScheme as _},
+        stake_table::StakeTableScheme as _,
     },
+    utils::{epoch_from_block_number, is_last_block},
     PeerConfig,
 };
 use jf_signature::SignatureScheme;
@@ -24,7 +32,7 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::SeqTypes;
+use crate::{context::Consensus, SeqTypes};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;
@@ -44,8 +52,10 @@ pub struct StateSigner<ApiVer: StaticVersionType> {
     signatures: RwLock<StateSignatureMemStorage>,
 
     /// Commitment for current fixed stake table
-    #[allow(dead_code)] // although not used today, might need it for dynamic stake table later
-    stake_table_comm: StakeTableCommitmentType,
+    voting_stake_table: StakeTableState,
+
+    /// Capacity of the stake table
+    stake_table_capacity: u64,
 
     /// The state relay server url
     relay_server_client: Option<Client<ServerError, ApiVer>>,
@@ -55,12 +65,14 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
     pub fn new(
         sign_key: StateSignKey,
         ver_key: StateVerKey,
-        stake_table_comm: StakeTableCommitmentType,
+        voting_stake_table: StakeTableState,
+        stake_table_capacity: u64,
     ) -> Self {
         Self {
             sign_key,
             ver_key,
-            stake_table_comm,
+            voting_stake_table,
+            stake_table_capacity,
             signatures: Default::default(),
             relay_server_client: Default::default(),
         }
@@ -72,7 +84,15 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         self
     }
 
-    pub(super) async fn handle_event(&self, event: &Event<SeqTypes>) {
+    pub(super) async fn handle_event<N, P, V>(
+        &mut self,
+        event: &Event<SeqTypes>,
+        consensus_state: Arc<RwLock<Consensus<N, P, V>>>,
+    ) where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+        V: Versions,
+    {
         let EventType::Decide { leaf_chain, .. } = &event.event else {
             return;
         };
@@ -84,13 +104,39 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
             .get_light_client_state(leaf.view_number())
         {
             Ok(state) => {
-                let signature = self.sign_new_state(&state).await;
                 tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);
+
+                let consensus = consensus_state.read().await;
+                let cur_block_height = state.block_height;
+                let blocks_per_epoch = consensus.epoch_height;
+
+                let next_stake_table = if is_last_block(cur_block_height, blocks_per_epoch) {
+                    // during the last block of each epoch, we will use a new `next_stake_table`
+                    let cur_epoch = epoch_from_block_number(cur_block_height, blocks_per_epoch);
+                    let Ok(membership) = consensus
+                        .membership_coordinator
+                        .membership_for_epoch(Some(EpochNumber::new(cur_epoch + 1)))
+                        .await
+                    else {
+                        tracing::error!("Fail to get membership for epoch: {}", cur_epoch + 1);
+                        return;
+                    };
+                    compute_stake_table_commitment(
+                        &membership.stake_table().await,
+                        self.stake_table_capacity as usize,
+                    )
+                } else {
+                    // during non-last-block (most cases), the stake table used for the next block is exactly the same
+                    self.voting_stake_table
+                };
+
+                let signature = self.sign_new_state(&state, next_stake_table).await;
 
                 if let Some(client) = &self.relay_server_client {
                     let request_body = StateSignatureRequestBody {
                         key: self.ver_key.clone(),
                         state,
+                        next_stake: next_stake_table,
                         signature,
                     };
                     if let Err(error) = client
@@ -103,6 +149,9 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         tracing::warn!("Error posting signature to the relay server: {:?}", error);
                     }
                 }
+
+                // update the voting stake table for future blocks
+                self.voting_stake_table = next_stake_table;
             },
             Err(err) => {
                 tracing::error!("Error generating light client state: {:?}", err)
@@ -117,8 +166,17 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
     }
 
     /// Sign the light client state at given height and store it.
-    async fn sign_new_state(&self, state: &LightClientState) -> StateSignature {
-        let msg: [CircuitField; 3] = state.into();
+    async fn sign_new_state(
+        &self,
+        state: &LightClientState,
+        next_stake_table: StakeTableState,
+    ) -> StateSignature {
+        let mut msg = Vec::with_capacity(7);
+        let state_msg: [CircuitField; 3] = state.into();
+        msg.extend_from_slice(&state_msg);
+        let next_stake_msg: [CircuitField; 4] = next_stake_table.into();
+        msg.extend_from_slice(&next_stake_msg);
+
         let signature =
             StateSignatureScheme::sign(&(), &self.sign_key, msg, &mut rand::thread_rng()).unwrap();
         let mut pool_guard = self.signatures.write().await;
@@ -127,6 +185,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
             StateSignatureRequestBody {
                 key: self.ver_key.clone(),
                 state: state.clone(),
+                next_stake: next_stake_table,
                 signature: signature.clone(),
             },
         );
@@ -159,14 +218,11 @@ impl StateSignatureMemStorage {
     }
 }
 
-/// Type for stake table commitment
-pub type StakeTableCommitmentType = (CircuitField, CircuitField, CircuitField);
-
-/// Helper function for stake table commitment
-pub fn static_stake_table_commitment(
+/// Given a list of stakers from `PeerConfig`, compute the stake table commitment
+pub fn compute_stake_table_commitment(
     known_nodes_with_stakes: &[PeerConfig<SeqTypes>],
     capacity: usize,
-) -> (CircuitField, CircuitField, CircuitField) {
+) -> StakeTableState {
     let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(capacity);
     known_nodes_with_stakes.iter().for_each(|peer| {
         // This `unwrap()` won't fail unless number of entries exceeds `capacity`
@@ -179,6 +235,5 @@ pub fn static_stake_table_commitment(
     });
     st.advance();
     st.advance();
-    // This `unwrap()` won't fail
-    st.commitment(SnapshotVersion::LastEpochStart).unwrap()
+    st.voting_state().unwrap() // safe unwrap
 }

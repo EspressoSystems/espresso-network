@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
@@ -23,7 +24,6 @@ use bincode::{
 };
 use committable::{Commitment, Committable};
 use digest::OutputSizeUser;
-use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;

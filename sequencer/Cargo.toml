@@ -63,14 +63,11 @@ alloy = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = "0.2"
-contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 espresso-types = { path = "../types" }
-ethers = { workspace = true }
-ethers-conv = { workspace = true }
 futures = { workspace = true }
 indexmap = { workspace = true }
 
@@ -101,7 +98,6 @@ marketplace-solver = { path = "../marketplace-solver" }
 num_enum = "0.7"
 parking_lot = "0.12"
 portpicker = { workspace = true }
-primitive-types = { workspace = true }
 priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }

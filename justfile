@@ -143,41 +143,15 @@ dev-sequencer:
 build-docker-images:
     scripts/build-docker-images-native
 
-# generate rust bindings for contracts, the ethers bindings are deprecated,
-# please only add alloy bindings for new contracts.
-ETHERS_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$"
-ALLOY_REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$|^StakeTable$|^EspToken$"
+# generate rust bindings for contracts
+REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^PermissionedStakeTable$|^StakeTable$|^EspToken$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
-    # Generate the ethers bindings
-    nix develop .#legacyFoundry -c forge bind --contracts ./contracts/src/ --ethers --crate-name contract-bindings-ethers --bindings-path contract-bindings-ethers --select "{{ETHERS_REGEXP}}" --overwrite --force
-
-    # Foundry doesn't include bytecode in the bindings for LightClient.sol, since it links with
-    # libraries. However, this bytecode is still needed to link and deploy the contract. Copy it to
-    # the source tree so that the deploy script can be compiled whenever the bindings are up to
-    # date, without needed to recompile the contracts.
-    #
-    # The bytecode is extracted *before* the forge bind --alloy ... step because we're forced to
-    # parse a library address to generate the bindings which leads to the bytecode being pre-linked
-    # with that library address. We need the unlinked contract bytecode to later link it at runtime.
-    mkdir -p contract-bindings/artifacts
-    jq '.bytecode.object' < contracts/out/LightClient.sol/LightClient.json > contract-bindings/artifacts/LightClient_bytecode.json
-    jq '.bytecode.object' < contracts/out/LightClientArbitrum.sol/LightClientArbitrum.json > contract-bindings/artifacts/LightClientArbitrum_bytecode.json
-    jq '.bytecode.object' < contracts/out/LightClientMock.sol/LightClientMock.json > contract-bindings/artifacts/LightClientMock_bytecode.json
-
     # Generate the alloy bindings
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0x5fbdb2315678afecb367f032d93f642f64180aa3 --alloy --contracts ./contracts/src/ --crate-name contract-bindings-alloy --bindings-path contract-bindings-alloy --select "{{ALLOY_REGEXP}}" --overwrite --force
-
-    # For some reason `alloy` likes to use the wrong version of itself in `contract-bindings`.
-    # Use the workspace version.
-    sed -i 's|{.*https://github.com/alloy-rs/alloy.*}|{ workspace = true }|' contract-bindings-alloy/Cargo.toml
-
-    # # Alloy requires us to copy the ABI in since it's not included in the bindings
-    # jq '.abi' < contracts/out/LightClient.sol/LightClient.json > contract-bindings/artifacts/LightClient_abi.json
-    # jq '.abi' < contracts/out/LightClientMock.sol/LightClientMock.json > contract-bindings/artifacts/LightClientMock_abi.json
+    forge bind --skip test --skip script --use "0.8.28" --alloy --alloy-version "0.12.5" --contracts ./contracts/src/ --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff
 
     cargo fmt --all
     cargo sort -g -w
@@ -190,8 +164,8 @@ sol-lint:
 # Build diff-test binary and forge test
 # Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-sequencer/issues/979
 sol-test *args:
-    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
-    cargo build --release --bin diff-test
+    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target} &&\
+    cargo build --release --bin diff-test &&\
     env PATH="${CARGO_TARGET_DIR}/release:$PATH" forge test {{ args }}
 
 # Deploys the light client contract on Sepolia and call it for profiling purposes.
@@ -230,3 +204,4 @@ download-srs:
 dev-download-srs:
     @echo "Check existence or download SRS for dev/test"
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
+    2>&1 | tee log.txt

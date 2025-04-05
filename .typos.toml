@@ -8,8 +8,7 @@ extend-exclude = [
   "doc/*.puml",
   "**/*.drawio",
   "contracts/lib",
-  "contract-bindings-alloy",
-  "contract-bindings-ethers",
+  "contracts/rust/adapter/src/bindings",
   "node-metrics/src/api/node_validator/v0/example_prometheus_metrics_output.txt",
   "hotshot-orchestrator/run-config.toml",
   "hotshot-macros/src/lib.rs"

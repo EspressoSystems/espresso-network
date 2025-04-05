@@ -1,10 +1,10 @@
+use alloy::primitives::U256;
 use ark_bn254::Bn254;
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_std::{
     borrow::Borrow,
     rand::{CryptoRng, RngCore},
 };
-use ethers::types::U256;
 /// BLS verification key, base field and Schnorr verification key
 pub use hotshot_stake_table::vec_based::config::QCVerKey;
 use hotshot_types::light_client::{
@@ -43,7 +43,8 @@ pub fn preprocess(
 /// - a list of stake table entries (`Vec<(BLSVerKey, Amount, SchnorrVerKey)>`)
 /// - a list of schnorr signatures of the updated states (`Vec<SchnorrSignature>`), default if the node doesn't sign the state
 /// - updated light client state (`(view_number, block_height, block_comm_root)`)
-/// - the static stake table state (containing 3 commitments to the 3 columns of the stake table and a threshold)
+/// - voting stake table state (containing 3 commitments to the 3 columns of the stake table and a threshold)
+/// - stake table state for the next block (same as the voting stake table except at epoch boundaries)
 /// - a bit vector indicates the signers
 ///
 /// Returns error or a pair `(proof, public_inputs)` asserting that
@@ -66,6 +67,7 @@ pub fn generate_state_update_proof<STIter, R, BitIter, SigIter>(
     lightclient_state: &LightClientState,
     stake_table_state: &StakeTableState,
     stake_table_capacity: usize,
+    next_stake_table_state: &StakeTableState,
 ) -> Result<(Proof, PublicInput), PlonkError>
 where
     STIter: IntoIterator,
@@ -94,6 +96,7 @@ where
         lightclient_state,
         stake_table_state,
         stake_table_capacity,
+        next_stake_table_state,
     )?;
     let proof = PlonkKzgSnark::<Bn254>::prove::<_, _, SolidityTranscript>(rng, &circuit, pk, None)?;
     Ok((proof, public_inputs))
@@ -106,19 +109,17 @@ mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_std::{
         rand::{CryptoRng, RngCore},
-        One,
+        One, UniformRand,
     };
     use hotshot_types::{
         light_client::LightClientState,
         traits::stake_table::{SnapshotVersion, StakeTableScheme},
     };
-    use jf_crhf::CRHF;
     use jf_plonk::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
         transcript::SolidityTranscript,
     };
     use jf_relation::Circuit;
-    use jf_rescue::crhf::VariableLengthRescueCRHF;
     use jf_signature::{
         schnorr::{SchnorrSignatureScheme, Signature},
         SignatureScheme,
@@ -128,7 +129,7 @@ mod tests {
     use super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
     use crate::{
         circuit::build_for_preprocessing,
-        test_utils::{genesis_stake_table_state, key_pairs_for_testing, stake_table_for_testing},
+        test_utils::{key_pairs_for_testing, stake_table_for_testing},
     };
 
     const ST_CAPACITY: usize = 20;
@@ -195,7 +196,8 @@ mod tests {
 
         let (bls_keys, schnorr_keys) = key_pairs_for_testing(num_validators, &mut prng);
         let st = stake_table_for_testing(ST_CAPACITY, &bls_keys, &schnorr_keys);
-        let st_state = genesis_stake_table_state(&st);
+        let st_state = st.voting_state().unwrap();
+        let next_st_state = st_state;
 
         let stake_table_entries = st
             .try_iter(SnapshotVersion::LastEpochStart)
@@ -203,22 +205,21 @@ mod tests {
             .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
             .collect::<Vec<_>>();
 
-        let block_comm_root = VariableLengthRescueCRHF::<CircuitField, 1>::evaluate(vec![
-            CircuitField::from(1u32),
-            CircuitField::from(2u32),
-        ])
-        .unwrap()[0];
-
         let lightclient_state = LightClientState {
             view_number: 100,
             block_height: 73,
-            block_comm_root,
+            block_comm_root: CircuitField::rand(&mut prng),
         };
+
+        let mut msg = Vec::with_capacity(7);
         let state_msg: [CircuitField; 3] = lightclient_state.clone().into();
+        msg.extend_from_slice(&state_msg);
+        let next_st_state_msg: [CircuitField; 4] = next_st_state.into();
+        msg.extend_from_slice(&next_st_state_msg);
 
         let sigs = schnorr_keys
             .iter()
-            .map(|(key, _)| SchnorrSignatureScheme::<Config>::sign(&(), key, state_msg, &mut prng))
+            .map(|(key, _)| SchnorrSignatureScheme::<Config>::sign(&(), key, &msg, &mut prng))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
@@ -260,13 +261,14 @@ mod tests {
             &lightclient_state,
             &st_state,
             ST_CAPACITY,
+            &next_st_state,
         );
         assert!(result.is_ok());
 
         let (proof, public_inputs) = result.unwrap();
         assert!(PlonkKzgSnark::<Bn254>::verify::<SolidityTranscript>(
             &vk,
-            public_inputs.as_ref(),
+            &public_inputs.to_vec(),
             &proof,
             None
         )
@@ -284,6 +286,7 @@ mod tests {
             &lightclient_state,
             &bad_st_state,
             ST_CAPACITY,
+            &next_st_state,
         );
         assert!(result.is_err());
     }

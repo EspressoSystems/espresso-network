@@ -2,9 +2,12 @@
 
 use std::{cmp::max, process::exit, sync::Arc, time::Duration};
 
+use alloy::{
+    primitives::U256,
+    providers::{Provider, ProviderBuilder},
+};
 use clap::Parser;
 use espresso_types::{Header, L1BlockInfo};
-use ethers::prelude::*;
 use futures::future::join_all;
 use itertools::Itertools;
 use sequencer::SequencerApiVersion;
@@ -59,7 +62,7 @@ type SequencerClient<ApiVer> = surf_disco::Client<hotshot_query_service::Error, 
 async fn verify_header<ApiVer: StaticVersionType>(
     opt: &Options,
     seq: &SequencerClient<ApiVer>,
-    l1: Option<&Provider<Http>>,
+    l1: Option<&impl Provider>,
     parent: Option<Header>,
     height: usize,
 ) -> (Header, bool) {
@@ -138,9 +141,9 @@ async fn get_header<ApiVer: StaticVersionType>(
     }
 }
 
-async fn get_l1_block(l1: &Provider<Http>, height: u64) -> L1BlockInfo {
+async fn get_l1_block(l1: &impl Provider, height: u64) -> L1BlockInfo {
     loop {
-        let block = match l1.get_block(height).await {
+        let block = match l1.get_block(height.into()).await {
             Ok(Some(block)) => block,
             Ok(None) => {
                 tracing::warn!("L1 block {height} not yet available");
@@ -154,16 +157,10 @@ async fn get_l1_block(l1: &Provider<Http>, height: u64) -> L1BlockInfo {
             },
         };
 
-        let Some(hash) = block.hash else {
-            tracing::warn!("L1 block {height} has no hash, might not be finalized yet");
-            sleep(Duration::from_secs(1)).await;
-            continue;
-        };
-
         return L1BlockInfo {
             number: height,
-            hash,
-            timestamp: block.timestamp,
+            hash: block.header.hash,
+            timestamp: U256::from(block.header.timestamp),
         };
     }
 }
@@ -190,7 +187,7 @@ async fn main() {
                 let l1 = opt
                     .l1
                     .as_ref()
-                    .map(|url| Provider::try_from(url.to_string()).unwrap());
+                    .map(|url| ProviderBuilder::new().on_http(url.clone()));
                 async move {
                     let mut ok = true;
 

@@ -7,9 +7,9 @@
 //! Types and Traits for the `HotShot` consensus module
 use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
 
+use alloy::primitives::U256;
 use bincode::Options;
 use displaydoc::Display;
-use primitive_types::U256;
 use tracing::error;
 use traits::{
     node_implementation::NodeType,

@@ -6,20 +6,17 @@ edition = { workspace = true }
 
 [dependencies]
 alloy = { workspace = true }
-
 anyhow = { workspace = true }
 ark-ec = { workspace = true }
 ark-ed-on-bn254 = { workspace = true }
 clap = { workspace = true }
 clap-serde = "0.5.1"
 clap-serde-derive = "0.2.1"
-contract-bindings-alloy = { workspace = true }
 derive_more = { workspace = true }
 directories = "6.0.0"
 dotenvy = { workspace = true }
 escargot = "0.5.13"
 espresso-types = { version = "0.1.0", path = "../types" }
-ethers-conv = { workspace = true }
 futures-util = "0.3.31"
 git-version = "0.3.9"
 hotshot-contract-adapter = { workspace = true }

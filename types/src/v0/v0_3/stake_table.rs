@@ -4,15 +4,16 @@ use crate::SeqTypes;
 use alloy::primitives::{Address, U256};
 use derive_more::derive::{From, Into};
 use hotshot::types::{BLSPubKey, SignatureKey};
-use hotshot_contract_adapter::stake_table::NodeInfoJf;
 use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
+    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys,
+    traits::node_implementation::NodeType, PeerConfig,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
-pub struct PermissionedStakeTableEntry(NodeInfoJf);
+#[serde(bound = "TYPES: NodeType")]
+pub struct PermissionedStakeTableEntry<TYPES: NodeType>(PeerConfigKeys<TYPES>);
 
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]

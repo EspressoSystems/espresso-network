@@ -38,7 +38,7 @@ impl From<ValidatorConfig<SeqTypes>> for PublicValidatorConfig {
 
         Self {
             public_key,
-            stake_value: stake_value.as_u64(),
+            stake_value: stake_value.to::<u64>(),
             is_da,
             state_public_key: state_public_key.to_string(),
             private_key: "*****".into(),
@@ -167,6 +167,12 @@ impl PublicHotShotConfig {
 
     pub fn known_da_nodes(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.known_da_nodes.clone()
+    }
+    pub fn blocks_per_epoch(&self) -> u64 {
+        self.epoch_height
+    }
+    pub fn epoch_start_block(&self) -> u64 {
+        self.epoch_start_block
     }
 }
 

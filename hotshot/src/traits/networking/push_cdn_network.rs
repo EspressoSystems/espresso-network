@@ -50,6 +50,7 @@ use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
+#[cfg(feature = "hotshot-testing")]
 use tracing::error;
 
 use super::NetworkError;
