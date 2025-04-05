@@ -34,6 +34,7 @@ use super::{
         QueryablePayload, TransactionHash, TransactionQueryData, VidCommonMetadata,
         VidCommonQueryData,
     },
+    StateCertQueryData,
 };
 use crate::{types::HeightIndexed, Header, Payload};
 
@@ -232,6 +233,8 @@ where
         &self,
         hash: TransactionHash<Types>,
     ) -> Fetch<TransactionQueryData<Types>>;
+
+    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>>;
 
     async fn subscribe_blocks(&self, from: usize) -> BoxStream<'static, BlockQueryData<Types>> {
         self.get_block_range(from..)

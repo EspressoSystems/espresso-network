@@ -613,7 +613,7 @@ mod test {
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-            LeafQueryData, PayloadMetadata, PayloadQueryData, TransactionHash,
+            LeafQueryData, PayloadMetadata, PayloadQueryData, StateCertQueryData, TransactionHash,
             TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
@@ -779,6 +779,9 @@ mod test {
             hash: TransactionHash<MockTypes>,
         ) -> Fetch<TransactionQueryData<MockTypes>> {
             self.hotshot_qs.get_transaction(hash).await
+        }
+        async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<MockTypes>> {
+            self.hotshot_qs.get_state_cert(epoch).await
         }
     }
 
