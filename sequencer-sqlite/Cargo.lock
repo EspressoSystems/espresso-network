@@ -244,7 +244,7 @@ dependencies = [
  "itoa",
  "serde",
  "serde_json",
- "winnow 0.7.4",
+ "winnow",
 ]
 
 [[package]]
@@ -675,7 +675,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d162f8524adfdfb0e4bd0505c734c985f3e2474eb022af32eef0d52a4f3935c"
 dependencies = [
  "serde",
- "winnow 0.7.4",
+ "winnow",
 ]
 
 [[package]]
@@ -2188,16 +2188,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cargo_toml"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "599aa35200ffff8f04c1925aa1acc92fa2e08874379ef42e210a80e527e60838"
-dependencies = [
- "serde",
- "toml 0.7.8",
-]
-
-[[package]]
 name = "cbor4ii"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2726,7 +2716,7 @@ dependencies = [
  "rust-ini",
  "serde",
  "serde_json",
- "toml 0.8.20",
+ "toml",
  "yaml-rust2",
 ]
 
@@ -3993,7 +3983,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.100",
- "toml 0.8.20",
+ "toml",
  "walkdir",
 ]
 
@@ -5084,7 +5074,7 @@ dependencies = [
  "tagged-base64",
  "thiserror 1.0.69",
  "tide-disco",
- "toml 0.8.20",
+ "toml",
  "vbs",
  "workspace-hack",
 ]
@@ -5132,7 +5122,7 @@ dependencies = [
  "snafu 0.8.5",
  "tide-disco",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-test",
  "vbs",
@@ -5176,7 +5166,7 @@ dependencies = [
  "rand 0.8.5",
  "tide-disco",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "vbs",
  "workspace-hack",
 ]
@@ -5238,7 +5228,7 @@ dependencies = [
  "surf-disco",
  "tide-disco",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "vbs",
  "workspace-hack",
@@ -5286,7 +5276,7 @@ dependencies = [
  "tide-disco",
  "time 0.3.41",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
  "trait-variant",
@@ -5351,7 +5341,7 @@ dependencies = [
  "tide-disco",
  "time 0.3.41",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "url",
  "vbs",
@@ -5496,7 +5486,7 @@ dependencies = [
  "thiserror 1.0.69",
  "time 0.3.41",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "typenum",
  "url",
@@ -7335,7 +7325,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tide-disco",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "vbs",
 ]
@@ -8469,7 +8459,7 @@ version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edce586971a4dfaa28950c6f18ed55e0406c1ab88bbce2c6f6293a7aaba73d35"
 dependencies = [
- "toml_edit 0.22.24",
+ "toml_edit",
 ]
 
 [[package]]
@@ -9025,7 +9015,7 @@ dependencies = [
  "time 0.3.41",
  "tokio",
  "tokio-postgres",
- "toml 0.8.20",
+ "toml",
  "url",
  "walkdir",
 ]
@@ -9932,9 +9922,8 @@ dependencies = [
  "tempfile",
  "tide-disco",
  "time 0.3.41",
- "todo_by",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
  "url",
@@ -9980,7 +9969,7 @@ dependencies = [
  "surf",
  "tempfile",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tower-service",
  "tracing",
  "url",
@@ -10673,7 +10662,7 @@ dependencies = [
  "tagged-base64",
  "thiserror 1.0.69",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
  "url",
@@ -11265,7 +11254,7 @@ dependencies = [
  "tagged-base64",
  "tide",
  "tide-websockets",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-distributed",
  "tracing-futures",
@@ -11397,20 +11386,6 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "todo_by"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e25529b77ab1841ec52a4e8356632b417698b53ea9ad62c6be7d04d5e420dc4"
-dependencies = [
- "cargo_toml",
- "chrono",
- "proc-macro2",
- "quote",
- "semver 1.0.26",
- "syn 2.0.100",
-]
 
 [[package]]
 name = "tokio"
@@ -11567,18 +11542,6 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd79e69d3b627db300ff956027cc6c3798cef26d22526befdfcd12feeb6d2257"
-dependencies = [
- "serde",
- "serde_spanned",
- "toml_datetime",
- "toml_edit 0.19.15",
-]
-
-[[package]]
-name = "toml"
 version = "0.8.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd87a5cdd6ffab733b2f74bc4fd7ee5fff6634124999ac278c35fc78c6120148"
@@ -11586,7 +11549,7 @@ dependencies = [
  "serde",
  "serde_spanned",
  "toml_datetime",
- "toml_edit 0.22.24",
+ "toml_edit",
 ]
 
 [[package]]
@@ -11600,19 +11563,6 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.19.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b5bb770da30e5cbfde35a2d7b9b8a2c4b8ef89548a7a6aeab5c9a576e3e7421"
-dependencies = [
- "indexmap 2.8.0",
- "serde",
- "serde_spanned",
- "toml_datetime",
- "winnow 0.5.40",
-]
-
-[[package]]
-name = "toml_edit"
 version = "0.22.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17b4795ff5edd201c7cd6dca065ae59972ce77d1b80fa0a84d94950ece7d1474"
@@ -11621,7 +11571,7 @@ dependencies = [
  "serde",
  "serde_spanned",
  "toml_datetime",
- "winnow 0.7.4",
+ "winnow",
 ]
 
 [[package]]
@@ -12849,15 +12799,6 @@ checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 
 [[package]]
 name = "winnow"
-version = "0.5.40"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f593a95398737aeed53e489c785df13f3618e41dbcd6718c6addbf1395aa6876"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "winnow"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e97b544156e9bebe1a0ffbc03484fc1ffe3100cbce3ffb17eac35f7cdd7ab36"
@@ -12961,7 +12902,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml_datetime",
- "toml_edit 0.22.24",
+ "toml_edit",
  "tracing",
  "tracing-core",
  "tracing-log",
