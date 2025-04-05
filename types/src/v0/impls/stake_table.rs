@@ -392,7 +392,7 @@ impl EpochCommittees {
         validators: IndexMap<Address, Validator<BLSPubKey>>,
     ) {
         let mut address_mapping = HashMap::new();
-        let stake_table = validators
+        let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
             .values()
             .map(|v| {
                 address_mapping.insert(v.stake_table_key, v.account);
@@ -409,10 +409,13 @@ impl EpochCommittees {
             })
             .collect();
 
+        let eligible_leaders: Vec<PeerConfig<SeqTypes>> =
+            stake_table.iter().map(|(_, l)| l.clone()).collect();
+
         self.state.insert(
             epoch,
             EpochCommittee {
-                eligible_leaders: self.non_epoch_committee.eligible_leaders.clone(),
+                eligible_leaders,
                 stake_table,
                 validators,
                 address_mapping,
@@ -466,15 +469,6 @@ impl EpochCommittees {
         peers: Arc<dyn StateCatchup>,
         persistence: impl MembershipPersistence,
     ) -> Self {
-        // For each eligible leader, get the stake table entry
-        let eligible_leaders: Vec<_> = committee_members
-            .iter()
-            .filter(|&peer_config| {
-                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
-            })
-            .cloned()
-            .collect();
-
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
             .iter()
@@ -484,6 +478,7 @@ impl EpochCommittees {
             .cloned()
             .collect();
 
+        let eligible_leaders = stake_table.clone();
         // For each member, get the stake table entry
         let da_members: Vec<_> = da_members
             .iter()
