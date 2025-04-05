@@ -82,6 +82,8 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     .wrap()
     .context(error!("Failed to sign proposal. This should never happen."))?;
 
+    tracing::info!("Sending proposal request for view {}", view_number);
+
     // First, broadcast that we need a proposal to the current leader
     broadcast_event(
         HotShotEvent::QuorumProposalRequestSend(signed_proposal_request, signature).into(),

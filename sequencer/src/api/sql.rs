@@ -638,7 +638,7 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
     catchup: &mut NullStateCatchup,
     tx: &mut Transaction<Mode>,
     instance: &NodeState,
-    parent: &Leaf2,
+    _parent: &Leaf2,
     leaves: impl IntoIterator<Item = &Leaf2>,
 ) -> anyhow::Result<HashSet<RewardAccount>> {
     let mut reward_accounts = HashSet::default();
@@ -647,39 +647,6 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
     let Some(epoch_height) = epoch_height else {
         bail!("epoch height not set");
     };
-
-    // we apply reward function in each block
-    // however, the stake table can only be changed every epoch
-    // so in order to get all the reward accounts that need to be loaded, we can call membership for every epoch
-    let leaves: Vec<_> = leaves.into_iter().collect();
-
-    if leaves.is_empty() {
-        bail!(format!("no leaves found for parent={parent:?}"));
-    }
-
-    let last_leaf = leaves.last().unwrap();
-
-    let from_epoch = epoch_from_block_number(parent.height(), epoch_height);
-    let to_epoch = epoch_from_block_number(last_leaf.height(), epoch_height);
-
-    let coordinator = instance.coordinator.clone();
-    for epoch in from_epoch..=to_epoch {
-        let epoch_membership = coordinator
-            .membership_for_epoch(Some(EpochNumber::new(epoch)))
-            .await?;
-        let membership = epoch_membership.coordinator.membership().read().await;
-        let validators = membership.validators(&EpochNumber::new(epoch))?;
-
-        for (validator, config) in validators {
-            let delegators: Vec<RewardAccount> = config
-                .delegators
-                .keys()
-                .map(|d| RewardAccount(d.to_ethers()))
-                .collect();
-            reward_accounts.insert(RewardAccount(validator.to_ethers()));
-            reward_accounts.extend(delegators);
-        }
-    }
 
     // add all the chain configs needed to apply STF to headers to the catchup
     for proposal in leaves {
@@ -707,6 +674,26 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
 
             catchup.add_chain_config(cf);
         };
+
+        let epoch = epoch_from_block_number(height, epoch_height);
+
+        let coordinator = instance.coordinator.clone();
+        let epoch_membership = coordinator
+            .membership_for_epoch(Some(EpochNumber::new(epoch)))
+            .await?;
+        let membership = coordinator.membership().read().await;
+        let leader = epoch_membership.leader(proposal.view_number()).await?;
+        let validator = membership.get_validator_config(&EpochNumber::new(epoch), leader)?;
+
+        reward_accounts.insert(RewardAccount(validator.account.to_ethers()));
+
+        let delegators: Vec<RewardAccount> = validator
+            .delegators
+            .keys()
+            .map(|d| RewardAccount(d.to_ethers()))
+            .collect();
+
+        reward_accounts.extend(delegators);
     }
     Ok(reward_accounts)
 }
