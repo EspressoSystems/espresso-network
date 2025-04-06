@@ -1298,7 +1298,7 @@ impl SequencerPersistence for Persistence {
         let mut tx = self.db.read().await?;
 
         // The SQL migration populates the table name and sets a default value of 0 for migrated rows.
-        // so, fetch_one() would always return a row 
+        // so, fetch_one() would always return a row
         // The number of migrated rows is updated after each batch insert.
         // This allows the types migration to resume from where it left off.
         let (is_completed, mut offset) = query_as::<(bool, i64)>(
