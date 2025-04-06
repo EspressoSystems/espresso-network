@@ -827,16 +827,20 @@ pub trait MigrateTypes<Types: NodeType> {
 #[async_trait]
 impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
     async fn migrate_types(&self) -> anyhow::Result<()> {
-        let mut offset = 0;
         let limit = 10000;
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
 
-        let (is_migration_completed,) =
-            query_as::<(bool,)>("SELECT completed from types_migration LIMIT 1 ")
-                .fetch_one(tx.as_mut())
-                .await?;
+        // The table `types_migration` is populated in the SQL migration with `completed = false` and `migrated_rows = 0`
+        // so fetch_one() would always return a row.
+        // After each batch insert, it is updated with the number of rows migrated.
+        // This is necessary to resume from the same point in case of a restart.
+        let (is_migration_completed, mut offset) = query_as::<(bool, i64)>(
+            "SELECT completed, migrated_rows from types_migration LIMIT 1 ",
+        )
+        .fetch_one(tx.as_mut())
+        .await?;
 
         if is_migration_completed {
             tracing::info!("types migration already completed");
@@ -927,6 +931,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                     .push_bind(row.5);
             });
 
+            query_builder.push(" ON CONFLICT DO NOTHING");
             let query = query_builder.build();
 
             let mut tx = self.write().await.map_err(|err| QueryError::Error {
@@ -935,7 +940,15 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
             query.execute(tx.as_mut()).await?;
 
-            tx.commit().await?;
+            // update migrated_rows column with the offset
+            tx.upsert(
+                "types_migration",
+                ["id", "completed", "migrated_rows"],
+                ["id"],
+                [(0_i64, false, offset)],
+            )
+            .await?;
+
             tracing::warn!("inserted {} rows into leaf2 table", offset);
             // migrate vid
             let mut query_builder: sqlx::QueryBuilder<Db> =
@@ -944,12 +957,8 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             query_builder.push_values(vid_rows.into_iter(), |mut b, row| {
                 b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
             });
-
+            query_builder.push(" ON CONFLICT DO NOTHING");
             let query = query_builder.build();
-
-            let mut tx = self.write().await.map_err(|err| QueryError::Error {
-                message: err.to_string(),
-            })?;
 
             query.execute(tx.as_mut()).await?;
 
@@ -961,7 +970,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 break;
             }
 
-            offset += limit;
+            offset += limit as i64;
         }
 
         let mut tx = self.write().await.map_err(|err| QueryError::Error {
@@ -972,9 +981,9 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
         tx.upsert(
             "types_migration",
-            ["id", "completed"],
+            ["id", "completed", "migrated_rows"],
             ["id"],
-            [(0_i64, true)],
+            [(0_i64, true, offset)],
         )
         .await?;
 
