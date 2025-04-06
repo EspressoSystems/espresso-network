@@ -2699,6 +2699,7 @@ mod test {
                 light_client_state: Default::default(), // filling arbitrary value
                 signatures: vec![],                     // filling arbitrary value
             };
+            // manually upsert the state cert to the finalized database
             let state_cert_bytes = bincode::serialize(&state_cert).unwrap();
             tx.upsert(
                 "finalized_state_cert",
@@ -2831,7 +2832,7 @@ mod test {
             "quorum certificates count does not match rows",
         );
 
-        let (state_cert_count,) = query_as::<(i64,)>("SELECT COUNT(*) from state_cert")
+        let (state_cert_count,) = query_as::<(i64,)>("SELECT COUNT(*) from finalized_state_cert")
             .fetch_one(tx.as_mut())
             .await
             .unwrap();
