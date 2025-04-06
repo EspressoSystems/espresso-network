@@ -269,10 +269,12 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            // TEST-ONLY: if this config is not yet set, we use a default value of 60
-            // to avoid contract complaining about invalid zero-valued blocks_per_epoch
+            // TEST-ONLY: if this config is not yet set, we use a large default value
+            // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
+            // This large value will act as if we are always in epoch 1, which won't conflict
+            // with the effective purpose of the real `PublicNetworkConfig`.
             if opt.use_mock && blocks_per_epoch == 0 {
-                blocks_per_epoch = 60;
+                blocks_per_epoch = u64::MAX;
             }
             tracing::info!(%blocks_per_epoch, "Upgrading LightClientV2 with ");
 
