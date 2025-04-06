@@ -70,7 +70,6 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::SignatureKey,
         states::ValidatedState,
-        storage::Storage,
     },
     utils::genesis_epoch_from_version,
     HotShotConfig,
@@ -220,14 +219,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         storage: I::Storage,
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> Arc<Self> {
-        #[allow(clippy::panic)]
-        match storage.migrate_consensus().await {
-            Ok(()) => {},
-            Err(e) => {
-                panic!("Failed to migrate consensus storage: {e}");
-            },
-        }
-
         let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
         let external_chan = broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
 

@@ -402,7 +402,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     },
                 };
                 if event_view == view_number {
-                    tracing::trace!(
+                    tracing::debug!(
                         "Vote dependency {:?} completed for view {:?}, my id is {:?}",
                         dependency_type,
                         view_number,
