@@ -337,6 +337,7 @@ async fn main() -> anyhow::Result<()> {
         // append to the list of light client contract addresses
         let chain_id = provider.get_chain_id().await?;
         client_states.lc_proxy_addr.insert(chain_id, lc_proxy_addr);
+        client_states.provider_urls.insert(chain_id, url.clone());
         light_client_addresses.push((chain_id, lc_proxy_addr));
 
         // init the prover config
@@ -413,7 +414,6 @@ async fn main() -> anyhow::Result<()> {
             }
 
             client_states.wallet = wallet;
-            client_states.l1_url = url;
             client_states.l1_chain_id = chain_id;
         }
     }
@@ -506,10 +506,10 @@ async fn main() -> anyhow::Result<()> {
 pub struct ApiState {
     /// all light client proxy addresses indexed by chain_id
     pub lc_proxy_addr: BTreeMap<u64, Address>,
-    /// wallet for sending tx
+    /// all the providers endpoint indexed by chain_id
+    pub provider_urls: BTreeMap<u64, Url>,
+    /// wallet for sending tx, used for all chains
     pub wallet: EthereumWallet,
-    /// L1 endpoint
-    pub l1_url: Url,
     /// L1 chain id
     pub l1_chain_id: u64,
 }
@@ -517,8 +517,8 @@ impl Default for ApiState {
     fn default() -> Self {
         Self {
             lc_proxy_addr: BTreeMap::new(),
+            provider_urls: BTreeMap::new(),
             wallet: EthereumWallet::default(),
-            l1_url: Url::parse("http://localhost:8545").unwrap(),
             l1_chain_id: 31337,
         }
     }
@@ -531,24 +531,24 @@ impl ApiState {
         chain_id: Option<u64>,
     ) -> Result<LightClientV2MockInstance<(), HttpProviderWithWallet>, ServerError> {
         // if chain id is not provided, primary L1 light client is used
-        let proxy_addr = if let Some(id) = chain_id {
-            self.lc_proxy_addr.get(&id).ok_or_else(|| {
-                ServerError::catch_all(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "light client contract not found for chain id {chain_id}".to_string(),
-                )
-            })?
-        } else {
-            self.lc_proxy_addr.get(&self.l1_chain_id).ok_or_else(|| {
-                ServerError::catch_all(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "L1 light client contract not found ".to_string(),
-                )
-            })?
-        };
+        let id = chain_id.unwrap_or(self.l1_chain_id);
+
+        let proxy_addr = self.lc_proxy_addr.get(&id).ok_or_else(|| {
+            ServerError::catch_all(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "LightClientProxy address not found for chain id {chain_id}".to_string(),
+            )
+        })?;
+        let provider_url = self.provider_urls.get(&id).ok_or_else(|| {
+            ServerError::catch_all(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Provider URL not found for chain id {chain_id}".to_string(),
+            )
+        })?;
+
         let provider = ProviderBuilder::new()
             .wallet(self.wallet.clone())
-            .on_http(self.l1_url.clone());
+            .on_http(provider_url.clone());
         let contract = LightClientV2Mock::new(*proxy_addr, provider);
         Ok(contract)
     }
@@ -696,7 +696,6 @@ mod tests {
     use tide_disco::error::ServerError;
     use tokio::time::sleep;
     use url::Url;
-    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{AltChainInfo, DevInfo, SetHotshotDownReqBody, SetHotshotUpReqBody};
@@ -768,7 +767,7 @@ mod tests {
             .await
             .unwrap();
 
-        let builder_api_client: Client<ServerError, StaticVersion<0, 1>> =
+        let builder_api_client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{builder_port}").parse().unwrap());
         builder_api_client.connect(None).await;
 
@@ -1030,7 +1029,7 @@ mod tests {
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();
 
-        let instance = Anvil::default().chain_id(1).spawn();
+        let instance = Anvil::new().chain_id(1).spawn();
         let l1_url = instance.endpoint_url();
 
         let (alt_providers, alt_chain_urls) = alt_chain_providers().await;
