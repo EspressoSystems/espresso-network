@@ -168,11 +168,6 @@ where
                                             marketplace_config,
                                         } = late_context_params;
 
-                                        let mut state_certs = BTreeMap::new();
-                                        if let Some(state_cert) = self.state_cert.clone() {
-                                            state_certs.insert(state_cert.epoch, state_cert);
-                                        }
-
                                         let initializer = HotShotInitializer::<TYPES>::load(
                                             TestInstanceState::new(self.async_delay_config.clone()),
                                             self.epoch_height,
@@ -187,7 +182,7 @@ where
                                             BTreeMap::new(),
                                             BTreeMap::new(),
                                             None,
-                                            state_certs,
+                                            self.state_cert.clone(),
                                         );
                                         // We assign node's public key and stake value rather than read from config file since it's a test
                                         let validator_config =
@@ -271,12 +266,7 @@ where
                                     )
                                     .await,
                                 );
-                                let state_cert = read_storage
-                                    .state_cert_cloned()
-                                    .await
-                                    .unwrap_or(LightClientStateUpdateCertificate::genesis());
-                                let mut state_certs = BTreeMap::new();
-                                state_certs.insert(state_cert.epoch, state_cert);
+                                let state_cert = read_storage.state_cert_cloned().await;
                                 let saved_proposals = read_storage.proposals_cloned().await;
                                 let mut vid_shares = BTreeMap::new();
                                 for (view, hash_map) in read_storage.vids_cloned().await {
@@ -300,7 +290,7 @@ where
                                     saved_proposals,
                                     vid_shares,
                                     decided_upgrade_certificate,
-                                    state_certs,
+                                    state_cert,
                                 );
                                 // We assign node's public key and stake value rather than read from config file since it's a test
                                 let validator_config = ValidatorConfig::generated_from_seed_indexed(

@@ -240,7 +240,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
         .block_number
         .is_some_and(|b| is_epoch_root(b, task_state.epoch_height));
     let state_cert = if is_epoch_root {
-        consensus_reader.state_cert(high_qc.epoch()).cloned()
+        consensus_reader.state_cert().cloned()
     } else {
         None
     };

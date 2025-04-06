@@ -841,11 +841,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
             "loaded consensus state"
         );
 
-        let mut state_certs = BTreeMap::new();
-        if let Some(state_cert) = state_cert {
-            state_certs.insert(state_cert.epoch, state_cert);
-        }
-
         Ok((
             HotShotInitializer {
                 instance_state: state,
@@ -865,7 +860,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
                 undecided_state: Default::default(),
                 saved_vid_shares: Default::default(), // TODO: implement saved_vid_shares
                 start_epoch_info,
-                state_certs,
+                state_cert,
             },
             anchor_view,
         ))

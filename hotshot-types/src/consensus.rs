@@ -344,7 +344,7 @@ pub struct Consensus<TYPES: NodeType> {
     /// The highest block number that we have seen
     pub highest_block: u64,
     /// The light client state update certificate
-    pub state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
+    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
 }
 
 /// This struct holds a payload and its metadata
@@ -446,7 +446,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
         metrics: Arc<ConsensusMetricsValue>,
         epoch_height: u64,
-        state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
+        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
     ) -> Self {
         let transition_qc = if let Some(ref next_epoch_high_qc) = next_epoch_high_qc {
             if high_qc
@@ -485,7 +485,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             drb_results: DrbResults::new(),
             transition_qc,
             highest_block: 0,
-            state_certs,
+            state_cert,
         }
     }
 
@@ -563,17 +563,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.transition_qc = Some((qc, next_epoch_qc));
     }
 
-    /// Get the light client state certificate
-    pub fn state_cert(
-        &self,
-        epoch: Option<TYPES::Epoch>,
-    ) -> Option<&LightClientStateUpdateCertificate<TYPES>> {
-        self.state_certs.get(&epoch?)
-    }
-
-    /// Get all the light client state certificates
-    pub fn state_certs(&self) -> &BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>> {
-        &self.state_certs
+    /// Get the current light client state certificate
+    pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificate<TYPES>> {
+        self.state_cert.as_ref()
     }
 
     /// Get the next epoch high QC.
@@ -649,7 +641,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let state_cert = if parent_leaf.with_epoch
             && is_epoch_root(parent_leaf.block_header().block_number(), self.epoch_height)
         {
-            self.state_cert(leaf.justify_qc().data.epoch).cloned()
+            self.state_cert().cloned()
         } else {
             None
         };
@@ -952,8 +944,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &mut self,
         state_cert: LightClientStateUpdateCertificate<TYPES>,
     ) -> Result<()> {
+        if let Some(existing_state_cert) = &self.state_cert {
+            ensure!(
+                state_cert.epoch > existing_state_cert.epoch,
+                debug!(
+                    "Light client state update certification with an equal or higher epoch exists."
+                )
+            );
+        }
         tracing::debug!("Updating light client state update certification");
-        self.state_certs.insert(state_cert.epoch, state_cert);
+        self.state_cert = Some(state_cert);
 
         Ok(())
     }

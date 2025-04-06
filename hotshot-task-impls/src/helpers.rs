@@ -532,13 +532,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
                         leaf.block_header().block_number(),
                         consensus_reader.epoch_height,
                     ) {
-                    consensus_reader
-                        .state_cert(option_epoch_from_block_number::<TYPES>(
-                            true,
-                            leaf.block_header().block_number(),
-                            consensus_reader.epoch_height,
-                        ))
-                        .cloned()
+                    consensus_reader.state_cert().cloned()
                 } else {
                     None
                 };
