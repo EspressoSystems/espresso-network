@@ -882,21 +882,22 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                     serde_json::to_value(leaf2.clone()).context("failed to serialize leaf2")?;
                 let qc2_json = serde_json::to_value(qc2).context("failed to serialize QC2")?;
 
-                // TODO (abdul): revisit after V1 VID has common field
                 let vid_common_bytes: Vec<u8> = row.try_get("vid_common")?;
-                let vid_share_bytes: Vec<u8> = row.try_get("vid_share")?;
-
-                let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
-                    .context("failed to deserialize vid_share")?;
-
-                let new_vid_share_bytes = bincode::serialize(&VidShare::V0(vid_share))
-                    .context("failed to serialize vid_share")?;
-
                 let vid_common: ADVZCommon = bincode::deserialize(&vid_common_bytes)
                     .context("failed to deserialize vid_common")?;
-
                 let new_vid_common_bytes = bincode::serialize(&VidCommon::V0(vid_common))
                     .context("failed to serialize vid_common")?;
+
+                let vid_share_bytes: Result<Vec<u8>, _> = row.try_get("vid_share");
+                let new_vid_share_bytes = if let Ok(bytes) = vid_share_bytes {
+                    let vid_share: ADVZShare =
+                        bincode::deserialize(&bytes).context("failed to deserialize vid_share")?;
+
+                    bincode::serialize(&VidShare::V0(vid_share))
+                        .context("failed to serialize vid_share")?
+                } else {
+                    vec![]
+                };
 
                 vid_rows.push((
                     leaf2.height() as i64,
@@ -933,7 +934,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 message: err.to_string(),
             })?;
 
-            query.execute(tx.as_mut()).await?;
+            let _ = query.execute(tx.as_mut()).await;
 
             tx.commit().await?;
             tracing::warn!("inserted {} rows into leaf2 table", offset);
@@ -951,7 +952,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 message: err.to_string(),
             })?;
 
-            query.execute(tx.as_mut()).await?;
+            let _ = query.execute(tx.as_mut()).await;
 
             tx.commit().await?;
 

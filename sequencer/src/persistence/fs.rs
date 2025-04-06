@@ -101,7 +101,7 @@ impl PersistenceOptions for Options {
 
         let migration_path = path.join("migration");
         let migrated = if migration_path.is_file() {
-            let bytes = fs::read(&path)
+            let bytes = fs::read(&migration_path)
                 .context(format!("unable to read migration from {}", path.display()))?;
             bincode::deserialize(&bytes).context("malformed migration file")?
         } else {

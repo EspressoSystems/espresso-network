@@ -735,6 +735,14 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         &self,
         state: NodeState,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
+        #[allow(clippy::panic)]
+        match self.migrate_consensus().await {
+            Ok(()) => {},
+            Err(e) => {
+                panic!("Failed to migrate consensus storage: {e}");
+            },
+        }
+
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match self
             .load_latest_acted_view()
@@ -963,11 +971,11 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
     async fn migrate_consensus(&self) -> anyhow::Result<()> {
         tracing::warn!("migrating consensus data...");
 
-        self.migrate_anchor_leaf().await?;
-        self.migrate_da_proposals().await?;
-        self.migrate_vid_shares().await?;
-        self.migrate_quorum_proposals().await?;
-        self.migrate_quorum_certificates().await?;
+        let _ = self.migrate_anchor_leaf().await;
+        let _ = self.migrate_da_proposals().await;
+        let _ = self.migrate_vid_shares().await;
+        let _ = self.migrate_quorum_proposals().await;
+        let _ = self.migrate_quorum_certificates().await;
 
         tracing::warn!("consensus storage has been migrated to new types");
 

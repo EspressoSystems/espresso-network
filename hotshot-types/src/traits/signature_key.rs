@@ -24,8 +24,8 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 
 use super::EncodeBytes;
 use crate::{
-    bundle::Bundle, light_client::LightClientStateMsg, traits::node_implementation::NodeType,
-    utils::BuilderCommitment,
+    bundle::Bundle, data::VidCommitment, light_client::LightClientStateMsg,
+    traits::node_implementation::NodeType, utils::BuilderCommitment,
 };
 
 /// Type representing stake table entries in a `StakeTable`
@@ -227,6 +227,21 @@ pub trait BuilderSignatureKey:
     }
 
     /// validate signature over sequencing fee information
+    /// with the builder's public key, including vid commitment
+    fn validate_fee_signature_with_vid_commitment<Metadata: EncodeBytes>(
+        &self,
+        signature: &Self::BuilderSignature,
+        fee_amount: u64,
+        metadata: &Metadata,
+        vid_commitment: &VidCommitment,
+    ) -> bool {
+        self.validate_builder_signature(
+            signature,
+            &aggregate_fee_data_with_vid_commitment(fee_amount, metadata, vid_commitment),
+        )
+    }
+
+    /// validate signature over sequencing fee information
     /// with the builder's public key (marketplace version)
     fn validate_sequencing_fee_signature_marketplace(
         &self,
@@ -287,6 +302,21 @@ pub trait BuilderSignatureKey:
         Self::sign_builder_message(private_key, &aggregate_fee_data(fee_amount, metadata))
     }
 
+    /// sign sequencing fee offer, with the payload commitment included
+    /// # Errors
+    /// If unable to sign the data with the key
+    fn sign_fee_with_vid_commitment<Metadata: EncodeBytes>(
+        private_key: &Self::BuilderPrivateKey,
+        fee_amount: u64,
+        metadata: &Metadata,
+        vid_commitment: &VidCommitment,
+    ) -> Result<Self::BuilderSignature, Self::SignError> {
+        Self::sign_builder_message(
+            private_key,
+            &aggregate_fee_data_with_vid_commitment(fee_amount, metadata, vid_commitment),
+        )
+    }
+
     /// sign fee offer (marketplace version)
     /// # Errors
     /// If unable to sign the data with the key
@@ -338,8 +368,25 @@ pub trait BuilderSignatureKey:
 /// Aggregate all inputs used for signature over fee data
 fn aggregate_fee_data<Metadata: EncodeBytes>(fee_amount: u64, metadata: &Metadata) -> Vec<u8> {
     let mut fee_info = Vec::new();
+
     fee_info.extend_from_slice(fee_amount.to_be_bytes().as_ref());
     fee_info.extend_from_slice(metadata.encode().as_ref());
+
+    fee_info
+}
+
+/// Aggregate all inputs used for signature over fee data, including the vid commitment
+fn aggregate_fee_data_with_vid_commitment<Metadata: EncodeBytes>(
+    fee_amount: u64,
+    metadata: &Metadata,
+    vid_commitment: &VidCommitment,
+) -> Vec<u8> {
+    let mut fee_info = Vec::new();
+
+    fee_info.extend_from_slice(fee_amount.to_be_bytes().as_ref());
+    fee_info.extend_from_slice(metadata.encode().as_ref());
+    fee_info.extend_from_slice(vid_commitment.as_ref());
+
     fee_info
 }
 
