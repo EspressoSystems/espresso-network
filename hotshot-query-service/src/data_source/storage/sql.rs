@@ -883,6 +883,19 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 let qc2_json = serde_json::to_value(qc2).context("failed to serialize QC2")?;
 
                 let vid_common_bytes: Vec<u8> = row.try_get("vid_common")?;
+                let vid_share_bytes: Option<Vec<u8>> = row.try_get("vid_share")?;
+
+                let mut new_vid_share_bytes = None;
+
+                if let Some(vid_share_bytes) = vid_share_bytes {
+                    let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
+                        .context("failed to deserialize vid_share")?;
+                    new_vid_share_bytes = Some(
+                        bincode::serialize(&VidShare::V0(vid_share))
+                            .context("failed to serialize vid_share")?,
+                    );
+                }
+
                 let vid_common: ADVZCommon = bincode::deserialize(&vid_common_bytes)
                     .context("failed to deserialize vid_common")?;
                 let new_vid_common_bytes = bincode::serialize(&VidCommon::V0(vid_common))
@@ -1816,10 +1829,15 @@ mod test {
             let mut vid = advz_scheme(2);
             let disperse = vid.disperse(payload.encode()).unwrap();
             let common = disperse.common;
-            let share = disperse.shares[0].clone();
 
             let common_bytes = bincode::serialize(&common).unwrap();
-            let share_bytes = bincode::serialize(&share).unwrap();
+            let share = disperse.shares[0].clone();
+            let mut share_bytes = Some(bincode::serialize(&share).unwrap());
+
+            // insert some nullable vid shares
+            if i % 10 == 0 {
+                share_bytes = None
+            }
 
             tx.upsert(
                 "vid",
