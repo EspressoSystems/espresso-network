@@ -1354,7 +1354,12 @@ impl SequencerPersistence for Persistence {
             query.execute(tx.as_mut()).await?;
             tx.commit().await?;
             offset += batch_size;
-            tracing::info!("anchor leaf migration progress: {} rows", offset);
+
+            tracing::info!(
+                "anchor leaf migration progress: rows={} offset={}",
+                rows.len(),
+                offset
+            );
 
             if rows.len() < batch_size as usize {
                 break;
@@ -1416,10 +1421,12 @@ impl SequencerPersistence for Persistence {
                 let data: Vec<u8> = row.try_get("data")?;
                 let payload_hash: String = row.try_get("payload_hash")?;
 
-                let da_proposal: DaProposal<SeqTypes> = bincode::deserialize(&data)?;
-                let da_proposal2: DaProposal2<SeqTypes> = da_proposal.into();
+                let da_proposal: Proposal<SeqTypes, DaProposal<SeqTypes>> =
+                    bincode::deserialize(&data)?;
+                let da_proposal2: Proposal<SeqTypes, DaProposal2<SeqTypes>> =
+                    convert_proposal(da_proposal);
 
-                let view = da_proposal2.view_number.u64() as i64;
+                let view = da_proposal2.data.view_number.u64() as i64;
                 let data = bincode::serialize(&da_proposal2)?;
 
                 values.push((view, payload_hash, data));
@@ -1439,9 +1446,12 @@ impl SequencerPersistence for Persistence {
 
             tx.commit().await?;
 
-            tracing::info!("DA proposals migration progress: {} rows", offset);
             offset += batch_size;
-
+            tracing::info!(
+                "DA proposals migration progress: rows={} offset={}",
+                rows.len(),
+                offset
+            );
             if rows.len() < batch_size as usize {
                 break;
             }
@@ -1500,10 +1510,12 @@ impl SequencerPersistence for Persistence {
                 let data: Vec<u8> = row.try_get("data")?;
                 let payload_hash: String = row.try_get("payload_hash")?;
 
-                let vid_share: ADVZDisperseShare<SeqTypes> = bincode::deserialize(&data)?;
-                let vid_share2: VidDisperseShare<SeqTypes> = vid_share.into();
+                let vid_share: Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>> =
+                    bincode::deserialize(&data)?;
+                let vid_share2: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
+                    convert_proposal(vid_share);
 
-                let view = vid_share2.view_number().u64() as i64;
+                let view = vid_share2.data.view_number().u64() as i64;
                 let data = bincode::serialize(&vid_share2)?;
 
                 values.push((view, payload_hash, data));
@@ -1521,9 +1533,13 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
             tx.commit().await?;
-            tracing::info!("VID shares migration progress: {} rows", offset);
-            offset += batch_size;
 
+            offset += batch_size;
+            tracing::info!(
+                "VID shares migration progress: rows={} offset={}",
+                rows.len(),
+                offset
+            );
             if rows.len() < batch_size as usize {
                 break;
             }
@@ -1610,7 +1626,11 @@ impl SequencerPersistence for Persistence {
             tx.commit().await?;
 
             offset += batch_size;
-            tracing::info!("quorum proposals migration progress: {} rows", offset);
+            tracing::info!(
+                "quorum proposals migration progress: rows={} offset={}",
+                rows.len(),
+                offset
+            );
 
             if rows.len() < batch_size as usize {
                 break;
@@ -1693,7 +1713,11 @@ impl SequencerPersistence for Persistence {
             tx.commit().await?;
             offset += batch_size;
 
-            tracing::info!("Quorum certificates migration progress: {} rows", offset);
+            tracing::info!(
+                "Quorum certificates migration progress: rows={} offset={}",
+                rows.len(),
+                offset
+            );
 
             if rows.len() < batch_size as usize {
                 break;
