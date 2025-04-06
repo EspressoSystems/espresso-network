@@ -29,7 +29,10 @@ use committable::Committable;
 use futures::future::Future;
 use hotshot_types::{
     data::{VidCommitment, VidShare},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    traits::{
+        block_contents::BlockHeader,
+        node_implementation::{ConsensusTime, NodeType},
+    },
 };
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::OptionExt;
@@ -692,7 +695,7 @@ where
     ) -> anyhow::Result<()> {
         self.inner
             .state_cert_storage
-            .insert(state_cert.height() as usize, state_cert)?;
+            .insert(state_cert.0.epoch.u64() as usize, state_cert)?;
         Ok(())
     }
 }

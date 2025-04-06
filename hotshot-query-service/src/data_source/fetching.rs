@@ -2127,6 +2127,10 @@ impl<Types: NodeType> Storable<Types> for BlockInfo<Types> {
             block.store(storage, leaf_only).await?;
         }
 
+        if let Some(state_cert) = self.state_cert {
+            state_cert.store(storage, leaf_only).await?;
+        }
+
         Ok(())
     }
 }

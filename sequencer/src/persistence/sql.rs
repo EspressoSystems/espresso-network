@@ -782,9 +782,14 @@ impl Persistence {
                         tracing::debug!(?view, "DA proposal not available at decide");
                     }
 
+                    let state_cert = state_certs
+                        .get(&view)
+                        .cloned();
+
                     LeafInfo {
                         leaf,
                         vid_share,
+                        state_cert,
                         // Note: the following fields are not used in Decide event processing, and
                         // should be removed. For now, we just default them.
                         state: Default::default(),

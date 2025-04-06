@@ -365,7 +365,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             initializer.next_epoch_high_qc,
             Arc::clone(&consensus_metrics),
             config.epoch_height,
-            initializer.state_cert,
+            initializer.state_certs,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));
@@ -484,6 +484,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                                 self.anchored_leaf.clone(),
                                 Arc::new(validated_state),
                                 Some(Arc::new(state_delta)),
+                                None,
                                 None,
                             )]),
                             qc,
@@ -1084,7 +1085,7 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     pub saved_vid_shares: VidShares<TYPES>,
 
     /// The last formed light client state update certificate
-    pub state_cert: LightClientStateUpdateCertificate<TYPES>,
+    pub state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
 
     /// Saved epoch information. This must be sorted ascending by epoch.
     pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
@@ -1119,7 +1120,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             instance_state,
             saved_vid_shares: BTreeMap::new(),
             epoch_height,
-            state_cert: LightClientStateUpdateCertificate::<TYPES>::genesis(),
+            state_certs: BTreeMap::new(),
             epoch_start_block,
             start_epoch_info,
         })
@@ -1184,7 +1185,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-        state_cert: LightClientStateUpdateCertificate<TYPES>,
+        state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
     ) -> Self {
         let anchor_state = Arc::new(TYPES::ValidatedState::from_header(
             anchor_leaf.block_header(),
@@ -1208,7 +1209,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             decided_upgrade_certificate,
             undecided_leaves: BTreeMap::new(),
             undecided_state: BTreeMap::new(),
-            state_cert,
+            state_certs,
             start_epoch_info,
         };
 

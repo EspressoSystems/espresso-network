@@ -27,6 +27,7 @@ use hotshot_types::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
         UpgradeCertificate,
     },
+    simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
@@ -309,7 +310,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .block_number
             .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
         {
-            Some(consensus_reader.state_cert().clone())
+            consensus_reader.state_cert(highest_qc.epoch()).cloned()
         } else {
             None
         };

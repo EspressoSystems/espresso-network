@@ -855,7 +855,7 @@ mod test {
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         hotshot_qs
-            .append(BlockInfo::new(leaf, Some(block), None, None))
+            .append(BlockInfo::new(leaf, Some(block), None, None, None))
             .await
             .unwrap();
 

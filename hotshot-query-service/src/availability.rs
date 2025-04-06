@@ -715,7 +715,11 @@ mod test {
     use async_lock::RwLock;
     use committable::Committable;
     use futures::future::FutureExt;
-    use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
+    use hotshot_example_types::node_types::EpochsTestVersions;
+    use hotshot_types::{
+        data::Leaf2, simple_certificate::QuorumCertificate2,
+        traits::node_implementation::ConsensusTime,
+    };
     use portpicker::pick_unused_port;
     use serde::de::DeserializeOwned;
     use surf_disco::{Client, Error as _};
@@ -1313,6 +1317,72 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_api_epochs() {
+        setup_test();
+
+        // Create the consensus network.
+        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+        let epoch_height = network.epoch_height();
+        network.start().await;
+
+        // Start the web server.
+        let port = pick_unused_port().unwrap();
+        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+        app.register_module(
+            "availability",
+            define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "1.0.0".parse().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        network.spawn(
+            "server",
+            app.serve(format!("0.0.0.0:{}", port), MockBase::instance()),
+        );
+
+        // Start a client.
+        let client = Client::<Error, MockBase>::new(
+            format!("http://localhost:{}/availability", port)
+                .parse()
+                .unwrap(),
+        );
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+
+        // Submit a few blocks and make sure each one gets reflected in the query service and
+        // preserves the consistency of the data and indices.
+        let headers = client
+            .socket("stream/headers/0")
+            .subscribe::<Header<MockTypes>>()
+            .await
+            .unwrap();
+        let mut chain = headers.enumerate();
+
+        loop {
+            let (i, header) = chain.next().await.unwrap();
+            let header = header.unwrap();
+            assert_eq!(header.height(), i as u64);
+            if header.height() >= 3 * epoch_height {
+                break;
+            }
+        }
+
+        for epoch in 1..4 {
+            let state_cert: StateCertQueryData<MockTypes> = client
+                .get(&format!("state-cert/{}", epoch))
+                .send()
+                .await
+                .unwrap();
+            tracing::info!("state-cert: {state_cert:?}");
+            assert_eq!(state_cert.0.epoch.u64(), epoch);
+        }
+
+        network.shut_down().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_old_api() {
         setup_test();
 
@@ -1434,7 +1504,7 @@ mod test {
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         data_source
-            .append(BlockInfo::new(leaf, Some(block.clone()), None, None))
+            .append(BlockInfo::new(leaf, Some(block.clone()), None, None, None))
             .await
             .unwrap();
 

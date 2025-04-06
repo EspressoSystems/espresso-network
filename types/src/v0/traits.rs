@@ -829,8 +829,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         let state_cert = self
             .load_state_cert()
             .await
-            .context("loading light client state update certificate")?
-            .unwrap_or(LightClientStateUpdateCertificate::genesis());
+            .context("loading light client state update certificate")?;
 
         tracing::info!(
             ?leaf,
@@ -841,6 +840,11 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
             ?state_cert,
             "loaded consensus state"
         );
+
+        let mut state_certs = BTreeMap::new();
+        if let Some(state_cert) = state_cert {
+            state_certs.insert(state_cert.epoch, state_cert);
+        }
 
         Ok((
             HotShotInitializer {
@@ -861,7 +865,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
                 undecided_state: Default::default(),
                 saved_vid_shares: Default::default(), // TODO: implement saved_vid_shares
                 start_epoch_info,
-                state_cert,
+                state_certs,
             },
             anchor_view,
         ))

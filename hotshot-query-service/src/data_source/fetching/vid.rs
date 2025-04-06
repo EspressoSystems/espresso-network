@@ -247,7 +247,6 @@ where
     P: AvailabilityProvider<Types>,
 {
     async fn run(self, common: VidCommon) {
-        tracing::info!("fetched VID common {:?}", self.header.payload_commitment());
         let common = VidCommonQueryData::new(self.header, common);
         self.fetcher.store_and_notify(common).await;
     }

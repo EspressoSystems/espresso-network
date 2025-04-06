@@ -527,12 +527,29 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
                     .cloned()
                     .map(|prop| prop.data);
 
+                let state_cert = if leaf.with_epoch
+                    && is_epoch_root(
+                        leaf.block_header().block_number(),
+                        consensus_reader.epoch_height,
+                    ) {
+                    consensus_reader
+                        .state_cert(option_epoch_from_block_number::<TYPES>(
+                            true,
+                            leaf.block_header().block_number(),
+                            consensus_reader.epoch_height,
+                        ))
+                        .cloned()
+                } else {
+                    None
+                };
+
                 // Add our data into a new `LeafInfo`
                 res.leaf_views.push(LeafInfo::new(
                     leaf.clone(),
                     Arc::clone(&state),
                     delta.clone(),
                     vid_share,
+                    state_cert,
                 ));
                 if let Some(ref payload) = leaf.block_payload() {
                     res.included_txns = Some(

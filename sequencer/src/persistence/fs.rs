@@ -368,7 +368,7 @@ impl Inner {
             }
 
             // Move the state cert to the finalized dir if it exists.
-            self.finalized_state_cert(v)?;
+            let state_cert = self.finalized_state_cert(v)?;
 
             // Fill in the full block payload using the DA proposals we had persisted.
             if let Some(proposal) = self.load_da_proposal(v)? {
@@ -384,6 +384,7 @@ impl Inner {
             let info = LeafInfo {
                 leaf,
                 vid_share,
+                state_cert,
                 // Note: the following fields are not used in Decide event processing, and should be
                 // removed. For now, we just default them.
                 state: Default::default(),
@@ -518,7 +519,10 @@ impl Inner {
         Ok(None)
     }
 
-    fn finalized_state_cert(&self, view: ViewNumber) -> anyhow::Result<()> {
+    fn finalized_state_cert(
+        &self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
         let dir_path = self.state_cert_dir_path();
 
         let file_path = dir_path.join(view.u64().to_string()).with_extension("txt");
@@ -535,9 +539,10 @@ impl Inner {
             fs::write(finalized_file_path, bytes).context(format!(
                 "finalizing light client state update certificate file for epoch {epoch:?}"
             ))?;
+            return Ok(Some(state_cert));
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 
