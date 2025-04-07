@@ -650,12 +650,15 @@ where
                 return Ok(());
             }
         }
+        let epoch = state_cert.0.epoch.u64();
         let bytes = bincode::serialize(&state_cert.0).context("failed to serialize state cert")?;
+        // Directly upsert the state cert to the finalized_state_cert table because
+        // this is called only when the corresponding leaf is decided.
         self.upsert(
-            "state_cert",
+            "finalized_state_cert",
             ["epoch", "state_cert"],
             ["epoch"],
-            [(height as i64, bytes)],
+            [(epoch as i64, bytes)],
         )
         .await?;
         Ok(())
