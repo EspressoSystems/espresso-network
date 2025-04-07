@@ -11,7 +11,9 @@ use clap::Args;
 use espresso_types::SeqTypes;
 use futures::FutureExt;
 use hotshot_stake_table::{utils::one_honest_threshold, vec_based::config::FieldType};
-use hotshot_state_prover::service::{epoch_config, init_stake_table_from_sequencer};
+use hotshot_state_prover::service::{
+    fetch_epoch_config_from_sequencer, fetch_stake_table_from_sequencer,
+};
 use hotshot_types::{
     light_client::{StateSignatureScheme, StateSignaturesBundle, StateVerKey},
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
@@ -91,7 +93,8 @@ impl StateRelayServerState {
     async fn init_genesis(&mut self) -> anyhow::Result<()> {
         // fetch genesis info from sequencer
         if self.blocks_per_epoch.is_none() || self.epoch_start_block.is_none() {
-            let (blocks_per_epoch, epoch_start_block) = epoch_config(&self.sequencer_url).await?;
+            let (blocks_per_epoch, epoch_start_block) =
+                fetch_epoch_config_from_sequencer(&self.sequencer_url).await?;
             // set local state
             self.blocks_per_epoch.get_or_insert(blocks_per_epoch);
             self.epoch_start_block.get_or_insert(epoch_start_block);
@@ -105,8 +108,9 @@ impl StateRelayServerState {
         let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
         tracing::info!(%blocks_per_epoch, %epoch_start_block, "Initializing genesis stake table with ");
 
-        let genesis_stake_table = init_stake_table_from_sequencer(
+        let genesis_stake_table = fetch_stake_table_from_sequencer(
             &self.sequencer_url,
+            0,
             self.stake_table_capacity as usize,
         )
         .await?;

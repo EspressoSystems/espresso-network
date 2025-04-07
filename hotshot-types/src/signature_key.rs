@@ -19,7 +19,7 @@ use rand_chacha::ChaCha20Rng;
 use tracing::instrument;
 
 use crate::{
-    light_client::LightClientStateMsg,
+    light_client::{LightClientState, StakeTableState},
     qc::{BitVectorQc, QcParams},
     stake_table::StakeTableEntry,
     traits::{
@@ -217,17 +217,29 @@ impl StateSignatureKey for SchnorrPubKey {
 
     fn sign_state(
         sk: &Self::StatePrivateKey,
-        state: &LightClientStateMsg,
+        light_client_state: &LightClientState,
+        next_stake_table_state: &StakeTableState,
     ) -> Result<Self::StateSignature, Self::SignError> {
-        SchnorrSignatureScheme::sign(&(), sk, state, &mut rand::thread_rng())
+        let mut msg = Vec::with_capacity(7);
+        let state_msg: [_; 3] = light_client_state.clone().into();
+        msg.extend_from_slice(&state_msg);
+        let adv_st_state_msg: [_; 4] = (*next_stake_table_state).into();
+        msg.extend_from_slice(&adv_st_state_msg);
+        SchnorrSignatureScheme::sign(&(), sk, msg, &mut rand::thread_rng())
     }
 
     fn verify_state_sig(
         &self,
         signature: &Self::StateSignature,
-        state: &LightClientStateMsg,
+        light_client_state: &LightClientState,
+        next_stake_table_state: &StakeTableState,
     ) -> bool {
-        SchnorrSignatureScheme::verify(&(), self, state, signature).is_ok()
+        let mut msg = Vec::with_capacity(7);
+        let state_msg: [_; 3] = light_client_state.clone().into();
+        msg.extend_from_slice(&state_msg);
+        let adv_st_state_msg: [_; 4] = (*next_stake_table_state).into();
+        msg.extend_from_slice(&adv_st_state_msg);
+        SchnorrSignatureScheme::verify(&(), self, msg, signature).is_ok()
     }
 
     fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey) {

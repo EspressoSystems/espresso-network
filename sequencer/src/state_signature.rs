@@ -8,24 +8,19 @@ use std::{
 use async_lock::RwLock;
 use espresso_types::{traits::SequencerPersistence, PubKey};
 use hotshot::types::{Event, EventType};
-use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
     data::EpochNumber,
     event::LeafInfo,
     light_client::{
-        CircuitField, LightClientState, StakeTableState, StateSignKey, StateSignature,
-        StateSignatureRequestBody, StateSignatureScheme, StateVerKey,
+        compute_stake_table_commitment, CircuitField, LightClientState, StakeTableState,
+        StateSignKey, StateSignature, StateSignatureRequestBody, StateSignatureScheme, StateVerKey,
     },
-    signature_key::BLSPubKey,
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, Versions},
-        signature_key::StakeTableEntryType,
-        stake_table::StakeTableScheme as _,
     },
     utils::{epoch_from_block_number, is_last_block},
-    PeerConfig,
 };
 use jf_signature::SignatureScheme;
 use surf_disco::{Client, Url};
@@ -216,24 +211,4 @@ impl StateSignatureMemStorage {
     pub fn get_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
         self.pool.get(&height).cloned()
     }
-}
-
-/// Given a list of stakers from `PeerConfig`, compute the stake table commitment
-pub fn compute_stake_table_commitment(
-    known_nodes_with_stakes: &[PeerConfig<SeqTypes>],
-    capacity: usize,
-) -> StakeTableState {
-    let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(capacity);
-    known_nodes_with_stakes.iter().for_each(|peer| {
-        // This `unwrap()` won't fail unless number of entries exceeds `capacity`
-        st.register(
-            *peer.stake_table_entry.key(),
-            peer.stake_table_entry.stake(),
-            peer.state_ver_key.clone(),
-        )
-        .unwrap();
-    });
-    st.advance();
-    st.advance();
-    st.voting_state().unwrap() // safe unwrap
 }

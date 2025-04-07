@@ -274,8 +274,11 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             state_ver_key,
         } = membership.stake(key).await?;
 
-        let state_msg = (&vote.light_client_state).into();
-        if !state_ver_key.verify_state_sig(&vote.signature, &state_msg) {
+        if !state_ver_key.verify_state_sig(
+            &vote.signature,
+            &vote.light_client_state,
+            &vote.next_stake_table_state,
+        ) {
             error!("Invalid light client state update vote {:?}", vote);
             return None;
         }
@@ -297,6 +300,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             return Some(LightClientStateUpdateCertificate {
                 epoch,
                 light_client_state: vote.light_client_state.clone(),
+                next_stake_table_state: vote.next_stake_table_state,
                 signatures: Vec::from_iter(vote_map.iter().map(|(k, v)| (k.clone(), v.clone()))),
             });
         }

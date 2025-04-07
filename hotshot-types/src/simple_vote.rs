@@ -20,7 +20,7 @@ use vbs::version::Version;
 
 use crate::{
     data::{Leaf, Leaf2, VidCommitment},
-    light_client::LightClientState,
+    light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
@@ -948,6 +948,8 @@ pub struct LightClientStateUpdateVote<TYPES: NodeType> {
     pub epoch: TYPES::Epoch,
     /// The light client state
     pub light_client_state: LightClientState,
+    /// The next stake table state
+    pub next_stake_table_state: StakeTableState,
     /// The signature to the light client state
     pub signature: <TYPES::StateSignatureKey as StateSignatureKey>::StateSignature,
 }

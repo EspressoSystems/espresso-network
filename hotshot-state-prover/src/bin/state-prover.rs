@@ -110,7 +110,8 @@ async fn main() {
         sequencer_url: args.sequencer_url,
         port: args.port,
         stake_table_capacity: args.stake_table_capacity,
-        blocks_per_epoch: None, // fetch from sequencer on-demand
+        blocks_per_epoch: None,  // fetch from sequencer on-demand
+        epoch_start_block: None, // fetch from sequencer on-demand
     };
 
     // validate that the light client contract is a proxy, panics otherwise
