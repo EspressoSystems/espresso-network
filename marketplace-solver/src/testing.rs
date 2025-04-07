@@ -127,16 +127,16 @@ mod test {
     use committable::Committable;
     use espresso_types::{
         v0_99::{
-            BidTx, RollupRegistration, RollupRegistrationBody, RollupUpdate, RollupUpdatebody,
+            BidTx, BidTxBody, RollupRegistration, RollupRegistrationBody, RollupUpdate, RollupUpdatebody,
         },
         FeeAccount, MarketplaceVersion, SeqTypes,
         Update::{Set, Skip},
     };
     use hotshot::types::{BLSPubKey, SignatureKey};
-    use hotshot_types::traits::node_implementation::NodeType;
+    use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
     use tide_disco::Url;
 
-    use crate::{testing::MockSolver, SolverError};
+    use crate::{testing::MockSolver, SolverError, state::UpdateSolverState};
 
     async fn register_rollup_helper(
         namespace_id: u64,
@@ -587,5 +587,145 @@ mod test {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], reg_ns_1);
         assert_eq!(result[1], reg_ns_2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_calculate_auction_results_no_bids() {
+        let mock_solver = MockSolver::init().await;
+        let state = mock_solver.state();
+        let state = state.read().await;
+        let view_number = ViewNumber::new(1);
+        
+        let results = state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+        
+        assert!(results.winning_bids.is_empty());
+        assert!(results.reserve_bids.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_calculate_auction_results_with_bids() {
+        let mock_solver = MockSolver::init().await;
+        let state = mock_solver.state();
+        let mut state = state.write().await;
+        let view_number = ViewNumber::new(1);
+        
+        // Create test namespace and bid
+        let namespace_id = 1u64.into();
+        let bid_amount = 1000;
+        
+        let bid_tx = BidTx {
+            body: BidTxBody {
+                view: view_number,
+                namespaces: vec![namespace_id],
+                bid_amount,
+                ..Default::default()
+            },
+            signature: Default::default(),
+        };
+        
+        // Submit bid
+        state.submit_bid_tx(bid_tx.clone()).await.unwrap();
+        
+        // Register rollup with reserve price
+        let (registration, ..) = register_rollup_helper(
+            1, // namespace_id
+            Some("http://example.com"),
+            500, // reserve_price (lower than bid amount)
+            true, // active
+            "test rollup"
+        ).await;
+        
+        state.register_rollup(registration).await.unwrap();
+        
+        let results = state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+        
+        assert_eq!(results.winning_bids.len(), 1);
+        assert_eq!(results.winning_bids[0], bid_tx);
+        assert!(results.reserve_bids.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_calculate_auction_results_bid_below_reserve() {
+        let mock_solver = MockSolver::init().await;
+        let state = mock_solver.state();
+        let mut state = state.write().await;
+        let view_number = ViewNumber::new(1);
+        
+        // Create test namespace and bid
+        let namespace_id = 1u64.into();
+        let bid_amount = 100;
+        
+        let bid_tx = BidTx {
+            body: BidTxBody {
+                view: view_number,
+                namespaces: vec![namespace_id],
+                bid_amount,
+                ..Default::default()
+            },
+            signature: Default::default(),
+        };
+        
+        // Submit bid
+        state.submit_bid_tx(bid_tx).await.unwrap();
+        
+        // Register rollup with higher reserve price
+        let (registration, ..) = register_rollup_helper(
+            1, // namespace_id
+            Some("http://example.com"),
+            500, // reserve_price (higher than bid amount)
+            true, // active
+            "test rollup"
+        ).await;
+        
+        state.register_rollup(registration).await.unwrap();
+        
+        let results = state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+        
+        // Bid should not win as it's below reserve price
+        assert!(results.winning_bids.is_empty());
+        // Reserve URL should be included
+        assert_eq!(results.reserve_bids.len(), 1);
+        assert_eq!(
+            results.reserve_bids[0],
+            (namespace_id, Url::parse("http://example.com").unwrap())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_calculate_auction_results_inactive_rollup() {
+        let mock_solver = MockSolver::init().await;
+        let state = mock_solver.state();
+        let mut state = state.write().await;
+        let view_number = ViewNumber::new(1);
+        
+        // Register inactive rollup
+        let (registration, ..) = register_rollup_helper(
+            1, // namespace_id
+            Some("http://example.com"),
+            500, // reserve_price
+            false, // inactive
+            "test rollup"
+        ).await;
+        
+        state.register_rollup(registration).await.unwrap();
+        
+        let results = state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+        
+        // No winning bids
+        assert!(results.winning_bids.is_empty());
+        // No reserve URLs for inactive rollup
+        assert!(results.reserve_bids.is_empty());
     }
 }
