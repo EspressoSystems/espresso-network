@@ -858,7 +858,7 @@ mod tests {
         assert_eq!(token.owner().call().await?._0, rand_owner);
         assert_eq!(
             token.balanceOf(init_recipient).call().await?._0,
-            parse_units("1000000000", "ether").unwrap().into(),
+            parse_units("10000000000", "ether").unwrap().into(),
         );
 
         Ok(())
