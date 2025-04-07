@@ -527,12 +527,32 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
                     .cloned()
                     .map(|prop| prop.data);
 
+                let state_cert = if leaf.with_epoch
+                    && is_epoch_root(
+                        leaf.block_header().block_number(),
+                        consensus_reader.epoch_height,
+                    ) {
+                    match consensus_reader.state_cert() {
+                        // Sanity check that the state cert is for the same view as the decided leaf
+                        Some(state_cert)
+                            if state_cert.light_client_state.view_number
+                                == leaf.view_number().u64() =>
+                        {
+                            Some(state_cert.clone())
+                        },
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
                 // Add our data into a new `LeafInfo`
                 res.leaf_views.push(LeafInfo::new(
                     leaf.clone(),
                     Arc::clone(&state),
                     delta.clone(),
                     vid_share,
+                    state_cert,
                 ));
                 if let Some(ref payload) = leaf.block_payload() {
                     res.included_txns = Some(
