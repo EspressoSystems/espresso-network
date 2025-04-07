@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{utils::parse_ether, Address, U256};
 use clap::Subcommand;
 use clap_serde_derive::ClapSerde;
 pub(crate) use hotshot_types::{
@@ -85,14 +85,14 @@ pub enum Commands {
     /// Delegate funds to a validator.
     /// Approve stake table contract to move tokens
     Approve {
-        #[clap(long)]
+        #[clap(long, value_parser = parse_ether)]
         amount: U256,
     },
     Delegate {
         #[clap(long)]
         validator_address: Address,
 
-        #[clap(long)]
+        #[clap(long, value_parser = parse_ether)]
         amount: U256,
     },
     /// Initiate a withdrawal of delegated funds from a validator.
@@ -100,7 +100,7 @@ pub enum Commands {
         #[clap(long)]
         validator_address: Address,
 
-        #[clap(long)]
+        #[clap(long, value_parser = parse_ether)]
         amount: U256,
     },
     /// Claim withdrawal after an undelegation.
@@ -112,6 +112,28 @@ pub enum Commands {
     ClaimValidatorExit {
         #[clap(long)]
         validator_address: Address,
+    },
+    /// Check ESP token balance
+    TokenBalance {
+        /// The address to check.
+        #[clap(long)]
+        address: Option<Address>,
+    },
+    /// Check ESP token allowance of stake table contract
+    TokenAllowance {
+        /// The address to check.
+        #[clap(long)]
+        address: Option<Address>,
+    },
+    /// Transfer ESP tokens
+    Transfer {
+        /// The address to transfer to.
+        #[clap(long)]
+        to: Address,
+
+        /// The amount to transfer
+        #[clap(long, value_parser = parse_ether)]
+        amount: U256,
     },
     /// Register the validators and delegates for the local demo.
     StakeForDemo {

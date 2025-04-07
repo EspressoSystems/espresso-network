@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use alloy::{
     network::EthereumWallet,
+    primitives::utils::format_ether,
     providers::ProviderBuilder,
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
@@ -236,8 +237,41 @@ pub async fn main() -> Result<()> {
             stake_for_demo(&config, num_validators).await.unwrap();
             return Ok(());
         },
+        Commands::TokenBalance { address } => {
+            let address = address.unwrap_or(account);
+            let balance = format_ether(token.balanceOf(address).call().await?._0);
+            tracing::info!("Token balance for {address} {balance} ESP");
+            return Ok(());
+        },
+        Commands::TokenAllowance { address } => {
+            let address = address.unwrap_or(account);
+            let allowance = format_ether(
+                token
+                    .allowance(address, config.stake_table_address)
+                    .call()
+                    .await?
+                    ._0,
+            );
+            tracing::info!("Stake table token allowance for {address}: {allowance} ESP");
+            return Ok(());
+        },
+        Commands::Transfer { amount, to } => {
+            let amount_esp = format_ether(amount);
+            tracing::info!("Transferring {amount_esp} ESP to {to}");
+            Ok(token
+                .transfer(to, amount)
+                .send()
+                .await?
+                .get_receipt()
+                .await?)
+        },
         _ => unreachable!(),
     };
-    tracing::info!("Result: {:?}", result);
+
+    match result {
+        Ok(receipt) => tracing::info!("Success! transaction hash: {}", receipt.transaction_hash),
+        Err(err) => exit_err("Failed:", err),
+    };
+
     Ok(())
 }
