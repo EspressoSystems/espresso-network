@@ -32,6 +32,6 @@ contract EspTokenUpgradabilityTest is Test {
     function testDeployment() public payable {
         assertEq(espTokenProxy.name(), "Espresso Token");
         assertEq(espTokenProxy.symbol(), "ESP");
-        assertEq(espTokenProxy.balanceOf(tokenGrantRecipient), 1_000_000_000 ether);
+        assertEq(espTokenProxy.balanceOf(tokenGrantRecipient), 10_000_000_000 ether);
     }
 }
