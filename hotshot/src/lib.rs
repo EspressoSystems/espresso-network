@@ -485,6 +485,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                                 Arc::new(validated_state),
                                 Some(Arc::new(state_delta)),
                                 None,
+                                None,
                             )]),
                             qc,
                             block_size: None,
@@ -1083,8 +1084,8 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     /// Saved VID shares
     pub saved_vid_shares: VidShares<TYPES>,
 
-    /// The last formed light client state update certificate
-    pub state_cert: LightClientStateUpdateCertificate<TYPES>,
+    /// The last formed light client state update certificate if there's any
+    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
 
     /// Saved epoch information. This must be sorted ascending by epoch.
     pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
@@ -1119,7 +1120,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             instance_state,
             saved_vid_shares: BTreeMap::new(),
             epoch_height,
-            state_cert: LightClientStateUpdateCertificate::<TYPES>::genesis(),
+            state_cert: None,
             epoch_start_block,
             start_epoch_info,
         })
@@ -1184,7 +1185,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-        state_cert: LightClientStateUpdateCertificate<TYPES>,
+        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
     ) -> Self {
         let anchor_state = Arc::new(TYPES::ValidatedState::from_header(
             anchor_leaf.block_header(),

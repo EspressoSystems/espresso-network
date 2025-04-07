@@ -86,7 +86,7 @@ pub struct SpinningTask<
     /// Generate network channel for restart nodes
     pub(crate) channel_generator: AsyncGenerator<Network<TYPES, I>>,
     /// The light client state update certificate
-    pub(crate) state_cert: LightClientStateUpdateCertificate<TYPES>,
+    pub(crate) state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
 }
 
 #[async_trait]
@@ -266,10 +266,7 @@ where
                                     )
                                     .await,
                                 );
-                                let state_cert = read_storage
-                                    .state_cert_cloned()
-                                    .await
-                                    .unwrap_or(LightClientStateUpdateCertificate::genesis());
+                                let state_cert = read_storage.state_cert_cloned().await;
                                 let saved_proposals = read_storage.proposals_cloned().await;
                                 let mut vid_shares = BTreeMap::new();
                                 for (view, hash_map) in read_storage.vids_cloned().await {

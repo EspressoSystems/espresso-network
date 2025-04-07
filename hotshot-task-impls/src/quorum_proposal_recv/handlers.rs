@@ -52,7 +52,7 @@ use crate::{
 /// Spawn a task which will fire a request to get a proposal, and store it.
 #[allow(clippy::too_many_arguments)]
 fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
-    view: TYPES::View,
+    qc: &QuorumCertificate2<TYPES>,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     membership: EpochMembershipCoordinator<TYPES>,
@@ -62,11 +62,12 @@ fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
     upgrade_lock: UpgradeLock<TYPES, V>,
     epoch_height: u64,
 ) {
+    let qc = qc.clone();
     spawn(async move {
         let lock = upgrade_lock;
 
         let _ = fetch_proposal(
-            view,
+            &qc,
             event_sender,
             event_receiver,
             membership,
@@ -331,7 +332,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
 
     if parent_leaf.is_none() {
         spawn_fetch_proposal(
-            justify_qc.view_number(),
+            &justify_qc,
             event_sender.clone(),
             event_receiver.clone(),
             validation_info.membership.coordinator.clone(),

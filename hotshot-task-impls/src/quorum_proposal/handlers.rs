@@ -309,7 +309,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .block_number
             .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
         {
-            Some(consensus_reader.state_cert().clone())
+            consensus_reader.state_cert().cloned()
         } else {
             None
         };
@@ -425,7 +425,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             self.private_key.clone(),
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             &self.upgrade_lock,
-            parent_qc.view_number(),
+            &parent_qc,
             self.epoch_height,
         )
         .await?;
