@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.28;
 
 import { BN254 } from "bn254/BN254.sol";
 import { LightClient } from "./LightClient.sol";
@@ -86,16 +86,11 @@ contract LightClientV2 is LightClient {
         // epoch-related checks
         uint64 lastUpdateEpoch = currentEpoch();
         uint64 newEpoch = epochFromBlockNumber(newState.blockHeight, _blocksPerEpoch);
-        if (
-            newEpoch == lastUpdateEpoch + 1 && !isLastBlockInEpoch(finalizedState.blockHeight)
-                && lastUpdateEpoch > 0
-        ) {
-            // advancing 1 epoch is only allowed if the last block of last epoch was submitted
-            // or if there is no last epoch (i.e. when current epoch is epoch 1)
-            revert MissingLastBlockInEpochUpdate();
-        }
-        if (newEpoch >= lastUpdateEpoch + 2) {
-            revert MissingLastBlockInEpochUpdate();
+        // advancing 1 epoch is only allowed if the last block of last epoch was submitted
+        // or if there is no last epoch (i.e. when current epoch is epoch 1)
+        require(newEpoch < lastUpdateEpoch + 2, MissingLastBlockInEpochUpdate());
+        if (lastUpdateEpoch != 0 && newEpoch != lastUpdateEpoch) {
+            require(isLastBlockInEpoch(finalizedState.blockHeight), MissingLastBlockInEpochUpdate());
         }
         BN254.validateScalarField(nextStakeTable.blsKeyComm);
         BN254.validateScalarField(nextStakeTable.schnorrKeyComm);
