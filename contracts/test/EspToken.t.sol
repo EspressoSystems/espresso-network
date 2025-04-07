@@ -30,8 +30,8 @@ contract EspTokenUpgradabilityTest is Test {
     // For now we just check that the contract is deployed and minted balance is as expected.
 
     function testDeployment() public payable {
-        assertEq(espTokenProxy.name(), "Espresso Token");
-        assertEq(espTokenProxy.symbol(), "ESP");
-        assertEq(espTokenProxy.balanceOf(tokenGrantRecipient), 10_000_000_000 ether);
+        assertEq(token.name(), "Espresso Token");
+        assertEq(token.symbol(), "ESP");
+        assertEq(token.balanceOf(tokenGrantRecipient), 10_000_000_000 ether);
     }
 }
