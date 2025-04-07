@@ -291,7 +291,7 @@ async fn test_cli_allowance() -> Result<()> {
     let out = system
         .cmd()
         .arg("token-allowance")
-        .arg("--address")
+        .arg("--owner")
         .arg(&addr)
         .output()?
         .assert_success()

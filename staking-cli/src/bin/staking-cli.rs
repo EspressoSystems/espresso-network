@@ -240,19 +240,19 @@ pub async fn main() -> Result<()> {
         Commands::TokenBalance { address } => {
             let address = address.unwrap_or(account);
             let balance = format_ether(token.balanceOf(address).call().await?._0);
-            tracing::info!("Token balance for {address} {balance} ESP");
+            tracing::info!("Token balance for {address}: {balance} ESP");
             return Ok(());
         },
-        Commands::TokenAllowance { address } => {
-            let address = address.unwrap_or(account);
+        Commands::TokenAllowance { owner } => {
+            let owner = owner.unwrap_or(account);
             let allowance = format_ether(
                 token
-                    .allowance(address, config.stake_table_address)
+                    .allowance(owner, config.stake_table_address)
                     .call()
                     .await?
                     ._0,
             );
-            tracing::info!("Stake table token allowance for {address}: {allowance} ESP");
+            tracing::info!("Stake table token allowance for {owner}: {allowance} ESP");
             return Ok(());
         },
         Commands::Transfer { amount, to } => {

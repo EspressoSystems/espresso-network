@@ -113,17 +113,17 @@ pub enum Commands {
         #[clap(long)]
         validator_address: Address,
     },
-    /// Check ESP token balance
+    /// Check ESP token balance.
     TokenBalance {
         /// The address to check.
         #[clap(long)]
         address: Option<Address>,
     },
-    /// Check ESP token allowance of stake table contract
+    /// Check ESP token allowance of stake table contract.
     TokenAllowance {
         /// The address to check.
         #[clap(long)]
-        address: Option<Address>,
+        owner: Option<Address>,
     },
     /// Transfer ESP tokens
     Transfer {
