@@ -447,6 +447,7 @@ pub(crate) async fn update_shared_state<
     let duration = now.elapsed();
     tracing::info!("Validation time: {:?}", duration);
 
+    let now = Instant::now();
     // Now that we've rounded everyone up, we need to update the shared state
     let mut consensus_writer = consensus.write().await;
 
@@ -459,6 +460,8 @@ pub(crate) async fn update_shared_state<
     }
 
     drop(consensus_writer);
+    let duration = now.elapsed();
+    tracing::info!("update_leaf time: {:?}", duration);
 
     Ok(())
 }
@@ -521,6 +524,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     .await
     .wrap()
     .context(error!("Failed to sign vote. This should never happen."))?;
+    let now = Instant::now();
     // Add to the storage.
     storage
         .write()
@@ -529,6 +533,8 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .await
         .wrap()
         .context(error!("Failed to store VID share"))?;
+    let duration = now.elapsed();
+    tracing::info!("append_vid_general time: {:?}", duration);
 
     // Make epoch root vote
 

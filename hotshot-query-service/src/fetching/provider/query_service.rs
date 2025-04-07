@@ -127,7 +127,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
                 }
             },
             Err(err) => {
-                tracing::error!("failed to fetch VID common {req:?}: {err}");
+                tracing::error!("failed to fetch VID common {} : {err}", req.0);
                 None
             },
         }

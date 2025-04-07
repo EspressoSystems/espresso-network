@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender};
 use async_lock::RwLock;
@@ -244,6 +244,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.epoch_height,
         );
 
+        let now = Instant::now();
         // We use this `epoch_membership` to vote,
         // meaning that we must know the leader for the current view in the current epoch
         // and must therefore perform the full DRB catchup.
@@ -258,6 +259,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 return;
             },
         };
+        let duration = now.elapsed();
+        tracing::info!("membership_for_epoch time: {:?}", duration);
 
         let current_epoch = option_epoch_from_block_number::<TYPES>(
             self.upgrade_lock.epochs_enabled(leaf.view_number()).await,

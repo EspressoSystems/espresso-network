@@ -365,8 +365,12 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     }
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
-    tracing::info!("setting epoch height={epoch_height:?}");
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
+
+    tracing::info!("setting epoch_height={epoch_height:?}");
+    tracing::info!("setting epoch_start_block={epoch_start_block:?}");
     network_config.config.epoch_height = epoch_height;
+    network_config.config.epoch_start_block = epoch_start_block;
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
