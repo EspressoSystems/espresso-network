@@ -291,7 +291,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     let validator_config = ValidatorConfig {
         public_key: pub_key,
         private_key: network_params.private_staking_key,
-        stake_value: 1,
+        stake_value: primitive_types::U256::from(1),
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
@@ -483,10 +483,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         l1_client.clone(),
-        genesis
-            .chain_config
-            .stake_table_contract
-            .map(|a| a.to_alloy()),
+        genesis.chain_config,
         peers.clone(),
         persistence.clone(),
     );
@@ -980,7 +977,7 @@ pub mod testing {
             let validator_config = ValidatorConfig {
                 public_key: my_peer_config.stake_table_entry.stake_key,
                 private_key: self.priv_keys[i].clone(),
-                stake_value: my_peer_config.stake_table_entry.stake_amount.as_u64(),
+                stake_value: my_peer_config.stake_table_entry.stake_amount,
                 state_public_key: self.state_key_pairs[i].ver_key(),
                 state_private_key: self.state_key_pairs[i].sign_key(),
                 is_da,
@@ -1015,7 +1012,7 @@ pub mod testing {
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
-                chain_config.stake_table_contract.map(|a| a.to_alloy()),
+                chain_config,
                 peers.clone(),
                 persistence.clone(),
             );

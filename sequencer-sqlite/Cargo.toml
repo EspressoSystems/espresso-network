@@ -8,6 +8,9 @@ edition = "2021"
 
 [features]
 default = ["embedded-db"]
+fee = ["sequencer/fee"]
+pos = ["sequencer/pos"]
+marketplace = ["sequencer/marketplace"]
 sqlite-unbundled = ["sequencer/sqlite-unbundled"]
 embedded-db = ["sequencer/embedded-db"]
 

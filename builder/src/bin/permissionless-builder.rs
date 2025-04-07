@@ -3,7 +3,7 @@ use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 use builder::non_permissioned::{build_instance_state, BuilderConfig};
 use clap::Parser;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, parse_duration, FeeVersion, MarketplaceVersion,
+    eth_signature_key::EthKeyPair, parse_duration, EpochVersion, FeeVersion, MarketplaceVersion,
     SequencerVersions, V0_0,
 };
 use futures::future::pending;
@@ -120,10 +120,12 @@ async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        (FeeVersion::VERSION, MarketplaceVersion::VERSION) => {
-            run::<SequencerVersions<FeeVersion, MarketplaceVersion>>(genesis, opt).await
+        (FeeVersion::VERSION, FeeVersion::VERSION) => {
+            run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await
         },
-        (FeeVersion::VERSION, _) => run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await,
+        (EpochVersion::VERSION, _) => {
+            run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await
+        },
         (MarketplaceVersion::VERSION, _) => {
             run::<SequencerVersions<MarketplaceVersion, V0_0>>(genesis, opt).await
         },

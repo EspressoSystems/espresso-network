@@ -214,8 +214,7 @@ pub mod testing {
                     private_key: self.priv_keys_staking_nodes[i].clone(),
                     stake_value: self.config.known_nodes_with_stake[i]
                         .stake_table_entry
-                        .stake_amount
-                        .as_u64(),
+                        .stake_amount,
                     state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
@@ -226,7 +225,7 @@ pub mod testing {
                         .stake_table_entry
                         .stake_key,
                     private_key: self.priv_keys_non_staking_nodes[i].clone(),
-                    stake_value: 0,
+                    stake_value: U256::from(0),
                     state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,

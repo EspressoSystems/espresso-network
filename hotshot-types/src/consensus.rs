@@ -32,16 +32,16 @@ use crate::{
         QuorumCertificate2,
     },
     traits::{
-        block_contents::BuilderFee,
+        block_contents::{BlockHeader, BuilderFee},
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
         BlockPayload, ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_transition, is_ge_epoch_root, is_last_block,
-        is_transition_block, option_epoch_from_block_number, BuilderCommitment, LeafCommitment,
-        StateAndDelta, Terminator,
+        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_ge_epoch_root,
+        is_last_block, is_transition_block, option_epoch_from_block_number, BuilderCommitment,
+        LeafCommitment, StateAndDelta, Terminator,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -344,7 +344,7 @@ pub struct Consensus<TYPES: NodeType> {
     /// The highest block number that we have seen
     pub highest_block: u64,
     /// The light client state update certificate
-    pub state_cert: LightClientStateUpdateCertificate<TYPES>,
+    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
 }
 
 /// This struct holds a payload and its metadata
@@ -446,7 +446,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
         metrics: Arc<ConsensusMetricsValue>,
         epoch_height: u64,
-        state_cert: LightClientStateUpdateCertificate<TYPES>,
+        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
     ) -> Self {
         let transition_qc = if let Some(ref next_epoch_high_qc) = next_epoch_high_qc {
             if high_qc
@@ -562,9 +562,10 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         }
         self.transition_qc = Some((qc, next_epoch_qc));
     }
-    /// Get the light client state certificate
-    pub fn state_cert(&self) -> &LightClientStateUpdateCertificate<TYPES> {
-        &self.state_cert
+
+    /// Get the current light client state certificate
+    pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificate<TYPES>> {
+        self.state_cert.as_ref()
     }
 
     /// Get the next epoch high QC.
@@ -637,11 +638,28 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             .and_then(|inner_map| inner_map.get(public_key).cloned())
             .map(|prop| prop.data);
 
+        let state_cert = if parent_leaf.with_epoch
+            && is_epoch_root(parent_leaf.block_header().block_number(), self.epoch_height)
+        {
+            match self.state_cert() {
+                // Sanity check that the state cert is for the same view as the parent leaf
+                Some(state_cert)
+                    if state_cert.light_client_state.view_number == parent_view_number.u64() =>
+                {
+                    Some(state_cert.clone())
+                },
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         Some(LeafInfo {
             leaf: parent_leaf.clone(),
             state,
             delta,
             vid_share: parent_vid,
+            state_cert,
         })
     }
 
@@ -934,12 +952,16 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &mut self,
         state_cert: LightClientStateUpdateCertificate<TYPES>,
     ) -> Result<()> {
-        ensure!(
-            state_cert.epoch > self.state_cert.epoch || state_cert == self.state_cert,
-            debug!("Light client state update certification with an equal or higher epoch exists.")
-        );
+        if let Some(existing_state_cert) = &self.state_cert {
+            ensure!(
+                state_cert.epoch > existing_state_cert.epoch,
+                debug!(
+                    "Light client state update certification with an equal or higher epoch exists."
+                )
+            );
+        }
         tracing::debug!("Updating light client state update certification");
-        self.state_cert = state_cert;
+        self.state_cert = Some(state_cert);
 
         Ok(())
     }

@@ -13,9 +13,10 @@
 use std::fmt::Debug;
 
 use committable::{Commitment, Committable};
+use derive_more::derive::From;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidCommitment, VidShare},
-    simple_certificate::QuorumCertificate2,
+    simple_certificate::{LightClientStateUpdateCertificate, QuorumCertificate2},
     traits::{
         self,
         block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
@@ -800,8 +801,18 @@ where
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, From)]
+#[serde(bound = "")]
+pub struct StateCertQueryData<Types: NodeType>(pub LightClientStateUpdateCertificate<Types>);
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Limits {
     pub small_object_range_limit: usize,
     pub large_object_range_limit: usize,
+}
+
+impl<Types: NodeType> HeightIndexed for StateCertQueryData<Types> {
+    fn height(&self) -> u64 {
+        self.0.light_client_state.block_height
+    }
 }

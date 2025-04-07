@@ -6,6 +6,7 @@
 
 use std::{num::NonZeroUsize, time::Duration};
 
+use primitive_types::U256;
 use url::Url;
 use vec1::Vec1;
 
@@ -105,7 +106,12 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
         let gen_known_nodes_with_stake = (0..10)
             .map(|node_id| {
                 let mut cur_validator_config: ValidatorConfig<TYPES> =
-                    ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, 1, false);
+                    ValidatorConfig::generated_from_seed_indexed(
+                        [0u8; 32],
+                        node_id,
+                        U256::from(1),
+                        false,
+                    );
 
                 if node_id < staked_da_nodes as u64 {
                     known_da_nodes.push(cur_validator_config.public_config());
