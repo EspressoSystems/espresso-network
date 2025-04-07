@@ -1360,6 +1360,8 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
 
+            offset += batch_size;
+
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1368,8 +1370,6 @@ impl SequencerPersistence for Persistence {
             )
             .await?;
             tx.commit().await?;
-
-            offset += batch_size;
 
             tracing::info!(
                 "anchor leaf migration progress: rows={} offset={}",
@@ -1458,6 +1458,8 @@ impl SequencerPersistence for Persistence {
 
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
+
+            offset += batch_size;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1467,7 +1469,6 @@ impl SequencerPersistence for Persistence {
             .await?;
             tx.commit().await?;
 
-            offset += batch_size;
             tracing::info!(
                 "DA proposals migration progress: rows={} offset={}",
                 rows.len(),
@@ -1553,6 +1554,8 @@ impl SequencerPersistence for Persistence {
 
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
+
+            offset += batch_size;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1562,7 +1565,6 @@ impl SequencerPersistence for Persistence {
             .await?;
             tx.commit().await?;
 
-            offset += batch_size;
             tracing::info!(
                 "VID shares migration progress: rows={} offset={}",
                 rows.len(),
@@ -1652,6 +1654,8 @@ impl SequencerPersistence for Persistence {
 
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
+
+            offset += batch_size;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1661,7 +1665,6 @@ impl SequencerPersistence for Persistence {
             .await?;
             tx.commit().await?;
 
-            offset += batch_size;
             tracing::info!(
                 "quorum proposals migration progress: rows={} offset={}",
                 rows.len(),
@@ -1746,6 +1749,8 @@ impl SequencerPersistence for Persistence {
 
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
+
+            offset += batch_size;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1754,7 +1759,6 @@ impl SequencerPersistence for Persistence {
             )
             .await?;
             tx.commit().await?;
-            offset += batch_size;
 
             tracing::info!(
                 "Quorum certificates migration progress: rows={} offset={}",
