@@ -318,6 +318,7 @@ mod test {
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
+            epoch_start_block: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 
