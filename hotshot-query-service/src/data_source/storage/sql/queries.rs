@@ -21,7 +21,7 @@ use std::{
 use anyhow::Context;
 use derivative::Derivative;
 use hotshot_types::{
-    simple_certificate::QuorumCertificate2,
+    simple_certificate::{LightClientStateUpdateCertificate, QuorumCertificate2},
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         node_implementation::NodeType,
@@ -33,7 +33,7 @@ use super::{Database, Db, Query, QueryAs, Transaction};
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryablePayload,
-        VidCommonQueryData,
+        StateCertQueryData, VidCommonQueryData,
     },
     data_source::storage::{PayloadMetadata, VidCommonMetadata},
     Header, Leaf2, Payload, QueryError, QueryResult,
@@ -334,6 +334,20 @@ impl From<sqlx::Error> for QueryError {
                 message: err.to_string(),
             }
         }
+    }
+}
+
+const STATE_CERT_COLUMNS: &str = "state_cert";
+
+impl<'r, Types> FromRow<'r, <Db as Database>::Row> for StateCertQueryData<Types>
+where
+    Types: NodeType,
+{
+    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
+        let state_cert: LightClientStateUpdateCertificate<Types> =
+            bincode::deserialize(row.try_get("state_cert")?)
+                .decode_error("malformed state cert")?;
+        Ok(state_cert.into())
     }
 }
 

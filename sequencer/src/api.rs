@@ -1288,9 +1288,9 @@ mod api_tests {
         Header, Leaf2, MockSequencerVersions, NamespaceId,
     };
     use futures::{future, stream::StreamExt};
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
     use hotshot_query_service::availability::{
-        AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
+        AvailabilityDataSource, BlockQueryData, StateCertQueryData, VidCommonQueryData,
     };
     use hotshot_types::{
         data::{
@@ -1744,6 +1744,74 @@ mod api_tests {
             vid_share: None,
             state: Default::default(),
             delta: None,
+            state_cert: None,
+        }
+    }
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    pub(crate) async fn test_state_cert_query<D: TestableSequencerDataSource>() {
+        setup_test();
+
+        const TEST_EPOCH_HEIGHT: u64 = 10;
+        const TEST_EPOCHS: u64 = 3;
+
+        // Start query service.
+        let port = pick_unused_port().expect("No ports free");
+        let storage = D::create_storage().await;
+        let anvil = Anvil::new().spawn();
+        let l1 = anvil.endpoint().parse().unwrap();
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1)
+            .epoch_height(TEST_EPOCH_HEIGHT)
+            .build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, EpochsTestVersions {}).await;
+        let mut events = network.server.event_stream().await;
+
+        // Wait until 3 epochs have passed.
+        loop {
+            let event = events.next().await.unwrap();
+            tracing::info!("Received event from handle: {event:?}");
+
+            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
+                println!(
+                    "Decide event received: {:?}",
+                    leaf_chain.first().unwrap().leaf.height()
+                );
+                if leaf_chain
+                    .first()
+                    .is_some_and(|leaf| leaf.leaf.height() >= TEST_EPOCHS * TEST_EPOCH_HEIGHT)
+                {
+                    break;
+                } else {
+                    // Keep waiting
+                }
+            }
+        }
+
+        // Connect client.
+        let client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        client.connect(None).await;
+
+        // Get the state cert for the 3rd epoch.
+        for i in 0..TEST_EPOCHS {
+            let state_cert = client
+                .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{i}"))
+                .send()
+                .await
+                .unwrap()
+                .0;
+            tracing::info!("state_cert: {:?}", state_cert);
+            assert_eq!(state_cert.epoch.u64(), i);
+            assert_eq!(
+                state_cert.light_client_state.block_height,
+                (i + 1) * TEST_EPOCH_HEIGHT - 5
+            );
         }
     }
 }

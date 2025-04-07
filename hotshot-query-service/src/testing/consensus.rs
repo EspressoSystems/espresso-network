@@ -80,6 +80,7 @@ pub type MockDataSource = FileSystemDataSource<MockTypes, NoFetching>;
 pub type MockSqlDataSource = SqlDataSource<MockTypes, NoFetching>;
 
 pub const NUM_NODES: usize = 2;
+const EPOCH_HEIGHT: u64 = 10;
 
 impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
     pub async fn init() -> Self {
@@ -156,7 +157,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             stop_proposing_time: 0,
             start_voting_time: 0,
             stop_voting_time: 0,
-            epoch_height: 10,
+            epoch_height: EPOCH_HEIGHT,
             epoch_start_block: 0,
         };
         update_config(&mut config);
@@ -295,6 +296,10 @@ impl<D: DataSourceLifeCycle, V: Versions> MockNetwork<D, V> {
         for node in &mut self.nodes {
             node.hotshot.shut_down().await;
         }
+    }
+
+    pub fn epoch_height(&self) -> u64 {
+        EPOCH_HEIGHT
     }
 }
 

@@ -58,7 +58,7 @@ pub struct TestStorageState<TYPES: NodeType> {
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
     action: TYPES::View,
     epoch: Option<TYPES::Epoch>,
-    state_cert: Option<hotshot_types::simple_certificate::LightClientStateUpdateCertificate<TYPES>>,
+    state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
     drb_results: BTreeMap<TYPES::Epoch, DrbResult>,
     epoch_roots: BTreeMap<TYPES::Epoch, TYPES::BlockHeader>,
 }
@@ -78,7 +78,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             high_qc2: None,
             action: TYPES::View::genesis(),
             epoch: None,
-            state_cert: None,
+            state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             epoch_roots: BTreeMap::new(),
         }
@@ -146,7 +146,13 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
     }
 
     pub async fn state_cert_cloned(&self) -> Option<LightClientStateUpdateCertificate<TYPES>> {
-        self.inner.read().await.state_cert.clone()
+        self.inner
+            .read()
+            .await
+            .state_certs
+            .iter()
+            .next_back()
+            .map(|(_, cert)| cert.clone())
     }
 }
 
@@ -322,20 +328,17 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
 
     async fn update_state_cert(
         &self,
-        state_cert: hotshot_types::simple_certificate::LightClientStateUpdateCertificate<TYPES>,
+        state_cert: LightClientStateUpdateCertificate<TYPES>,
     ) -> Result<()> {
         if self.should_return_err {
             bail!("Failed to update state_cert to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
-        let mut inner = self.inner.write().await;
-        if let Some(ref current_state_cert) = inner.state_cert {
-            if state_cert.epoch > current_state_cert.epoch {
-                inner.state_cert = Some(state_cert);
-            }
-        } else {
-            inner.state_cert = Some(state_cert);
-        }
+        self.inner
+            .write()
+            .await
+            .state_certs
+            .insert(state_cert.epoch, state_cert);
         Ok(())
     }
 
