@@ -10,17 +10,19 @@ use async_lock::RwLock;
 use clap::Args;
 use espresso_types::SeqTypes;
 use futures::FutureExt;
-use hotshot_stake_table::{utils::one_honest_threshold, vec_based::config::FieldType};
+use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
     fetch_epoch_config_from_sequencer, fetch_stake_table_from_sequencer,
 };
 use hotshot_types::{
-    light_client::{StateSignatureScheme, StateSignaturesBundle, StateVerKey},
-    traits::stake_table::{SnapshotVersion, StakeTableScheme},
+    light_client::{StateSignaturesBundle, StateVerKey},
+    traits::{
+        signature_key::StateSignatureKey,
+        stake_table::{SnapshotVersion, StakeTableScheme},
+    },
     utils::epoch_from_block_number,
     PeerConfig,
 };
-use jf_signature::SignatureScheme;
 use tide_disco::{
     api::ApiError,
     error::ServerError,
@@ -325,13 +327,11 @@ impl StateRelayServerDataSource for StateRelayServerState {
         };
 
         // sanity check the signature validity first before adding in
-        let mut msg = Vec::with_capacity(7);
-        let state_msg: [FieldType; 3] = (&req.state).into();
-        msg.extend_from_slice(&state_msg);
-        let stake_msg: [FieldType; 4] = req.next_stake.into();
-        msg.extend_from_slice(&stake_msg);
-
-        if StateSignatureScheme::verify(&(), &req.key, msg, &req.signature).is_err() {
+        if !req
+            .key
+            .verify_state_sig(&req.signature, &req.state, &req.next_stake)
+        {
+            tracing::info!("Received invalid request: {:?}", req);
             return Err(ServerError::catch_all(
                 StatusCode::BAD_REQUEST,
                 "The posted signature is not valid.".to_owned(),

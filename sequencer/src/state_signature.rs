@@ -7,22 +7,22 @@ use std::{
 
 use async_lock::RwLock;
 use espresso_types::{traits::SequencerPersistence, PubKey};
-use hotshot::types::{Event, EventType};
+use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_types::{
     data::EpochNumber,
     event::LeafInfo,
     light_client::{
-        compute_stake_table_commitment, CircuitField, LightClientState, StakeTableState,
-        StateSignKey, StateSignature, StateSignatureRequestBody, StateSignatureScheme, StateVerKey,
+        compute_stake_table_commitment, LightClientState, StakeTableState, StateSignKey,
+        StateSignature, StateSignatureRequestBody, StateVerKey,
     },
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, Versions},
+        signature_key::StateSignatureKey,
     },
     utils::{epoch_from_block_number, is_last_block},
 };
-use jf_signature::SignatureScheme;
 use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
@@ -166,14 +166,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         state: &LightClientState,
         next_stake_table: StakeTableState,
     ) -> StateSignature {
-        let mut msg = Vec::with_capacity(7);
-        let state_msg: [CircuitField; 3] = state.into();
-        msg.extend_from_slice(&state_msg);
-        let next_stake_msg: [CircuitField; 4] = next_stake_table.into();
-        msg.extend_from_slice(&next_stake_msg);
-
-        let signature =
-            StateSignatureScheme::sign(&(), &self.sign_key, msg, &mut rand::thread_rng()).unwrap();
+        let signature = <SchnorrPubKey as StateSignatureKey>::sign_state(
+            &self.sign_key,
+            state,
+            &next_stake_table,
+        )
+        .unwrap();
         let mut pool_guard = self.signatures.write().await;
         pool_guard.push(
             state.block_height,

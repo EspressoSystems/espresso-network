@@ -341,14 +341,15 @@ mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_std::UniformRand;
     use hotshot_types::{
-        light_client::LightClientState,
-        traits::stake_table::{SnapshotVersion, StakeTableScheme},
+        light_client::{LightClientState, StakeTableState},
+        signature_key::SchnorrPubKey,
+        traits::{
+            signature_key::StateSignatureKey,
+            stake_table::{SnapshotVersion, StakeTableScheme},
+        },
     };
     use jf_relation::Circuit;
-    use jf_signature::{
-        schnorr::{SchnorrSignatureScheme, Signature},
-        SignatureScheme,
-    };
+    use jf_signature::schnorr::Signature;
     use jf_utils::test_rng;
 
     use super::build;
@@ -379,17 +380,18 @@ mod tests {
             block_height: 73,
             block_comm_root: F::rand(&mut prng),
         };
-        let mut msg = Vec::with_capacity(7);
-        let state_msg: [F; 3] = lightclient_state.clone().into();
-        msg.extend_from_slice(&state_msg);
-        let next_st_state_msg: [F; 4] = next_st_state.into();
-        msg.extend_from_slice(&next_st_state_msg);
 
-        let sigs = state_keys
+        let sigs: Vec<_> = state_keys
             .iter()
-            .map(|(key, _)| SchnorrSignatureScheme::<Config>::sign(&(), key, &msg, &mut prng))
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            .map(|(key, _)| {
+                <SchnorrPubKey as StateSignatureKey>::sign_state(
+                    key,
+                    &lightclient_state,
+                    &next_st_state,
+                )
+                .unwrap()
+            })
+            .collect();
 
         // bit vector with total weight 26
         let bit_vec = [
@@ -510,12 +512,15 @@ mod tests {
             .is_err());
 
         // bad path: incorrect signing message
-        let bad_msg: Vec<F> = msg.iter().map(|_| F::rand(&mut prng)).collect();
-        let bad_sigs = state_keys
+        let bad_lc_state = LightClientState::default();
+        let bad_st_state = StakeTableState::default();
+        let bad_sigs: Vec<_> = state_keys
             .iter()
-            .map(|(key, _)| SchnorrSignatureScheme::<Config>::sign(&(), key, &bad_msg, &mut prng))
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            .map(|(key, _)| {
+                <SchnorrPubKey as StateSignatureKey>::sign_state(key, &bad_lc_state, &bad_st_state)
+                    .unwrap()
+            })
+            .collect();
         let (bad_circuit, public_inputs) = build(
             &entries,
             &bit_vec,

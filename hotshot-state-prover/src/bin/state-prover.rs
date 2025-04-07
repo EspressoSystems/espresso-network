@@ -108,6 +108,18 @@ async fn main() {
             .await
             .unwrap_or((u64::MAX, u64::MAX));
 
+    // If the sequencer returns 0 for pre-epoch configuration.
+    let blocks_per_epoch = if blocks_per_epoch == 0 {
+        u64::MAX
+    } else {
+        blocks_per_epoch
+    };
+    let epoch_start_block = if epoch_start_block == 0 {
+        u64::MAX
+    } else {
+        epoch_start_block
+    };
+
     tracing::info!(
         "Epoch config fetched from sequencer: blocks_per_epoch = {}, epoch_start_block = {}",
         blocks_per_epoch,

@@ -22,10 +22,7 @@ use hotshot_contract_adapter::{
     sol_types::{LightClientStateSol, LightClientV2, PlonkProofSol, StakeTableStateSol},
 };
 use hotshot_query_service::availability::StateCertQueryData;
-use hotshot_stake_table::{
-    utils::one_honest_threshold,
-    vec_based::{config::FieldType, StakeTable},
-};
+use hotshot_stake_table::{utils::one_honest_threshold, vec_based::StakeTable};
 use hotshot_types::{
     light_client::{
         CircuitField, LightClientState, PublicInput, StakeTableState, StateSignature,
@@ -34,7 +31,7 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     simple_certificate::LightClientStateUpdateCertificate,
     traits::{
-        signature_key::StakeTableEntryType,
+        signature_key::{StakeTableEntryType, StateSignatureKey},
         stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme as _},
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
@@ -43,7 +40,6 @@ use hotshot_types::{
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
-use jf_signature::constants::CS_ID_SCHNORR;
 use sequencer_utils::deployer::is_proxy_contract;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
@@ -397,8 +393,8 @@ async fn fetch_epoch_state_from_sequencer(
 async fn generate_proof_helper(
     state: &mut ProverServiceState,
     light_client_state: &LightClientState,
-    current_stake_table_commitment: &StakeTableState,
-    next_stake_table_commitment: &StakeTableState,
+    current_stake_table_state: &StakeTableState,
+    next_stake_table_state: &StakeTableState,
     signature_map: HashMap<StateVerKey, StateSignature>,
     proving_key: &ProvingKey,
 ) -> Result<(Proof, PublicInput), ProverError> {
@@ -415,21 +411,17 @@ async fn generate_proof_helper(
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = signature_map.get(key) {
             // Check if the signature is valid
-            let mut msg = Vec::with_capacity(7);
-            let state_msg: [FieldType; 3] = light_client_state.into();
-            msg.extend_from_slice(&state_msg);
-            let next_stake_msg: [FieldType; 4] = (*next_stake_table_commitment).into();
-            msg.extend_from_slice(&next_stake_msg);
-
-            if key.verify(&msg, sig, CS_ID_SCHNORR).is_ok() {
+            if key.verify_state_sig(sig, light_client_state, next_stake_table_state) {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;
+            } else {
+                tracing::info!("Invalid signature for key: {:?}", key);
             }
         }
     });
 
-    if accumulated_weight < field_to_u256(next_stake_table_commitment.threshold) {
+    if accumulated_weight < field_to_u256(current_stake_table_state.threshold) {
         return Err(ProverError::InvalidState(
             "The signers' total weight doesn't reach the threshold.".to_string(),
         ));
@@ -440,19 +432,19 @@ async fn generate_proof_helper(
     let proving_key_clone = proving_key.clone();
     let stake_table_capacity = state.config.stake_table_capacity;
     let light_client_state = light_client_state.clone();
-    let current_stake_table_commitment = *current_stake_table_commitment;
-    let next_stake_table_commitment = *next_stake_table_commitment;
+    let current_stake_table_state = *current_stake_table_state;
+    let next_stake_table_state = *next_stake_table_state;
     let (proof, public_input) = spawn_blocking(move || {
         generate_state_update_proof(
             &mut ark_std::rand::thread_rng(),
             &proving_key_clone,
-            &entries,
+            entries,
             signer_bit_vec,
             signatures,
             &light_client_state,
-            &current_stake_table_commitment,
+            &current_stake_table_state,
             stake_table_capacity,
-            &next_stake_table_commitment,
+            &next_stake_table_state,
         )
     })
     .await
@@ -576,7 +568,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         }
 
         // If we reached the epoch root, proceed to the next epoch and ignore the rest bundles from the same epoch
-        if is_ge_epoch_root(bundle.state.block_height as u64, state.epoch) {
+        if is_ge_epoch_root(bundle.state.block_height as u64, blocks_per_epoch) {
             tracing::info!("Epoch reaching an end, proceed to the next epoch...");
             epoch_catchup(
                 state,
@@ -695,17 +687,17 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
 
 #[derive(Debug, Display)]
 pub enum ProverError {
-    /// Invalid light client state or signatures
+    /// Invalid light client state or signatures: {0}
     InvalidState(String),
     /// Error when communicating with the smart contract: {0}
     ContractError(anyhow::Error),
     /// Error when communicating with the state relay server: {0}
     RelayServerError(ServerError),
-    /// Internal error with the stake table
+    /// Internal error with the stake table: {0}
     StakeTableError(StakeTableError),
     /// Internal error when generating the SNARK proof: {0}
     PlonkError(PlonkError),
-    /// Internal error
+    /// Internal error: {0}
     Internal(String),
     /// General network issue: {0}
     NetworkError(anyhow::Error),

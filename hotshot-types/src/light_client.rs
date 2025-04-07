@@ -6,7 +6,7 @@
 
 //! Types and structs associated with light client state
 
-use std::collections::HashMap;
+use std::{collections::HashMap, iter};
 
 use alloy::primitives::U256;
 use ark_ed_on_bn254::EdwardsConfig as Config;
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
 use crate::{
-    signature_key::BLSPubKey,
+    signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
     PeerConfig,
 };
@@ -363,6 +363,7 @@ pub fn compute_stake_table_commitment<TYPES: NodeType>(
     known_nodes_with_stakes: &[PeerConfig<TYPES>],
     stake_table_capacity: usize,
 ) -> StakeTableState {
+    let padding_len = stake_table_capacity - known_nodes_with_stakes.len();
     let mut bls_preimage = vec![];
     let mut schnorr_preimage = vec![];
     let mut amount_preimage = vec![];
@@ -377,10 +378,9 @@ pub fn compute_stake_table_commitment<TYPES: NodeType>(
         <TYPES::SignatureKey as ToLightClientFields>::SIZE * stake_table_capacity,
         CircuitField::default(),
     );
-    schnorr_preimage.resize(
-        <TYPES::StateSignatureKey as ToLightClientFields>::SIZE * stake_table_capacity,
-        CircuitField::default(),
-    );
+    // Nasty tech debt
+    schnorr_preimage
+        .extend(iter::repeat_n(SchnorrPubKey::default().to_fields(), padding_len).flatten());
     amount_preimage.resize(stake_table_capacity, CircuitField::default());
     let threshold = u256_to_field(one_honest_threshold(total_stake));
     StakeTableState {
