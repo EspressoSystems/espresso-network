@@ -117,8 +117,13 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 }
                 // Increase stake
                 validator_entry.stake += amount;
-                // Add delegator to the set
-                validator_entry.delegators.insert(delegator, amount);
+                // Insert the delegator with the given stake
+                // or increase the stake if already present
+                validator_entry
+                    .delegators
+                    .entry(delegator)
+                    .and_modify(|stake| *stake += amount)
+                    .or_insert(amount);
             },
             StakeTableEvent::Undelegate(undelegated) => {
                 let Undelegated {
@@ -1017,15 +1022,24 @@ mod tests {
                 amount: U256::from(7),
             }
             .into(),
+            // delegate to the same validator again
+            Delegated {
+                delegator,
+                validator: val.account,
+                amount: U256::from(5),
+            }
+            .into(),
         ]
         .to_vec();
 
         let st = from_l1_events(events.iter().cloned())?;
         let st_val = st.get(&val.account).unwrap();
-        assert_eq!(st_val.stake, U256::from(3));
+        // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
+        assert_eq!(st_val.stake, U256::from(8));
         assert_eq!(st_val.commission, val.commission);
         assert_eq!(st_val.delegators.len(), 1);
-        assert_eq!(*st_val.delegators.get(&delegator).unwrap(), U256::from(3));
+        // final delegated amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
+        assert_eq!(*st_val.delegators.get(&delegator).unwrap(), U256::from(8));
 
         events.push(
             ValidatorExit {
