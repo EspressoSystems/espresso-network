@@ -532,7 +532,16 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
                         leaf.block_header().block_number(),
                         consensus_reader.epoch_height,
                     ) {
-                    consensus_reader.state_cert().cloned()
+                    match consensus_reader.state_cert() {
+                        // Sanity check that the state cert is for the same view as the decided leaf
+                        Some(state_cert)
+                            if state_cert.light_client_state.view_number
+                                == leaf.view_number().u64() =>
+                        {
+                            Some(state_cert.clone())
+                        },
+                        _ => None,
+                    }
                 } else {
                     None
                 };

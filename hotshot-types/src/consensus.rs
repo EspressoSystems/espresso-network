@@ -641,7 +641,15 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let state_cert = if parent_leaf.with_epoch
             && is_epoch_root(parent_leaf.block_header().block_number(), self.epoch_height)
         {
-            self.state_cert().cloned()
+            match self.state_cert() {
+                // Sanity check that the state cert is for the same view as the parent leaf
+                Some(state_cert)
+                    if state_cert.light_client_state.view_number == parent_view_number.u64() =>
+                {
+                    Some(state_cert.clone())
+                },
+                _ => None,
+            }
         } else {
             None
         };
