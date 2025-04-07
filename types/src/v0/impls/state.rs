@@ -29,7 +29,7 @@ use super::{
     auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
-    reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
+    reward::{apply_rewards, find_validator_info, first_two_epochs},
     v0_1::{
         RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
@@ -885,14 +885,13 @@ impl ValidatedState {
             && !first_two_epochs(parent_leaf.height() + 1, instance).await?
         {
             let validator =
-                catchup_missing_accounts(instance, &mut validated_state, parent_leaf, view_number)
+                find_validator_info(instance, &mut validated_state, parent_leaf, view_number)
                     .await?;
 
             // apply rewards
-
             validated_state
                 .distribute_rewards(&mut delta, validator)
-                .context("failed to distribute rewards")?
+                .context("failed to distribute rewards")?;
         }
 
         Ok((validated_state, delta))

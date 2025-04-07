@@ -140,14 +140,6 @@ async fn store_state_update(
         .context("failed to store block merkle nodes")?;
     }
 
-    tracing::debug!(block_number, "updating state height");
-    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
-        tx,
-        block_number as usize,
-    )
-    .await
-    .context("setting state height")?;
-
     for delta in rewards_delta {
         let proof = match reward_merkle_tree.universal_lookup(delta) {
             LookupResult::Ok(_, proof) => proof,
@@ -160,7 +152,7 @@ async fn store_state_update(
                 reward_merkle_tree.height(),
             );
 
-        tracing::debug!(%delta, "inserting fee account");
+        tracing::debug!(%delta, "inserting reward account");
         UpdateStateData::<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>::insert_merkle_nodes(
             tx,
             proof,
@@ -168,8 +160,17 @@ async fn store_state_update(
             block_number,
         )
         .await
-        .context("failed to store fee merkle nodes")?;
+        .context("failed to store reward merkle nodes")?;
     }
+
+    tracing::debug!(block_number, "updating state height");
+    UpdateStateData::<SeqTypes, _, { BlockMerkleTree::ARITY }>::set_last_state_height(
+        tx,
+        block_number as usize,
+    )
+    .await
+    .context("setting state height")?;
+
     Ok(())
 }
 
