@@ -359,12 +359,6 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Signature key for light client state
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
-
-    /// Upgrade certificate to enable epochs, staged until we reach the specified block height
-    pub staged_epoch_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-
-    /// Block height at which to enable the epoch upgrade
-    pub epoch_upgrade_block_height: u64,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {

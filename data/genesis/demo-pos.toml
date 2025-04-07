@@ -1,6 +1,7 @@
 base_version = "0.2"
 upgrade_version = "0.3"
-epoch_height = 20
+epoch_height = 200
+epoch_start_block = 321
 
 [stake_table]
 capacity = 10
@@ -20,8 +21,8 @@ number = 0
 
 [[upgrade]]
 version = "0.3"
-start_proposing_view = 10
-stop_proposing_view = 50
+start_proposing_view = 200
+stop_proposing_view = 1000
 
 [upgrade.epoch]
 [upgrade.epoch.chain_config]

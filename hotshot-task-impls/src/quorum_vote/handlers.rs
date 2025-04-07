@@ -219,36 +219,22 @@ pub(crate) async fn handle_quorum_proposal_validated<
         .await
     };
 
-    if let Some(cert) = &task_state.staged_epoch_upgrade_certificate {
-        if leaf_views.last().unwrap().leaf.height() >= task_state.epoch_upgrade_block_height {
-            let mut decided_certificate_lock = task_state
-                .upgrade_lock
-                .decided_upgrade_certificate
-                .write()
-                .await;
-            *decided_certificate_lock = Some(cert.clone());
-            drop(decided_certificate_lock);
-
-            let _ = task_state
-                .storage
-                .write()
-                .await
-                .update_decided_upgrade_certificate(Some(cert.clone()))
-                .await;
-
-            task_state.staged_epoch_upgrade_certificate = None;
-        }
-    };
-
     if let Some(cert) = decided_upgrade_cert.clone() {
-        if cert.data.new_version == V::Epochs::VERSION {
-            task_state.staged_epoch_upgrade_certificate = Some(cert);
+        let mut decided_certificate_lock = task_state
+            .upgrade_lock
+            .decided_upgrade_certificate
+            .write()
+            .await;
+        *decided_certificate_lock = Some(cert.clone());
+        drop(decided_certificate_lock);
 
+        if cert.data.new_version == V::Epochs::VERSION {
             let epoch_height = task_state.consensus.read().await.epoch_height;
             let first_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
-                task_state.epoch_upgrade_block_height,
+                proposal.block_header().block_number(),
                 epoch_height,
             ));
+
             tracing::debug!("Calling set_first_epoch for epoch {:?}", first_epoch_number);
             task_state
                 .membership
@@ -256,22 +242,14 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 .write()
                 .await
                 .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
-        } else {
-            let mut decided_certificate_lock = task_state
-                .upgrade_lock
-                .decided_upgrade_certificate
-                .write()
-                .await;
-            *decided_certificate_lock = Some(cert.clone());
-            drop(decided_certificate_lock);
+        };
 
-            let _ = task_state
-                .storage
-                .write()
-                .await
-                .update_decided_upgrade_certificate(Some(cert.clone()))
-                .await;
-        }
+        let _ = task_state
+            .storage
+            .write()
+            .await
+            .update_decided_upgrade_certificate(Some(cert.clone()))
+            .await;
     }
 
     let mut consensus_writer = task_state.consensus.write().await;
