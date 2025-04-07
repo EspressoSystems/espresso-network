@@ -829,8 +829,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         let state_cert = self
             .load_state_cert()
             .await
-            .context("loading light client state update certificate")?
-            .unwrap_or(LightClientStateUpdateCertificate::genesis());
+            .context("loading light client state update certificate")?;
 
         tracing::info!(
             ?leaf,

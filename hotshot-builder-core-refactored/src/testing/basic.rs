@@ -224,6 +224,7 @@ async fn test_pruning() {
                     state: Arc::new(TestValidatedState::default()),
                     delta: None,
                     vid_share: None,
+                    state_cert: None,
                 }]),
                 qc: Arc::new(mock_qc),
                 block_size: None,

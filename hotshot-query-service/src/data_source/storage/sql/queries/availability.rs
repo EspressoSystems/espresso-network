@@ -24,12 +24,13 @@ use vec1::Vec1;
 use super::{
     super::transaction::{query, Transaction, TransactionMode},
     QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
-    VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
+    STATE_CERT_COLUMNS, VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
 };
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryableHeader,
-        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
+        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
+        VidCommonQueryData,
     },
     data_source::storage::{
         sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
@@ -416,5 +417,15 @@ where
         .await?;
         let leaf = LeafQueryData::from_row(&row)?;
         Ok(leaf)
+    }
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+        let row = query(&format!(
+            "SELECT {STATE_CERT_COLUMNS} FROM finalized_state_cert WHERE epoch = $1 LIMIT 1"
+        ))
+        .bind(epoch as i64)
+        .fetch_one(self.as_mut())
+        .await?;
+        Ok(StateCertQueryData::from_row(&row)?)
     }
 }
