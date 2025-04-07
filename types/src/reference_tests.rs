@@ -43,8 +43,8 @@ use vbs::{
 };
 
 use crate::{
-    v0_1, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId, NsTable, Payload, SeqTypes,
-    Transaction, ValidatedState,
+    v0_1, v0_2, v0_3, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId, NsTable, Payload,
+    SeqTypes, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -110,6 +110,12 @@ fn reference_chain_config() -> crate::v0_99::ChainConfig {
 const REFERENCE_V1_CHAIN_CONFIG_COMMITMENT: &str =
     "CHAIN_CONFIG~L6HmMktJbvnEGgpmRrsiYvQmIBstSj9UtDM7eNFFqYFO";
 
+const REFERENCE_V2_CHAIN_CONFIG_COMMITMENT: &str =
+    "CHAIN_CONFIG~L6HmMktJbvnEGgpmRrsiYvQmIBstSj9UtDM7eNFFqYFO";
+
+const REFERENCE_V3_CHAIN_CONFIG_COMMITMENT: &str =
+    "CHAIN_CONFIG~eGc90bEB8zFN4GTo2nForM7pox7r4OiHd2LrtgotiNMO";
+
 const REFERENCE_V99_CHAIN_CONFIG_COMMITMENT: &str =
     "CHAIN_CONFIG~ucfYQZSMbWCUHdtwYMc6vsw-4jDmlu3hi2lGDBxCRpI-";
 
@@ -155,6 +161,7 @@ async fn reference_header(version: Version) -> Header {
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
+const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
 const REFERENCE_V99_HEADER_COMMITMENT: &str = "BLOCK~h9jWCyN6A6vRqxEhxejJbTbORMxUqXYQxXBdpfdBQ8x5";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
@@ -350,6 +357,26 @@ fn test_reference_v1_chain_config() {
 }
 
 #[test]
+fn test_reference_v2_chain_config() {
+    reference_test(
+        "v2",
+        "chain_config",
+        v0_2::ChainConfig::from(reference_chain_config()),
+        REFERENCE_V2_CHAIN_CONFIG_COMMITMENT,
+    );
+}
+
+#[test]
+fn test_reference_v3_chain_config() {
+    reference_test(
+        "v3",
+        "chain_config",
+        v0_3::ChainConfig::from(reference_chain_config()),
+        REFERENCE_V3_CHAIN_CONFIG_COMMITMENT,
+    );
+}
+
+#[test]
 fn test_reference_v99_chain_config() {
     reference_test(
         "v99",
@@ -386,6 +413,16 @@ async fn test_reference_header_v2() {
         "header",
         reference_header(StaticVersion::<0, 2>::version()).await,
         REFERENCE_V2_HEADER_COMMITMENT,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_header_v3() {
+    reference_test(
+        "v3",
+        "header",
+        reference_header(StaticVersion::<0, 3>::version()).await,
+        REFERENCE_V3_HEADER_COMMITMENT,
     );
 }
 
