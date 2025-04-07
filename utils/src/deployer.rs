@@ -221,9 +221,10 @@ pub(crate) async fn deploy_light_client_contract(
     } else {
         LightClient::BYTECODE.encode_hex()
     };
-    let lc_linked_bytecode = Bytes::from_hex(target_lc_bytecode.replace(
+    let lc_linked_bytecode = Bytes::from_hex(target_lc_bytecode.replacen(
         LIBRARY_PLACEHOLDER_ADDRESS,
         &plonk_verifier_addr.encode_hex(),
+        1,
     ))?;
 
     // Deploy the light client
@@ -332,9 +333,11 @@ pub async fn upgrade_light_client_v2(
             } else {
                 LightClientV2::BYTECODE.encode_hex()
             };
-            let lcv2_linked_bytecode = Bytes::from_hex(
-                target_lcv2_bytecode.replace(LIBRARY_PLACEHOLDER_ADDRESS, &pv2_addr.encode_hex()),
-            )?;
+            let lcv2_linked_bytecode = Bytes::from_hex(target_lcv2_bytecode.replacen(
+                LIBRARY_PLACEHOLDER_ADDRESS,
+                &pv2_addr.encode_hex(),
+                1,
+            ))?;
 
             let lcv2_addr = if is_mock {
                 let addr = LightClientV2Mock::deploy_builder(&provider)
