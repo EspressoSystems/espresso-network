@@ -616,13 +616,12 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     }
 
     let consensus_reader = consensus.read().await;
-    //let parent_view_number = consensus_reader.high_qc().view_number();
     let parent_view = consensus_reader.validated_state_map().get(&parent_qc.view_number()).context(
         debug!("Couldn't find parent view in state map, waiting for replica to see proposal; parent_view_number: {}", *parent_qc.view_number())
     )?;
 
     let (leaf_commitment, state) = parent_view.leaf_and_state().context(
-        info!("Parent of high QC points to a view without a proposal; parent_view_number: {parent_view_number}, parent_view {parent_view:?}")
+        info!("Parent of high QC points to a view without a proposal; parent_view_number: {}, parent_view {:?}", *parent_qc.view_number(), parent_view)
     )?;
 
     if leaf_commitment != consensus_reader.high_qc().data().leaf_commit {
