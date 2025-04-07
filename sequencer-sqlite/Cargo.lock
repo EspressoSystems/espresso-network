@@ -4801,6 +4801,7 @@ dependencies = [
  "espresso-types",
  "futures",
  "hotshot-contract-adapter",
+ "hotshot-query-service",
  "hotshot-stake-table",
  "hotshot-types",
  "itertools 0.12.1",
