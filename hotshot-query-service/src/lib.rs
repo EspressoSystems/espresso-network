@@ -613,7 +613,7 @@ mod test {
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-            LeafQueryData, PayloadMetadata, PayloadQueryData, TransactionHash,
+            LeafQueryData, PayloadMetadata, PayloadQueryData, StateCertQueryData, TransactionHash,
             TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
@@ -780,6 +780,9 @@ mod test {
         ) -> Fetch<TransactionQueryData<MockTypes>> {
             self.hotshot_qs.get_transaction(hash).await
         }
+        async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<MockTypes>> {
+            self.hotshot_qs.get_state_cert(epoch).await
+        }
     }
 
     // Imiplement data source trait for node API.
@@ -852,7 +855,7 @@ mod test {
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         hotshot_qs
-            .append(BlockInfo::new(leaf, Some(block), None, None))
+            .append(BlockInfo::new(leaf, Some(block), None, None, None))
             .await
             .unwrap();
 

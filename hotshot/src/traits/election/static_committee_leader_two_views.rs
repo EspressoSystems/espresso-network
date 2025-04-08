@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
     traits::{
@@ -16,7 +17,6 @@ use hotshot_types::{
     PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
-use primitive_types::U256;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 
@@ -47,21 +47,21 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
         // For each eligible leader, get the stake table entry
         let eligible_leaders: Vec<PeerConfig<TYPES>> = committee_members
             .iter()
-            .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+            .filter(|&member| member.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let members: Vec<PeerConfig<TYPES>> = committee_members
             .iter()
-            .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+            .filter(|&member| member.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
         // For each member, get the stake table entry
         let da_members: Vec<PeerConfig<TYPES>> = da_members
             .iter()
-            .filter(|&member| member.stake_table_entry.stake() > U256::zero())
+            .filter(|&member| member.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
@@ -158,7 +158,7 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     ) -> bool {
         self.indexed_stake_table
             .get(pub_key)
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+            .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
 
     /// Check if a node has stake in the committee
@@ -169,7 +169,7 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     ) -> bool {
         self.indexed_da_stake_table
             .get(pub_key)
-            .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+            .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
 
     /// Index the vector of public keys with the current view number

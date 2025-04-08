@@ -2,18 +2,17 @@ use alloy::{
     primitives::{Address, U256},
     providers::Provider,
     rpc::types::TransactionReceipt,
-    transports::Transport,
 };
 use anyhow::Result;
-use contract_bindings_alloy::{
-    esptoken::EspToken::EspTokenInstance, staketable::StakeTable::StakeTableInstance,
-};
+use hotshot_contract_adapter::sol_types::{EspToken, StakeTable};
 
-pub async fn approve<P: Provider<T>, T: Transport + Clone>(
-    token: EspTokenInstance<T, P>,
+pub async fn approve(
+    provider: impl Provider,
+    token_addr: Address,
     stake_table_address: Address,
     amount: U256,
 ) -> Result<TransactionReceipt> {
+    let token = EspToken::new(token_addr, &provider);
     Ok(token
         .approve(stake_table_address, amount)
         .send()
@@ -22,14 +21,16 @@ pub async fn approve<P: Provider<T>, T: Transport + Clone>(
         .await?)
 }
 
-pub async fn delegate<P: Provider<T>, T: Transport + Clone>(
-    stake_table: StakeTableInstance<T, P>,
+pub async fn delegate(
+    provider: impl Provider,
+    stake_table: Address,
     validator_address: Address,
     amount: U256,
 ) -> Result<TransactionReceipt> {
+    let st = StakeTable::new(stake_table, provider);
     // TODO: needs alloy 0.12: use err.as_decoded_error::<StakeTableErrors>().unwrap();
     // to provide better error messages in case of failure
-    Ok(stake_table
+    Ok(st
         .delegate(validator_address, amount)
         .send()
         .await?
@@ -37,12 +38,14 @@ pub async fn delegate<P: Provider<T>, T: Transport + Clone>(
         .await?)
 }
 
-pub async fn undelegate<P: Provider<T>, T: Transport + Clone>(
-    stake_table: StakeTableInstance<T, P>,
+pub async fn undelegate(
+    provider: impl Provider,
+    stake_table: Address,
     validator_address: Address,
     amount: U256,
 ) -> Result<TransactionReceipt> {
-    Ok(stake_table
+    let st = StakeTable::new(stake_table, provider);
+    Ok(st
         .undelegate(validator_address, amount)
         .send()
         .await?
@@ -52,8 +55,6 @@ pub async fn undelegate<P: Provider<T>, T: Transport + Clone>(
 
 #[cfg(test)]
 mod test {
-    use contract_bindings_alloy::staketable::StakeTable::{self};
-
     use super::*;
     use crate::{deploy::TestSystem, l1::decode_log};
 
@@ -64,7 +65,13 @@ mod test {
         let validator_address = system.deployer_address;
 
         let amount = U256::from(123);
-        let receipt = delegate(system.stake_table, validator_address, amount).await?;
+        let receipt = delegate(
+            &system.provider,
+            system.stake_table,
+            validator_address,
+            amount,
+        )
+        .await?;
         assert!(receipt.status());
 
         let event = decode_log::<StakeTable::Delegated>(&receipt).unwrap();
@@ -82,7 +89,13 @@ mod test {
         system.delegate(amount).await?;
 
         let validator_address = system.deployer_address;
-        let receipt = undelegate(system.stake_table, validator_address, amount).await?;
+        let receipt = undelegate(
+            &system.provider,
+            system.stake_table,
+            validator_address,
+            amount,
+        )
+        .await?;
         assert!(receipt.status());
 
         let event = decode_log::<StakeTable::Undelegated>(&receipt).unwrap();

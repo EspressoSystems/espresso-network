@@ -271,7 +271,7 @@ where
 
                 Some(payload.data)
             },
-            Err(err) => self.fetch_legacy_payload::<Types>(req).await,
+            Err(_err) => self.fetch_legacy_payload::<Types>(req).await,
         }
     }
 }
@@ -311,7 +311,7 @@ where
 
                 Some(leaf)
             },
-            Err(err) => self.fetch_legacy_leaf(req).await,
+            Err(_err) => self.fetch_legacy_leaf(req).await,
         }
     }
 }
@@ -354,7 +354,7 @@ where
                     }
                 },
             },
-            Err(err) => self.fetch_legacy_vid_common::<Types>(req).await,
+            Err(_err) => self.fetch_legacy_vid_common::<Types>(req).await,
         }
     }
 }
@@ -1203,7 +1203,7 @@ mod test {
             let block = blocks.next().await.unwrap();
 
             data_source
-                .append(BlockInfo::new(leaf, Some(block.clone()), None, None))
+                .append(BlockInfo::new(leaf, Some(block.clone()), None, None, None))
                 .await
                 .unwrap();
 
@@ -2269,7 +2269,7 @@ mod test {
         let block = network.data_source().get_block(1).await.await;
         let vid = network.data_source().get_vid_common(1).await.await;
         data_source
-            .append(BlockInfo::new(leaf, Some(block), Some(vid), None))
+            .append(BlockInfo::new(leaf, Some(block), Some(vid), None, None))
             .await
             .unwrap();
 

@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
+use alloy::primitives::{Address, U256};
 use committable::Commitment;
 use derive_more::{derive::AddAssign, Add, Display, From, Into, Mul, Sub};
-use ethers::{abi::Address, types::U256};
 use jf_merkle_tree::{
     prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
@@ -96,8 +96,8 @@ pub fn block_reward() -> RewardAmount {
     U256::from(REWARD_PER_BLOCK).into()
 }
 
-// 1 billion tokens with 18 decimals
-const TOTAL_SUPPLY: u128 = 1_000_000_000 * 10_u128.pow(18);
+// 10 billion tokens with 18 decimals
+const TOTAL_SUPPLY: u128 = 10_000_000_000 * 10_u128.pow(18);
 const INFLATION_RATE: u128 = 300; // 3% in basis points
 const BLOCK_TIME_SECONDS: u128 = 2;
 const SECONDS_PER_YEAR: u128 = 60 * 60 * 24 * 365;

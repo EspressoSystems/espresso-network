@@ -308,7 +308,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .block_number
             .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
         {
-            Some(consensus_reader.state_cert().clone())
+            consensus_reader.state_cert().cloned()
         } else {
             None
         };
@@ -747,7 +747,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     match self.wait_for_highest_qc().await {
                         Ok((qc, maybe_state_cert)) => (qc, maybe_state_cert),
                         Err(e) => {
-                            tracing::error!("Error while waiting for highest QC: {:?}", e);
+                            tracing::error!("Error while waiting for highest QC: {e:?}");
                             return;
                         },
                     }
@@ -770,7 +770,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
             match self.wait_for_highest_qc().await {
                 Ok((qc, maybe_state_cert)) => (qc, maybe_state_cert),
                 Err(e) => {
-                    tracing::error!("Error while waiting for highest QC: {:?}", e);
+                    tracing::error!("Error while waiting for highest QC: {e:?}");
                     return;
                 },
             }

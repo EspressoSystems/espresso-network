@@ -2,6 +2,7 @@
 
 use std::{collections::HashSet, path::Path, time::Duration};
 
+use alloy::node_bindings::{Anvil, AnvilInstance};
 use anyhow::bail;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
@@ -14,7 +15,6 @@ use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, FeeAccount,
     MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
 };
-use ethers::utils::{Anvil, AnvilInstance};
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},

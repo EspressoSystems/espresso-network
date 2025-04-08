@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::{broadcast, Receiver, Sender};
 use async_lock::RwLock;
 use futures::future::join_all;
@@ -33,7 +34,7 @@ use hotshot_types::{
     data::Leaf2,
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
-    simple_certificate::{LightClientStateUpdateCertificate, QuorumCertificate2},
+    simple_certificate::QuorumCertificate2,
     traits::{
         election::Membership,
         network::ConnectedNetwork,
@@ -41,7 +42,6 @@ use hotshot_types::{
     },
     HotShotConfig, ValidatorConfig,
 };
-use primitive_types::U256;
 use tide_disco::Url;
 use tokio::{spawn, task::JoinHandle};
 #[allow(deprecated)]
@@ -200,7 +200,7 @@ where
             async_delay_config: launcher.metadata.async_delay_config,
             restart_contexts: HashMap::new(),
             channel_generator: launcher.resource_generators.channel_generator,
-            state_cert: LightClientStateUpdateCertificate::<TYPES>::genesis(),
+            state_cert: None,
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I, V>>::new(
             spinning_task_state,

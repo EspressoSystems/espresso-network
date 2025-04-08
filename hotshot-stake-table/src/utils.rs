@@ -6,8 +6,8 @@
 
 //! Utilities to help building a stake table.
 
+use alloy::primitives::U256;
 use ark_ff::{Field, PrimeField};
-use primitive_types::U256;
 
 /// A trait that converts into a field element.
 pub trait ToFields<F: Field> {
@@ -20,7 +20,12 @@ pub trait ToFields<F: Field> {
 
 /// convert a U256 to a field element.
 pub(crate) fn u256_to_field<F: PrimeField>(v: &U256) -> F {
-    let mut bytes = vec![0u8; 32];
-    v.to_little_endian(&mut bytes);
+    let bytes: [u8; 32] = v.to_le_bytes();
     F::from_le_bytes_mod_order(&bytes)
+}
+
+#[inline]
+/// A helper function to compute the quorum threshold given a total amount of stake.
+pub fn one_honest_threshold(total_stake: U256) -> U256 {
+    total_stake / U256::from(3) + U256::from(1)
 }

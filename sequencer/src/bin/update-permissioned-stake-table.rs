@@ -1,9 +1,9 @@
 use std::{path::PathBuf, time::Duration};
 
+use alloy::primitives::Address;
 use anyhow::Result;
 use clap::Parser;
 use espresso_types::{parse_duration, SeqTypes};
-use ethers::types::Address;
 use sequencer_utils::{
     logging,
     stake_table::{update_stake_table, PermissionedStakeTableUpdate},
@@ -92,7 +92,6 @@ async fn main() -> Result<()> {
 
     update_stake_table(
         opts.rpc_url,
-        opts.l1_polling_interval,
         opts.mnemonic,
         opts.account_index,
         opts.contract_address,

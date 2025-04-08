@@ -9,7 +9,6 @@ use espresso_types::{
     v0_99::{ChainConfig, IterableFeeInfo},
     BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
-use ethers_conv::ToEthers;
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
     availability::LeafId,
@@ -512,17 +511,15 @@ async fn reconstruct_state<Mode: TransactionMode>(
     }
 
     if let Some(accounts) = reward_accounts {
-        // TODO: don't think this is needed?
-        // What if we are reconstructing a state from the leaf which is on pre-epoch version?
-        // that is okie?
-        // if parent.block_header().reward_merkle_tree_root().is_none() {
-        //     bail!("reward merkle tree root not set");
-        // }
+        tracing::info!(
+            "reconstructing reward accounts for from height {} to view {}",
+            from_height,
+            to_view
+        );
 
         let mut accounts = accounts.iter().copied().collect::<HashSet<_>>();
 
-        let dependencies =
-            reward_header_dependencies(&mut catchup, tx, instance, &parent, &leaves).await?;
+        let dependencies = reward_header_dependencies(&mut catchup, tx, instance, &leaves).await?;
         accounts.extend(dependencies);
         let accounts = accounts.into_iter().collect::<Vec<_>>();
         state.reward_merkle_tree = load_reward_accounts(tx, from_height, &accounts)
@@ -638,7 +635,6 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
     catchup: &mut NullStateCatchup,
     tx: &mut Transaction<Mode>,
     instance: &NodeState,
-    _parent: &Leaf2,
     leaves: impl IntoIterator<Item = &Leaf2>,
 ) -> anyhow::Result<HashSet<RewardAccount>> {
     let mut reward_accounts = HashSet::default();
@@ -685,12 +681,12 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
         let leader = epoch_membership.leader(proposal.view_number()).await?;
         let validator = membership.get_validator_config(&EpochNumber::new(epoch), leader)?;
 
-        reward_accounts.insert(RewardAccount(validator.account.to_ethers()));
+        reward_accounts.insert(RewardAccount(validator.account));
 
         let delegators: Vec<RewardAccount> = validator
             .delegators
             .keys()
-            .map(|d| RewardAccount(d.to_ethers()))
+            .map(|d| RewardAccount(*d))
             .collect();
 
         reward_accounts.extend(delegators);
