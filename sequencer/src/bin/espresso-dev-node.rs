@@ -18,15 +18,12 @@ use clap::Parser;
 use espresso_types::{
     parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
 };
-use ethers_conv::{ToAlloy, ToEthers};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
-use hotshot_state_prover::service::{
-    light_client_genesis_from_stake_table, one_honest_threshold,
-    run_prover_service_with_stake_table, StateProverConfig,
-};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_stake_table::utils::one_honest_threshold;
-use hotshot_state_prover::service::{run_prover_service_with_stake_table, StateProverConfig};
+use hotshot_state_prover::service::{
+    light_client_genesis_from_stake_table, run_prover_service_with_stake_table, StateProverConfig,
+};
 use hotshot_types::{
     light_client::StateVerKey,
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
@@ -225,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
         (url, None)
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
-        let instance = Anvil::new().arg("--slots_in_epoch", 0).spawn();
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
         let url = instance.endpoint_url();
         tracing::info!("l1 url: {}", url);
         (url, Some(instance))
@@ -252,8 +249,11 @@ async fn main() -> anyhow::Result<()> {
         .with_max_block_size(max_block_size)
         .build();
 
-    let network =
-        TestNetwork::new(config, SequencerVersions::<MarketplaceVersion, V0_1>::new()).await;
+    let network = TestNetwork::new(
+        config,
+        SequencerVersions::<EpochVersion, EpochVersion>::new(),
+    )
+    .await;
     let st = network.cfg.stake_table();
     let config = network.cfg.hotshot_config();
 
@@ -460,12 +460,9 @@ async fn main() -> anyhow::Result<()> {
                 staking_priv_keys,
             )
             .await?;
-
-
         }
     }
 
-    const NUM_NODES: usize = 2;
     let chain_config = ChainConfig {
         max_block_size: max_block_size.into(),
         // TODO: MA: the builder has block fee `123` hardcoded so we have to set this to zero for now.

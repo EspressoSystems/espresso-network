@@ -31,7 +31,7 @@ pub async fn stake_in_contract_for_test(
 
     let mk_provider = |signer| {
         let wallet = EthereumWallet::from(signer);
-        Ok(ProviderBuilder::new()
+        ProviderBuilder::new()
             .wallet(wallet)
             .on_http(rpc_url.clone())
     };
