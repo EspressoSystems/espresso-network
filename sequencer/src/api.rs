@@ -2980,11 +2980,11 @@ mod test {
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let url = instance.endpoint_url();
+        dbg!(&url);
         let secret_key = instance.keys()[0].clone();
         dbg!(&secret_key);
         let signer = LocalSigner::from(secret_key);
-        let url = instance.endpoint_url();
-        dbg!(&url);
 
         let contracts = &mut Contracts::new();
 
@@ -3058,14 +3058,19 @@ mod test {
             admin,
         )
         .await?;
+        tracing::error!("stake_table_proxy_address: {:?}", stake_table_proxy_addr);
 
         let staking_priv_keys = network_config.staking_priv_keys();
+
+        let stake_table_address = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("stake table deployed");
+
+        tracing::error!("stake_table_address: {:?}", stake_table_address);
         stake_in_contract_for_test(
             url.clone(),
             signer,
-            contracts
-                .address(Contract::StakeTableProxy)
-                .expect("stake table deployed"),
+            stake_table_address,
             contracts
                 .address(Contract::EspTokenProxy)
                 .expect("ESP token deployed"),
@@ -3073,21 +3078,13 @@ mod test {
         )
         .await?;
 
-        let stake_table_address = contracts
-            .address(Contract::StakeTableProxy)
-            .expect("stake table deployed");
-
         let chain_config = ChainConfig {
             max_block_size: 300.into(),
             base_fee: 0.into(),
-            // fee_recipient: dst,
             stake_table_contract: Some(stake_table_address),
             ..Default::default()
         };
-        tracing::error!(
-            "chain_config: {:?}",
-            chain_config
-        );
+        tracing::error!("chain_config: {:?}", chain_config);
 
         let state = ValidatedState {
             chain_config: chain_config.into(),
