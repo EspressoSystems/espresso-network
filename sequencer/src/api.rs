@@ -3193,14 +3193,7 @@ mod test {
         };
 
         let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
-
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
-        let config = TestNetworkConfigBuilder::default()
-            .api_config(options)
-            .network_config(network_config.clone())
-            .build();
-
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
 
         let fee_proxy_addr =
             deployer::deploy_fee_contract_proxy(&provider, contracts, admin).await?;
@@ -3254,6 +3247,27 @@ mod test {
             staking_priv_keys,
         )
         .await?;
+
+        let chain_config = ChainConfig {
+            max_block_size: 300.into(),
+            base_fee: 0.into(),
+            // fee_recipient: dst,
+            stake_table_contract: Some(stake_table_proxy_addr),
+            ..Default::default()
+        };
+
+        let state = ValidatedState {
+            chain_config: chain_config.into(),
+            ..Default::default()
+        };
+
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .states(std::array::from_fn(|_| state.clone()))
+            .network_config(network_config.clone())
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
 
         let mut subscribed_events = client
             .socket("hotshot-events/events")
