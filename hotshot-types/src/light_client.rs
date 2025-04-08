@@ -317,21 +317,25 @@ pub fn hash_bytes_to_field<F: RescueParameter>(bytes: &[u8]) -> Result<F, Rescue
     Ok(VariableLengthRescueCRHF::<_, 1>::evaluate(elem)?[0])
 }
 
-pub trait ToLightClientFields {
+/// This trait is for light client use. It converts the stake table items into
+/// field elements. These items will then be digested into a part of the light client state.
+pub trait ToFieldsLightClientCompat {
     const SIZE: usize;
     fn to_fields(&self) -> Vec<CircuitField>;
 }
 
-impl ToLightClientFields for StateVerKey {
+impl ToFieldsLightClientCompat for StateVerKey {
     const SIZE: usize = 2;
+    /// This should be compatible with our legacy implementation.
     fn to_fields(&self) -> Vec<CircuitField> {
         let p = self.to_affine();
         vec![p.x, p.y]
     }
 }
 
-impl ToLightClientFields for BLSPubKey {
+impl ToFieldsLightClientCompat for BLSPubKey {
     const SIZE: usize = 3;
+    /// This should be compatible with our legacy implementation.
     fn to_fields(&self) -> Vec<CircuitField> {
         match to_bytes!(&self.to_affine()) {
             Ok(bytes) => {
@@ -348,11 +352,13 @@ impl ToLightClientFields for BLSPubKey {
 
 #[inline]
 /// A helper function to compute the quorum threshold given a total amount of stake.
+/// TODO: clean up <https://github.com/EspressoSystems/espresso-network/issues/2971>
 pub fn one_honest_threshold(total_stake: U256) -> U256 {
     total_stake / U256::from(3) + U256::from(1)
 }
 
 #[inline]
+/// TODO: clean up <https://github.com/EspressoSystems/espresso-network/issues/2971>
 fn u256_to_field(amount: U256) -> CircuitField {
     let amount_bytes: [u8; 32] = amount.to_le_bytes();
     CircuitField::from_le_bytes_mod_order(&amount_bytes)
@@ -375,7 +381,7 @@ pub fn compute_stake_table_commitment<TYPES: NodeType>(
         total_stake += peer.stake_table_entry.stake();
     }
     bls_preimage.resize(
-        <TYPES::SignatureKey as ToLightClientFields>::SIZE * stake_table_capacity,
+        <TYPES::SignatureKey as ToFieldsLightClientCompat>::SIZE * stake_table_capacity,
         CircuitField::default(),
     );
     // Nasty tech debt

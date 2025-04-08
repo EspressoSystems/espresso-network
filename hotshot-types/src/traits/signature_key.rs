@@ -25,7 +25,7 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use super::EncodeBytes;
 use crate::{
     bundle::Bundle,
-    light_client::{LightClientState, StakeTableState, ToLightClientFields},
+    light_client::{LightClientState, StakeTableState, ToFieldsLightClientCompat},
     traits::node_implementation::NodeType,
     utils::BuilderCommitment,
 };
@@ -72,7 +72,7 @@ pub trait SignatureKey:
     + PartialOrd
     + Ord
     + Display
-    + ToLightClientFields
+    + ToFieldsLightClientCompat
     + for<'a> TryFrom<&'a TaggedBase64>
     + Into<TaggedBase64>
 {
@@ -380,7 +380,7 @@ pub trait StateSignatureKey:
     + PartialEq
     + Eq
     + Display
-    + ToLightClientFields
+    + ToFieldsLightClientCompat
     + for<'a> TryFrom<&'a TaggedBase64>
     + Into<TaggedBase64>
 {

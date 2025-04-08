@@ -453,7 +453,11 @@ async fn generate_proof_helper(
     Ok((proof, public_input))
 }
 
-async fn epoch_catchup(
+/// This function will fetch the cross epoch state update information from the sequencer query node
+/// and update the light client state in the contract to the `target_epoch`.
+/// In the end, both the locally stored stake table and the contract light client state will corresponds
+/// to the `target_epoch`.
+async fn advance_epoch(
     state: &mut ProverServiceState,
     provider: &impl Provider,
     light_client_address: Address,
@@ -462,12 +466,15 @@ async fn epoch_catchup(
     contract_epoch: u64,
     target_epoch: u64,
 ) -> Result<(), ProverError> {
-    for epoch in contract_epoch..target_epoch {
-        tracing::info!("Advancing to epoch {}...", epoch + 1);
+    // First sync the local stake table if necessary.
+    if state.epoch != contract_epoch {
         state
-            .sync_with_epoch(epoch)
+            .sync_with_epoch(contract_epoch)
             .await
             .map_err(ProverError::NetworkError)?;
+    }
+    for epoch in contract_epoch..target_epoch {
+        tracing::info!("Advancing to epoch {}...", epoch + 1);
         let state_cert =
             fetch_epoch_state_from_sequencer(&state.config.sequencer_url, epoch).await?;
         let signature_map = state_cert
@@ -538,20 +545,41 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     tracing::debug!("Old state: {contract_state:?}");
     tracing::debug!("New state: {:?}", bundle.state);
 
-    if bundle.state.block_height > epoch_start_block {
-        // Update the prover service state if necessary
+    let epoch_enabled = bundle.state.block_height >= epoch_start_block;
+
+    if !epoch_enabled {
+        // If epoch hasn't been enabled, directly update the contract.
+        let (proof, public_input) = generate_proof_helper(
+            state,
+            bundle.state,
+            st_state,
+            st_state,
+            bundle.signatures,
+            &proving_key,
+        )
+        .await?;
+
+        submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
+
+        tracing::info!("Successfully synced light client state.");
+    } else {
+        // After the epoch is enabled
+
         let contract_epoch = epoch_from_block_number(contract_state.block_height, blocks_per_epoch);
+        let bundle_epoch = epoch_from_block_number(bundle.state.block_height, blocks_per_epoch);
+
+        // Update the local stake table if necessary
         if contract_epoch != state.epoch {
             state
                 .sync_with_epoch(contract_epoch)
                 .await
                 .map_err(ProverError::NetworkError)?;
         }
-        // We need an epoch catchup to process the current bundle.
-        let bundle_epoch = epoch_from_block_number(bundle.state.block_height, blocks_per_epoch);
+
+        // A catchup is needed if the contract epoch is behind.
         if bundle_epoch > state.epoch {
             tracing::info!("Catching up from epoch {contract_epoch} to epoch {bundle_epoch}...");
-            epoch_catchup(
+            advance_epoch(
                 state,
                 &provider,
                 light_client_address,
@@ -563,10 +591,12 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             .await?;
         }
 
-        // If we reached the epoch root, proceed to the next epoch and ignore the rest bundles from the same epoch
+        // Now that the contract epoch should be equal to the bundle epoch.
+
         if is_ge_epoch_root(bundle.state.block_height as u64, blocks_per_epoch) {
+            // If we reached the epoch root, proceed to the next epoch directly
             tracing::info!("Epoch reaching an end, proceed to the next epoch...");
-            epoch_catchup(
+            advance_epoch(
                 state,
                 &provider,
                 light_client_address,
@@ -576,24 +606,23 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
                 bundle_epoch + 1,
             )
             .await?;
-            return Ok(());
+        } else {
+            // Otherwise process the bundle update information as usual
+            let (proof, public_input) = generate_proof_helper(
+                state,
+                bundle.state,
+                st_state,
+                st_state,
+                bundle.signatures,
+                &proving_key,
+            )
+            .await?;
+
+            submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
+
+            tracing::info!("Successfully synced light client state.");
         }
     }
-
-    // Stake table update is already handled in the epoch catchup
-    let (proof, public_input) = generate_proof_helper(
-        state,
-        bundle.state,
-        st_state,
-        st_state,
-        bundle.signatures,
-        &proving_key,
-    )
-    .await?;
-
-    submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
-
-    tracing::info!("Successfully synced light client state.");
     Ok(())
 }
 
