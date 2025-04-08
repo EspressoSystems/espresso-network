@@ -416,10 +416,10 @@ async fn main() -> anyhow::Result<()> {
             stake_in_contract_for_test(
                 l1_url.clone(),
                 signer,
-                contracts
+                l1_contracts
                     .address(Contract::StakeTableProxy)
                     .expect("stake table deployed"),
-                contracts
+                l1_contracts
                     .address(Contract::EspTokenProxy)
                     .expect("ESP token deployed"),
                 staking_priv_keys,
