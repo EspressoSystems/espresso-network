@@ -641,7 +641,7 @@ impl<
             let serialized_message = match self.upgrade_lock.serialize(&message).await {
                 Ok(serialized) => serialized,
                 Err(e) => {
-                    tracing::error!("Failed to serialize message: {}", e);
+                    tracing::error!("Failed to serialize message: {e}");
                     continue;
                 },
             };
@@ -667,7 +667,7 @@ impl<
             }
             match net.vid_broadcast_message(messages).await {
                 Ok(()) => {},
-                Err(e) => tracing::warn!("Failed to send message from network task: {:?}", e),
+                Err(e) => tracing::warn!("Failed to send message from network task: {e:?}"),
             }
         });
 
@@ -699,7 +699,7 @@ impl<
             {
                 Ok(()) => Ok(()),
                 Err(e) => {
-                    tracing::warn!("Not Sending {:?} because of storage error: {:?}", action, e);
+                    tracing::warn!("Not Sending {action:?} because of storage error: {e:?}");
                     Err(())
                 },
             }
@@ -770,11 +770,7 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to calculate leader for view number {:?}. Error: {:?}",
-                            view_number,
-                            e
-                        );
+                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
                         return None;
                     },
                 };
@@ -907,11 +903,7 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to calculate leader for view number {:?}. Error: {:?}",
-                            view_number,
-                            e
-                        );
+                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
                         return None;
                     },
                 };
@@ -958,11 +950,7 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to calculate leader for view number {:?}. Error: {:?}",
-                            view_number,
-                            e
-                        );
+                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
                         return None;
                     },
                 };
@@ -991,11 +979,7 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to calculate leader for view number {:?}. Error: {:?}",
-                            view_number,
-                            e
-                        );
+                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
                         return None;
                     },
                 };
@@ -1024,11 +1008,7 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to calculate leader for view number {:?}. Error: {:?}",
-                            view_number,
-                            e
-                        );
+                        tracing::warn!("Failed to calculate leader for view number {view_number:?}. Error: {e:?}");
                         return None;
                     },
                 };
@@ -1099,11 +1079,7 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to calculate leader for view number {:?}. Error: {:?}",
-                            view_number,
-                            e
-                        );
+                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
                         return None;
                     },
                 };
@@ -1139,11 +1115,7 @@ impl<
                 {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to calculate leader for view number {:?}. Error: {:?}",
-                            view_number,
-                            e
-                        );
+                        tracing::warn!("Failed to calculate leader for view number {view_number}. Error: {e:?}");
                         return None;
                     },
                 };
@@ -1313,7 +1285,7 @@ impl<
             let serialized_message = match upgrade_lock.serialize(&message).await {
                 Ok(serialized) => serialized,
                 Err(e) => {
-                    tracing::error!("Failed to serialize message: {}", e);
+                    tracing::error!("Failed to serialize message: {e}");
                     return;
                 },
             };
@@ -1340,7 +1312,7 @@ impl<
 
             match transmit_result {
                 Ok(()) => {},
-                Err(e) => tracing::warn!("Failed to send message task: {:?}", e),
+                Err(e) => tracing::warn!("Failed to send message task: {e:?}"),
             }
         });
         self.transmit_tasks

@@ -238,6 +238,7 @@ mod persistence_tests {
             vid_share: None,
             state: Default::default(),
             delta: None,
+            state_cert: None,
         }
     }
 

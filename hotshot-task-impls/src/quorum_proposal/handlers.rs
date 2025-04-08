@@ -309,7 +309,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .block_number
             .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
         {
-            Some(consensus_reader.state_cert().clone())
+            consensus_reader.state_cert().cloned()
         } else {
             None
         };
@@ -425,7 +425,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             self.private_key.clone(),
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
             &self.upgrade_lock,
-            parent_qc.view_number(),
+            &parent_qc,
             self.epoch_height,
         )
         .await?;
@@ -517,6 +517,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 metadata,
                 commitment_and_metadata.fees.first().clone(),
                 version,
+                *self.view_number,
             )
             .await
             .wrap()
@@ -633,7 +634,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             signature,
             _pd: PhantomData,
         };
-        tracing::debug!(
+        tracing::info!(
             "Sending proposal for view {:?}, height {:?}, justify_qc view: {:?}",
             proposed_leaf.view_number(),
             proposed_leaf.height(),
@@ -758,7 +759,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     match self.wait_for_highest_qc().await {
                         Ok((qc, maybe_state_cert)) => (qc, maybe_state_cert),
                         Err(e) => {
-                            tracing::error!("Error while waiting for highest QC: {:?}", e);
+                            tracing::error!("Error while waiting for highest QC: {e:?}");
                             return;
                         },
                     }
@@ -781,7 +782,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
             match self.wait_for_highest_qc().await {
                 Ok((qc, maybe_state_cert)) => (qc, maybe_state_cert),
                 Err(e) => {
-                    tracing::error!("Error while waiting for highest QC: {:?}", e);
+                    tracing::error!("Error while waiting for highest QC: {e:?}");
                     return;
                 },
             }

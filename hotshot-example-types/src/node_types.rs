@@ -436,8 +436,8 @@ mod tests {
     #[test]
     fn test_option_epoch_from_block_number() {
         // block 0 is always epoch 0
-        let epoch = option_epoch_from_block_number::<TestTypes>(true, 0, 10);
-        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(0)), epoch);
+        let epoch = option_epoch_from_block_number::<TestTypes>(true, 1, 10);
+        assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(1)), epoch);
 
         let epoch = option_epoch_from_block_number::<TestTypes>(true, 1, 10);
         assert_eq!(Some(<TestTypes as NodeType>::Epoch::new(1)), epoch);

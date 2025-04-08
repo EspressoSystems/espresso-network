@@ -101,6 +101,7 @@ marketplace-solver = { path = "../marketplace-solver" }
 num_enum = "0.7"
 parking_lot = "0.12"
 portpicker = { workspace = true }
+primitive-types = { workspace = true }
 priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }

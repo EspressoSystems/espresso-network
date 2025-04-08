@@ -134,7 +134,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                     }
                 },
                 Err(e) => {
-                    tracing::error!("Failed to receive event. {:?}", e);
+                    tracing::error!("Failed to receive event: {e:?}");
                 },
             }
         }

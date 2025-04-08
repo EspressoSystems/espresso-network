@@ -7,6 +7,7 @@ pub(crate) use hotshot_types::{
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use parse::Commission;
+use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -44,6 +45,10 @@ pub struct Config {
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
+
+    #[clap(flatten)]
+    #[serde(skip)]
+    pub logging: logging::Config,
 
     #[command(subcommand)]
     #[serde(skip)]

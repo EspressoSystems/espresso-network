@@ -7,7 +7,7 @@ capacity = 10
 
 [chain_config]
 chain_id = 999999999
-base_fee = '0 wei'
+base_fee = '1 wei'
 max_block_size = '1mb'
 fee_recipient = '0x0000000000000000000000000000000000000000'
 fee_contract = '0xa15bb66138824a1c7167f5e85b957d04dd34e468'
@@ -22,7 +22,7 @@ number = 0
 [[upgrade]]
 version = "0.3"
 start_proposing_view = 10
-stop_proposing_view = 60
+stop_proposing_view = 50
 
 [upgrade.epoch]
 [upgrade.epoch.chain_config]
@@ -32,4 +32,4 @@ base_fee = '1 wei'
 fee_recipient = "0x0000000000000000000000000000000000000000"
 bid_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
-stake_table_contract = "0x8ce361602b935680e8dec218b820ff5056beb7af"
+stake_table_contract = "0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d"

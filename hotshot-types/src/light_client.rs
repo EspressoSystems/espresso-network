@@ -278,7 +278,7 @@ impl<F: PrimeField> GenericPublicInput<F> {
 
 pub fn hash_bytes_to_field<F: RescueParameter>(bytes: &[u8]) -> Result<F, RescueError> {
     // make sure that `mod_order` won't happen.
-    let bytes_len = <F as PrimeField>::MODULUS_BIT_SIZE.div_ceil(8) as usize;
+    let bytes_len = (<F as PrimeField>::MODULUS_BIT_SIZE.div_ceil(8) - 1) as usize;
     let elem = bytes
         .chunks(bytes_len)
         .map(F::from_le_bytes_mod_order)

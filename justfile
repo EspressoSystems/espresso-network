@@ -24,16 +24,22 @@ lint:
     cargo clippy --workspace --features testing --all-targets -- -D warnings
     cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml -- -D warnings
 
-build profile="test":
+build profile="test" features="":
     #!/usr/bin/env bash
     set -euxo pipefail
     # Use the same target dir for both `build` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
-    cargo build --profile {{profile}}
-    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml
+    cargo build --profile {{profile}} {{features}}
+    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
 
-demo-native-mp *args: build
+demo-native-mp *args: (build "test" "--features fee,marketplace")
     scripts/demo-native -f process-compose.yaml -f process-compose-mp.yml {{args}}
+
+demo-native-pos *args: (build "test" "--features fee,pos")
+    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-pos-base *args: (build "test" "--features pos")
+    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -57,27 +63,31 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
+nextest *args:
+    # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
+    cargo nextest run --locked --workspace --exclude hotshot-testing --verbose {{args}}
+
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --workspace --features embedded-db --verbose {{args}}
-    cargo nextest run --locked --workspace --verbose {{args}}
+    just nextest --features embedded-db  {{args}}
+    just nextest {{args}}
 
 test-slow:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --release --workspace --features embedded-db --verbose --profile slow
-    cargo nextest run --locked --release --workspace --verbose --profile slow
+    just nextest --features embedded-db --profile slow
+    just nextest --profile slow
 
 test-all:
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --release --workspace --features embedded-db --verbose --profile all
-    cargo nextest run --locked --release --workspace --verbose --profile all
+    just nextest --features embedded-db --profile all
+    just nextest --profile all
 
-test-integration:
+test-integration: (build "test" "--features fee")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
-test-integration-mp:
+test-integration-mp: (build "test" "--features fee,marketplace")
     INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
 
 clippy:

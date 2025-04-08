@@ -120,7 +120,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 });
 
                 let mut consensus_writer = self.consensus.write().await;
-                // Make sure with save the payload; we might need it to send the next epoch VID shares.
+                // Make sure we save the payload; we might need it to send the next epoch VID shares.
                 if let Err(e) =
                     consensus_writer.update_saved_payloads(*view_number, payload_with_metadata)
                 {
@@ -155,10 +155,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     error!("VID: failed to sign dispersal payload");
                     return None;
                 };
-                debug!(
-                    "publishing VID disperse for view {} and epoch {:?}",
-                    *view_number, epoch
-                );
+                debug!("publishing VID disperse for view {view_number} and epoch {epoch:?}");
                 broadcast_event(
                     Arc::new(HotShotEvent::VidDisperseSend(
                         Proposal {
@@ -184,7 +181,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 }
 
                 if *view - *self.cur_view > 1 {
-                    info!("View changed by more than 1 going to view {:?}", view);
+                    info!("View changed by more than 1 going to view {view:?}");
                 }
                 self.cur_view = view;
 
@@ -240,8 +237,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     return None;
                 };
                 debug!(
-                    "publishing VID disperse for view {} and epoch {:?}",
-                    *proposal_view_number, target_epoch
+                    "publishing VID disperse for view {proposal_view_number} and epoch {target_epoch:?}"
                 );
                 broadcast_event(
                     Arc::new(HotShotEvent::VidDisperseSend(

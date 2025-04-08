@@ -56,7 +56,7 @@ impl<TYPES: NodeType> TaskState for RewindTaskState<TYPES> {
         {
             Ok(file) => file,
             Err(e) => {
-                tracing::error!("Failed to write file {}; error = {}", filename, e);
+                tracing::error!("Failed to write file {filename}; error = {e}");
                 return;
             },
         };

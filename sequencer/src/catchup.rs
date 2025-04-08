@@ -617,11 +617,9 @@ where
             .get_reward_accounts(instance, block_height, view, accounts)
             .await?
             .0;
-
         if merkle_tree.commitment() != reward_merkle_tree_root {
             bail!("reward merkle tree root mismatch");
         }
-
         Ok(merkle_tree)
     }
 
