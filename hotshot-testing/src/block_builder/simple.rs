@@ -49,7 +49,7 @@ use tokio::spawn;
 use vbs::version::StaticVersionType;
 
 use super::{build_block, run_builder_source, BlockEntry, BuilderTask, TestBuilderImplementation};
-use crate::test_builder::BuilderChange;
+use crate::{block_builder::AcceptsTxnSubmits, test_builder::BuilderChange};
 
 pub struct SimpleBuilderImplementation;
 
@@ -118,6 +118,40 @@ pub struct SimpleBuilderSource<TYPES: NodeType> {
     transactions: Arc<RwLock<HashMap<Commitment<TYPES::Transaction>, SubmittedTransaction<TYPES>>>>,
     blocks: Arc<RwLock<HashMap<BuilderCommitment, BlockEntry<TYPES>>>>,
     should_fail_claims: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl<Types> AcceptsTxnSubmits<Types> for SimpleBuilderSource<Types>
+where
+    Types: NodeType,
+{
+    async fn submit_txns(
+        &self,
+        txns: Vec<<Types as NodeType>::Transaction>,
+    ) -> Result<Vec<Commitment<<Types as NodeType>::Transaction>>, BuildError> {
+        let mut transactions = self.transactions.write().await;
+        let mut commits = Vec::new();
+        for tx in txns {
+            transactions.insert(
+                tx.commit(),
+                SubmittedTransaction {
+                    claimed: None,
+                    transaction: tx.clone(),
+                },
+            );
+
+            commits.push(tx.commit());
+        }
+
+        Ok(commits)
+    }
+
+    async fn txn_status(
+        &self,
+        _txn_hash: Commitment<<Types as NodeType>::Transaction>,
+    ) -> Result<v0_1::builder::TransactionStatus, BuildError> {
+        Ok(v0_1::builder::TransactionStatus::Unknown)
+    }
 }
 
 #[async_trait]

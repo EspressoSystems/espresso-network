@@ -16,7 +16,7 @@ use hotshot_builder_api::{
         block_info::{AvailableBlockData, AvailableBlockInfo},
         builder::{Error, Options},
     },
-    v0_2::block_info::AvailableBlockHeaderInputV1,
+    v0_2::{block_info::AvailableBlockHeaderInputV1, data_source::AcceptsTxnSubmits},
     v0_99,
 };
 use hotshot_types::{
@@ -28,7 +28,7 @@ use hotshot_types::{
 };
 use tide_disco::{method::ReadState, App, Url};
 use tokio::spawn;
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersion, StaticVersionType};
 
 use crate::test_builder::BuilderChange;
 
@@ -79,9 +79,11 @@ pub fn run_builder_source<TYPES, Source>(
 ) where
     TYPES: NodeType,
     <TYPES as NodeType>::InstanceState: Default,
-    Source: Clone + Send + Sync + tide_disco::method::ReadState + 'static,
+    Source:
+        Clone + Send + Sync + tide_disco::method::ReadState + 'static + AcceptsTxnSubmits<TYPES>,
     <Source as ReadState>::State: Sync
         + Send
+        + AcceptsTxnSubmits<TYPES>
         + v0_1::data_source::BuilderDataSource<TYPES>
         + v0_99::data_source::BuilderDataSource<TYPES>,
 {
@@ -96,10 +98,18 @@ pub fn run_builder_source<TYPES, Source>(
             )
             .expect("Failed to construct the builder API");
             let mut app: App<Source, Error> = App::with_state(source);
+
+            let private_mempool_api = v0_1::builder::submit_api::<Source, TYPES, StaticVersion<0, 1>>(
+         &Default::default(), ).unwrap();
+
             app.register_module(LEGACY_BUILDER_MODULE, builder_api_0_1)
                 .expect("Failed to register the builder API 0.1")
                 .register_module(MARKETPLACE_BUILDER_MODULE, builder_api_0_3)
                 .expect("Failed to register the builder API 0.3");
+
+            app.register_module("txn_submit", private_mempool_api)
+                .expect("failed to register txn submit module");
+
             spawn(app.serve(url, hotshot_builder_api::v0_1::Version::instance()))
         };
 
