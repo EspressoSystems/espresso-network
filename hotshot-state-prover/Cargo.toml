@@ -6,6 +6,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ec = { workspace = true }
@@ -14,10 +15,8 @@ ark-ff = { workspace = true }
 ark-srs = { workspace = true }
 ark-std = { workspace = true }
 clap = { workspace = true }
-contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 displaydoc = { version = "0.2.3", default-features = false }
 espresso-types = { path = "../types" }
-ethers = { workspace = true }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-stake-table = { workspace = true }
@@ -43,9 +42,11 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
+hotshot-types = { workspace = true }
 sequencer-utils = { path = "../utils", features = ["testing"] }
 
 [features]
 default = ["parallel"]
 std = ["ark-std/std", "ark-ff/std"]
 parallel = ["jf-signature/parallel", "jf-utils/parallel", "ark-ff/parallel"]
+

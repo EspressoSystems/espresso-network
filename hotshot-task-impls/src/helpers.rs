@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy::primitives::U256;
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
@@ -44,7 +45,6 @@ use hotshot_types::{
     StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
-use primitive_types::U256;
 use tokio::time::timeout;
 use tracing::instrument;
 use vbs::version::StaticVersionType;

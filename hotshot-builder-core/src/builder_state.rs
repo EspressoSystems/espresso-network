@@ -312,8 +312,8 @@ async fn best_builder_states_to_extend<Types: NodeType>(
     let maximum_stored_view_number_smaller_than_quorum_proposal = global_state_read_lock
         .spawned_builder_states
         .keys()
-        .map(|builder_state_id| builder_state_id.parent_view)
-        .filter(|view_number| *view_number < current_view_number)
+        .map(|builder_state_id| *builder_state_id.parent_view)
+        .filter(|view_number| *view_number < *current_view_number)
         .max();
 
     // If we have a maximum view number that meets our criteria, then we should
@@ -330,7 +330,7 @@ async fn best_builder_states_to_extend<Types: NodeType>(
                 .spawned_builder_states
                 .keys()
                 .filter(|builder_state_id| {
-                    builder_state_id.parent_view
+                    builder_state_id.parent_view.u64()
                         == maximum_stored_view_number_smaller_than_quorum_proposal
                 })
         {

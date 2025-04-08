@@ -7,6 +7,7 @@
 #![allow(clippy::panic)]
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, sync::Arc};
 
+use alloy::primitives::U256;
 use async_broadcast::{Receiver, Sender};
 use async_lock::RwLock;
 use bitvec::bitvec;
@@ -40,7 +41,6 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber, Vote},
     StakeTableEntries, ValidatorConfig,
 };
-use primitive_types::U256;
 use serde::Serialize;
 use vbs::version::Version;
 

@@ -6,10 +6,10 @@ use std::{
     path::PathBuf,
 };
 
+use alloy::hex;
 use anyhow::anyhow;
 use clap::{Parser, ValueEnum};
 use derive_more::Display;
-use ethers::utils::hex;
 use hotshot::types::SignatureKey;
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSPubKey};
 use rand::{RngCore, SeedableRng};

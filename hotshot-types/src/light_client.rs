@@ -8,13 +8,13 @@
 
 use std::collections::HashMap;
 
+use alloy::primitives::U256;
 use ark_ed_on_bn254::EdwardsConfig as Config;
 use ark_ff::PrimeField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_crhf::CRHF;
 use jf_rescue::{crhf::VariableLengthRescueCRHF, RescueError, RescueParameter};
 use jf_signature::schnorr;
-use primitive_types::U256;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,8 @@ pub struct StateSignatureRequestBody {
     pub key: StateVerKey,
     /// The associated light client state
     pub state: LightClientState,
+    /// The stake table used for the next HotShot block
+    pub next_stake: StakeTableState,
     /// The associated signature of the light client state
     pub signature: StateSignature,
 }
@@ -59,6 +61,8 @@ pub struct StateSignatureRequestBody {
 pub struct StateSignaturesBundle {
     /// The state for this signatures bundle
     pub state: LightClientState,
+    /// The stake table used in the next block (only different from voting_stake_table at the last block of every epoch)
+    pub next_stake: StakeTableState,
     /// The collected signatures
     pub signatures: HashMap<StateVerKey, StateSignature>,
     /// Total stakes associated with the signer
@@ -150,6 +154,17 @@ pub struct GenericStakeTableState<F: PrimeField> {
     pub threshold: F,
 }
 
+impl<F: PrimeField> From<GenericStakeTableState<F>> for [F; 4] {
+    fn from(state: GenericStakeTableState<F>) -> Self {
+        [
+            state.bls_key_comm,
+            state.schnorr_key_comm,
+            state.amount_comm,
+            state.threshold,
+        ]
+    }
+}
+
 impl std::ops::Deref for StateKeyPair {
     type Target = schnorr::KeyPair<Config>;
 
@@ -196,83 +211,89 @@ impl From<schnorr::KeyPair<Config>> for StateKeyPair {
 
 /// Public input to the light client state prover service
 #[derive(Clone, Debug)]
-pub struct GenericPublicInput<F: PrimeField>(Vec<F>);
+pub struct GenericPublicInput<F: PrimeField> {
+    // new light client state
+    pub lc_state: GenericLightClientState<F>,
+    // voting stake table state
+    pub voting_st_state: GenericStakeTableState<F>,
+    // next-block stake table state
+    pub next_st_state: GenericStakeTableState<F>,
+}
 
 impl<F: PrimeField> GenericPublicInput<F> {
     /// Construct a public input from light client state and static stake table state
-    pub fn new(lc_state: GenericLightClientState<F>, st_state: GenericStakeTableState<F>) -> Self {
-        let lc_state_f: [F; 3] = lc_state.into();
-        Self(vec![
-            lc_state_f[0],
-            lc_state_f[1],
-            lc_state_f[2],
-            st_state.bls_key_comm,
-            st_state.schnorr_key_comm,
-            st_state.amount_comm,
-            st_state.threshold,
-        ])
+    pub fn new(
+        lc_state: GenericLightClientState<F>,
+        voting_st_state: GenericStakeTableState<F>,
+        next_st_state: GenericStakeTableState<F>,
+    ) -> Self {
+        Self {
+            lc_state,
+            voting_st_state,
+            next_st_state,
+        }
+    }
+
+    /// Convert to a vector of field elements
+    pub fn to_vec(&self) -> Vec<F> {
+        vec![
+            F::from(self.lc_state.view_number),
+            F::from(self.lc_state.block_height),
+            self.lc_state.block_comm_root,
+            self.voting_st_state.bls_key_comm,
+            self.voting_st_state.schnorr_key_comm,
+            self.voting_st_state.amount_comm,
+            self.voting_st_state.threshold,
+            self.next_st_state.bls_key_comm,
+            self.next_st_state.schnorr_key_comm,
+            self.next_st_state.amount_comm,
+            self.next_st_state.threshold,
+        ]
     }
 }
 
-impl<F: PrimeField> AsRef<[F]> for GenericPublicInput<F> {
-    fn as_ref(&self) -> &[F] {
-        &self.0
+impl<F: PrimeField> From<GenericPublicInput<F>> for Vec<F> {
+    fn from(v: GenericPublicInput<F>) -> Self {
+        vec![
+            F::from(v.lc_state.view_number),
+            F::from(v.lc_state.block_height),
+            v.lc_state.block_comm_root,
+            v.voting_st_state.bls_key_comm,
+            v.voting_st_state.schnorr_key_comm,
+            v.voting_st_state.amount_comm,
+            v.voting_st_state.threshold,
+            v.next_st_state.bls_key_comm,
+            v.next_st_state.schnorr_key_comm,
+            v.next_st_state.amount_comm,
+            v.next_st_state.threshold,
+        ]
     }
 }
 
 impl<F: PrimeField> From<Vec<F>> for GenericPublicInput<F> {
     fn from(v: Vec<F>) -> Self {
-        Self(v)
-    }
-}
-
-impl<F: PrimeField> GenericPublicInput<F> {
-    /// Return the view number of the light client state
-    #[must_use]
-    pub fn view_number(&self) -> F {
-        self.0[0]
-    }
-
-    /// Return the block height of the light client state
-    #[must_use]
-    pub fn block_height(&self) -> F {
-        self.0[1]
-    }
-
-    /// Return the block commitment root of the light client state
-    #[must_use]
-    pub fn block_comm_root(&self) -> F {
-        self.0[2]
-    }
-
-    /// Return the stake table commitment of the light client state
-    #[must_use]
-    pub fn stake_table_comm(&self) -> (F, F, F) {
-        (self.0[3], self.0[4], self.0[5])
-    }
-
-    /// Return the qc key commitment of the light client state
-    #[must_use]
-    pub fn qc_key_comm(&self) -> F {
-        self.0[3]
-    }
-
-    /// Return the state key commitment of the light client state
-    #[must_use]
-    pub fn state_key_comm(&self) -> F {
-        self.0[4]
-    }
-
-    /// Return the stake amount commitment of the light client state
-    #[must_use]
-    pub fn stake_amount_comm(&self) -> F {
-        self.0[5]
-    }
-
-    /// Return the threshold
-    #[must_use]
-    pub fn threshold(&self) -> F {
-        self.0[6]
+        let lc_state = GenericLightClientState {
+            view_number: v[0].into_bigint().as_ref()[0],
+            block_height: v[1].into_bigint().as_ref()[0],
+            block_comm_root: v[2],
+        };
+        let voting_st_state = GenericStakeTableState {
+            bls_key_comm: v[3],
+            schnorr_key_comm: v[4],
+            amount_comm: v[5],
+            threshold: v[6],
+        };
+        let next_st_state = GenericStakeTableState {
+            bls_key_comm: v[7],
+            schnorr_key_comm: v[8],
+            amount_comm: v[9],
+            threshold: v[10],
+        };
+        Self {
+            lc_state,
+            voting_st_state,
+            next_st_state,
+        }
     }
 }
 

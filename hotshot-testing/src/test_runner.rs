@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::{broadcast, Receiver, Sender};
 use async_lock::RwLock;
 use futures::future::join_all;
@@ -41,7 +42,6 @@ use hotshot_types::{
     },
     HotShotConfig, ValidatorConfig,
 };
-use primitive_types::U256;
 use tide_disco::Url;
 use tokio::{spawn, task::JoinHandle};
 #[allow(deprecated)]

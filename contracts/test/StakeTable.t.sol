@@ -19,6 +19,8 @@ import { LightClientMock } from "../test/mocks/LightClientMock.sol";
 import { InitializedAt } from "../src/InitializedAt.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
+import { LightClientCommonTest } from "./LightClientV2.t.sol";
+import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -28,18 +30,14 @@ import { EspToken } from "../src/EspToken.sol";
 
 // Target contract
 import { StakeTable as S } from "../src/StakeTable.sol";
-import { StakeTableMock } from "../test/mocks/StakeTableMock.sol";
-import { DeployStakeTableScript } from "./script/StakeTable.s.sol";
-import { DeployEspTokenScript } from "./script/EspToken.s.sol";
+
 // TODO: currently missing several tests
 // TODO: test only owner methods access control
 
-contract StakeTable_register_Test is Test {
-    StakeTableMock public stakeTable;
-    address payable public proxy;
-    address public admin;
+contract StakeTable_register_Test is LightClientCommonTest {
+    S public stakeTable;
+    // NOTE: address admin defined in LightClientCommonTest
     EspToken public token;
-    LightClientMock public lcMock;
     uint256 public constant INITIAL_BALANCE = 5 ether;
     uint256 public constant ESCROW_PERIOD = 1 weeks;
     uint16 public constant COMMISSION = 1234; // 12.34 %
@@ -65,8 +63,8 @@ contract StakeTable_register_Test is Test {
             BN254.G1Point memory blsSig,
             BN254.G2Point memory blsVK,
             uint256 schnorrVKx,
-            uint256 schnorrVKy,
-        ) = abi.decode(result, (BN254.G1Point, BN254.G2Point, uint256, uint256, address));
+            uint256 schnorrVKy
+        ) = abi.decode(result, (BN254.G1Point, BN254.G2Point, uint256, uint256));
 
         return (
             blsVK, // blsVK
@@ -76,38 +74,36 @@ contract StakeTable_register_Test is Test {
     }
 
     function setUp() public {
+        init(); // light client init
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
         validator = makeAddr("validator");
         delegator = makeAddr("delegator");
 
-        string[] memory cmds = new string[](3);
-        cmds[0] = "diff-test";
-        cmds[1] = "mock-genesis";
-        cmds[2] = "5";
+        // deploy EspToken and its proxy
+        EspToken tokenImpl = new EspToken();
+        bytes memory initData =
+            abi.encodeWithSignature("initialize(address,address)", admin, tokenGrantRecipient);
+        ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
+        token = EspToken(payable(address(proxy)));
 
-        bytes memory result = vm.ffi(cmds);
-        (
-            LightClientMock.LightClientState memory state,
-            LightClientMock.StakeTableState memory stakeState
-        ) = abi.decode(result, (LightClient.LightClientState, LightClient.StakeTableState));
-        LightClientMock.LightClientState memory genesis = state;
-        LightClientMock.StakeTableState memory genesisStakeTableState = stakeState;
-
-        lcMock = new LightClientMock(genesis, genesisStakeTableState, 864000);
-
-        DeployEspTokenScript tokenDeployer = new DeployEspTokenScript();
-        (address tokenAddress,) = tokenDeployer.run(tokenGrantRecipient);
-        token = EspToken(tokenAddress);
-
+        // transfer minted coin
         vm.prank(tokenGrantRecipient);
         token.transfer(address(validator), INITIAL_BALANCE);
 
-        DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
-        (proxy, admin) = stakeTableDeployer.run(tokenAddress, address(lcMock), ESCROW_PERIOD);
-        stakeTable = StakeTableMock(proxy);
+        // deploy stake table and its proxy
+        S staketableImpl = new S();
+        initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)",
+            address(token),
+            address(lc),
+            ESCROW_PERIOD,
+            admin
+        );
+        proxy = new ERC1967Proxy(address(staketableImpl), initData);
+        stakeTable = S(payable(address(proxy)));
     }
 
-    function test_Deployment_StoresBlockNumber() public {
+    function test_Deployment_StoresBlockNumber() public view {
         assertEq(stakeTable.initializedAtBlock(), block.number);
     }
 
@@ -716,11 +712,11 @@ contract StakeTableUpgradeTest is Test {
     }
 
     function test_upgrade_succeeds() public {
-        (uint8 majorVersion,,) = StakeTableV2Test(stakeTableRegisterTest.proxy()).getVersion();
+        (uint8 majorVersion,,) = S(stakeTableRegisterTest.stakeTable()).getVersion();
         assertEq(majorVersion, 1);
 
         vm.startPrank(stakeTableRegisterTest.admin());
-        address proxy = stakeTableRegisterTest.proxy();
+        address proxy = address(stakeTableRegisterTest.stakeTable());
         S(proxy).upgradeToAndCall(address(new StakeTableV2Test()), "");
 
         (uint8 majorVersionNew,,) = StakeTableV2Test(proxy).getVersion();
@@ -733,7 +729,7 @@ contract StakeTableUpgradeTest is Test {
     /// forge-config: default.allow_internal_expect_revert = true
     function test_upgrade_reverts_when_not_admin() public {
         address notAdmin = makeAddr("not_admin");
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         (uint8 majorVersion,,) = proxy.getVersion();
         assertEq(majorVersion, 1);
 
@@ -754,14 +750,14 @@ contract StakeTableUpgradeTest is Test {
     }
 
     function test_initialize_function_is_protected() public {
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         proxy.initialize(address(0), address(0), 0, address(0));
     }
 
     function test_initialize_function_is_protected_when_upgraded() public {
         vm.startPrank(stakeTableRegisterTest.admin());
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         proxy.upgradeToAndCall(address(new StakeTableV2Test()), "");
 
         vm.expectRevert(Initializable.InvalidInitialization.selector);
@@ -824,12 +820,12 @@ contract StakeTableUpgradeTest is Test {
 
     function test_reinitialize_succeeds_only_once() public {
         vm.startPrank(stakeTableRegisterTest.admin());
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         proxy.upgradeToAndCall(
             address(new StakeTableV2Test()), abi.encodeWithSignature("initializeV2(uint256)", 2)
         );
 
-        StakeTableV2Test proxyV2 = StakeTableV2Test(stakeTableRegisterTest.proxy());
+        StakeTableV2Test proxyV2 = StakeTableV2Test(address(stakeTableRegisterTest.stakeTable()));
         assertEq(proxyV2.newValue(), 2);
 
         vm.expectRevert(Initializable.InvalidInitialization.selector);

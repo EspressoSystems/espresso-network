@@ -6,9 +6,9 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+alloy = { workspace = true }
 ark-srs = { workspace = true }
 clap = { workspace = true }
-ethers = { version = "2.0.4" }
 hotshot-contract-adapter = { workspace = true }
 hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }

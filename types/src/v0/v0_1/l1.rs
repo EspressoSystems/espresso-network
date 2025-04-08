@@ -1,8 +1,13 @@
 use alloy::{
-    primitives::FixedBytes,
-    providers::RootProvider,
+    network::Ethereum,
+    primitives::{B256, U256},
+    providers::{
+        fillers::{FillProvider, JoinFill, RecommendedFillers},
+        Identity, RootProvider,
+    },
     transports::http::{Client, Http},
 };
+use alloy_compat::ethers_serde;
 use async_broadcast::{InactiveReceiver, Sender};
 use clap::Parser;
 use derive_more::Deref;
@@ -26,14 +31,16 @@ use crate::v0::utils::parse_duration;
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Hash, PartialEq, Eq)]
 pub struct L1BlockInfo {
     pub number: u64,
-    pub timestamp: ethers::types::U256,
-    pub hash: ethers::types::H256,
+    #[serde(with = "ethers_serde::u256")]
+    pub timestamp: U256,
+    #[serde(with = "ethers_serde::b256")]
+    pub hash: B256,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, Hash, PartialEq, Eq)]
 pub(crate) struct L1BlockInfoWithParent {
     pub(crate) info: L1BlockInfo,
-    pub(crate) parent_hash: FixedBytes<32>,
+    pub(crate) parent_hash: B256,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Hash, PartialEq, Eq)]
@@ -149,6 +156,12 @@ pub struct L1ClientOptions {
     pub metrics: Arc<Box<dyn Metrics>>,
 }
 
+/// Type alias for alloy provider
+pub type L1Provider = FillProvider<
+    JoinFill<Identity, <Ethereum as RecommendedFillers>::RecommendedFillers>,
+    RootProvider,
+>;
+
 #[derive(Clone, Debug, Deref)]
 /// An Ethereum provider and configuration to interact with the L1.
 ///
@@ -158,9 +171,12 @@ pub struct L1ClientOptions {
 /// easy to use a subscription instead of polling for new blocks, vastly reducing the number of L1
 /// RPC calls we make.
 pub struct L1Client {
-    /// A `RootProvider` from `alloy` which uses our custom `SwitchingTransport`
+    /// The alloy provider used for L1 communication with wallet and default fillers
     #[deref]
-    pub provider: RootProvider<SwitchingTransport>,
+    pub provider: L1Provider,
+    /// Actual transport used in `self.provider`
+    /// i.e. the `t` variable in `ProviderBuilder::new().on_client(RpcClient::new(t, is_local))`
+    pub transport: SwitchingTransport,
     /// Shared state updated by an asynchronous task which polls the L1.
     pub(crate) state: Arc<Mutex<L1State>>,
     /// Channel used by the async update task to send events to clients.

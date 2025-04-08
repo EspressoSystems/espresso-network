@@ -14,10 +14,10 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
-use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 
 use crate::{

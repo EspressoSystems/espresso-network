@@ -12,10 +12,10 @@ use std::{
     marker::PhantomData,
 };
 
+use alloy::primitives::U256;
 use bitvec::{bitvec, vec::BitVec};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
-use primitive_types::U256;
 use tracing::error;
 
 use crate::{

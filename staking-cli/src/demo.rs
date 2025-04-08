@@ -9,9 +9,7 @@ use alloy::{
     signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
 };
 use anyhow::Result;
-use contract_bindings_alloy::{
-    esptoken::EspToken::EspTokenInstance, staketable::StakeTable::StakeTableInstance,
-};
+use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 use url::Url;
 
@@ -33,8 +31,7 @@ pub async fn stake_in_contract_for_test(
 
     let mk_provider = |signer| {
         let wallet = EthereumWallet::from(signer);
-        ProviderBuilder::new()
-            .with_recommended_fillers()
+        Ok(ProviderBuilder::new()
             .wallet(wallet)
             .on_http(rpc_url.clone())
     };
@@ -44,7 +41,7 @@ pub async fn stake_in_contract_for_test(
     let token_signer = mk_provider(grant_recipient.clone());
 
     tracing::info!("ESP token address: {token_address}");
-    let token = EspTokenInstance::new(token_address, token_signer.clone());
+    let token = EspToken::new(token_address, token_signer.clone());
     let token_balance = token.balanceOf(grant_recipient.address()).call().await?._0;
     tracing::info!(
         "token distributor account {} balance: {} ESP",
@@ -96,7 +93,7 @@ pub async fn stake_in_contract_for_test(
         assert!(receipt.status());
 
         tracing::info!("approve {fund_amount_eth} ESP for {stake_table_address}",);
-        let validator_token = EspTokenInstance::new(token_address, validator_provider.clone());
+        let validator_token = EspToken::new(token_address, validator_provider.clone());
         let receipt = validator_token
             .approve(stake_table_address, fund_amount)
             .send()
@@ -106,9 +103,9 @@ pub async fn stake_in_contract_for_test(
         assert!(receipt.status());
 
         tracing::info!("deploy validator {val_index} with commission {commission}");
-        let stake_table = StakeTableInstance::new(stake_table_address, validator_provider);
         let receipt = register_validator(
-            stake_table.clone(),
+            &validator_provider,
+            stake_table_address,
             commission,
             validator_address,
             bls_key_pair,
@@ -120,7 +117,13 @@ pub async fn stake_in_contract_for_test(
         tracing::info!(
             "delegate {delegate_amount_esp} ESP for validator {val_index} from {validator_address}"
         );
-        let receipt = delegate(stake_table, validator_address, delegate_amount).await?;
+        let receipt = delegate(
+            &validator_provider,
+            stake_table_address,
+            validator_address,
+            delegate_amount,
+        )
+        .await?;
         assert!(receipt.status());
     }
     tracing::info!("completed staking for demo");

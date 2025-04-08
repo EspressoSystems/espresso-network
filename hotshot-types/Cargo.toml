@@ -7,6 +7,7 @@ version = "0.1.11"
 license = "MIT"
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ed-on-bn254 = { workspace = true }
@@ -40,7 +41,6 @@ libp2p-identity = { workspace = true }
 memoize = { workspace = true }
 mnemonic = "1"
 multiaddr = { workspace = true }
-primitive-types = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 serde = { workspace = true }
