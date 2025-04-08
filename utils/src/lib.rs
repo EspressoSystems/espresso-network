@@ -37,6 +37,7 @@ pub struct AnvilOptions {
     load_state: Option<PathBuf>,
     accounts: Option<usize>,
     chain_id: Option<u64>,
+    slots_in_epoch: Option<u64>,
 }
 
 impl AnvilOptions {
@@ -62,6 +63,11 @@ impl AnvilOptions {
 
     pub fn chain_id(mut self, id: u64) -> Self {
         self.chain_id = Some(id);
+        self
+    }
+
+    pub fn slots_in_epoch(mut self, slots: u64) -> Self {
+        self.slots_in_epoch = Some(slots);
         self
     }
 
@@ -126,6 +132,9 @@ impl Anvil {
         }
         if let Some(chain_id) = opt.chain_id {
             command.args(["--chain-id", &chain_id.to_string()]);
+        }
+        if let Some(slots) = opt.slots_in_epoch {
+            command.args(["--slots-in-an-epoch", &slots.to_string()]);
         }
 
         tracing::info!("Starting Anvil: {:?}", &command);

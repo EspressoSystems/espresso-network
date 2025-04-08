@@ -159,6 +159,10 @@ struct Args {
     )]
     max_block_size: u64,
 
+    /// The length of a hotshot epoch in hotshot blocks.
+    #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 40)]
+    epoch_height: u64,
+
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
@@ -192,6 +196,7 @@ async fn main() -> anyhow::Result<()> {
         alt_prover_update_intervals,
         l1_interval,
         max_block_size,
+        epoch_height,
     } = cli_params;
 
     logging.init();
@@ -207,7 +212,8 @@ async fn main() -> anyhow::Result<()> {
         (url, None)
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
-        let instance = AnvilOptions::default().spawn().await;
+        // Espresso only considers finalized L1 blocks. Finalize every L1 block immediately.
+        let instance = AnvilOptions::default().slots_in_epoch(1).spawn().await;
         let url = instance.url();
         tracing::info!("l1 url: {}", url);
         (url, Some(instance))
@@ -219,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap();
 
     let network_config = TestConfigBuilder::default()
+        .epoch_height(epoch_height)
         .builder_port(builder_port)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
