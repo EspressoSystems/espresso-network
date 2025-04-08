@@ -51,7 +51,7 @@ fn test_cli_version() -> Result<()> {
 }
 
 #[test]
-fn test_cli_created_and_remove_config_file() -> anyhow::Result<()> {
+fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
 
@@ -319,6 +319,22 @@ async fn test_cli_transfer() -> Result<()> {
         .assert_success();
 
     assert_eq!(system.balance(addr).await?, amount);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cli_info() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    let amount = parse_ether("0.123")?;
+    system.delegate(amount).await?;
+
+    let out = system.cmd().arg("info").output()?.assert_success().utf8();
+
+    assert!(out.contains(&system.deployer_address.to_string()));
+    assert!(out.contains("0.123"));
 
     Ok(())
 }
