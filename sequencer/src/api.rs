@@ -1810,9 +1810,15 @@ mod api_tests {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::BTreeMap, time::Duration};
+    use std::{
+        collections::{BTreeMap, HashSet},
+        time::Duration,
+    };
 
-    use alloy::{node_bindings::Anvil, primitives::U256};
+    use alloy::{
+        node_bindings::Anvil,
+        primitives::{utils::parse_ether, U256},
+    };
     use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
@@ -1835,6 +1841,7 @@ mod test {
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        utils::epoch_from_block_number,
         ValidatorConfig,
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
@@ -2948,5 +2955,174 @@ mod test {
             }
         }
         assert_eq!(receive_count, total_count + 1);
+    }
+
+    // TODO when `EpochVersion` becomes base version we can merge this
+    // w/ above test.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_epoch_progression() {
+        setup_test();
+
+        let epoch_height = 35; // TODO may need to increase so first blocks appear in the fetch
+        let wanted_epochs = 10;
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let hotshot_event_streaming_port =
+            pick_unused_port().expect("No ports free for hotshot event streaming");
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+
+        let url = format!("http://localhost:{hotshot_event_streaming_port}")
+            .parse()
+            .unwrap();
+
+        let sys = staking_cli::deploy::TestSystem::deploy().await.unwrap();
+        // register and delegate to deployer account
+        sys.register_validator().await.unwrap();
+        let delegate_amount = parse_ether("100").unwrap();
+        sys.delegate(delegate_amount).await.unwrap();
+        tracing::error!("address: {:?}", sys.stake_table);
+
+        // register and delegate some more accounts
+        let demo_config = staking_cli::Config {
+            rpc_url: sys.rpc_url.clone(),
+            stake_table_address: sys.stake_table,
+            token_address: sys.token,
+            ..Default::default()
+        };
+
+        staking_cli::demo::stake_for_demo(&demo_config, 2)
+            .await
+            .unwrap();
+
+        // let instance = AnvilOptions::default().slots_in_epoch(0).spawn().await;
+        // stake_in_contract_for_test(
+        //     instance.url(),
+        //     deployer_signer_alloy,
+        //     stake_table,
+        //     token,
+        //     staking_priv_keys,
+        // )
+        // .await?;
+
+        let hotshot_events = HotshotEvents {
+            events_service_port: hotshot_event_streaming_port,
+        };
+
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+
+        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+
+        // let builder_priv_key = FeeAccount::generated_from_seed_indexed([1; 32], 0).1;
+        // let src = FeeAccount::generated_from_seed_indexed([0; 32], 0).0;
+        // let dst = FeeAccount::generated_from_seed_indexed([0; 32], 1).0;
+        // let amt = FeeAmount::from(1);
+
+        // let fee_info = FeeInfo::new(src, amt);
+
+        let chain_config = ChainConfig {
+            max_block_size: 300.into(),
+            base_fee: 0.into(),
+            // fee_recipient: dst,
+            stake_table_contract: Some(sys.stake_table),
+            ..Default::default()
+        };
+
+        // let mut genesis_state = NodeState::mock()
+        //             .with_l1(
+        //                 L1Client::new(vec![anvil.endpoint().parse().unwrap()])
+        //                     .expect("Failed to create L1 client"),
+        //             )
+        //             .with_current_version(StaticVersion::<0, 1>::version());
+        // genesis_state.peers = Arc::new(MockStateCatchup::from_iter([(
+        //             parent_leaf.view_number(),
+        //             Arc::new(parent_state.clone()),
+        //         )]));
+
+        tracing::error!(
+            "fee recipients match? chain_config: {:?}",
+            chain_config.fee_recipient
+        );
+
+        // let state = {
+        //     let mut state = ValidatedState {
+        //         chain_config: chain_config.into(),
+        //         ..Default::default()
+        //     };
+        //     state.prefund_account(src, amt);
+        //     state
+        // };
+
+        let state = ValidatedState {
+            chain_config: chain_config.into(),
+            ..Default::default()
+        };
+        // Note that we are cloning state, not the Arc
+        let catchup_state = Arc::new(state.clone());
+        // let catchup = AnotherMockStateCatchup::from_state(catchup_state);
+
+        // let states = std::array::from_fn(|_| state.clone());
+        // let c = MockStateCatchup::default();
+        let c = NullStateCatchup::default();
+        tracing::error!("null catchup default: {:?}", c);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(sys.rpc_url.clone())
+            .epoch_height(epoch_height)
+            .build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .states(std::array::from_fn(|_| state.clone()))
+            .network_config(network_config)
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+
+        let mut subscribed_events = client
+            .socket("hotshot-events/events")
+            .subscribe::<Event<SeqTypes>>()
+            .await
+            .unwrap();
+
+        let wanted_views = epoch_height * wanted_epochs; // TODO not sure about this
+        let mut views = HashSet::new();
+        let mut epochs = HashSet::new();
+        for _ in 0..=600 {
+            let event = subscribed_events.next().await.unwrap();
+            let event = event.unwrap();
+            let view_number = event.view_number;
+            tracing::error!("view number: {}", view_number.u64());
+            views.insert(view_number.u64());
+
+            if let hotshot::types::EventType::Decide { qc, .. } = event.event {
+                assert!(qc.data.epoch.is_some(), "epochs are live");
+                assert!(qc.data.block_number.is_some());
+
+                let epoch = qc.data.epoch.unwrap().u64();
+                epochs.insert(epoch);
+
+                tracing::error!(
+                    "Got decide: epoch: {:?}, block: {:?} ",
+                    epoch,
+                    qc.data.block_number
+                );
+
+                let expected_epoch =
+                    epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
+                tracing::error!(expected_epoch, epoch);
+
+                assert_eq!(expected_epoch, epoch);
+            }
+            if views.contains(&wanted_views) {
+                tracing::info!("Client Received at least desired views, exiting loop");
+                break;
+            }
+        }
+
+        // prevent false positive when we overflow the range
+        assert!(views.contains(&wanted_views), "Views are not progressing");
+        assert!(
+            epochs.contains(&wanted_epochs),
+            "Epochs are not progressing"
+        );
     }
 }

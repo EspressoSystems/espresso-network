@@ -46,8 +46,14 @@ impl TestSystem {
         let port = portpicker::pick_unused_port().unwrap();
         // Spawn anvil
         let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
-            anvil.port(port).arg("--accounts").arg("20")
+            anvil
+                .port(port)
+                .arg("--accounts")
+                .arg("20")
+                .arg("--slots-in-an-epoch")
+                .arg("0")
         })?;
+
         let rpc_url = format!("http://localhost:{}", port).parse()?;
         let deployer_address = provider.default_signer_address();
 
