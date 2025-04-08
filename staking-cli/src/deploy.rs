@@ -176,17 +176,14 @@ impl TestSystem {
     }
 
     pub async fn allowance(&self, owner: Address) -> Result<U256> {
-        Ok(self
-            .token
-            .allowance(owner, *self.stake_table.address())
-            .call()
-            .await?
-            ._0)
+        let token = EspToken::new(self.token, &self.provider);
+        Ok(token.allowance(owner, self.stake_table).call().await?._0)
     }
 
     pub async fn approve(&self, amount: U256) -> Result<()> {
-        self.token
-            .approve(*self.stake_table.address(), amount)
+        let token = EspToken::new(self.token, &self.provider);
+        token
+            .approve(self.stake_table, amount)
             .send()
             .await?
             .get_receipt()

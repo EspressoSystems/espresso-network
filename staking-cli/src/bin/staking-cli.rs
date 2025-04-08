@@ -5,12 +5,12 @@ use alloy::{
     network::EthereumWallet,
     primitives::{utils::format_ether, Address},
     providers::{Provider, ProviderBuilder},
-    rpc::types::BlockTransactionsKind,
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::Result;
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
+use hotshot_contract_adapter::sol_types::EspToken;
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
@@ -189,16 +189,14 @@ pub async fn main() -> Result<()> {
         .on_http(config.rpc_url.clone());
     let stake_table_addr = config.stake_table_address;
     let token_addr = config.token_address;
+    let token = EspToken::new(config.token_address, &provider);
 
     let result = match config.commands {
         Commands::Info { l1_block_number } => {
             let query_block = l1_block_number.unwrap_or(BlockId::latest());
-            let l1_block = provider
-                .get_block(query_block, BlockTransactionsKind::Hashes)
-                .await?
-                .unwrap_or_else(|| {
-                    exit_err("Failed to get block {query_block}", "Block not found");
-                });
+            let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
+                exit_err("Failed to get block {query_block}", "Block not found");
+            });
             let l1_block_resolved = l1_block.header.number;
             tracing::info!("Getting stake table info at block {l1_block_resolved}");
             let stake_table = stake_table_info(
