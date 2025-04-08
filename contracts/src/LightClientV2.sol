@@ -90,7 +90,7 @@ contract LightClientV2 is LightClient {
         // or if there is no last epoch (i.e. when current epoch is epoch 1)
         require(newEpoch < lastUpdateEpoch + 2, MissingLastBlockInEpochUpdate());
         if (lastUpdateEpoch != 0 && newEpoch != lastUpdateEpoch) {
-            require(isLastBlockInEpoch(finalizedState.blockHeight), MissingLastBlockInEpochUpdate());
+            require(isEpochRoot(finalizedState.blockHeight), MissingLastBlockInEpochUpdate());
         }
         BN254.validateScalarField(nextStakeTable.blsKeyComm);
         BN254.validateScalarField(nextStakeTable.schnorrKeyComm);
@@ -102,7 +102,7 @@ contract LightClientV2 is LightClient {
         // upon successful verification, update the latest finalized state
         // during epoch change, also update to the new stake table
         finalizedState = newState;
-        if (isLastBlockInEpoch(newState.blockHeight)) {
+        if (isEpochRoot(newState.blockHeight)) {
             votingStakeTableState = nextStakeTable;
             emit NewEpoch(newEpoch + 1);
         }
@@ -141,7 +141,7 @@ contract LightClientV2 is LightClient {
         publicInput[5] = BN254.ScalarField.unwrap(votingStakeTableState.amountComm);
         publicInput[6] = votingStakeTableState.threshold;
 
-        if (isLastBlockInEpoch(state.blockHeight)) {
+        if (isEpochRoot(state.blockHeight)) {
             // during epoch change: use the next stake table
             publicInput[7] = BN254.ScalarField.unwrap(nextStakeTable.blsKeyComm);
             publicInput[8] = BN254.ScalarField.unwrap(nextStakeTable.schnorrKeyComm);
@@ -189,12 +189,12 @@ contract LightClientV2 is LightClient {
         }
     }
 
-    /// @notice Decide if a block height is the last block in an epoch
-    function isLastBlockInEpoch(uint64 blockHeight) public view virtual returns (bool) {
+    /// @notice Decide if a block height is the an "epoch root" (defined as last block in epoch - 5)
+    function isEpochRoot(uint64 blockHeight) public view virtual returns (bool) {
         if (blockHeight == 0) {
             return false;
         } else {
-            return blockHeight % _blocksPerEpoch == 0;
+            return (blockHeight + 5) % _blocksPerEpoch == 0;
         }
     }
 }
