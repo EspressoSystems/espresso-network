@@ -242,24 +242,9 @@ async fn main() -> anyhow::Result<()> {
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
 
-    const NUM_NODES: usize = 2;
-    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-        .api_config(api_options)
-        .network_config(network_config)
-        .with_max_block_size(max_block_size)
-        .build();
-
-    let network = TestNetwork::new(
-        config,
-        SequencerVersions::<EpochVersion, EpochVersion>::new(),
-    )
-    .await;
-    let st = network.cfg.stake_table();
-    let config = network.cfg.hotshot_config();
-
-    tracing::info!("Hotshot config {config:?}");
-
-    let (genesis_state, genesis_stake) = network.light_client_genesis();
+    let initial_stake_table = network_config.stake_table();
+    let (genesis_state, genesis_stake) =
+        light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
     let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];
@@ -438,9 +423,8 @@ async fn main() -> anyhow::Result<()> {
             // fund stake table only on L1
             // Save the stake table address to use in ChainConfig
             stake_table_address = contracts
-                .get_contract_address(Contract::StakeTableProxy)
-                .expect("stake table deployed")
-                .to_alloy();
+                .address(Contract::StakeTableProxy)
+                .expect("stake table deployed");
             let deployer_signer_alloy = alloy::signers::local::MnemonicBuilder::<
                 alloy::signers::local::coins_bip39::English,
             >::default()
@@ -448,9 +432,8 @@ async fn main() -> anyhow::Result<()> {
             .index(account_index)?
             .build()?;
             let token_address = contracts
-                .get_contract_address(Contract::EspTokenProxy)
-                .expect("ESP token deployed")
-                .to_alloy();
+                .address(Contract::EspTokenProxy)
+                .expect("ESP token deployed");
             let staking_priv_keys = network_config.staking_priv_keys();
             stake_in_contract_for_test(
                 l1_url.clone(),
@@ -467,21 +450,21 @@ async fn main() -> anyhow::Result<()> {
         max_block_size: max_block_size.into(),
         // TODO: MA: the builder has block fee `123` hardcoded so we have to set this to zero for now.
         base_fee: 0.into(),
-        stake_table_contract: Some(stake_table_address.to_ethers()),
+        stake_table_contract: Some(stake_table_address),
         ..Default::default()
     };
+    tracing::info!("Chain config: {chain_config:?}");
 
     let config = network_config.hotshot_config();
-
     tracing::info!("Hotshot config {config:?}");
 
-    tracing::info!("Chain config: {:?}", chain_config);
     let state = ValidatedState {
         chain_config: chain_config.into(),
         ..Default::default()
     };
-    tracing::info!("State: {:?}", state);
+    tracing::info!("Initial state: {state:?}");
 
+    const NUM_NODES: usize = 2;
     let states = std::array::from_fn(|_| state.clone());
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
@@ -503,11 +486,13 @@ async fn main() -> anyhow::Result<()> {
         let mut thresholds = HashMap::new();
         thresholds.insert(
             first_epoch,
-            one_honest_threshold(st.total_stake(SnapshotVersion::LastEpochStart)?),
+            one_honest_threshold(initial_stake_table.total_stake(SnapshotVersion::LastEpochStart)?),
         );
 
         let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
-        for (_bls_vk, amt, schnorr_vk) in st.try_iter(SnapshotVersion::LastEpochStart)? {
+        for (_bls_vk, amt, schnorr_vk) in
+            initial_stake_table.try_iter(SnapshotVersion::LastEpochStart)?
+        {
             genesis_known_nodes.insert(schnorr_vk, amt);
         }
         let mut known_nodes = HashMap::new();
