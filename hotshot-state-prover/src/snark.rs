@@ -15,6 +15,7 @@ use jf_plonk::{
     proof_system::{PlonkKzgSnark, UniversalSNARK},
     transcript::SolidityTranscript,
 };
+use jf_relation::Circuit;
 use jf_signature::schnorr::Signature;
 /// Proving key
 pub type ProvingKey = jf_plonk::proof_system::structs::ProvingKey<Bn254>;
@@ -98,6 +99,9 @@ where
         stake_table_capacity,
         next_stake_table_state,
     )?;
+
+    // Sanity check
+    circuit.check_circuit_satisfiability(&public_inputs.to_vec())?;
     let proof = PlonkKzgSnark::<Bn254>::prove::<_, _, SolidityTranscript>(rng, &circuit, pk, None)?;
     Ok((proof, public_inputs))
 }
@@ -113,17 +117,18 @@ mod tests {
     };
     use hotshot_types::{
         light_client::LightClientState,
-        traits::stake_table::{SnapshotVersion, StakeTableScheme},
+        signature_key::SchnorrPubKey,
+        traits::{
+            signature_key::StateSignatureKey,
+            stake_table::{SnapshotVersion, StakeTableScheme},
+        },
     };
     use jf_plonk::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
         transcript::SolidityTranscript,
     };
     use jf_relation::Circuit;
-    use jf_signature::{
-        schnorr::{SchnorrSignatureScheme, Signature},
-        SignatureScheme,
-    };
+    use jf_signature::schnorr::Signature;
     use jf_utils::test_rng;
 
     use super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
@@ -211,17 +216,17 @@ mod tests {
             block_comm_root: CircuitField::rand(&mut prng),
         };
 
-        let mut msg = Vec::with_capacity(7);
-        let state_msg: [CircuitField; 3] = lightclient_state.clone().into();
-        msg.extend_from_slice(&state_msg);
-        let next_st_state_msg: [CircuitField; 4] = next_st_state.into();
-        msg.extend_from_slice(&next_st_state_msg);
-
-        let sigs = schnorr_keys
+        let sigs: Vec<_> = schnorr_keys
             .iter()
-            .map(|(key, _)| SchnorrSignatureScheme::<Config>::sign(&(), key, &msg, &mut prng))
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            .map(|(key, _)| {
+                <SchnorrPubKey as StateSignatureKey>::sign_state(
+                    key,
+                    &lightclient_state,
+                    &next_st_state,
+                )
+                .unwrap()
+            })
+            .collect();
 
         // bit vector with total weight 26
         let bit_vec = [

@@ -18,8 +18,8 @@ contract LightClientV2 is LightClient {
     /// @notice stake table commitments for the current voting stakers
     StakeTableState public votingStakeTableState;
 
-    /// @notice The last block of the epoch (of the finalizedState) should not be skipped
-    error MissingLastBlockInEpochUpdate();
+    /// @notice The finalized state for the epoch root of every epoch should NOT be skipped
+    error MissingEpochRootUpdate();
     /// @notice Invocation on outdated APIs on V1
     error DeprecatedApi();
 
@@ -86,11 +86,15 @@ contract LightClientV2 is LightClient {
         // epoch-related checks
         uint64 lastUpdateEpoch = currentEpoch();
         uint64 newEpoch = epochFromBlockNumber(newState.blockHeight, _blocksPerEpoch);
-        // advancing 1 epoch is only allowed if the last block of last epoch was submitted
+        // advancing 1 epoch is only allowed if the epoch root (last block - 5) of the last epoch
+        // was submitted
         // or if there is no last epoch (i.e. when current epoch is epoch 1)
-        require(newEpoch < lastUpdateEpoch + 2, MissingLastBlockInEpochUpdate());
-        if (lastUpdateEpoch != 0 && newEpoch != lastUpdateEpoch) {
-            require(isLastBlockInEpoch(finalizedState.blockHeight), MissingLastBlockInEpochUpdate());
+        require(newEpoch < lastUpdateEpoch + 2, MissingEpochRootUpdate());
+        if (
+            lastUpdateEpoch != 0
+                && epochFromBlockNumber(newState.blockHeight + 5, _blocksPerEpoch) != lastUpdateEpoch
+        ) {
+            require(isEpochRoot(finalizedState.blockHeight), MissingEpochRootUpdate());
         }
         BN254.validateScalarField(nextStakeTable.blsKeyComm);
         BN254.validateScalarField(nextStakeTable.schnorrKeyComm);
@@ -102,7 +106,7 @@ contract LightClientV2 is LightClient {
         // upon successful verification, update the latest finalized state
         // during epoch change, also update to the new stake table
         finalizedState = newState;
-        if (isLastBlockInEpoch(newState.blockHeight)) {
+        if (isEpochRoot(newState.blockHeight)) {
             votingStakeTableState = nextStakeTable;
             emit NewEpoch(newEpoch + 1);
         }
@@ -141,7 +145,7 @@ contract LightClientV2 is LightClient {
         publicInput[5] = BN254.ScalarField.unwrap(votingStakeTableState.amountComm);
         publicInput[6] = votingStakeTableState.threshold;
 
-        if (isLastBlockInEpoch(state.blockHeight)) {
+        if (isEpochRoot(state.blockHeight)) {
             // during epoch change: use the next stake table
             publicInput[7] = BN254.ScalarField.unwrap(nextStakeTable.blsKeyComm);
             publicInput[8] = BN254.ScalarField.unwrap(nextStakeTable.schnorrKeyComm);
@@ -189,12 +193,12 @@ contract LightClientV2 is LightClient {
         }
     }
 
-    /// @notice Decide if a block height is the last block in an epoch
-    function isLastBlockInEpoch(uint64 blockHeight) public view virtual returns (bool) {
+    /// @notice Decide if a block height is the an "epoch root" (defined as last block in epoch - 5)
+    function isEpochRoot(uint64 blockHeight) public view virtual returns (bool) {
         if (blockHeight == 0) {
             return false;
         } else {
-            return blockHeight % _blocksPerEpoch == 0;
+            return (blockHeight + 5) % _blocksPerEpoch == 0;
         }
     }
 }

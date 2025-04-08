@@ -2740,6 +2740,7 @@ mod test {
             let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {
                 epoch: EpochNumber::new(i),
                 light_client_state: Default::default(), // filling arbitrary value
+                next_stake_table_state: Default::default(), // filling arbitrary value
                 signatures: vec![],                     // filling arbitrary value
             };
             // manually upsert the state cert to the finalized database
@@ -2888,6 +2889,7 @@ mod test {
             LightClientStateUpdateCertificate::<SeqTypes> {
                 epoch: EpochNumber::new(rows - 1),
                 light_client_state: Default::default(),
+                next_stake_table_state: Default::default(),
                 signatures: vec![]
             },
             "Wrong light client state update certificate in the storage",

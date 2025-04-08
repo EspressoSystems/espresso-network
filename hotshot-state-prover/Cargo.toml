@@ -19,6 +19,7 @@ displaydoc = { version = "0.2.3", default-features = false }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
+hotshot-query-service = { workspace = true }
 hotshot-stake-table = { workspace = true }
 hotshot-types = { workspace = true }
 itertools = { workspace = true }

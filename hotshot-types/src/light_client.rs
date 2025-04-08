@@ -6,7 +6,7 @@
 
 //! Types and structs associated with light client state
 
-use std::collections::HashMap;
+use std::{collections::HashMap, iter};
 
 use alloy::primitives::U256;
 use ark_ed_on_bn254::EdwardsConfig as Config;
@@ -15,11 +15,21 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_crhf::CRHF;
 use jf_rescue::{crhf::VariableLengthRescueCRHF, RescueError, RescueParameter};
 use jf_signature::schnorr;
+use jf_utils::to_bytes;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
+use crate::{
+    signature_key::{BLSPubKey, SchnorrPubKey},
+    traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
+    PeerConfig,
+};
+
+/// Capacity of the stake table, used for light client
+/// TODO(Chengyu): this should be loaded from the sequencer config
+pub const STAKE_TABLE_CAPACITY: usize = 100;
 /// Base field in the prover circuit
 pub type CircuitField = ark_ed_on_bn254::Fq;
 /// Concrete type for light client state
@@ -305,4 +315,87 @@ pub fn hash_bytes_to_field<F: RescueParameter>(bytes: &[u8]) -> Result<F, Rescue
         .map(F::from_le_bytes_mod_order)
         .collect::<Vec<_>>();
     Ok(VariableLengthRescueCRHF::<_, 1>::evaluate(elem)?[0])
+}
+
+/// This trait is for light client use. It converts the stake table items into
+/// field elements. These items will then be digested into a part of the light client state.
+pub trait ToFieldsLightClientCompat {
+    const SIZE: usize;
+    fn to_fields(&self) -> Vec<CircuitField>;
+}
+
+impl ToFieldsLightClientCompat for StateVerKey {
+    const SIZE: usize = 2;
+    /// This should be compatible with our legacy implementation.
+    fn to_fields(&self) -> Vec<CircuitField> {
+        let p = self.to_affine();
+        vec![p.x, p.y]
+    }
+}
+
+impl ToFieldsLightClientCompat for BLSPubKey {
+    const SIZE: usize = 3;
+    /// This should be compatible with our legacy implementation.
+    fn to_fields(&self) -> Vec<CircuitField> {
+        match to_bytes!(&self.to_affine()) {
+            Ok(bytes) => {
+                vec![
+                    CircuitField::from_le_bytes_mod_order(&bytes[..31]),
+                    CircuitField::from_le_bytes_mod_order(&bytes[31..62]),
+                    CircuitField::from_le_bytes_mod_order(&bytes[62..]),
+                ]
+            },
+            Err(_) => unreachable!(),
+        }
+    }
+}
+
+#[inline]
+/// A helper function to compute the quorum threshold given a total amount of stake.
+/// TODO: clean up <https://github.com/EspressoSystems/espresso-network/issues/2971>
+pub fn one_honest_threshold(total_stake: U256) -> U256 {
+    total_stake / U256::from(3) + U256::from(1)
+}
+
+#[inline]
+/// TODO: clean up <https://github.com/EspressoSystems/espresso-network/issues/2971>
+fn u256_to_field(amount: U256) -> CircuitField {
+    let amount_bytes: [u8; 32] = amount.to_le_bytes();
+    CircuitField::from_le_bytes_mod_order(&amount_bytes)
+}
+
+/// Given a list of stakers from `PeerConfig`, compute the stake table commitment
+pub fn compute_stake_table_commitment<TYPES: NodeType>(
+    known_nodes_with_stakes: &[PeerConfig<TYPES>],
+    stake_table_capacity: usize,
+) -> StakeTableState {
+    let padding_len = stake_table_capacity - known_nodes_with_stakes.len();
+    let mut bls_preimage = vec![];
+    let mut schnorr_preimage = vec![];
+    let mut amount_preimage = vec![];
+    let mut total_stake = U256::from(0);
+    for peer in known_nodes_with_stakes {
+        bls_preimage.extend(peer.stake_table_entry.public_key().to_fields());
+        schnorr_preimage.extend(peer.state_ver_key.to_fields());
+        amount_preimage.push(u256_to_field(peer.stake_table_entry.stake()));
+        total_stake += peer.stake_table_entry.stake();
+    }
+    bls_preimage.resize(
+        <TYPES::SignatureKey as ToFieldsLightClientCompat>::SIZE * stake_table_capacity,
+        CircuitField::default(),
+    );
+    // Nasty tech debt
+    schnorr_preimage
+        .extend(iter::repeat_n(SchnorrPubKey::default().to_fields(), padding_len).flatten());
+    amount_preimage.resize(stake_table_capacity, CircuitField::default());
+    let threshold = u256_to_field(one_honest_threshold(total_stake));
+    StakeTableState {
+        bls_key_comm: VariableLengthRescueCRHF::<CircuitField, 1>::evaluate(bls_preimage).unwrap()
+            [0],
+        schnorr_key_comm: VariableLengthRescueCRHF::<CircuitField, 1>::evaluate(schnorr_preimage)
+            .unwrap()[0],
+        amount_comm: VariableLengthRescueCRHF::<CircuitField, 1>::evaluate(amount_preimage)
+            .unwrap()[0],
+        threshold,
+    }
 }

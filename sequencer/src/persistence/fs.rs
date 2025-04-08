@@ -1769,6 +1769,7 @@ mod test {
                     block_height: i,
                     block_comm_root: Default::default(),
                 },
+                next_stake_table_state: Default::default(),
                 signatures: vec![], // filling arbitrary value
             };
             assert!(storage.add_state_cert(state_cert).await.is_ok());

@@ -25,6 +25,7 @@ use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    light_client::compute_stake_table_commitment,
     network::NetworkConfig,
     traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
     PeerConfig, ValidatorConfig,
@@ -40,7 +41,6 @@ use tracing::{Instrument, Level};
 use url::Url;
 
 use crate::{
-    compute_stake_table_commitment,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
