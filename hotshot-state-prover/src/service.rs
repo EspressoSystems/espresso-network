@@ -392,9 +392,9 @@ async fn fetch_epoch_state_from_sequencer(
 
 async fn generate_proof_helper(
     state: &mut ProverServiceState,
-    light_client_state: &LightClientState,
-    current_stake_table_state: &StakeTableState,
-    next_stake_table_state: &StakeTableState,
+    light_client_state: LightClientState,
+    current_stake_table_state: StakeTableState,
+    next_stake_table_state: StakeTableState,
     signature_map: HashMap<StateVerKey, StateSignature>,
     proving_key: &ProvingKey,
 ) -> Result<(Proof, PublicInput), ProverError> {
@@ -411,7 +411,7 @@ async fn generate_proof_helper(
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
         if let Some(sig) = signature_map.get(key) {
             // Check if the signature is valid
-            if key.verify_state_sig(sig, light_client_state, next_stake_table_state) {
+            if key.verify_state_sig(sig, &light_client_state, &next_stake_table_state) {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;
@@ -431,9 +431,6 @@ async fn generate_proof_helper(
     let proof_gen_start = Instant::now();
     let proving_key_clone = proving_key.clone();
     let stake_table_capacity = state.config.stake_table_capacity;
-    let light_client_state = light_client_state.clone();
-    let current_stake_table_state = *current_stake_table_state;
-    let next_stake_table_state = *next_stake_table_state;
     let (proof, public_input) = spawn_blocking(move || {
         generate_state_update_proof(
             &mut ark_std::rand::thread_rng(),
@@ -480,9 +477,9 @@ async fn epoch_catchup(
 
         let (proof, public_input) = generate_proof_helper(
             state,
-            &state_cert.light_client_state,
-            &cur_st_state,
-            &state_cert.next_stake_table_state,
+            state_cert.light_client_state,
+            cur_st_state,
+            state_cert.next_stake_table_state,
             signature_map,
             proving_key,
         )
@@ -530,18 +527,9 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         contract_state.block_height
     );
 
-    // Update the prover service state if necessary
-    let contract_epoch = epoch_from_block_number(contract_state.block_height, blocks_per_epoch);
-    if contract_epoch != state.epoch {
-        state
-            .sync_with_epoch(contract_epoch)
-            .await
-            .map_err(ProverError::NetworkError)?;
-    }
-
     let bundle = fetch_latest_state(relay_server_client).await?;
-    tracing::info!("Bundle accumulated weight: {}", bundle.accumulated_weight);
-    tracing::info!("Latest HotShot block height: {}", bundle.state.block_height);
+    tracing::debug!("Bundle accumulated weight: {}", bundle.accumulated_weight);
+    tracing::debug!("Latest HotShot block height: {}", bundle.state.block_height);
 
     if contract_state.block_height >= bundle.state.block_height {
         tracing::info!("No update needed.");
@@ -551,6 +539,14 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     tracing::debug!("New state: {:?}", bundle.state);
 
     if bundle.state.block_height > epoch_start_block {
+        // Update the prover service state if necessary
+        let contract_epoch = epoch_from_block_number(contract_state.block_height, blocks_per_epoch);
+        if contract_epoch != state.epoch {
+            state
+                .sync_with_epoch(contract_epoch)
+                .await
+                .map_err(ProverError::NetworkError)?;
+        }
         // We need an epoch catchup to process the current bundle.
         let bundle_epoch = epoch_from_block_number(bundle.state.block_height, blocks_per_epoch);
         if bundle_epoch > state.epoch {
@@ -587,9 +583,9 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     // Stake table update is already handled in the epoch catchup
     let (proof, public_input) = generate_proof_helper(
         state,
-        &bundle.state,
-        &st_state,
-        &st_state,
+        bundle.state,
+        st_state,
+        st_state,
         bundle.signatures,
         &proving_key,
     )
