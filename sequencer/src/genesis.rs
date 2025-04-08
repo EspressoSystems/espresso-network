@@ -1120,6 +1120,8 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            epoch_height = 20
+            epoch_start_block = 1
 
             [stake_table]
             capacity = 10
@@ -1181,6 +1183,8 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            epoch_height = 20
+            epoch_start_block = 1
 
             [stake_table]
             capacity = 10
