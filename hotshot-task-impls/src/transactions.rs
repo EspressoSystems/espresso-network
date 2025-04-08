@@ -184,7 +184,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                         .unwrap_or(TYPES::View::new(0))
                         + 1
                 {
-                    tracing::error!("High QC in epoch version and not the first QC after upgrade");
+                    tracing::warn!("High QC in epoch version and not the first QC after upgrade");
+                    self.send_empty_block(event_stream, block_view, block_epoch, version)
+                        .await;
                     return None;
                 }
                 // 0 here so we use the highest block number in the calculation below

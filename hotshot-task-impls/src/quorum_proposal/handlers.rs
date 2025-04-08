@@ -15,7 +15,6 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
@@ -412,7 +411,6 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         _vid_share: Proposal<TYPES, VidDisperse<TYPES>>,
         view_change_evidence: Option<ViewChangeEvidence2<TYPES>>,
         formed_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-        decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
         parent_qc: QuorumCertificate2<TYPES>,
         maybe_next_epoch_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
         maybe_state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
@@ -449,11 +447,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .or(formed_upgrade_certificate);
 
         if let Some(cert) = upgrade_certificate.clone() {
-            if cert
-                .is_relevant(self.view_number, Arc::clone(&decided_upgrade_certificate))
-                .await
-                .is_err()
-            {
+            if cert.is_relevant(self.view_number).await.is_err() {
                 upgrade_certificate = None;
             }
         }
@@ -474,8 +468,8 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let metadata = commitment_and_metadata.metadata.clone();
 
         if version >= V::Epochs::VERSION
-            && self.view_number
-                != self
+            && parent_qc.view_number()
+                > self
                     .upgrade_lock
                     .upgrade_view()
                     .await
@@ -800,7 +794,6 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                 vid_share.unwrap(),
                 proposal_cert,
                 self.formed_upgrade_certificate.clone(),
-                Arc::clone(&self.upgrade_lock.decided_upgrade_certificate),
                 parent_qc,
                 maybe_next_epoch_qc,
                 maybe_state_cert,

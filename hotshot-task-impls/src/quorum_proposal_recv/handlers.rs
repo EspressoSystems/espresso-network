@@ -182,16 +182,26 @@ async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     validation_info: &ValidationInfo<TYPES, I, V>,
 ) -> Result<()> {
+    let upgrade_view = validation_info
+        .upgrade_lock
+        .upgrade_view()
+        .await
+        .unwrap_or(TYPES::View::new(0));
     if !validation_info
         .upgrade_lock
         .epochs_enabled(proposal.data.view_number())
         .await
-        || proposal.data.justify_qc().view_number()
-            <= validation_info
-                .upgrade_lock
-                .upgrade_view()
-                .await
-                .unwrap_or(TYPES::View::new(0))
+        || proposal.data.justify_qc().view_number() <= upgrade_view
+    {
+        return Ok(());
+    }
+    if validation_info
+        .consensus
+        .read()
+        .await
+        .high_qc()
+        .view_number()
+        <= upgrade_view
     {
         return Ok(());
     }

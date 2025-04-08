@@ -220,9 +220,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
         .await
     };
 
-    if let (Some(cert), Some(decided_view)) =
-        (decided_upgrade_cert.clone(), new_decided_view_number)
-    {
+    if let (Some(cert), Some(_)) = (decided_upgrade_cert.clone(), new_decided_view_number) {
         let mut decided_certificate_lock = task_state
             .upgrade_lock
             .decided_upgrade_certificate

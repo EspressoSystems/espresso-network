@@ -21,7 +21,6 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::UpgradeLock,
-    simple_certificate::UpgradeCertificate,
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,

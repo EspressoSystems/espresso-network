@@ -295,7 +295,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
 
                     let (_, last_proposal) = consensus_reader.last_proposals().last_key_value().context(info!("No recent quorum proposals in consensus state -- skipping upgrade proposal."))?;
 
-                    let last_proposal_view: u64 = *last_proposal.data.view_number();
+                    // let last_proposal_view: u64 = *last_proposal.data.view_number();
                     let last_proposal_block: u64 = last_proposal.data.block_header().block_number();
 
                     drop(consensus_reader);
