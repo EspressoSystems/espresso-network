@@ -455,7 +455,7 @@ async fn generate_proof_helper(
 
 /// This function will fetch the cross epoch state update information from the sequencer query node
 /// and update the light client state in the contract to the `target_epoch`.
-/// In the end, both the locally stored stake table and the contract light client state will corresponds
+/// In the end, both the locally stored stake table and the contract light client state will correspond
 /// to the `target_epoch`.
 async fn advance_epoch(
     state: &mut ProverServiceState,
