@@ -11,9 +11,6 @@ use alloy::{
 use anyhow::Result;
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
-use contract_bindings_alloy::{
-    esptoken::EspToken::EspTokenInstance, staketable::StakeTable::StakeTableInstance,
-};
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
@@ -188,11 +185,10 @@ pub async fn main() -> Result<()> {
     let account = signer.address();
     let wallet = EthereumWallet::from(signer);
     let provider = ProviderBuilder::new()
-        .with_recommended_fillers()
         .wallet(wallet)
         .on_http(config.rpc_url.clone());
-    let stake_table = StakeTableInstance::new(config.stake_table_address, provider.clone());
-    let token = EspTokenInstance::new(config.token_address, provider.clone());
+    let stake_table_addr = config.stake_table_address;
+    let token_addr = config.token_address;
 
     let result = match config.commands {
         Commands::Info { l1_block_number } => {
@@ -221,7 +217,8 @@ pub async fn main() -> Result<()> {
         } => {
             tracing::info!("Registering validator {account} with commission {commission}");
             register_validator(
-                stake_table,
+                &provider,
+                stake_table_addr,
                 commission,
                 account,
                 (consensus_private_key).into(),
@@ -231,36 +228,36 @@ pub async fn main() -> Result<()> {
         },
         Commands::DeregisterValidator {} => {
             tracing::info!("Deregistering validator {account}");
-            deregister_validator(stake_table).await
+            deregister_validator(&provider, stake_table_addr).await
         },
         Commands::Approve { amount } => {
             tracing::info!(
                 "Approving stake table {} to spend {amount}",
                 config.stake_table_address
             );
-            approve(token, config.stake_table_address, amount).await
+            approve(&provider, token_addr, stake_table_addr, amount).await
         },
         Commands::Delegate {
             validator_address,
             amount,
         } => {
             tracing::info!("Delegating {amount} to {validator_address}");
-            delegate(stake_table, validator_address, amount).await
+            delegate(&provider, stake_table_addr, validator_address, amount).await
         },
         Commands::Undelegate {
             validator_address,
             amount,
         } => {
             tracing::info!("Undelegating {amount} from {validator_address}");
-            undelegate(stake_table, validator_address, amount).await
+            undelegate(&provider, stake_table_addr, validator_address, amount).await
         },
         Commands::ClaimWithdrawal { validator_address } => {
             tracing::info!("Claiming withdrawal for {validator_address}");
-            claim_withdrawal(stake_table, validator_address).await
+            claim_withdrawal(&provider, stake_table_addr, validator_address).await
         },
         Commands::ClaimValidatorExit { validator_address } => {
             tracing::info!("Claiming validator exit for {validator_address}");
-            claim_validator_exit(stake_table, validator_address).await
+            claim_validator_exit(&provider, stake_table_addr, validator_address).await
         },
         Commands::StakeForDemo { num_validators } => {
             tracing::info!("Staking for demo with {num_validators} validators");

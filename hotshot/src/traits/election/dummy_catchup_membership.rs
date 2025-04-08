@@ -1,5 +1,6 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use anyhow::Ok;
 use async_lock::RwLock;
 use hotshot_types::{
@@ -7,7 +8,6 @@ use hotshot_types::{
     drb::DrbResult,
     traits::{election::Membership, node_implementation::NodeType},
 };
-use primitive_types::U256;
 
 use super::static_committee::StaticCommittee;
 

@@ -11,12 +11,10 @@ use alloy::{
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use committable::Committable;
-use contract_bindings_alloy::staketable::StakeTable::{
+use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
+use hotshot_contract_adapter::sol_types::StakeTable::{
     ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
 };
-use ethers_conv::{ToAlloy, ToEthers};
-use hotshot::types::{BLSPubKey, SignatureKey as _};
-use hotshot_contract_adapter::stake_table::{bls_alloy_to_jf2, edward_bn254point_to_state_ver};
 use hotshot_types::{
     data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
     drb::{
@@ -72,8 +70,8 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 commission,
             }) => {
                 // TODO(abdul): BLS and Schnorr signature keys verification
-                let stake_table_key = bls_alloy_to_jf2(blsVk.clone());
-                let state_ver_key = edward_bn254point_to_state_ver(schnorrVk.clone());
+                let stake_table_key: BLSPubKey = blsVk.clone().into();
+                let state_ver_key: SchnorrPubKey = schnorrVk.clone().into();
                 // TODO(MA): The stake table contract currently enforces that each bls key is only used once. We will
                 // move this check to the confirmation layer and remove it from the contract. Once we have the signature
                 // check in this functions we can skip if a BLS key, or Schnorr key was previously used.
@@ -169,8 +167,8 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 let validator = validators
                     .get_mut(&account)
                     .with_context(|| "validator {account:#x} not found")?;
-                let bls = bls_alloy_to_jf2(blsVK);
-                let state_ver_key = edward_bn254point_to_state_ver(schnorrVK);
+                let bls = blsVK.into();
+                let state_ver_key = schnorrVK.into();
 
                 validator.stake_table_key = bls;
                 validator.state_ver_key = state_ver_key;
@@ -406,7 +404,7 @@ impl EpochCommittees {
                     PeerConfig {
                         stake_table_entry: BLSPubKey::stake_table_entry(
                             &v.stake_table_key,
-                            v.stake.to_ethers(),
+                            v.stake,
                         ),
                         state_ver_key: v.state_ver_key.clone(),
                     },
@@ -477,9 +475,7 @@ impl EpochCommittees {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
             .iter()
-            .filter(|&peer_config| {
-                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
-            })
+            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
@@ -487,9 +483,7 @@ impl EpochCommittees {
         // For each member, get the stake table entry
         let da_members: Vec<_> = da_members
             .iter()
-            .filter(|&peer_config| {
-                peer_config.stake_table_entry.stake() > ethers::types::U256::zero()
-            })
+            .filter(|&peer_config| peer_config.stake_table_entry.stake() > U256::ZERO)
             .cloned()
             .collect();
 
@@ -660,14 +654,14 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Check if a node has stake in the committee
     fn has_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> bool {
         self.stake(pub_key, epoch)
-            .map(|x| x.stake_table_entry.stake() > ethers::types::U256::zero())
+            .map(|x| x.stake_table_entry.stake() > U256::ZERO)
             .unwrap_or_default()
     }
 
     /// Check if a node has stake in the committee
     fn has_da_stake(&self, pub_key: &PubKey, epoch: Option<Epoch>) -> bool {
         self.da_stake(pub_key, epoch)
-            .map(|x| x.stake_table_entry.stake() > ethers::types::U256::zero())
+            .map(|x| x.stake_table_entry.stake() > U256::ZERO)
             .unwrap_or_default()
     }
 
@@ -710,41 +704,52 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the voting success threshold for the committee
-    fn success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+    fn success_threshold(&self, epoch: Option<Epoch>) -> U256 {
         let total_stake = self.total_stake(epoch);
-        if total_stake < primitive_types::U256::max_value() / 2 {
-            ((total_stake * 2) / 3) + 1
+        let one = U256::ONE;
+        let two = U256::from(2);
+        let three = U256::from(3);
+        if total_stake < U256::MAX / two {
+            ((total_stake * two) / three) + one
         } else {
-            ((total_stake / 3) * 2) + 2
+            ((total_stake / three) * two) + two
         }
     }
 
     /// Get the voting success threshold for the committee
-    fn da_success_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+    fn da_success_threshold(&self, epoch: Option<Epoch>) -> U256 {
         let total_stake = self.total_da_stake(epoch);
-        if total_stake < primitive_types::U256::max_value() / 2 {
-            ((total_stake * 2) / 3) + 1
+        let one = U256::ONE;
+        let two = U256::from(2);
+        let three = U256::from(3);
+
+        if total_stake < U256::MAX / two {
+            ((total_stake * two) / three) + one
         } else {
-            ((total_stake / 3) * 2) + 2
+            ((total_stake / three) * two) + two
         }
     }
 
     /// Get the voting failure threshold for the committee
-    fn failure_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+    fn failure_threshold(&self, epoch: Option<Epoch>) -> U256 {
         let total_stake = self.total_stake(epoch);
+        let one = U256::ONE;
+        let three = U256::from(3);
 
-        (total_stake / 3) + 1
+        (total_stake / three) + one
     }
 
     /// Get the voting upgrade threshold for the committee
-    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> primitive_types::U256 {
+    fn upgrade_threshold(&self, epoch: Option<Epoch>) -> U256 {
         let total_stake = self.total_stake(epoch);
+        let nine = U256::from(9);
+        let ten = U256::from(10);
 
         let normal_threshold = self.success_threshold(epoch);
-        let higher_threshold = if total_stake < primitive_types::U256::max_value() / 9 {
-            (total_stake * 9) / 10
+        let higher_threshold = if total_stake < U256::MAX / nine {
+            (total_stake * nine) / ten
         } else {
-            (total_stake / 10) * 9
+            (total_stake / ten) * nine
         };
 
         max(higher_threshold, normal_threshold)
@@ -771,7 +776,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         };
 
         let stake_tables = self
-            .get_stake_table_from_l1(address.to_alloy(), l1_finalized_block_info.number())
+            .get_stake_table_from_l1(address, l1_finalized_block_info.number())
             .await
             .inspect_err(|e| {
                 tracing::error!(?e, "`add_epoch_root`, error retrieving stake table");
@@ -943,9 +948,7 @@ impl DAMembers {
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
-    use contract_bindings_alloy::staketable::{EdOnBN254::EdOnBN254Point, BN254::G2Point};
-    use ethers_conv::ToAlloy as _;
-    use hotshot_contract_adapter::stake_table::{bls_jf_to_alloy2, ParsedEdOnBN254Point};
+    use hotshot_contract_adapter::sol_types::{EdOnBN254PointSol, G2PointSol};
     use hotshot_types::light_client::StateKeyPair;
     use rand::{Rng as _, RngCore as _};
 
@@ -955,8 +958,8 @@ pub mod testing {
 
     pub struct TestValidator {
         pub account: Address,
-        pub bls_vk: G2Point,
-        pub schnorr_vk: EdOnBN254Point,
+        pub bls_vk: G2PointSol,
+        pub schnorr_vk: EdOnBN254PointSol,
         pub commission: u16,
     }
 
@@ -967,19 +970,15 @@ pub mod testing {
             rng.fill_bytes(&mut seed);
 
             let (bls_vk, _) = BLSPubKey::generated_from_seed_indexed(seed, 0);
-            let schnorr_vk: ParsedEdOnBN254Point =
-                StateKeyPair::generate_from_seed_indexed(seed, 0)
-                    .ver_key()
-                    .to_affine()
-                    .into();
+            let schnorr_vk: EdOnBN254PointSol = StateKeyPair::generate_from_seed_indexed(seed, 0)
+                .ver_key()
+                .to_affine()
+                .into();
 
             Self {
                 account: Address::random(),
-                bls_vk: bls_jf_to_alloy2(bls_vk),
-                schnorr_vk: EdOnBN254Point {
-                    x: schnorr_vk.x.to_alloy(),
-                    y: schnorr_vk.y.to_alloy(),
-                },
+                bls_vk: bls_vk.to_affine().into(),
+                schnorr_vk,
                 commission: rng.gen_range(0..10000),
             }
         }
@@ -999,8 +998,8 @@ pub mod testing {
                 validator_stake += alloy::primitives::U256::from(stake);
             }
 
-            let stake_table_key = bls_alloy_to_jf2(val.bls_vk.clone());
-            let state_ver_key = edward_bn254point_to_state_ver(val.schnorr_vk.clone());
+            let stake_table_key = val.bls_vk.clone().into();
+            let state_ver_key = val.schnorr_vk.clone().into();
 
             Validator {
                 account: val.account,
@@ -1032,8 +1031,8 @@ mod tests {
         let mut events: Vec<StakeTableEvent> = [
             ValidatorRegistered {
                 account: val.account,
-                blsVk: val.bls_vk.clone(),
-                schnorrVk: val.schnorr_vk.clone(),
+                blsVk: val.bls_vk.clone().into(),
+                schnorrVk: val.schnorr_vk.clone().into(),
                 commission: val.commission,
             }
             .into(),
@@ -1045,8 +1044,8 @@ mod tests {
             .into(),
             ConsensusKeysUpdated {
                 account: val.account,
-                blsVK: val_new_keys.bls_vk.clone(),
-                schnorrVK: val_new_keys.schnorr_vk.clone(),
+                blsVK: val_new_keys.bls_vk.clone().into(),
+                schnorrVK: val_new_keys.schnorr_vk.clone().into(),
             }
             .into(),
             Undelegated {
@@ -1094,8 +1093,8 @@ mod tests {
 
         let register: StakeTableEvent = ValidatorRegistered {
             account: val.account,
-            blsVk: val.bls_vk.clone(),
-            schnorrVk: val.schnorr_vk.clone(),
+            blsVk: val.bls_vk.clone().into(),
+            schnorrVk: val.schnorr_vk.clone().into(),
             commission: val.commission,
         }
         .into();
@@ -1107,8 +1106,8 @@ mod tests {
         .into();
         let key_update: StakeTableEvent = ConsensusKeysUpdated {
             account: val.account,
-            blsVK: val.bls_vk.clone(),
-            schnorrVK: val.schnorr_vk.clone(),
+            blsVK: val.bls_vk.clone().into(),
+            schnorrVK: val.schnorr_vk.clone().into(),
         }
         .into();
         let undelegate: StakeTableEvent = Undelegated {

@@ -66,7 +66,7 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
 struct ConsensusState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
-    state_signer: Arc<StateSigner<SequencerApiVersion>>,
+    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
     node_state: NodeState,
     network_config: NetworkConfig<SeqTypes>,
@@ -107,7 +107,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
         }
     }
 
-    async fn state_signer(&self) -> &StateSigner<SequencerApiVersion> {
+    async fn state_signer(&self) -> &Arc<RwLock<StateSigner<SequencerApiVersion>>> {
         &self.consensus.as_ref().get().await.get_ref().state_signer
     }
 
@@ -667,7 +667,12 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
     for ApiState<N, P, V>
 {
     async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
-        self.state_signer().await.get_state_signature(height).await
+        self.state_signer()
+            .await
+            .read()
+            .await
+            .get_state_signature(height)
+            .await
     }
 }
 
@@ -675,18 +680,21 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
 pub mod test_helpers {
     use std::time::Duration;
 
+    use alloy::{
+        node_bindings::Anvil,
+        primitives::{Address, U256},
+    };
     use committable::Committable;
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
         MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
     };
-    use ethers::{prelude::Address, utils::Anvil};
     use futures::{
         future::{join_all, FutureExt},
         stream::StreamExt,
     };
     use hotshot::types::{Event, EventType};
-    use hotshot_contract_adapter::light_client::{ParsedLightClientState, ParsedStakeTableState};
+    use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
     use hotshot_state_prover::service::light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
@@ -963,7 +971,7 @@ pub mod test_helpers {
             }
         }
 
-        pub fn light_client_genesis(&self) -> (ParsedLightClientState, ParsedStakeTableState) {
+        pub fn light_client_genesis(&self) -> (LightClientStateSol, StakeTableStateSol) {
             let st = self.cfg.stake_table();
             light_client_genesis_from_stake_table(st).unwrap()
         }
@@ -993,7 +1001,7 @@ pub mod test_helpers {
 
         let options = opt(Options::with_port(port));
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1045,7 +1053,7 @@ pub mod test_helpers {
 
         let options = opt(Options::with_port(port).submit(Default::default()));
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1081,7 +1089,7 @@ pub mod test_helpers {
 
         let options = opt(Options::with_port(port));
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1123,7 +1131,7 @@ pub mod test_helpers {
 
         let options = opt(Options::with_port(port));
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1168,7 +1176,7 @@ pub mod test_helpers {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.balance, 0.into());
+        assert_eq!(res.balance, U256::ZERO);
         assert_eq!(
             res.proof
                 .verify(
@@ -1181,7 +1189,7 @@ pub mod test_helpers {
                         .commitment()
                 )
                 .unwrap(),
-            0.into()
+            U256::ZERO,
         );
 
         // Undecided block state.
@@ -1272,13 +1280,13 @@ pub mod test_helpers {
 mod api_tests {
     use std::fmt::Debug;
 
+    use alloy::node_bindings::Anvil;
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
         Header, Leaf2, MockSequencerVersions, NamespaceId,
     };
-    use ethers::utils::Anvil;
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
     use hotshot_query_service::availability::{
@@ -1344,7 +1352,7 @@ mod api_tests {
         let port = pick_unused_port().expect("No ports free");
         let storage = D::create_storage().await;
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
@@ -1812,6 +1820,7 @@ mod api_tests {
 mod test {
     use std::{collections::BTreeMap, time::Duration};
 
+    use alloy::{node_bindings::Anvil, primitives::U256};
     use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
@@ -1821,7 +1830,6 @@ mod test {
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState, V0_1,
     };
-    use ethers::utils::Anvil;
     use futures::{
         future::{self, join_all},
         stream::{StreamExt, TryStreamExt},
@@ -1839,7 +1847,6 @@ mod test {
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
-    use primitive_types::U256;
     use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
     use surf_disco::Client;
     use test_helpers::{
@@ -1871,7 +1878,7 @@ mod test {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         let options = Options::with_port(port);
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::<5, _, NullStateCatchup>::default()
             .api_config(options)
@@ -1915,7 +1922,7 @@ mod test {
         let options = SqlDataSource::options(&storage, Options::with_port(port));
 
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1980,7 +1987,7 @@ mod test {
             .await
             .unwrap()
             .unwrap();
-        let expected = ethers::types::U256::max_value();
+        let expected = U256::MAX;
         assert_eq!(expected, amount.0);
     }
 
@@ -1995,7 +2002,7 @@ mod test {
             SqlDataSource::leaf_only_ds_options(&storage, Options::with_port(port)).unwrap();
 
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -2082,7 +2089,7 @@ mod test {
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
@@ -2183,7 +2190,7 @@ mod test {
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         const EPOCH_HEIGHT: u64 = 5;
         let network_config = TestConfigBuilder::default()
             .l1_url(l1)
@@ -2293,7 +2300,7 @@ mod test {
 
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let chain_config: ChainConfig = ChainConfig::default();
 
@@ -2350,7 +2357,7 @@ mod test {
 
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let cf = ChainConfig {
             max_block_size: 300.into(),
@@ -2430,7 +2437,7 @@ mod test {
 
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let cf = ChainConfig {
             max_block_size: 300.into(),
@@ -2619,7 +2626,7 @@ mod test {
     ) {
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let chain_config_upgrade = upgrades
             .get(&<MockSeqVersions as Versions>::Upgrade::VERSION)
@@ -2733,7 +2740,7 @@ mod test {
             .unwrap();
         let port = pick_unused_port().unwrap();
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
@@ -2796,7 +2803,7 @@ mod test {
         // Start up again, resuming from the last decided leaf.
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
@@ -2862,7 +2869,7 @@ mod test {
 
         let options = Options::with_port(port).config(Default::default());
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -2919,7 +2926,7 @@ mod test {
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
 
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)

@@ -260,13 +260,20 @@ contract LightClient is Initializable, OwnableUpgradeable, UUPSUpgradeable {
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
     }
 
+    /// @notice a technically unnecessary but luckily zero-cost indirection for the benefit of
+    /// having
+    /// `IPlonkVerifier.VerifyingKey` rust alloy bindings, included only if appear in a public func.
+    function _getVk() public pure virtual returns (IPlonkVerifier.VerifyingKey memory vk) {
+        vk = VkLib.getVk();
+    }
+
     /// @notice Verify the Plonk proof, marked as `virtual` for easier testing as we can swap VK
     /// used in inherited contracts.
     function verifyProof(LightClientState memory state, IPlonkVerifier.PlonkProof memory proof)
         internal
         virtual
     {
-        IPlonkVerifier.VerifyingKey memory vk = VkLib.getVk();
+        IPlonkVerifier.VerifyingKey memory vk = _getVk();
 
         // Prepare the public input
         uint256[7] memory publicInput;

@@ -15,7 +15,7 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --only fee-contract,permissioned-stake-table,esp-token,stake-table
+    command: deploy --deploy-fee --deploy-permissioned-stake-table --deploy-esp-token --deploy-stake-table
     environment:
       - ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH=/data/initial_stake_table.toml
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
@@ -36,7 +36,7 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock-contract --only light-client
+    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_L1_PROVIDER
@@ -213,6 +213,8 @@ services:
     environment:
       - ESPRESSO_STATE_RELAY_SERVER_PORT
       - ESPRESSO_STATE_SIGNATURE_TOTAL_STAKE
+      - ESPRESSO_SEQUENCER_URL
+      - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -228,7 +230,7 @@ services:
       - ESPRESSO_STATE_PROVER_UPDATE_INTERVAL
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_ETH_MNEMONIC
-      - ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS
+      - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX

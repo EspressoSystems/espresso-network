@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
-pragma experimental ABIEncoderV2;
 
 import { Test } from "forge-std/Test.sol";
 import { LightClient as LCV1 } from "../src/LightClient.sol";
-import { LightClientV2 as LCV2 } from "../test/LightClientV2.sol";
-import { LightClientV3 as LCV3 } from "../test/LightClientV3.sol";
+import { LightClientV2Fake as LCV2 } from "./mocks/LightClientV2Fake.sol";
+import { LightClientV3Fake as LCV3 } from "./mocks/LightClientV3Fake.sol";
 // import { DeployLightClientContractWithoutMultiSigScript as DeployScript } from
 //     "../script/LightClient.s.sol";
 

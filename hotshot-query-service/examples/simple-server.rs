@@ -18,6 +18,7 @@
 
 use std::{num::NonZeroUsize, str::FromStr, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use clap::Parser;
 use futures::future::{join_all, try_join_all};
@@ -50,7 +51,6 @@ use hotshot_types::{
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
-use primitive_types::U256;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;

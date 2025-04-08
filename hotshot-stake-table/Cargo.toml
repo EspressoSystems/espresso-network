@@ -7,6 +7,7 @@ edition = { workspace = true }
 license = "MIT"
 
 [dependencies]
+alloy = { workspace = true }
 ark-bn254 = "0.4"
 ark-ed-on-bn254 = "0.4"
 ark-ff = "0.4"
@@ -18,7 +19,6 @@ jf-crhf = { workspace = true }
 jf-rescue = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-utils = { workspace = true }
-primitive-types = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 tagged-base64 = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }

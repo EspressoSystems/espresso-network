@@ -9,10 +9,10 @@
 mod config;
 mod internal;
 
+use alloy::primitives::{U256, U512};
 use ark_std::{collections::HashMap, rand::SeedableRng, sync::Arc};
 use digest::crypto_common::rand_core::CryptoRngCore;
 use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme};
-use primitive_types::{U256, U512};
 use serde::{Deserialize, Serialize};
 
 use self::internal::{to_merkle_path, Key, MerkleCommitment, MerkleProof, PersistentMerkleNode};
@@ -162,9 +162,9 @@ impl<K: Key> StakeTableScheme for StakeTable<K> {
     ) -> Option<(&Self::Key, &Self::Amount)> {
         let mut bytes = [0u8; 64];
         rng.fill_bytes(&mut bytes);
-        let r = U512::from_big_endian(&bytes);
+        let r = U512::from_be_slice(&bytes);
         let m = U512::from(self.last_epoch_start.total_stakes());
-        let pos: U256 = (r % m).try_into().unwrap(); // won't fail
+        let pos = (r % m).to::<U256>();
         self.last_epoch_start.key_by_stake(pos)
     }
 
@@ -229,9 +229,9 @@ impl<K: Key> StakeTable<K> {
 
 #[cfg(test)]
 mod tests {
+    use alloy::primitives::U256;
     use ark_std::{rand::SeedableRng, vec::Vec};
     use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme};
-    use primitive_types::U256;
 
     use super::StakeTable;
 

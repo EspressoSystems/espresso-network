@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use alloy::primitives::Address;
 use anyhow::Context;
 use espresso_types::{FeeAccount, FeeAmount, FeeMerkleTree, Header};
-use ethers::types::Address;
 use futures::{stream::BoxStream, StreamExt};
 use jf_merkle_tree::{
     prelude::{MerkleProof, Sha3Node},
@@ -132,7 +132,7 @@ mod tests {
         let client = SequencerClient::new("http://dummy-url:3030".parse().unwrap());
         assert_eq!(
             client
-                .get_espresso_balance(Address::zero(), Some(0))
+                .get_espresso_balance(Address::default(), Some(0))
                 .await
                 .unwrap(),
             0.into()

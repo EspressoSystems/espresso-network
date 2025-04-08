@@ -6,29 +6,32 @@ pragma solidity ^0.8.0;
 
 // Libraries
 import { Test } from "forge-std/Test.sol";
+import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 // Target contract
 import { EspToken } from "../src/EspToken.sol";
-import { DeployEspTokenScript } from "./script/EspToken.s.sol";
 
 contract EspTokenUpgradabilityTest is Test {
-    address payable public proxy;
     address public admin;
     address tokenGrantRecipient;
-    EspToken public espTokenProxy;
+    EspToken public token;
 
     function setUp() public {
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
-        DeployEspTokenScript deployer = new DeployEspTokenScript();
-        (proxy, admin) = deployer.run(tokenGrantRecipient);
-        espTokenProxy = EspToken(proxy);
+        admin = makeAddr("admin");
+
+        EspToken tokenImpl = new EspToken();
+        bytes memory initData =
+            abi.encodeWithSignature("initialize(address,address)", admin, tokenGrantRecipient);
+        ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
+        token = EspToken(payable(address(proxy)));
     }
 
     // For now we just check that the contract is deployed and minted balance is as expected.
 
     function testDeployment() public payable {
-        assertEq(espTokenProxy.name(), "Espresso Token");
-        assertEq(espTokenProxy.symbol(), "ESP");
-        assertEq(espTokenProxy.balanceOf(tokenGrantRecipient), 10_000_000_000 ether);
+        assertEq(token.name(), "Espresso Token");
+        assertEq(token.symbol(), "ESP");
+        assertEq(token.balanceOf(tokenGrantRecipient), 10_000_000_000 ether);
     }
 }

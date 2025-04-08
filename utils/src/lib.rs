@@ -1,291 +1,37 @@
-use std::{
-    fmt::Debug,
-    path::{Path, PathBuf},
-    process::{Child, Command},
-    time::Duration,
-};
+use std::time::Duration;
 
+use alloy::{
+    contract::SolCallBuilder,
+    network::{Ethereum, EthereumWallet},
+    primitives::U256,
+    providers::{
+        fillers::{FillProvider, JoinFill, WalletFiller},
+        utils::JoinedRecommendedFillers,
+        Provider, ProviderBuilder, RootProvider,
+    },
+    rpc::types::TransactionReceipt,
+    sol_types::{GenericContractError, SolCall},
+};
 use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
 use committable::{Commitment, Committable};
-use ethers::{
-    abi::Detokenize,
-    contract::builders::ContractCall,
-    prelude::*,
-    providers::{Http, Middleware, Provider},
-    signers::{coins_bip39::English, Signer as _},
-    types::U256,
-};
-use tempfile::TempDir;
 use tokio::time::sleep;
 use url::Url;
 
-pub mod blocknative;
+// FIXME: (alex) alloy doesn't have builtin external GasOracle support, do we still keep this?
+// pub mod blocknative;
 pub mod deployer;
 pub mod logging;
 pub mod ser;
 pub mod stake_table;
 pub mod test_utils;
 
-pub type Signer = SignerMiddleware<Provider<Http>, LocalWallet>;
-pub type NonceManager = NonceManagerMiddleware<Signer>;
-
-#[derive(Clone, Debug, Default)]
-pub struct AnvilOptions {
-    block_time: Option<Duration>,
-    port: Option<u16>,
-    load_state: Option<PathBuf>,
-    accounts: Option<usize>,
-    chain_id: Option<u64>,
-}
-
-impl AnvilOptions {
-    pub fn block_time(mut self, time: Duration) -> Self {
-        self.block_time = Some(time);
-        self
-    }
-
-    pub fn port(mut self, port: u16) -> Self {
-        self.port = Some(port);
-        self
-    }
-
-    pub fn load_state(mut self, path: PathBuf) -> Self {
-        self.load_state = Some(path);
-        self
-    }
-
-    pub fn accounts(mut self, accounts: usize) -> Self {
-        self.accounts = Some(accounts);
-        self
-    }
-
-    pub fn chain_id(mut self, id: u64) -> Self {
-        self.chain_id = Some(id);
-        self
-    }
-
-    pub async fn spawn(self) -> Anvil {
-        let state_dir = TempDir::new().unwrap();
-        let (child, url) = Anvil::spawn_server(&self, Some(state_dir.path())).await;
-        let anvil: Anvil = Anvil {
-            child,
-            url,
-            state_dir,
-            opt: self,
-        };
-
-        // When we are running a local Anvil node, as in tests, some endpoints (e.g. eth_feeHistory)
-        // do not work until at least one block has been mined.
-        while let Err(err) = anvil
-            .provider()
-            .fee_history(1, BlockNumber::Latest, &[])
-            .await
-        {
-            tracing::warn!("RPC is not ready: {err}");
-            sleep(Duration::from_millis(200)).await;
-        }
-
-        anvil
-    }
-}
-
-/// Convenient interfaces for using `anvil` command which runs a local blockchain
-/// Similar to [`AnvilInstance`][https://docs.rs/ethers/latest/ethers/core/utils/struct.AnvilInstance.html], with more useful methods
-#[derive(Debug)]
-pub struct Anvil {
-    child: Child,
-    url: Url,
-    state_dir: TempDir,
-    opt: AnvilOptions,
-}
-
-impl Anvil {
-    async fn spawn_server(opt: &AnvilOptions, state_dir: Option<&Path>) -> (Child, Url) {
-        let port = opt
-            .port
-            .unwrap_or_else(|| portpicker::pick_unused_port().unwrap());
-
-        let mut command = Command::new("anvil");
-        command.args([
-            "--silent",
-            "--port",
-            &port.to_string(),
-            "--accounts",
-            &opt.accounts.unwrap_or(20).to_string(),
-        ]);
-
-        if let Some(state_dir) = state_dir {
-            command.args(["--dump-state", &state_dir.display().to_string()]);
-        }
-        if let Some(block_time) = opt.block_time {
-            command.args(["-b", &block_time.as_secs().to_string()]);
-        }
-        if let Some(load_state) = &opt.load_state {
-            command.args(["--load-state", &load_state.display().to_string()]);
-        }
-        if let Some(chain_id) = opt.chain_id {
-            command.args(["--chain-id", &chain_id.to_string()]);
-        }
-
-        tracing::info!("Starting Anvil: {:?}", &command);
-
-        let child = command.spawn().unwrap();
-
-        let url = Url::parse(&format!("http://localhost:{port}")).unwrap();
-        wait_for_rpc(&url, Duration::from_millis(200), 20)
-            .await
-            .unwrap();
-
-        (child, url)
-    }
-
-    pub fn url(&self) -> Url {
-        self.url.clone()
-    }
-
-    pub fn ws_url(&self) -> Url {
-        let mut ws_url = self.url.clone();
-        ws_url.set_scheme("ws").unwrap();
-        ws_url
-    }
-
-    pub fn provider(&self) -> Provider<Http> {
-        Provider::try_from(self.url().to_string()).unwrap()
-    }
-
-    fn shutdown_gracefully(&self) {
-        Command::new("kill")
-            .args(["-s", "INT", &self.child.id().to_string()])
-            .spawn()
-            .unwrap()
-            .wait()
-            .unwrap();
-    }
-
-    /// Restart the server, possibly with different options.
-    pub async fn restart(&mut self, mut opt: AnvilOptions) {
-        // Stop the server and wait for it to dump its state.
-        self.shutdown_gracefully();
-
-        // If `opt` does not explicitly override the URL, use the current one.
-        if opt.port.is_none() {
-            opt.port = self.url.port();
-        }
-        // If `opt` does not explicitly override the chain ID, use the current one.
-        if opt.chain_id.is_none() {
-            opt.chain_id = self.opt.chain_id;
-        }
-
-        // Load state from the file where we just dumped state.
-        opt = opt.load_state(self.state_dir.path().join("state.json"));
-
-        // Restart the server with the new options, loading state from disk.
-        let (child, url) = Self::spawn_server(&opt, Some(self.state_dir.path())).await;
-        self.child = child;
-        self.url = url;
-        self.opt = opt;
-    }
-
-    /// Force a reorg in the L1.
-    ///
-    /// This function will block until the reorg has completed; that is, a block has been added to
-    /// the chain at the same height as a different, earlier block.
-    ///
-    /// Due to limitations in Anvil, the common ancestor of the reorg will always be the L1 genesis.
-    /// However, after the reorg, the genesis state of the EVM will be the same as the state when
-    /// this function was originally called. The recommended way to use this for testing reorg
-    /// handling, then, is to perform initialization (like deploying contracts) and then start some
-    /// service in the background and immediately call this function. This function will let the L1
-    /// chain run until it reaches block height at least `min_depth` and then reset it to block
-    /// height 0. Then it will let the L1 chain run again until it reaches block height `min_depth`.
-    ///
-    /// From the perspective of the service under test, this looks like an L1 chain with some
-    /// initial state (e.g. contracts deployed) and a block height which happens to be 0 but, as far
-    /// as the service cares, could be arbitrary. The block height grows somewhat before getting
-    /// reorged back to an earlier height (0) and then growing again.
-    ///
-    /// The L1 node will restart several times during this process.
-    pub async fn reorg(&mut self, min_depth: u64) {
-        // Stop the server and wait for it to dump its state, to obtain a snapshot of the current,
-        // pre-reorg state.
-        self.shutdown_gracefully();
-
-        // Ensure we restart on the same port and load the state snapshot.
-        let opt = self
-            .opt
-            .clone()
-            .port(self.url.port().unwrap())
-            .load_state(self.state_dir.path().into());
-
-        // Restart the server, loading state from disk but not dumping it on the next exit.
-        let (child, url) = Self::spawn_server(&opt, None).await;
-        self.child = child;
-        self.url = url;
-
-        // Wait for enough blocks to be produced.
-        let client = Provider::try_from(self.url.to_string()).unwrap();
-        while client.get_block_number().await.unwrap().as_u64() < min_depth {
-            sleep(Duration::from_secs(1)).await;
-        }
-
-        // Restart again, loading from the previous state checkpoint.
-        self.shutdown_gracefully();
-        let (child, url) = Self::spawn_server(&opt, Some(self.state_dir.path())).await;
-        self.child = child;
-        self.url = url;
-
-        // Wait for the chain to reach its former height again.
-        let client = Provider::try_from(self.url.to_string()).unwrap();
-        while client.get_block_number().await.unwrap().as_u64() < min_depth {
-            sleep(Duration::from_secs(1)).await;
-        }
-    }
-}
-
-impl Drop for Anvil {
-    fn drop(&mut self) {
-        self.shutdown_gracefully()
-    }
-}
-
-/// Prepare a `SignerMiddleware` by connecting to a provider and initiating a local wallet.
-/// Returns a signer/client that can sign and send transactions to network.
-pub async fn init_signer(provider: &Url, mnemonic: &str, index: u32) -> Option<Signer> {
-    let provider = match Provider::try_from(provider.to_string()) {
-        Ok(provider) => provider,
-        Err(err) => {
-            tracing::error!("error connecting to RPC {}: {}", provider, err);
-            return None;
-        },
-    };
-    let chain_id = match provider.get_chainid().await {
-        Ok(id) => id.as_u64(),
-        Err(err) => {
-            tracing::error!("error getting chain ID: {}", err);
-            return None;
-        },
-    };
-    let mnemonic = match MnemonicBuilder::<English>::default()
-        .phrase(mnemonic)
-        .index(index)
-    {
-        Ok(mnemonic) => mnemonic,
-        Err(err) => {
-            tracing::error!("error building wallet: {}", err);
-            return None;
-        },
-    };
-    let wallet = match mnemonic.build() {
-        Ok(wallet) => wallet,
-        Err(err) => {
-            tracing::error!("error opening wallet: {}", err);
-            return None;
-        },
-    };
-    let wallet = wallet.with_chain_id(chain_id);
-    Some(SignerMiddleware::new(provider, wallet))
-}
+/// Type alias that connects to providers with recommended fillers and wallet
+pub type HttpProviderWithWallet = FillProvider<
+    JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
+    RootProvider,
+    Ethereum,
+>;
 
 pub async fn wait_for_http(
     url: &Url,
@@ -310,7 +56,7 @@ pub async fn wait_for_rpc(
     max_retries: usize,
 ) -> Result<usize, String> {
     let retries = wait_for_http(url, interval, max_retries).await?;
-    let client = Provider::new(Http::new(url.clone()));
+    let client = ProviderBuilder::new().on_http(url.clone());
     for i in retries..(max_retries + 1) {
         if client.get_block_number().await.is_ok() {
             tracing::debug!("JSON-RPC ready at {url}");
@@ -327,15 +73,12 @@ pub async fn wait_for_rpc(
 pub fn commitment_to_u256<T: Committable>(comm: Commitment<T>) -> U256 {
     let mut buf = vec![];
     comm.serialize_uncompressed(&mut buf).unwrap();
-    let state_comm: [u8; 32] = buf.try_into().unwrap();
-    U256::from_little_endian(&state_comm)
+    U256::from_le_slice(&buf)
 }
 
 /// converting a `U256` value into a keccak256-based structured commitment (32 bytes)
 pub fn u256_to_commitment<T: Committable>(comm: U256) -> Result<Commitment<T>, SerializationError> {
-    let mut commit_bytes = [0; 32];
-    comm.to_little_endian(&mut commit_bytes);
-    Commitment::deserialize_uncompressed_unchecked(&*commit_bytes.to_vec())
+    Commitment::deserialize_uncompressed_unchecked(&*comm.to_le_bytes_vec())
 }
 
 /// Implement `to_fixed_bytes` for wrapped types
@@ -344,8 +87,7 @@ macro_rules! impl_to_fixed_bytes {
     ($struct_name:ident, $type:ty) => {
         impl $struct_name {
             pub(crate) fn to_fixed_bytes(self) -> [u8; core::mem::size_of::<$type>()] {
-                let mut bytes = [0u8; core::mem::size_of::<$type>()];
-                self.0.to_little_endian(&mut bytes);
+                let bytes: [u8; core::mem::size_of::<$type>()] = self.0.to_le_bytes();
                 bytes
             }
         }
@@ -353,99 +95,96 @@ macro_rules! impl_to_fixed_bytes {
 }
 
 /// send a transaction and wait for confirmation before returning the tx receipt and block included.
-pub async fn contract_send<M: Middleware, T: Detokenize, E>(
-    call: &ContractCall<M, T>,
+///
+/// # NOTE:
+/// - `wait_for_transaction_to_be_mined` is removed thanks to alloy's better builtin PendingTransaction await
+/// - DON'T use this if you want parse the exact revert reason/type, since this func will only give err msg like: "custom error 0x23b0db14",
+///   instead, follow <https://docs.rs/alloy/0.12.5/alloy/contract/enum.Error.html#method.as_decoded_interface_error> to pattern-match err type
+pub async fn contract_send<T, P, C>(
+    call: &SolCallBuilder<T, P, C>,
 ) -> Result<(TransactionReceipt, u64), anyhow::Error>
 where
-    M::Provider: Clone,
-    E: ContractRevert + Debug,
+    P: Provider,
+    C: SolCall,
 {
     let pending = match call.send().await {
         Ok(pending) => pending,
         Err(err) => {
-            if let Some(e) = err.decode_contract_revert::<E>() {
-                tracing::error!("contract revert: {:?}", e);
+            if let Some(e) = err.as_decoded_interface_error::<GenericContractError>() {
+                tracing::error!("contract err: {:?}", e);
             }
             return Err(anyhow!("error sending transaction: {:?}", err));
         },
     };
 
-    let hash = pending.tx_hash();
-    let provider = pending.provider();
-    tracing::debug!("submitted contract call {:x}", hash);
+    let hash = pending.tx_hash().to_owned();
+    tracing::info!("submitted contract call 0x{:x}", hash);
 
-    if !wait_for_transaction_to_be_mined(&provider, hash).await {
-        return Err(anyhow!("transaction not mined"));
-    }
-
-    let receipt = match provider.get_transaction_receipt(hash).await {
-        Ok(Some(receipt)) => receipt,
-        Ok(None) => {
-            return Err(anyhow!("contract call {hash:x}: no receipt"));
-        },
+    let receipt = match pending.get_receipt().await {
+        Ok(r) => r,
         Err(err) => {
             return Err(anyhow!(
-                "contract call {hash:x}: error getting transaction receipt: {err}"
+                "contract call 0x{hash:x}: error getting transaction receipt: {err}"
             ))
         },
     };
-    if receipt.status != Some(1.into()) {
-        return Err(anyhow!("contract call {hash:x}: transaction reverted"));
-    }
 
     // If a transaction is mined and we get a receipt for it, the block number should _always_ be
     // set. If it is not, something has gone horribly wrong with the RPC.
     let block_number = receipt
         .block_number
         .expect("transaction mined but block number not set");
-    Ok((receipt, block_number.as_u64()))
-}
-
-async fn wait_for_transaction_to_be_mined<P: JsonRpcClient>(
-    provider: &Provider<P>,
-    hash: H256,
-) -> bool {
-    let retries = 10;
-    // It's common to have to try a few times before the transactions is mined. It is too noisy if
-    // we log every retry. However, if it is not mined after several retries, something might be
-    // wrong, and it would be useful to start logging.
-    let log_retries = 5;
-
-    let interval = provider.get_interval();
-    for i in 0..retries {
-        match provider.get_transaction(hash).await {
-            Err(err) => {
-                if i >= log_retries {
-                    tracing::warn!("contract call {hash:?} (retry {i}/{retries}): error getting transaction status: {err}");
-                }
-            },
-            Ok(None) => {
-                if i >= log_retries {
-                    tracing::warn!(
-                        "contract call {hash:?} (retry {i}/{retries}): missing from mempool"
-                    );
-                }
-            },
-            Ok(Some(tx)) if tx.block_number.is_none() => {
-                if i >= log_retries {
-                    tracing::warn!("contract call {hash:?} (retry {i}/{retries}): pending");
-                }
-            },
-            Ok(Some(_)) => return true,
-        }
-
-        sleep(interval).await;
-    }
-
-    tracing::error!("contract call {hash:?}: not mined after {retries} retries");
-    false
+    Ok((receipt, block_number))
 }
 
 #[cfg(test)]
 mod test {
+    use alloy::{primitives::I256, sol};
+    use anyhow::Result;
     use committable::RawCommitmentBuilder;
+    use test_utils::setup_test;
 
     use super::*;
+
+    // contract for tests, credit: <https://alloy.rs/examples/sol-macro/events_errors.html>
+    sol! {
+        #[allow(missing_docs)]
+        #[sol(rpc, bytecode = "608060405260008055348015601357600080fd5b506103e9806100236000396000f3fe608060405234801561001057600080fd5b50600436106100575760003560e01c80632baeceb71461005c5780632ccbdbca1461006657806361bc221a14610070578063c3e8b5ca1461008e578063d09de08a14610098575b600080fd5b6100646100a2565b005b61006e610103565b005b61007861013e565b60405161008591906101f9565b60405180910390f35b610096610144565b005b6100a061017f565b005b60016000808282546100b49190610243565b925050819055506000543373ffffffffffffffffffffffffffffffffffffffff167fdc69c403b972fc566a14058b3b18e1513da476de6ac475716e489fae0cbe4a2660405160405180910390a3565b6040517f23b0db14000000000000000000000000000000000000000000000000000000008152600401610135906102e3565b60405180910390fd5b60005481565b6040517fa5f9ec670000000000000000000000000000000000000000000000000000000081526004016101769061034f565b60405180910390fd5b6001600080828254610191919061036f565b925050819055506000543373ffffffffffffffffffffffffffffffffffffffff167ff6d1d8d205b41f9fb9549900a8dba5d669d68117a3a2b88c1ebc61163e8117ba60405160405180910390a3565b6000819050919050565b6101f3816101e0565b82525050565b600060208201905061020e60008301846101ea565b92915050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052601160045260246000fd5b600061024e826101e0565b9150610259836101e0565b92508282039050818112600084121682821360008512151617156102805761027f610214565b5b92915050565b600082825260208201905092915050565b7f4572726f72204100000000000000000000000000000000000000000000000000600082015250565b60006102cd600783610286565b91506102d882610297565b602082019050919050565b600060208201905081810360008301526102fc816102c0565b9050919050565b7f4572726f72204200000000000000000000000000000000000000000000000000600082015250565b6000610339600783610286565b915061034482610303565b602082019050919050565b600060208201905081810360008301526103688161032c565b9050919050565b600061037a826101e0565b9150610385836101e0565b9250828201905082811215600083121683821260008412151617156103ad576103ac610214565b5b9291505056fea2646970667358221220a878a3c1da1a1170e4496cdbc63bd5ed1587374bcd6cf6d4f1d5b88fa981795d64736f6c63430008190033")]
+        contract CounterWithError {
+            int256 public counter = 0;
+
+            // Events - using `Debug` to print the events
+            #[derive(Debug)]
+            event Increment(address indexed by, int256 indexed value);
+            #[derive(Debug)]
+            event Decrement(address indexed by, int256 indexed value);
+
+            // Custom Error
+            #[derive(Debug)]
+            error ErrorA(string message);
+            #[derive(Debug)]
+            error ErrorB(string message);
+
+            // Functions
+            function increment() public {
+                counter += 1;
+                emit Increment(msg.sender, counter);
+            }
+
+            function decrement() public {
+                counter -= 1;
+                emit Decrement(msg.sender, counter);
+            }
+
+            function revertA() public pure {
+                revert ErrorA("Error A");
+            }
+
+            function revertB() public pure {
+                revert ErrorB("Error B");
+            }
+        }
+    }
 
     struct TestCommittable;
 
@@ -461,5 +200,25 @@ mod test {
             TestCommittable.commit(),
             u256_to_commitment(commitment_to_u256(TestCommittable.commit())).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_contract_send() -> Result<()> {
+        setup_test();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let contract = CounterWithError::deploy(provider.clone()).await?;
+
+        // test normal contract sending should success
+        let inc_call = contract.increment();
+        let (receipt, block_num) = contract_send(&inc_call).await?;
+        assert_eq!(block_num, 2); // 1 for deployment, 1 for this send
+        assert!(receipt.inner.is_success());
+        assert_eq!(contract.counter().call().await?.counter, I256::ONE);
+
+        // test contract revert will return useful error message
+        let revert_call = contract.revertA();
+        assert!(contract_send(&revert_call).await.is_err());
+
+        Ok(())
     }
 }

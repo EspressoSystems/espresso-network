@@ -1,20 +1,30 @@
-use std::{collections::BTreeMap, io, iter::once, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io,
+    iter::once,
+    sync::Arc,
+    time::Duration,
+};
 
+use alloy::{
+    network::EthereumWallet,
+    node_bindings::Anvil,
+    primitives::{Address, U256},
+    providers::{Provider, ProviderBuilder},
+    signers::local::{coins_bip39::English, MnemonicBuilder},
+};
 use async_trait::async_trait;
 use clap::Parser;
-use contract_bindings_ethers::light_client_mock::LightClientMock;
 use espresso_types::{parse_duration, MarketplaceVersion, SequencerVersions, V0_1};
-use ethers::{
-    middleware::{MiddlewareBuilder, SignerMiddleware},
-    providers::{Http, Middleware, Provider},
-    signers::{coins_bip39::English, MnemonicBuilder, Signer},
-    types::{Address, H160, U256},
-};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
-use hotshot_state_prover::service::{
-    one_honest_threshold, run_prover_service_with_stake_table, StateProverConfig,
+use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
+use hotshot_stake_table::utils::one_honest_threshold;
+use hotshot_state_prover::service::{run_prover_service_with_stake_table, StateProverConfig};
+use hotshot_types::{
+    light_client::StateVerKey,
+    traits::stake_table::{SnapshotVersion, StakeTableScheme},
+    utils::epoch_from_block_number,
 };
-use hotshot_types::traits::stake_table::{SnapshotVersion, StakeTableScheme};
 use portpicker::pick_unused_port;
 use sequencer::{
     api::{
@@ -22,13 +32,13 @@ use sequencer::{
         test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
     },
     persistence,
-    state_signature::relay_server::run_relay_server,
+    state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
     testing::TestConfigBuilder,
     SequencerApiVersion,
 };
 use sequencer_utils::{
-    deployer::{deploy, is_proxy_contract, Contract, Contracts},
-    logging, AnvilOptions,
+    deployer::{self, Contract, Contracts},
+    logging, HttpProviderWithWallet,
 };
 use serde::{Deserialize, Serialize};
 use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
@@ -81,10 +91,10 @@ struct Args {
         name = "MULTISIG_ADDRESS",
         env = "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS"
     )]
-    multisig_address: Option<H160>,
+    multisig_address: Option<Address>,
 
     /// The frequency of updating the light client state, expressed in update interval
-    #[clap( long, value_parser = parse_duration, default_value = "20s", env = "ESPRESSO_STATE_PROVER_UPDATE_INTERVAL")]
+    #[clap( long, value_parser = parse_duration, default_value = "10s", env = "ESPRESSO_STATE_PROVER_UPDATE_INTERVAL")]
     update_interval: Duration,
 
     /// Interval between retries if a state update fails
@@ -111,7 +121,7 @@ struct Args {
     /// Optional list of multisig addresses for the alternate chains.
     /// If there are fewer multisig addresses provided than chains, the base MULTISIG_ADDRESS will be used.
     #[arg(long, env = "ESPRESSO_DEPLOYER_ALT_MULTISIG_ADDRESSES", num_args = 1.., value_delimiter = ',')]
-    alt_multisig_addresses: Vec<H160>,
+    alt_multisig_addresses: Vec<Address>,
 
     /// The frequency of updating the light client state for alt chains.
     /// If there are fewer intervals provided than chains, the base update interval will be used.
@@ -184,8 +194,8 @@ async fn main() -> anyhow::Result<()> {
         update_interval,
         retry_interval,
         alt_prover_retry_intervals,
-        alt_prover_update_intervals,
-        l1_interval,
+        alt_prover_update_intervals: _,
+        l1_interval: _,
         max_block_size,
     } = cli_params;
 
@@ -202,8 +212,8 @@ async fn main() -> anyhow::Result<()> {
         (url, None)
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
-        let instance = AnvilOptions::default().spawn().await;
-        let url = instance.url();
+        let instance = Anvil::new().spawn();
+        let url = instance.endpoint_url();
         tracing::info!("l1 url: {}", url);
         (url, Some(instance))
     };
@@ -218,6 +228,8 @@ async fn main() -> anyhow::Result<()> {
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
         .build();
+    let blocks_per_epoch = network_config.hotshot_config().epoch_height;
+    let epoch_start_block = network_config.hotshot_config().epoch_start_block;
 
     const NUM_NODES: usize = 2;
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
@@ -229,25 +241,25 @@ async fn main() -> anyhow::Result<()> {
     let network =
         TestNetwork::new(config, SequencerVersions::<MarketplaceVersion, V0_1>::new()).await;
     let st = network.cfg.stake_table();
-    let total_stake = st.total_stake(SnapshotVersion::LastEpochStart).unwrap();
     let config = network.cfg.hotshot_config();
 
     tracing::info!("Hotshot config {config:?}");
 
-    let lc_genesis = network.light_client_genesis();
+    let (genesis_state, genesis_stake) = network.light_client_genesis();
 
-    let contracts = Contracts::new();
+    let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];
     let mut prover_ports = Vec::new();
-    let mut mock_contracts = BTreeMap::new();
+    let mut client_states = ApiState::default();
     let mut handles = FuturesUnordered::new();
-    // deploy contract for L1 and each alt chain
-    for (url, mnemonic, account_index, multisig_address, update_interval, retry_interval) in once((
+
+    // deploy light client contract for L1 and each alt chain,
+    // deploy fee contract, EspToken, stake table contracts on L1 only.
+    for (url, mnemonic, account_index, multisig_address, retry_interval) in once((
         l1_url.clone(),
         mnemonic.clone(),
         account_index,
         multisig_address,
-        update_interval,
         retry_interval,
     ))
     .chain(
@@ -266,103 +278,179 @@ async fn main() -> anyhow::Result<()> {
                     .chain(std::iter::repeat(multisig_address)),
             )
             .zip(
-                alt_prover_update_intervals
-                    .into_iter()
-                    .chain(std::iter::repeat(update_interval)),
-            )
-            .zip(
                 alt_prover_retry_intervals
                     .into_iter()
                     .chain(std::iter::repeat(retry_interval)),
             )
-            .map(|(((((url, mnc), idx), mlts), update), retry)| {
-                (url.clone(), mnc, idx, mlts, update, retry)
-            }),
+            .map(|((((url, mnc), idx), mlts), retry)| (url.clone(), mnc, idx, mlts, retry)),
     ) {
         tracing::info!("deploying the contract for provider: {url:?}");
 
-        let contracts = deploy(
-            url.clone(),
-            l1_interval,
-            mnemonic.clone(),
-            account_index,
-            multisig_address,
-            true,
-            None,
-            async { Ok(lc_genesis.clone()) }.boxed(),
-            None,
-            contracts.clone(),
-            None,                           // initial stake table
-            Some(Duration::from_secs(300)), // exit escrow period
-            None,                           // use deployer as initial token grant recipient
-        )
-        .await?;
-
-        let provider = Provider::<Http>::try_from(url.as_str())
-            .unwrap()
-            .interval(l1_interval);
-        let chain_id = provider.get_chainid().await.unwrap().as_u64();
-
-        let wallet = MnemonicBuilder::<English>::default()
+        let signer = MnemonicBuilder::<English>::default()
             .phrase(mnemonic.as_str())
             .index(account_index)
             .expect("error building wallet")
             .build()
-            .expect("error opening wallet")
-            .with_chain_id(chain_id);
+            .expect("error opening wallet");
+        let wallet = EthereumWallet::from(signer.clone());
+        let provider = ProviderBuilder::new()
+            .wallet(wallet.clone())
+            .on_http(url.clone());
+        let admin = provider.get_accounts().await?[0];
 
-        let light_client_address = contracts
-            .get_contract_address(Contract::LightClientProxy)
-            .unwrap();
+        let contracts = if url == l1_url {
+            &mut l1_contracts
+        } else {
+            // alt chains contracts
+            &mut Contracts::new()
+        };
 
-        if !is_proxy_contract(&provider, light_client_address)
-            .await
-            .expect("Failed to determine if light client contract is a proxy")
-        {
-            panic!("Light Client contract's address is not a proxy");
+        // deploy light client v1, proxy
+        let lc_proxy_addr = deployer::deploy_light_client_proxy(
+            &provider,
+            contracts,
+            true, // use mock
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            None, // no permissioned prover
+        )
+        .await?;
+        // upgrade to LightClientV2
+        deployer::upgrade_light_client_v2(
+            &provider,
+            contracts,
+            true, // use mock
+            blocks_per_epoch,
+        )
+        .await?;
+        if let Some(multisig) = multisig_address {
+            deployer::transfer_ownership(
+                &provider,
+                Contract::LightClientProxy,
+                lc_proxy_addr,
+                multisig,
+            )
+            .await?;
         }
 
-        mock_contracts.insert(
-            chain_id,
-            LightClientMock::new(
-                light_client_address,
-                Arc::new(provider.with_signer(wallet.clone())),
-            ),
-        );
-        light_client_addresses.push((chain_id, light_client_address));
+        // append to the list of light client contract addresses
+        let chain_id = provider.get_chain_id().await?;
+        client_states.lc_proxy_addr.insert(chain_id, lc_proxy_addr);
+        client_states.provider_urls.insert(chain_id, url.clone());
+        light_client_addresses.push((chain_id, lc_proxy_addr));
 
+        // init the prover config
         let prover_port = prover_port.unwrap_or_else(|| pick_unused_port().unwrap());
-
         prover_ports.push(prover_port);
-
         let prover_config = StateProverConfig {
             relay_server: relay_server_url.clone(),
             update_interval,
             retry_interval,
-            sequencer_url: "http://localhost".parse().unwrap(),
+            sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}")).unwrap(),
             port: Some(prover_port),
             stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST as usize,
-            provider: url.clone(),
-            light_client_address,
-            signing_key: wallet.signer().clone(),
+            provider_endpoint: url.clone(),
+            light_client_address: lc_proxy_addr,
+            signer: signer.clone(),
+            blocks_per_epoch: Some(blocks_per_epoch),
         };
 
+        // spawn off prover service for this chain
         let prover_handle = spawn(run_prover_service_with_stake_table(
             prover_config,
             SequencerApiVersion::instance(),
             Arc::new(st.clone()),
         ));
         handles.push(prover_handle);
+
+        // L1-only actions and contract deployment
+        if url == l1_url {
+            // deploy fee contract (and proxy)
+            let fee_proxy_addr =
+                deployer::deploy_fee_contract_proxy(&provider, contracts, admin).await?;
+            if let Some(multisig) = multisig_address {
+                deployer::transfer_ownership(
+                    &provider,
+                    Contract::FeeContractProxy,
+                    fee_proxy_addr,
+                    multisig,
+                )
+                .await?;
+            }
+
+            // deploy EspToken, proxy
+            let token_proxy_addr =
+                deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+            if let Some(multisig) = multisig_address {
+                deployer::transfer_ownership(
+                    &provider,
+                    Contract::EspTokenProxy,
+                    token_proxy_addr,
+                    multisig,
+                )
+                .await?;
+            }
+
+            // deploy permissionless stake table
+            let exit_escrow_period = U256::from(300); // 300 sec
+            let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+                &provider,
+                contracts,
+                token_proxy_addr,
+                lc_proxy_addr,
+                exit_escrow_period,
+                admin,
+            )
+            .await?;
+            if let Some(multisig) = multisig_address {
+                deployer::transfer_ownership(
+                    &provider,
+                    Contract::StakeTableProxy,
+                    stake_table_proxy_addr,
+                    multisig,
+                )
+                .await?;
+            }
+
+            client_states.wallet = wallet;
+            client_states.l1_chain_id = chain_id;
+        }
     }
 
     let relay_server_handle = spawn(async move {
-        let _ = run_relay_server(
-            None,
-            one_honest_threshold(total_stake),
-            format!("http://0.0.0.0:{relay_server_port}")
+        // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
+        // during `init_genesis()`, since this dev-node didn't expose those APIs.
+        let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
+        let mut thresholds = HashMap::new();
+        thresholds.insert(
+            first_epoch,
+            one_honest_threshold(st.total_stake(SnapshotVersion::LastEpochStart)?),
+        );
+
+        let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
+        for (_bls_vk, amt, schnorr_vk) in st.try_iter(SnapshotVersion::LastEpochStart)? {
+            genesis_known_nodes.insert(schnorr_vk, amt);
+        }
+        let mut known_nodes = HashMap::new();
+        known_nodes.insert(first_epoch, genesis_known_nodes);
+
+        // manually fill up the relay server state
+        let state = StateRelayServerState::new(
+            Url::parse(&format!("http://localhost:{}", sequencer_api_port)).unwrap(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .with_blocks_per_epoch(blocks_per_epoch)
+        .with_epoch_start_block(epoch_start_block)
+        .with_thresholds(thresholds)
+        .with_known_nodes(known_nodes);
+
+        let _ = run_relay_server_with_state(
+            format!("http://localhost:{relay_server_port}")
                 .parse()
                 .unwrap(),
             SequencerApiVersion::instance(),
+            state,
         )
         .await;
 
@@ -374,8 +462,6 @@ async fn main() -> anyhow::Result<()> {
     // so only alt chain light client addresses are left
     let (_, l1_lc) = light_client_addresses.remove(0);
     let l1_prover_port = prover_ports.remove(0);
-    // we remove the first entry which is for primary L1 chain signing key
-    // so only alt signing keys are left
 
     let dev_info = DevInfo {
         builder_url: network.cfg.hotshot_config().builder_urls[0].clone(),
@@ -400,7 +486,7 @@ async fn main() -> anyhow::Result<()> {
 
     let dev_node_handle = spawn(run_dev_node_server(
         dev_node_port,
-        mock_contracts,
+        client_states,
         dev_info,
         SequencerApiVersion::instance(),
     ));
@@ -416,13 +502,61 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // ApiState is passed to the tide disco app so avoid cloning the contracts for each endpoint
-pub struct ApiState<S: Signer + Clone + 'static>(
-    BTreeMap<u64, LightClientMock<SignerMiddleware<Provider<Http>, S>>>,
-);
+#[derive(Clone)]
+pub struct ApiState {
+    /// all light client proxy addresses indexed by chain_id
+    pub lc_proxy_addr: BTreeMap<u64, Address>,
+    /// all the providers endpoint indexed by chain_id
+    pub provider_urls: BTreeMap<u64, Url>,
+    /// wallet for sending tx, used for all chains
+    pub wallet: EthereumWallet,
+    /// L1 chain id
+    pub l1_chain_id: u64,
+}
+impl Default for ApiState {
+    fn default() -> Self {
+        Self {
+            lc_proxy_addr: BTreeMap::new(),
+            provider_urls: BTreeMap::new(),
+            wallet: EthereumWallet::default(),
+            l1_chain_id: 31337,
+        }
+    }
+}
+
+impl ApiState {
+    /// Return a client/handle to the light client proxy on `chain_id`
+    pub fn light_client_instance(
+        &self,
+        chain_id: Option<u64>,
+    ) -> Result<LightClientV2MockInstance<(), HttpProviderWithWallet>, ServerError> {
+        // if chain id is not provided, primary L1 light client is used
+        let id = chain_id.unwrap_or(self.l1_chain_id);
+
+        let proxy_addr = self.lc_proxy_addr.get(&id).ok_or_else(|| {
+            ServerError::catch_all(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "LightClientProxy address not found for chain id {chain_id}".to_string(),
+            )
+        })?;
+        let provider_url = self.provider_urls.get(&id).ok_or_else(|| {
+            ServerError::catch_all(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Provider URL not found for chain id {chain_id}".to_string(),
+            )
+        })?;
+
+        let provider = ProviderBuilder::new()
+            .wallet(self.wallet.clone())
+            .on_http(provider_url.clone());
+        let contract = LightClientV2Mock::new(*proxy_addr, provider);
+        Ok(contract)
+    }
+}
 
 #[async_trait]
-impl<S: Signer + Clone + 'static> ReadState for ApiState<S> {
-    type State = ApiState<S>;
+impl ReadState for ApiState {
+    type State = ApiState;
     async fn read<T>(
         &self,
         op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
@@ -431,13 +565,13 @@ impl<S: Signer + Clone + 'static> ReadState for ApiState<S> {
     }
 }
 
-async fn run_dev_node_server<ApiVer: StaticVersionType + 'static, S: Signer + Clone + 'static>(
+async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     port: u16,
-    contracts: BTreeMap<u64, LightClientMock<SignerMiddleware<Provider<Http>, S>>>,
+    client_states: ApiState,
     dev_info: DevInfo,
     bind_version: ApiVer,
 ) -> anyhow::Result<()> {
-    let mut app = tide_disco::App::<_, ServerError>::with_state(ApiState(contracts));
+    let mut app = tide_disco::App::<_, ServerError>::with_state(client_states);
     let toml =
         toml::from_str::<toml::value::Value>(include_str!("../../api/espresso_dev_node.toml"))
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
@@ -449,36 +583,25 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static, S: Signer + Cl
         async move { Ok(info.clone()) }.boxed()
     })
     .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?
-    .at("sethotshotdown", move |req, state: &ApiState<S>| {
+    .at("sethotshotdown", move |req, state: &ApiState| {
         async move {
             let body = req
                 .body_auto::<SetHotshotDownReqBody, ApiVer>(ApiVer::instance())
                 .map_err(ServerError::from_request_error)?;
+            let contract = state.light_client_instance(body.chain_id)?;
 
-            // if chain id is not provided, primary L1 light client is used
-            let contract = if let Some(chain_id) = body.chain_id {
-                state.0.get(&chain_id).ok_or_else(|| {
-                    ServerError::catch_all(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "light client contract not found for chain id {chain_id}".to_string(),
-                    )
+            contract
+                .setHotShotDownSince(U256::from(body.height))
+                .send()
+                .await
+                .map_err(|err| {
+                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?
-            } else {
-                let (_, contract) = state.0.first_key_value().ok_or_else(|| {
-                    ServerError::catch_all(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "L1 light client contract not found ".to_string(),
-                    )
+                .watch()
+                .await
+                .map_err(|err| {
+                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?;
-
-                contract
-            };
-
-            let contract_call = contract.set_hot_shot_down_since(U256::from(body.height));
-
-            contract_call.send().await.map_err(|err| {
-                ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-            })?;
             Ok(())
         }
         .boxed()
@@ -490,29 +613,20 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static, S: Signer + Cl
                 .body_auto::<Option<SetHotshotUpReqBody>, ApiVer>(ApiVer::instance())
                 .map_err(ServerError::from_request_error)?
                 .map(|b| b.chain_id);
+            let contract = state.light_client_instance(chain_id)?;
 
-            // if chain id is not provided, we use the base L1 light client contract
-            let contract = if let Some(chain_id) = chain_id {
-                state.0.get(&chain_id).ok_or_else(|| {
-                    ServerError::catch_all(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "light client ontract not found".to_string(),
-                    )
+            contract
+                .setHotShotUp()
+                .send()
+                .await
+                .map_err(|err| {
+                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?
-            } else {
-                let (_, light_client_address) = state.0.first_key_value().ok_or_else(|| {
-                    ServerError::catch_all(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "l1 light client ontract not found".to_string(),
-                    )
+                .watch()
+                .await
+                .map_err(|err| {
+                    ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
                 })?;
-
-                light_client_address
-            };
-
-            contract.set_hot_shot_up().send().await.map_err(|err| {
-                ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-            })?;
             Ok(())
         }
         .boxed()
@@ -559,14 +673,17 @@ struct SetHotshotUpReqBody {
 
 #[cfg(test)]
 mod tests {
-    use std::{process::Child, sync::Arc, time::Duration};
+    use std::{process::Child, time::Duration};
 
+    use alloy::{
+        node_bindings::{Anvil, AnvilInstance},
+        primitives::U256,
+    };
     use committable::{Commitment, Committable};
-    use contract_bindings_ethers::light_client::LightClient;
     use escargot::CargoBuild;
     use espresso_types::{BlockMerkleTree, Header, SeqTypes, Transaction};
-    use ethers::{providers::Middleware, types::U256};
     use futures::{StreamExt, TryStreamExt};
+    use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use hotshot_query_service::availability::{
         BlockQueryData, TransactionQueryData, VidCommonQueryData,
     };
@@ -574,13 +691,13 @@ mod tests {
     use portpicker::pick_unused_port;
     use rand::Rng;
     use sequencer::{api::endpoints::NamespaceProofQueryData, SequencerApiVersion};
-    use sequencer_utils::{init_signer, test_utils::setup_test, Anvil, AnvilOptions};
+    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use tide_disco::error::ServerError;
     use tokio::time::sleep;
     use url::Url;
-    use vbs::version::StaticVersion;
 
+    use super::*;
     use crate::{AltChainInfo, DevInfo, SetHotshotDownReqBody, SetHotshotUpReqBody};
 
     const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -606,8 +723,8 @@ mod tests {
         let builder_port = pick_unused_port().unwrap();
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();
-        let instance = AnvilOptions::default().spawn().await;
-        let l1_url = instance.url();
+        let instance = Anvil::new().spawn();
+        let l1_url = instance.endpoint_url();
 
         let tmp_dir = tempfile::tempdir().unwrap();
 
@@ -650,7 +767,7 @@ mod tests {
             .await
             .unwrap();
 
-        let builder_api_client: Client<ServerError, StaticVersion<0, 1>> =
+        let builder_api_client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{builder_port}").parse().unwrap());
         builder_api_client.connect(None).await;
 
@@ -817,11 +934,20 @@ mod tests {
 
             let light_client_address = dev_info.l1_light_client_address;
 
-            let signer = init_signer(&l1_url, TEST_MNEMONIC, 0).await.unwrap();
-            let light_client = LightClient::new(light_client_address, Arc::new(signer.clone()));
+            let signer = MnemonicBuilder::<English>::default()
+                .phrase(TEST_MNEMONIC)
+                .index(0)
+                .unwrap()
+                .build()
+                .unwrap();
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(signer))
+                .on_http(l1_url.clone());
+
+            let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
             while light_client
-                .get_hot_shot_commitment(U256::from(1))
+                .getHotShotCommitment(U256::from(1))
                 .call()
                 .await
                 .is_err()
@@ -830,7 +956,7 @@ mod tests {
                 sleep(Duration::from_secs(3)).await;
             }
 
-            let height = signer.get_block_number().await.unwrap().as_u64();
+            let height = provider.get_block_number().await.unwrap();
             dev_node_client
                 .post::<()>("api/set-hotshot-down")
                 .body_json(&SetHotshotDownReqBody {
@@ -843,9 +969,10 @@ mod tests {
                 .unwrap();
 
             while !light_client
-                .lag_over_escape_hatch_threshold(U256::from(height), U256::from(0))
+                .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                 .call()
                 .await
+                .map(|ret| ret._0)
                 .unwrap_or(false)
             {
                 tracing::info!("waiting for setting hotshot down");
@@ -861,9 +988,10 @@ mod tests {
                 .unwrap();
 
             while light_client
-                .lag_over_escape_hatch_threshold(U256::from(height), U256::from(0))
+                .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                 .call()
                 .await
+                .map(|ret| ret._0)
                 .unwrap_or(true)
             {
                 tracing::info!("waiting for setting hotshot up");
@@ -874,18 +1002,17 @@ mod tests {
         drop(process);
     }
 
-    async fn alt_chain_providers() -> (Vec<Anvil>, Vec<Url>) {
+    async fn alt_chain_providers() -> (Vec<AnvilInstance>, Vec<Url>) {
         let mut providers = Vec::new();
         let mut urls = Vec::new();
 
         for _ in 0..NUM_ALT_CHAIN_PROVIDERS {
             let mut rng = rand::thread_rng();
 
-            let anvil = AnvilOptions::default()
+            let anvil = Anvil::default()
                 .chain_id(rng.gen_range(2..u32::MAX) as u64)
-                .spawn()
-                .await;
-            let url = anvil.url();
+                .spawn();
+            let url = anvil.endpoint_url();
 
             providers.push(anvil);
             urls.push(url);
@@ -902,8 +1029,8 @@ mod tests {
         let api_port = pick_unused_port().unwrap();
         let dev_node_port = pick_unused_port().unwrap();
 
-        let instance = AnvilOptions::default().chain_id(1).spawn().await;
-        let l1_url = instance.url();
+        let instance = Anvil::new().chain_id(1).spawn();
+        let l1_url = instance.endpoint_url();
 
         let (alt_providers, alt_chain_urls) = alt_chain_providers().await;
 
@@ -972,11 +1099,20 @@ mod tests {
 
             let light_client_address = dev_info.l1_light_client_address;
 
-            let signer = init_signer(&l1_url, TEST_MNEMONIC, 0).await.unwrap();
-            let light_client = LightClient::new(light_client_address, Arc::new(signer.clone()));
+            let signer = MnemonicBuilder::<English>::default()
+                .phrase(TEST_MNEMONIC)
+                .index(0)
+                .unwrap()
+                .build()
+                .unwrap();
+            let provider = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(signer))
+                .on_http(l1_url.clone());
+
+            let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
             while light_client
-                .get_hot_shot_commitment(U256::from(1))
+                .getHotShotCommitment(U256::from(1))
                 .call()
                 .await
                 .is_err()
@@ -994,11 +1130,20 @@ mod tests {
             {
                 tracing::info!("checking hotshot commitment for {chain_id}");
 
-                let signer = init_signer(&provider_url, TEST_MNEMONIC, 0).await.unwrap();
-                let light_client = LightClient::new(light_client_address, Arc::new(signer.clone()));
+                let signer = MnemonicBuilder::<English>::default()
+                    .phrase(TEST_MNEMONIC)
+                    .index(0)
+                    .unwrap()
+                    .build()
+                    .unwrap();
+                let provider = ProviderBuilder::new()
+                    .wallet(EthereumWallet::from(signer))
+                    .on_http(provider_url.clone());
+
+                let light_client = LightClientV2Mock::new(light_client_address, &provider);
 
                 while light_client
-                    .get_hot_shot_commitment(U256::from(1))
+                    .getHotShotCommitment(U256::from(1))
                     .call()
                     .await
                     .is_err()
@@ -1007,7 +1152,7 @@ mod tests {
                     sleep(Duration::from_secs(3)).await;
                 }
 
-                let height = signer.get_block_number().await.unwrap().as_u64();
+                let height = provider.get_block_number().await.unwrap();
                 dev_node_client
                     .post::<()>("api/set-hotshot-down")
                     .body_json(&SetHotshotDownReqBody {
@@ -1020,9 +1165,10 @@ mod tests {
                     .unwrap();
 
                 while !light_client
-                    .lag_over_escape_hatch_threshold(U256::from(height), U256::from(0))
+                    .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                     .call()
                     .await
+                    .map(|ret| ret._0)
                     .unwrap_or(false)
                 {
                     tracing::info!("waiting for setting hotshot down");
@@ -1038,9 +1184,10 @@ mod tests {
                     .unwrap();
 
                 while light_client
-                    .lag_over_escape_hatch_threshold(U256::from(height), U256::from(0))
+                    .lagOverEscapeHatchThreshold(U256::from(height), U256::from(0))
                     .call()
                     .await
+                    .map(|ret| ret._0)
                     .unwrap_or(true)
                 {
                     tracing::info!("waiting for setting hotshot up");
