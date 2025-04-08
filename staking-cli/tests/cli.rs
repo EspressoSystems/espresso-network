@@ -1,6 +1,9 @@
 use std::process::{Command, Output};
 
-use alloy::primitives::U256;
+use alloy::primitives::{
+    utils::{format_ether, parse_ether},
+    Address, U256,
+};
 use anyhow::Result;
 use staking_cli::*;
 
@@ -20,6 +23,17 @@ impl AssertSuccess for Output {
         self
     }
 }
+
+trait Utf8 {
+    fn utf8(&self) -> String;
+}
+
+impl Utf8 for Output {
+    fn utf8(&self) -> String {
+        String::from_utf8(self.stdout.clone()).expect("stdout is utf8")
+    }
+}
+
 fn cmd() -> Command {
     escargot::CargoBuild::new()
         .bin("staking-cli")
@@ -37,7 +51,7 @@ fn test_cli_version() -> Result<()> {
 }
 
 #[test]
-fn test_cli_created_and_remove_config_file() -> anyhow::Result<()> {
+fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
 
@@ -128,8 +142,8 @@ async fn test_cli_deregister_validator() -> Result<()> {
 async fn test_cli_undelegate() -> Result<()> {
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
-    let amount = U256::from(123);
-    system.delegate(amount).await?;
+    let amount = "123";
+    system.delegate(parse_ether(amount)?).await?;
 
     system
         .cmd()
@@ -137,7 +151,7 @@ async fn test_cli_undelegate() -> Result<()> {
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
-        .arg(amount.to_string())
+        .arg(amount)
         .output()?
         .assert_success();
     Ok(())
@@ -210,13 +224,117 @@ async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
 #[tokio::test]
 async fn test_cli_approve() -> Result<()> {
     let system = TestSystem::deploy().await?;
+    let amount = "123";
 
     system
         .cmd()
         .arg("approve")
         .arg("--amount")
-        .arg("1234")
+        .arg(amount)
         .output()?
         .assert_success();
+
+    assert!(system.allowance(system.deployer_address).await? == parse_ether(amount)?);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cli_balance() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    // Check balance of account owner
+    let s = system
+        .cmd()
+        .arg("token-balance")
+        .output()?
+        .assert_success()
+        .utf8();
+
+    assert!(s.contains(&system.deployer_address.to_string()));
+    assert!(s.contains(" 10000000000.0"));
+
+    // Check balance of other address
+    let addr = "0x1111111111111111111111111111111111111111";
+    let s = system
+        .cmd()
+        .arg("token-balance")
+        .arg("--address")
+        .arg(addr)
+        .output()?
+        .assert_success()
+        .utf8();
+
+    assert!(s.contains(addr));
+    assert!(s.contains(" 0.0"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cli_allowance() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    // Check allowance of account owner
+    let out = system
+        .cmd()
+        .arg("token-allowance")
+        .output()?
+        .assert_success()
+        .utf8();
+
+    assert!(out.contains(&system.deployer_address.to_string()));
+    assert!(out.contains(&format_ether(system.approval_amount)));
+
+    // Check allowance of other address
+    let addr = "0x1111111111111111111111111111111111111111".to_string();
+    let out = system
+        .cmd()
+        .arg("token-allowance")
+        .arg("--owner")
+        .arg(&addr)
+        .output()?
+        .assert_success()
+        .utf8();
+
+    assert!(out.contains(&addr));
+    assert!(out.contains(" 0.0"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cli_transfer() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
+    let amount = parse_ether("0.123")?;
+    system
+        .cmd()
+        .arg("transfer")
+        .arg("--to")
+        .arg(addr.to_string())
+        .arg("--amount")
+        .arg(format_ether(amount))
+        .output()?
+        .assert_success();
+
+    assert_eq!(system.balance(addr).await?, amount);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cli_info() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    let amount = parse_ether("0.123")?;
+    system.delegate(amount).await?;
+
+    let out = system.cmd().arg("info").output()?.assert_success().utf8();
+
+    assert!(out.contains(&system.deployer_address.to_string()));
+    assert!(out.contains("0.123"));
+
     Ok(())
 }

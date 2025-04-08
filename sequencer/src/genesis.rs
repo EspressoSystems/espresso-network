@@ -52,6 +52,7 @@ pub struct Genesis {
     #[serde(with = "version_ser")]
     pub upgrade_version: Version,
     pub epoch_height: Option<u64>,
+    pub epoch_start_block: Option<u64>,
     pub chain_config: ChainConfig,
     pub stake_table: StakeTableConfig,
     #[serde(default)]
@@ -1069,8 +1070,8 @@ mod test {
     #[test]
     fn test_marketplace_upgrade_toml() {
         let toml = toml! {
-            base_version = "0.1"
-            upgrade_version = "0.2"
+            base_version = "0.3"
+            upgrade_version = "0.99"
 
             [stake_table]
             capacity = 10
@@ -1115,10 +1116,12 @@ mod test {
     }
 
     #[test]
-    fn test_marketplace_and_fee_upgrade_toml() {
+    fn test_fee_and_epoch_upgrade_toml() {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            epoch_height = 20
+            epoch_start_block = 1
 
             [stake_table]
             capacity = 10
@@ -1147,6 +1150,69 @@ mod test {
             start_proposing_view = 1
             stop_proposing_view = 10
 
+            [upgrade.epoch]
+            [upgrade.epoch.chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+            stake_table_contract = "0x0000000000000000000000000000000000000000"
+
+            [[upgrade]]
+            version = "0.2"
+            start_proposing_view = 1
+            stop_proposing_view = 15
+
+            [upgrade.fee]
+
+            [upgrade.fee.chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+        }
+        .to_string();
+
+        toml::from_str::<Genesis>(&toml).unwrap();
+    }
+
+    #[test]
+    fn test_fee_and_epoch_and_marketplace_upgrade_toml() {
+        let toml = toml! {
+            base_version = "0.1"
+            upgrade_version = "0.2"
+            epoch_height = 20
+            epoch_start_block = 1
+
+            [stake_table]
+            capacity = 10
+
+            [chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
+            [header]
+            timestamp = 123456
+
+            [accounts]
+            "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
+            "0x0000000000000000000000000000000000000000" = 42
+
+            [l1_finalized]
+            number = 64
+            timestamp = "0x123def"
+            hash = "0x80f5dd11f2bdda2814cb1ad94ef30a47de02cf28ad68c89e104c00c4e51bb7a5"
+
+            [[upgrade]]
+            version = "0.99"
+            start_proposing_view = 1
+            stop_proposing_view = 10
+
             [upgrade.marketplace]
             [upgrade.marketplace.chain_config]
             chain_id = 12345
@@ -1155,6 +1221,22 @@ mod test {
             fee_recipient = "0x0000000000000000000000000000000000000000"
             bid_recipient = "0x0000000000000000000000000000000000000000"
             fee_contract = "0x0000000000000000000000000000000000000000"
+            stake_table_contract = "0x0000000000000000000000000000000000000000"
+
+            [[upgrade]]
+            version = "0.3"
+            start_proposing_view = 1
+            stop_proposing_view = 10
+
+            [upgrade.epoch]
+            [upgrade.epoch.chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            bid_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+            stake_table_contract = "0x0000000000000000000000000000000000000000"
 
             [[upgrade]]
             version = "0.2"
