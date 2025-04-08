@@ -23,7 +23,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
-    utils::{        epoch_from_block_number,EpochTransitionIndicator},
+    utils::{epoch_from_block_number, EpochTransitionIndicator},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -300,11 +300,15 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
 
                     drop(consensus_reader);
 
-                    let target_start_epoch = epoch_from_block_number(self.epoch_start_block, self.epoch_height);
-                    let last_proposal_epoch = epoch_from_block_number(last_proposal_block, self.epoch_height);
-                    let upgrade_finish_epoch = epoch_from_block_number(new_version_first_view + 10, self.epoch_height);
+                    let target_start_epoch =
+                        epoch_from_block_number(self.epoch_start_block, self.epoch_height);
+                    let last_proposal_epoch =
+                        epoch_from_block_number(last_proposal_block, self.epoch_height);
+                    let upgrade_finish_epoch =
+                        epoch_from_block_number(new_version_first_view + 10, self.epoch_height);
 
-                    target_start_epoch == last_proposal_epoch && last_proposal_epoch == upgrade_finish_epoch
+                    target_start_epoch == last_proposal_epoch
+                        && last_proposal_epoch == upgrade_finish_epoch
                 } else {
                     true
                 };

@@ -521,7 +521,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 );
 
                 // Handle the event before creating the dependency task.
-                if let Err(e) = handle_quorum_proposal_validated(&proposal.data, self).await {
+                if let Err(e) =
+                    handle_quorum_proposal_validated(&proposal.data, self, &event_sender).await
+                {
                     tracing::debug!(
                         "Failed to handle QuorumProposalValidated event; error = {e:#}"
                     );

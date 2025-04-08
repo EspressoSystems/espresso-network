@@ -44,6 +44,7 @@ mod handlers;
 
 /// Task state for the Consensus task.
 pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
     /// Our public key
     pub public_key: TYPES::SignatureKey,
 
@@ -146,7 +147,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::debug!("Failed to handle TimeoutVoteRecv event; error = {e}");
                 }
             },
+            HotShotEvent::SetFirstEpoch(view, epoch) => {
+                self.first_epoch = Some((*view, *epoch));
+            },
             HotShotEvent::ViewChange(new_view_number, epoch_number) => {
+                if let Some((view, epoch)) = self.first_epoch {
+                    if *new_view_number == view && *epoch_number != Some(epoch) {
+                        broadcast_event(
+                            Arc::new(HotShotEvent::ViewChange(*new_view_number, Some(epoch))),
+                            &sender,
+                        )
+                        .await;
+                    }
+                }
                 if let Err(e) =
                     handle_view_change(*new_view_number, *epoch_number, &sender, &receiver, self)
                         .await

@@ -336,6 +336,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             view_start_time: Instant::now(),
+            first_epoch: None,
         }
     }
 }

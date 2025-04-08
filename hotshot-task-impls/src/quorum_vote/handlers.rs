@@ -168,6 +168,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
 >(
     proposal: &QuorumProposalWrapper<TYPES>,
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
+    event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<()> {
     let version = task_state
         .upgrade_lock
@@ -219,7 +220,9 @@ pub(crate) async fn handle_quorum_proposal_validated<
         .await
     };
 
-    if let Some(cert) = decided_upgrade_cert.clone() {
+    if let (Some(cert), Some(decided_view)) =
+        (decided_upgrade_cert.clone(), new_decided_view_number)
+    {
         let mut decided_certificate_lock = task_state
             .upgrade_lock
             .decided_upgrade_certificate
@@ -242,7 +245,16 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 .write()
                 .await
                 .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
-        };
+
+            broadcast_event(
+                Arc::new(HotShotEvent::SetFirstEpoch(
+                    cert.data.new_version_first_view,
+                    first_epoch_number,
+                )),
+                event_sender,
+            )
+            .await;
+        }
 
         let _ = task_state
             .storage
