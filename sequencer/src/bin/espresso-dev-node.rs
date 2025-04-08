@@ -211,13 +211,6 @@ async fn main() -> anyhow::Result<()> {
 
     logging.init();
 
-    let api_options = options::Options::from(options::Http {
-        port: sequencer_api_port,
-        max_connections: sequencer_api_max_connections,
-    })
-    .submit(Default::default())
-    .query_sql(Default::default(), sql);
-
     let (l1_url, _anvil) = if let Some(url) = rpc_url {
         (url, None)
     } else {
@@ -248,7 +241,6 @@ async fn main() -> anyhow::Result<()> {
 
     let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];
-    let mut stake_table_address = alloy::primitives::Address::default();
     let mut prover_ports = Vec::new();
     let mut client_states = ApiState::default();
     let mut handles = FuturesUnordered::new();
@@ -420,32 +412,27 @@ async fn main() -> anyhow::Result<()> {
             client_states.wallet = wallet;
             client_states.l1_chain_id = chain_id;
 
-            // fund stake table only on L1
-            // Save the stake table address to use in ChainConfig
-            stake_table_address = contracts
-                .address(Contract::StakeTableProxy)
-                .expect("stake table deployed");
-            let deployer_signer_alloy = alloy::signers::local::MnemonicBuilder::<
-                alloy::signers::local::coins_bip39::English,
-            >::default()
-            .phrase(mnemonic.as_str())
-            .index(account_index)?
-            .build()?;
-            let token_address = contracts
-                .address(Contract::EspTokenProxy)
-                .expect("ESP token deployed");
             let staking_priv_keys = network_config.staking_priv_keys();
             stake_in_contract_for_test(
                 l1_url.clone(),
-                deployer_signer_alloy,
-                stake_table_address,
-                token_address,
+                signer,
+                contracts
+                    .address(Contract::StakeTableProxy)
+                    .expect("stake table deployed"),
+                contracts
+                    .address(Contract::EspTokenProxy)
+                    .expect("ESP token deployed"),
                 staking_priv_keys,
             )
             .await?;
         }
     }
 
+    const NUM_NODES: usize = 2;
+
+    let stake_table_address = l1_contracts
+        .address(Contract::StakeTableProxy)
+        .expect("stake table deployed");
     let chain_config = ChainConfig {
         max_block_size: max_block_size.into(),
         // TODO: MA: the builder has block fee `123` hardcoded so we have to set this to zero for now.
@@ -455,17 +442,23 @@ async fn main() -> anyhow::Result<()> {
     };
     tracing::info!("Chain config: {chain_config:?}");
 
-    let config = network_config.hotshot_config();
-    tracing::info!("Hotshot config {config:?}");
-
     let state = ValidatedState {
         chain_config: chain_config.into(),
         ..Default::default()
     };
     tracing::info!("Initial state: {state:?}");
-
-    const NUM_NODES: usize = 2;
     let states = std::array::from_fn(|_| state.clone());
+
+    let config = network_config.hotshot_config();
+    tracing::info!("Hotshot config {config:?}");
+
+    let api_options = options::Options::from(options::Http {
+        port: sequencer_api_port,
+        max_connections: sequencer_api_max_connections,
+    })
+    .submit(Default::default())
+    .query_sql(Default::default(), sql);
+
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
         .network_config(network_config)
