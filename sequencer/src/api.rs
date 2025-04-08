@@ -1816,9 +1816,13 @@ mod test {
     };
 
     use alloy::{
+        network::EthereumWallet,
         node_bindings::Anvil,
-        primitives::{utils::parse_ether, U256},
+        primitives::{utils::parse_ether, Address, U256},
+        providers::{Provider, ProviderBuilder},
+        signers::local::{coins_bip39::English, LocalSigner, MnemonicBuilder},
     };
+
     use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
@@ -1838,6 +1842,7 @@ mod test {
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         types::HeightIndexed,
     };
+    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -1846,7 +1851,12 @@ mod test {
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
-    use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
+    use sequencer_utils::{
+        deployer::{self, Contract, Contracts},
+        ser::FromStringOrInteger,
+        test_utils::setup_test,
+    };
+    use staking_cli::demo::stake_in_contract_for_test;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, spawn_dishonest_peer_catchup_api, state_signature_test_helper,
@@ -1855,6 +1865,7 @@ mod test {
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use time::OffsetDateTime;
     use tokio::time::sleep;
+    use tracing::instrument::WithSubscriber;
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use self::{
@@ -2975,6 +2986,7 @@ mod test {
             .parse()
             .unwrap();
 
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
         let sys = staking_cli::deploy::TestSystem::deploy().await.unwrap();
         // register and delegate to deployer account
         sys.register_validator().await.unwrap();
@@ -3003,12 +3015,19 @@ mod test {
         //     staking_priv_keys,
         // )
         // .await?;
+        let hotshot_event_streaming_port =
+            pick_unused_port().expect("No ports free for hotshot event streaming");
+
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let hotshot_url = format!("http://localhost:{hotshot_event_streaming_port}")
+            .parse()
+            .unwrap();
 
         let hotshot_events = HotshotEvents {
             events_service_port: hotshot_event_streaming_port,
         };
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
 
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
 
@@ -3124,5 +3143,167 @@ mod test {
             epochs.contains(&wanted_epochs),
             "Epochs are not progressing"
         );
+    }
+
+    #[tokio::test]
+    async fn test_contract_deploy() -> anyhow::Result<()> {
+        setup_test();
+        let epoch_height = 35;
+        let wanted_epochs = 4;
+        tracing::error!("epoch height : {:?}", epoch_height);
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let secret_key = instance.keys()[0].clone();
+        dbg!(&secret_key);
+        let signer = LocalSigner::from(secret_key);
+        let url = instance.endpoint_url();
+        dbg!(&url);
+
+        let contracts = &mut Contracts::new();
+
+        let wallet = EthereumWallet::from(signer.clone());
+        let provider = ProviderBuilder::new()
+            .wallet(wallet.clone())
+            .on_http(url.clone());
+        let admin = provider.get_accounts().await?[0];
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(url.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let blocks_per_epoch = network_config.hotshot_config().epoch_height;
+        let epoch_start_block = network_config.hotshot_config().epoch_start_block;
+        let initial_stake_table = network_config.stake_table();
+        let (genesis_state, genesis_stake) =
+            light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+
+        let hotshot_event_streaming_port =
+            pick_unused_port().expect("No ports free for hotshot event streaming");
+        let hotshot_url = format!("http://localhost:{hotshot_event_streaming_port}")
+            .parse()
+            .unwrap();
+
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+
+        let hotshot_events = HotshotEvents {
+            events_service_port: hotshot_event_streaming_port,
+        };
+
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
+
+        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config.clone())
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+
+        let fee_proxy_addr =
+            deployer::deploy_fee_contract_proxy(&provider, contracts, admin).await?;
+
+        // deploy EspToken, proxy
+        let token_proxy_addr =
+            deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+
+        // deploy light client v1, proxy
+        let lc_proxy_addr = deployer::deploy_light_client_proxy(
+            &provider,
+            contracts,
+            true, // use mock
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            None, // no permissioned prover
+        )
+        .await?;
+        // upgrade to LightClientV2
+        deployer::upgrade_light_client_v2(
+            &provider,
+            contracts,
+            true, // use mock
+            blocks_per_epoch,
+        )
+        .await?;
+
+        // deploy permissionless stake table
+        let exit_escrow_period = U256::from(300); // 300 sec
+        let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+            &provider,
+            contracts,
+            token_proxy_addr,
+            lc_proxy_addr,
+            exit_escrow_period,
+            admin,
+        )
+        .await?;
+
+        let staking_priv_keys = network_config.staking_priv_keys();
+        stake_in_contract_for_test(
+            url.clone(),
+            signer,
+            contracts
+                .address(Contract::StakeTableProxy)
+                .expect("stake table deployed"),
+            contracts
+                .address(Contract::EspTokenProxy)
+                .expect("ESP token deployed"),
+            staking_priv_keys,
+        )
+        .await?;
+
+        let mut subscribed_events = client
+            .socket("hotshot-events/events")
+            .subscribe::<Event<SeqTypes>>()
+            .await
+            .unwrap();
+
+        let wanted_views = epoch_height * wanted_epochs; // TODO not sure about this
+
+        let mut views = HashSet::new();
+        let mut epochs = HashSet::new();
+        for _ in 0..=600 {
+            let event = subscribed_events.next().await.unwrap();
+            let event = event.unwrap();
+            let view_number = event.view_number;
+            tracing::error!("view number: {}", view_number.u64());
+            views.insert(view_number.u64());
+
+            if let hotshot::types::EventType::Decide { qc, .. } = event.event {
+                assert!(qc.data.epoch.is_some(), "epochs are live");
+                assert!(qc.data.block_number.is_some());
+
+                let epoch = qc.data.epoch.unwrap().u64();
+                epochs.insert(epoch);
+
+                tracing::error!(
+                    "Got decide: epoch: {:?}, block: {:?} ",
+                    epoch,
+                    qc.data.block_number
+                );
+
+                let expected_epoch =
+                    epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
+                tracing::error!(expected_epoch, epoch);
+
+                assert_eq!(expected_epoch, epoch);
+            }
+            if views.contains(&wanted_views) {
+                tracing::info!("Client Received at least desired views, exiting loop");
+                break;
+            }
+        }
+
+        // prevent false positive when we overflow the range
+        assert!(views.contains(&wanted_views), "Views are not progressing");
+        assert!(
+            epochs.contains(&wanted_epochs),
+            "Epochs are not progressing"
+        );
+
+        Ok(())
     }
 }
