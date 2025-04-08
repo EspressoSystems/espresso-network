@@ -99,7 +99,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         use hotshot_utils::anytrace::*;
 
         self.lookup_leader(view, epoch).wrap().context(info!(
-            "Failed to get leader for view {view} in epoch {epoch}"
+            "Failed to get leader for view {view} in epoch {epoch:?}"
         ))
     }
 

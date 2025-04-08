@@ -101,8 +101,10 @@ impl PersistenceOptions for Options {
 
         let migration_path = path.join("migration");
         let migrated = if migration_path.is_file() {
-            let bytes = fs::read(&path)
-                .context(format!("unable to read migration from {}", path.display()))?;
+            let bytes = fs::read(&migration_path).context(format!(
+                "unable to read migration from {}",
+                migration_path.display()
+            ))?;
             bincode::deserialize(&bytes).context("malformed migration file")?
         } else {
             HashSet::new()
@@ -1935,6 +1937,23 @@ mod test {
         assert_eq!(
             state_cert_count, rows as usize,
             "light client state update certificate count does not match",
+        );
+
+        // Reinitialize the file system persistence using the same path.
+        // re run the consensus migration.
+        // No changes will occur, as the migration has already been completed.
+        let storage = opt.create().await.unwrap();
+        storage.migrate_consensus().await.unwrap();
+
+        let inner = storage.inner.read().await;
+        let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
+        let decided_leaves_count = decided_leaves
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_file())
+            .count();
+        assert_eq!(
+            decided_leaves_count, rows as usize,
+            "decided leaves count does not match",
         );
     }
 
