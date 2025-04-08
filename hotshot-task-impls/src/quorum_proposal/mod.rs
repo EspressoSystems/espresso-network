@@ -569,7 +569,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     .membership_coordinator
                     .stake_table_for_epoch(epoch_number)
                     .await
-                    .context(warn!("No Stake Table for Epoch = {:?}", epoch_number))?;
+                    .context(warn!("No Stake Table for Epoch = {epoch_number:?}"))?;
 
                 let membership_stake_table = epoch_membership.stake_table().await;
                 let membership_success_threshold = epoch_membership.success_threshold().await;

@@ -96,8 +96,8 @@ pub fn block_reward() -> RewardAmount {
     U256::from(REWARD_PER_BLOCK).into()
 }
 
-// 1 billion tokens with 18 decimals
-const TOTAL_SUPPLY: u128 = 1_000_000_000 * 10_u128.pow(18);
+// 10 billion tokens with 18 decimals
+const TOTAL_SUPPLY: u128 = 10_000_000_000 * 10_u128.pow(18);
 const INFLATION_RATE: u128 = 300; // 3% in basis points
 const BLOCK_TIME_SECONDS: u128 = 2;
 const SECONDS_PER_YEAR: u128 = 60 * 60 * 24 * 365;
