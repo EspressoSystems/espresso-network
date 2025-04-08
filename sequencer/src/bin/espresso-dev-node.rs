@@ -213,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
         // Espresso only considers finalized L1 blocks. Finalize every L1 block immediately.
-        let instance = AnvilOptions::default().slots_in_epoch(1).spawn().await;
+        let instance = AnvilOptions::default().slots_in_epoch(0).spawn().await;
         let url = instance.url();
         tracing::info!("l1 url: {}", url);
         (url, Some(instance))
