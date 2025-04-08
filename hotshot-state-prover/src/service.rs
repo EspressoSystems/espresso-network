@@ -878,12 +878,12 @@ mod test {
         let lc_v2 = LightClientV2Mock::new(lc_proxy_addr, &provider);
 
         // simulate some block elapsing
-        for _ in 0..EPOCH_HEIGHT_FOR_TEST - 1 {
+        for _ in 0..EPOCH_HEIGHT_FOR_TEST - 6 {
             ledger.elapse_with_block();
         }
         ledger.sync_stake_table(5, 2); // update the stake table, some register, some exit
         ledger.elapse_with_block(); // the last block in the first epoch, thus updating the `next_stake_table`
-        assert_eq!(ledger.state.block_height, EPOCH_HEIGHT_FOR_TEST);
+        assert_eq!(ledger.state.block_height, EPOCH_HEIGHT_FOR_TEST - 5);
 
         let (pi, proof) = ledger.gen_state_proof();
         tracing::info!("Successfully generated proof for new state.");
