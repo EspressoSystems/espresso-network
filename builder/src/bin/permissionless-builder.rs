@@ -2,10 +2,7 @@ use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 
 use builder::non_permissioned::{build_instance_state, BuilderConfig};
 use clap::Parser;
-use espresso_types::{
-    eth_signature_key::EthKeyPair, parse_duration, EpochVersion, FeeVersion, MarketplaceVersion,
-    SequencerVersions, V0_0,
-};
+use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, SequencerVersions};
 use futures::future::pending;
 use hotshot::traits::ValidatedState;
 use hotshot_types::{
@@ -120,14 +117,42 @@ async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        (FeeVersion::VERSION, FeeVersion::VERSION) => {
-            run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await
+        #[cfg(all(feature = "fee", feature = "pos"))]
+        (espresso_types::FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
+                genesis, opt
+            )
+            .await
+        }
+        #[cfg(feature = "pos")]
+        (espresso_types::EpochVersion::VERSION, _) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::MarketplaceVersion>>(
+                genesis, opt
+                // Specifying V0_0 disables upgrades
+            )
+            .await
+        }
+        #[cfg(all(feature = "fee", feature = "marketplace"))]
+        (espresso_types::FeeVersion::VERSION, espresso_types::MarketplaceVersion::VERSION) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::MarketplaceVersion>>(
+                genesis, opt
+            )
+            .await
         },
-        (EpochVersion::VERSION, _) => {
-            run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await
+        #[cfg(feature = "fee")]
+        (espresso_types::FeeVersion::VERSION, _) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::V0_0>>(
+                genesis, opt
+            )
+            .await
         },
-        (MarketplaceVersion::VERSION, _) => {
-            run::<SequencerVersions<MarketplaceVersion, V0_0>>(genesis, opt).await
+        #[cfg(feature = "marketplace")]
+        (espresso_types::MarketplaceVersion::VERSION, _) => {
+            run::<SequencerVersions<espresso_types::MarketplaceVersion, espresso_types::V0_0>>(
+                genesis, opt
+            )
+            .await
+
         },
         _ => panic!(
             "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."

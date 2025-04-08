@@ -17,16 +17,16 @@ pub use line_info;
 ///   - a string literal
 ///   - a format string, similar to the `format!()` macro
 macro_rules! trace {
+  ($message:literal) => {
+      Error {
+        level: Level::Trace,
+        message: format!("{}: {}", line_info!(), format!($message))
+      }
+  };
   ($error:expr) => {
       Error {
         level: Level::Trace,
         message: format!("{}: {}", line_info!(), $error)
-      }
-  };
-  ($message:literal) => {
-      Error {
-        level: Level::Trace,
-        message: format!("{}: {}", line_info!(), $message)
       }
   };
   ($fmt:expr, $($arg:tt)*) => {
@@ -46,16 +46,16 @@ pub use trace;
 ///   - a string literal
 ///   - a format string, similar to the `format!()` macro
 macro_rules! debug {
+  ($message:literal) => {
+      Error {
+        level: Level::Debug,
+        message: format!("{}: {}", line_info!(), format!($message))
+      }
+  };
   ($error:expr) => {
       Error {
         level: Level::Debug,
         message: format!("{}: {}", line_info!(), $error)
-      }
-  };
-  ($message:literal) => {
-      Error {
-        level: Level::Debug,
-        message: format!("{}: {}", line_info!(), $message)
       }
   };
   ($fmt:expr, $($arg:tt)*) => {
@@ -75,16 +75,16 @@ pub use debug;
 ///   - a string literal
 ///   - a format string, similar to the `format!()` macro
 macro_rules! info {
+  ($message:literal) => {
+      Error {
+        level: Level::Info,
+        message: format!("{}: {}", line_info!(), format!($message))
+      }
+  };
   ($error:expr) => {
       Error {
         level: Level::Info,
         message: format!("{}: {}", line_info!(), $error)
-      }
-  };
-  ($message:literal) => {
-      Error {
-        level: Level::Info,
-        message: format!("{}: {}", line_info!(), $message)
       }
   };
   ($fmt:expr, $($arg:tt)*) => {
@@ -104,16 +104,16 @@ pub use info;
 ///   - a string literal
 ///   - a format string, similar to the `format!()` macro
 macro_rules! warn {
+  ($message:literal) => {
+      Error {
+        level: Level::Warn,
+        message: format!("{}: {}", line_info!(), format!($message))
+      }
+  };
   ($error:expr) => {
       Error {
         level: Level::Warn,
         message: format!("{}: {}", line_info!(), $error)
-      }
-  };
-  ($message:literal) => {
-      Error {
-        level: Level::Warn,
-        message: format!("{}: {}", line_info!(), $message)
       }
   };
   ($fmt:expr, $($arg:tt)*) => {
@@ -133,16 +133,16 @@ pub use crate::warn;
 ///   - a string literal
 ///   - a format string, similar to the `format!()` macro
 macro_rules! error {
+  ($message:literal) => {
+      Error {
+        level: Level::Error,
+        message: format!("{}: {}", line_info!(), format!($message))
+      }
+  };
   ($error:expr) => {
       Error {
         level: Level::Error,
         message: format!("{}: {}", line_info!(), $error)
-      }
-  };
-  ($message:literal) => {
-      Error {
-        level: Level::Error,
-        message: format!("{}: {}", line_info!(), $message)
       }
   };
   ($fmt:expr, $($arg:tt)*) => {
@@ -213,7 +213,7 @@ macro_rules! ensure {
       if !$condition {
         let result = Err(Error {
           level: Level::Unspecified,
-          message: format!("{}: {}", line_info!(), $message)
+          message: format!("{}: {}", line_info!(), format!($message))
         });
 
         log!(result);
@@ -267,7 +267,7 @@ macro_rules! bail {
   ($message:literal) => {
       let result = Err(Error {
         level: Level::Unspecified,
-        message: format!("{}: {}", line_info!(), $message)
+        message: format!("{}: {}", line_info!(), format!($message))
       });
 
       log!(result);

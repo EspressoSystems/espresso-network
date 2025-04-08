@@ -488,6 +488,10 @@ contract StakeTable_register_Test is Test {
 
         vm.startPrank(delegator);
 
+        // Delegating zero amount fails
+        vm.expectRevert(S.ZeroAmount.selector);
+        stakeTable.delegate(validator, 0);
+
         // Delegate some funds
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator, 3 ether);
@@ -496,31 +500,35 @@ contract StakeTable_register_Test is Test {
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
         assertEq(token.balanceOf(address(stakeTable)), 3 ether);
 
-        // Withdraw from non-existent validator
+        // Withdraw from non-existent validator fails
         vm.expectRevert(S.NothingToWithdraw.selector);
         stakeTable.claimWithdrawal(makeAddr("nobody"));
 
-        // Withdraw without undelegation
+        // Withdraw without undelegation fails
         vm.expectRevert(S.NothingToWithdraw.selector);
         stakeTable.claimWithdrawal(validator);
 
-        // Request partial undelegation of funds
+        // Undelegating zero amount fails
+        vm.expectRevert(S.ZeroAmount.selector);
+        stakeTable.undelegate(validator, 0);
+
+        // Partial undelegation of funds ok
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Undelegated(delegator, validator, 1 ether);
         stakeTable.undelegate(validator, 1 ether);
 
-        // Withdraw too early
+        // Withdraw too early fails
         vm.expectRevert(S.PrematureWithdrawal.selector);
         stakeTable.claimWithdrawal(validator);
 
-        // Withdraw after escrow period
+        // Withdraw after escrow period ok
         vm.warp(block.timestamp + ESCROW_PERIOD);
         stakeTable.claimWithdrawal(validator);
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 2 ether);
 
         vm.stopPrank();
 
-        // Validator exit
+        // Validator exit succeeds
         vm.prank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.ValidatorExit(validator);
@@ -528,15 +536,15 @@ contract StakeTable_register_Test is Test {
 
         vm.startPrank(delegator);
 
-        // Withdraw too early
+        // Claim validator exit too early fails
         vm.expectRevert(S.PrematureWithdrawal.selector);
         stakeTable.claimValidatorExit(validator);
 
-        // Try to undelegate after validator exit
+        // Undelegate after validator exit fails
         vm.expectRevert(S.ValidatorInactive.selector);
         stakeTable.undelegate(validator, 1);
 
-        // Withdraw after escrow period
+        // Claim validator exit after escrow period ok
         vm.warp(block.timestamp + ESCROW_PERIOD);
         stakeTable.claimValidatorExit(validator);
 
@@ -549,6 +557,81 @@ contract StakeTable_register_Test is Test {
     // solhint-disable-next-line no-empty-blocks
     function test_revertIf_undelegate_AfterValidatorExit() public {
         // TODO
+    }
+
+    function test_multiple_undelegations_after_exit_epoch_succeeds() public {
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed1);
+
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        // register the node
+        vm.prank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+
+        vm.startPrank(delegator);
+
+        // Delegate some funds
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, 3 ether);
+        stakeTable.delegate(validator, 3 ether);
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
+        assertEq(token.balanceOf(address(stakeTable)), 3 ether);
+
+        stakeTable.undelegate(validator, 2 ether);
+        vm.expectRevert(S.UndelegationAlreadyExists.selector);
+        stakeTable.undelegate(validator, 1 ether);
+
+        // can't undelegate until the previous undelegation is withdrawn
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectRevert(S.UndelegationAlreadyExists.selector);
+        stakeTable.undelegate(validator, 1 ether);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, 2 ether);
+        stakeTable.claimWithdrawal(validator);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether + 2 ether);
+
+        assertEq(stakeTable.delegations(validator, delegator), 1 ether);
+
+        // now the delegator can undelegate again
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator, 1 ether);
+        stakeTable.undelegate(validator, 1 ether);
+
+        assertEq(stakeTable.delegations(validator, delegator), 0);
+        (uint256 amountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, 1 ether);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        assertEq(token.balanceOf(address(stakeTable)), 1 ether);
+
+        vm.expectRevert(S.PrematureWithdrawal.selector);
+        stakeTable.claimWithdrawal(validator);
+        (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, 1 ether);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, 1 ether);
+        stakeTable.claimWithdrawal(validator);
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
+
+        vm.stopPrank();
     }
 }
 
