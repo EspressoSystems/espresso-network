@@ -1199,7 +1199,6 @@ impl SequencerPersistence for Persistence {
         .await?;
         tx.commit().await
     }
-
     async fn append_vid2(
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
@@ -1403,7 +1402,16 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
 
-            offset += batch_size;
+            offset += rows.len() as i64 as i64;
+
+            tx.upsert(
+                "epoch_migration",
+                ["table_name", "completed", "migrated_rows"],
+                ["table_name"],
+                [("anchor_leaf".to_string(), false, offset)],
+            )
+            .await?;
+            tx.commit().await?;
 
             tracing::info!(
                 "anchor leaf migration progress: rows={} offset={}",
@@ -1493,7 +1501,7 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
 
-            offset += batch_size;
+            offset += rows.len() as i64;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1503,7 +1511,6 @@ impl SequencerPersistence for Persistence {
             .await?;
             tx.commit().await?;
 
-            offset += batch_size;
             tracing::info!(
                 "DA proposals migration progress: rows={} offset={}",
                 rows.len(),
@@ -1589,9 +1596,17 @@ impl SequencerPersistence for Persistence {
 
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
+
+            offset += rows.len() as i64;
+            tx.upsert(
+                "epoch_migration",
+                ["table_name", "completed", "migrated_rows"],
+                ["table_name"],
+                [("vid_share".to_string(), false, offset)],
+            )
+            .await?;
             tx.commit().await?;
 
-            offset += batch_size;
             tracing::info!(
                 "VID shares migration progress: rows={} offset={}",
                 rows.len(),
@@ -1682,7 +1697,16 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
 
-            offset += batch_size;
+            offset += rows.len() as i64;
+            tx.upsert(
+                "epoch_migration",
+                ["table_name", "completed", "migrated_rows"],
+                ["table_name"],
+                [("quorum_proposals".to_string(), false, offset)],
+            )
+            .await?;
+            tx.commit().await?;
+
             tracing::info!(
                 "quorum proposals migration progress: rows={} offset={}",
                 rows.len(),
@@ -1715,7 +1739,7 @@ impl SequencerPersistence for Persistence {
         let batch_size: i64 = 10000;
         let mut tx = self.db.read().await?;
 
-        let (is_completed, offset) = query_as::<(bool, i64)>(
+        let (is_completed, mut offset) = query_as::<(bool, i64)>(
             "SELECT completed, migrated_rows from epoch_migration WHERE table_name = 'quorum_certificate'",
         )
         .fetch_one(tx.as_mut())
@@ -1767,6 +1791,16 @@ impl SequencerPersistence for Persistence {
 
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
+
+            offset += rows.len() as i64;
+            tx.upsert(
+                "epoch_migration",
+                ["table_name", "completed", "migrated_rows"],
+                ["table_name"],
+                [("quorum_certificate".to_string(), false, offset)],
+            )
+            .await?;
+            tx.commit().await?;
 
             tracing::info!(
                 "Quorum certificates migration progress: rows={} offset={}",

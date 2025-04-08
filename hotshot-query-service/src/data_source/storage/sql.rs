@@ -887,34 +887,23 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 let qc2_json = serde_json::to_value(qc2).context("failed to serialize QC2")?;
 
                 let vid_common_bytes: Vec<u8> = row.try_get("vid_common")?;
-                // let vid_share_bytes: Option<Vec<u8>> = row.try_get("vid_share")?;
+                let vid_share_bytes: Option<Vec<u8>> = row.try_get("vid_share")?;
 
-                // let mut new_vid_share_bytes = None;
+                let mut new_vid_share_bytes = None;
 
-                // if let Some(vid_share_bytes) = vid_share_bytes {
-                //     let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
-                //         .context("failed to deserialize vid_share")?;
-                //     new_vid_share_bytes = Some(
-                //         bincode::serialize(&VidShare::V0(vid_share))
-                //             .context("failed to serialize vid_share")?,
-                //     );
-                // }
+                if let Some(vid_share_bytes) = vid_share_bytes {
+                    let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
+                        .context("failed to deserialize vid_share")?;
+                    new_vid_share_bytes = Some(
+                        bincode::serialize(&VidShare::V0(vid_share))
+                            .context("failed to serialize vid_share")?,
+                    );
+                }
 
                 let vid_common: ADVZCommon = bincode::deserialize(&vid_common_bytes)
                     .context("failed to deserialize vid_common")?;
                 let new_vid_common_bytes = bincode::serialize(&VidCommon::V0(vid_common))
                     .context("failed to serialize vid_common")?;
-
-                let vid_share_bytes: Result<Vec<u8>, _> = row.try_get("vid_share");
-                let new_vid_share_bytes = if let Ok(bytes) = vid_share_bytes {
-                    let vid_share: ADVZShare =
-                        bincode::deserialize(&bytes).context("failed to deserialize vid_share")?;
-
-                    bincode::serialize(&VidShare::V0(vid_share))
-                        .context("failed to serialize vid_share")?
-                } else {
-                    vec![]
-                };
 
                 vid_rows.push((
                     leaf2.height() as i64,
