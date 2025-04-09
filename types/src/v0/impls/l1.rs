@@ -413,6 +413,7 @@ impl L1Client {
 
     /// Start the background tasks which keep the L1 client up to date.
     pub async fn spawn_tasks(&self) {
+        tracing::error!("spawn tasks: {:?}", self.provider);
         let mut update_task = self.update_task.0.lock().await;
         if update_task.is_none() {
             *update_task = Some(spawn(self.update_loop()));
