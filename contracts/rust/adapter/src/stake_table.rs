@@ -17,8 +17,11 @@ impl From<G2PointSol> for BLSPubKey {
     fn from(value: G2PointSol) -> Self {
         let point: G2Affine = value.into();
         let mut bytes = vec![];
-        point.into_group().serialize_compressed(&mut bytes).unwrap();
-        Self::deserialize_compressed(&bytes[..]).unwrap()
+        point
+            .into_group()
+            .serialize_uncompressed(&mut bytes)
+            .unwrap();
+        Self::deserialize_uncompressed(&bytes[..]).unwrap()
     }
 }
 
