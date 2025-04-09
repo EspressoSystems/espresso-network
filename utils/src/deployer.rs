@@ -327,6 +327,7 @@ pub async fn upgrade_light_client_v2(
     contracts: &mut Contracts,
     is_mock: bool,
     blocks_per_epoch: u64,
+    epoch_start_block: u64,
 ) -> Result<TransactionReceipt> {
     match contracts.address(Contract::LightClientProxy) {
         // check if proxy already exists
@@ -383,7 +384,10 @@ pub async fn upgrade_light_client_v2(
 
             // prepare init calldata
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
-            let init_data = lcv2.initializeV2(blocks_per_epoch).calldata().to_owned();
+            let init_data = lcv2
+                .initializeV2(blocks_per_epoch, epoch_start_block)
+                .calldata()
+                .to_owned();
             // invoke upgrade on proxy
             let receipt = proxy
                 .upgradeToAndCall(lcv2_addr, init_data)
@@ -803,7 +807,8 @@ mod tests {
     async fn test_upgrade_light_client_to_v2_helper(is_mock: bool) -> Result<()> {
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
-        let blocks_per_epoch = 3; // for test
+        let blocks_per_epoch = 10; // for test
+        let epoch_start_block = 22;
 
         // prepare `initialize()` input
         let genesis_state = LightClientStateSol::dummy_genesis();
@@ -824,7 +829,14 @@ mod tests {
         .await?;
 
         // then upgrade to v2
-        upgrade_light_client_v2(&provider, &mut contracts, is_mock, blocks_per_epoch).await?;
+        upgrade_light_client_v2(
+            &provider,
+            &mut contracts,
+            is_mock,
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
 
         // test correct v1 state persistence
         let lc = LightClientV2::new(lc_proxy_addr, &provider);
@@ -840,7 +852,8 @@ mod tests {
             next_stake.abi_encode_params()
         );
         assert_eq!(lc.getVersion().call().await?.majorVersion, 2);
-        assert_eq!(lc._blocksPerEpoch().call().await?._0, blocks_per_epoch);
+        assert_eq!(lc.blocksPerEpoch().call().await?._0, blocks_per_epoch);
+        assert_eq!(lc.epochStartBlock().call().await?._0, epoch_start_block);
 
         // test mock-specific functions
         if is_mock {
@@ -855,7 +868,7 @@ mod tests {
                 .await?;
             assert_eq!(
                 new_blocks_per_epoch,
-                lc_mock._blocksPerEpoch().call().await?._0
+                lc_mock.blocksPerEpoch().call().await?._0
             );
         }
         Ok(())

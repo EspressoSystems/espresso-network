@@ -58,7 +58,7 @@ contract LightClientV2Mock is LCV2 {
     }
 
     function setBlocksPerEpoch(uint64 newBlocksPerEpoch) public {
-        _blocksPerEpoch = newBlocksPerEpoch;
+        blocksPerEpoch = newBlocksPerEpoch;
     }
 
     // generated and copied from `cargo run --bin gen-vk-contract --release -- --mock`

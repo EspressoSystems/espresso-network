@@ -762,7 +762,8 @@ mod test {
 
     use super::*;
     use crate::mock_ledger::{
-        MockLedger, MockSystemParam, EPOCH_HEIGHT_FOR_TEST, STAKE_TABLE_CAPACITY_FOR_TEST,
+        MockLedger, MockSystemParam, EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST,
+        STAKE_TABLE_CAPACITY_FOR_TEST,
     };
 
     // const MAX_HISTORY_SECONDS: u32 = 864000;
@@ -794,7 +795,14 @@ mod test {
         .await?;
 
         // upgrade to V2
-        upgrade_light_client_v2(&provider, contracts, is_mock_v2, EPOCH_HEIGHT_FOR_TEST).await?;
+        upgrade_light_client_v2(
+            &provider,
+            contracts,
+            is_mock_v2,
+            EPOCH_HEIGHT_FOR_TEST,
+            EPOCH_START_BLOCK_FOR_TEST,
+        )
+        .await?;
 
         Ok(lc_proxy_addr)
     }
@@ -877,14 +885,22 @@ mod test {
         .await?;
         let lc_v2 = LightClientV2Mock::new(lc_proxy_addr, &provider);
 
-        // simulate some block elapsing
-        for _ in 0..EPOCH_HEIGHT_FOR_TEST - 6 {
+        // update first epoch root (in numerical 2nd epoch)
+        // there will be new key registration but the effect only take place on the second epoch root update
+        while ledger.light_client_state().block_height < 2 * EPOCH_HEIGHT_FOR_TEST - 5 {
             ledger.elapse_with_block();
         }
-        ledger.sync_stake_table(5, 2); // update the stake table, some register, some exit
-        ledger.elapse_with_block(); // the last block in the first epoch, thus updating the `next_stake_table`
-        assert_eq!(ledger.state.block_height, EPOCH_HEIGHT_FOR_TEST - 5);
 
+        let (pi, proof) = ledger.gen_state_proof();
+        tracing::info!("Successfully generated proof for new state.");
+
+        super::submit_state_and_proof(&provider, lc_proxy_addr, proof, pi).await?;
+        tracing::info!("Successfully submitted new finalized state to L1.");
+
+        // second epoch root update
+        while ledger.light_client_state().block_height < 3 * EPOCH_HEIGHT_FOR_TEST - 5 {
+            ledger.elapse_with_block();
+        }
         let (pi, proof) = ledger.gen_state_proof();
         tracing::info!("Successfully generated proof for new state.");
 

@@ -13,28 +13,31 @@ import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 // Target contract
 import { LightClient as LC } from "../src/LightClient.sol";
 import { PlonkVerifierV2 as PV2 } from "../src/libraries/PlonkVerifierV2.sol";
-import { LightClientV2Mock as LCV2 } from "./mocks/LightClientV2Mock.sol";
+import { LightClientV2 as LCV2 } from "../src/LightClientV2.sol";
+import { LightClientV2Mock as LCV2Mock } from "./mocks/LightClientV2Mock.sol";
 import { BN254 } from "bn254/BN254.sol";
 
 /// @dev Common helpers for LightClient tests
 contract LightClientCommonTest is Test {
-    LCV2 public lc;
+    LCV2Mock public lc;
     LC.LightClientState public genesis;
     LC.StakeTableState public genesisStakeTableState;
     uint32 public constant MAX_HISTORY_SECONDS = 1 days;
-    // this constant should be consistent with `hotshot_contract::light_client.rs`
-    uint64 internal constant STAKE_TABLE_CAPACITY = 10;
     address payable public proxyAddr;
     address public admin = makeAddr("admin");
     address public prover = makeAddr("prover");
+    // consistent with mock_ledger's constant
+    uint64 internal constant STAKE_TABLE_CAPACITY = 10;
+    uint64 internal constant NUM_INIT_VALIDATORS = STAKE_TABLE_CAPACITY / 2;
     uint64 public constant BLOCKS_PER_EPOCH = 10;
+    uint64 public constant EPOCH_START_BLOCK = 12;
 
     /// @dev initialized ledger like genesis and system params
     function init() public {
         string[] memory cmds = new string[](3);
         cmds[0] = "diff-test";
         cmds[1] = "mock-genesis";
-        cmds[2] = vm.toString(STAKE_TABLE_CAPACITY / 2);
+        cmds[2] = vm.toString(NUM_INIT_VALIDATORS);
 
         bytes memory result = vm.ffi(cmds);
         (LC.LightClientState memory state, LC.StakeTableState memory stakeState) =
@@ -46,8 +49,8 @@ contract LightClientCommonTest is Test {
         // - deploy LCV1
         // - deploy proxy while setting current impl to LCV1 and initialize
         // - set permissioned prover on the LC proxy
-        // - deploy LCV2
-        // - upgrade on the proxy to point to new impl as LCV2 and initialize
+        // - deploy LCV2Mock
+        // - upgrade on the proxy to point to new impl as LCV2Mock and initialize
         LC lcv1 = new LC();
         bytes memory lcv1InitData = abi.encodeWithSignature(
             "initialize((uint64,uint64,uint256),(uint256,uint256,uint256,uint256),uint32,address)",
@@ -65,20 +68,25 @@ contract LightClientCommonTest is Test {
         vm.prank(admin);
         LC(proxyAddr).setPermissionedProver(prover);
 
-        // deploy PlonkVerifierV2 and LCV2
-        LCV2 lcv2 = new LCV2();
-        bytes memory lcv2InitData =
-            abi.encodeWithSignature("initializeV2(uint64)", BLOCKS_PER_EPOCH);
+        // deploy PlonkVerifierV2 and LCV2Mock
+        LCV2Mock lcv2 = new LCV2Mock();
+        bytes memory lcv2InitData = abi.encodeWithSignature(
+            "initializeV2(uint64,uint64)", BLOCKS_PER_EPOCH, EPOCH_START_BLOCK
+        );
 
-        // upgrade proxy to new LC impl and initialize LCV2
+        // upgrade proxy to new LC impl and initialize LCV2Mock
         vm.prank(admin);
         LC(proxyAddr).upgradeToAndCall(address(lcv2), lcv2InitData);
-        // now the proxy can be treated as LCV2
-        lc = LCV2(proxyAddr);
+        // now the proxy can be treated as LCV2Mock
+        lc = LCV2Mock(proxyAddr);
     }
 
     function assertEq(BN254.ScalarField a, BN254.ScalarField b) public pure {
         assertEq(BN254.ScalarField.unwrap(a), BN254.ScalarField.unwrap(b));
+    }
+
+    function assertNotEq(BN254.ScalarField a, BN254.ScalarField b) public pure {
+        assertNotEq(BN254.ScalarField.unwrap(a), BN254.ScalarField.unwrap(b));
     }
 
     /// @dev util to generate a single valid state proof and public inputs (for
@@ -115,6 +123,26 @@ contract LightClientCommonTest is Test {
             BN254.ScalarField.wrap(BN254.ScalarField.unwrap(blockCommRoot) + 50)
         );
     }
+
+    function expectFinalizedState(LC.LightClientState memory state) internal view {
+        (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot) = lc.finalizedState();
+        assertEq(state.viewNum, viewNum);
+        assertEq(state.blockHeight, blockHeight);
+        assertEq(state.blockCommRoot, blockCommRoot);
+    }
+
+    function expectVotingStake(LC.StakeTableState memory stake) internal view {
+        (
+            uint256 threshold,
+            BN254.ScalarField blsKeyComm,
+            BN254.ScalarField schnorrKeyComm,
+            BN254.ScalarField amountComm
+        ) = lc.votingStakeTableState();
+        assertEq(stake.threshold, threshold);
+        assertEq(stake.blsKeyComm, blsKeyComm);
+        assertEq(stake.schnorrKeyComm, schnorrKeyComm);
+        assertEq(stake.amountComm, amountComm);
+    }
 }
 
 contract LightClient_constructor_Test is LightClientCommonTest {
@@ -129,7 +157,8 @@ contract LightClient_constructor_Test is LightClientCommonTest {
     function test_ProxyInitialization() public {
         init();
         // V2 initialization
-        assertEq(lc._blocksPerEpoch(), BLOCKS_PER_EPOCH);
+        assertEq(lc.blocksPerEpoch(), BLOCKS_PER_EPOCH);
+        assertEq(lc.epochStartBlock(), EPOCH_START_BLOCK);
 
         // V1 initialization
         (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot) = lc.genesisState();
@@ -148,7 +177,7 @@ contract LightClient_constructor_Test is LightClientCommonTest {
         assertEq(genesisStakeTableState.amountComm, stakeTableAmountComm);
         assertEq(genesisStakeTableState.threshold, threshold);
 
-        assertEq(LCV2(proxyAddr).permissionedProver(), prover);
+        assertEq(LCV2Mock(proxyAddr).permissionedProver(), prover);
     }
 }
 
@@ -287,7 +316,8 @@ contract LightClient_permissionedProver_Test is LightClientCommonTest {
     }
 }
 
-contract LightClient_newFinalizedState_Test is LightClientCommonTest {
+/// @dev test new finalized state update before the dynamic stake / PoS epoch activation
+contract LightClient_newFinalizedState_BeforeEpochActivation_Test is LightClientCommonTest {
     LC.LightClientState newState;
     LC.StakeTableState nextStakeTable;
     V.PlonkProof newProof;
@@ -307,13 +337,11 @@ contract LightClient_newFinalizedState_Test is LightClientCommonTest {
 
     /// @dev Test happy path for (the number of states + 1) consecutive new finalized blocks
     function test_ConsecutiveUpdate() external {
-        uint64 numInitValidators = STAKE_TABLE_CAPACITY / 2;
-
         // Generating a few consecutive states and proofs
         string[] memory cmds = new string[](3);
         cmds[0] = "diff-test";
         cmds[1] = "mock-consecutive-finalized-states";
-        cmds[2] = vm.toString(numInitValidators);
+        cmds[2] = vm.toString(NUM_INIT_VALIDATORS);
 
         bytes memory result = vm.ffi(cmds);
         (
@@ -323,30 +351,29 @@ contract LightClient_newFinalizedState_Test is LightClientCommonTest {
         ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
 
         uint256 statesLen = states.length;
-        uint64 viewNum;
-        uint64 blockHeight;
-        BN254.ScalarField blockCommRoot;
         for (uint256 i = 0; i < statesLen; i++) {
             vm.expectEmit(true, true, true, true);
             emit LC.NewState(states[i].viewNum, states[i].blockHeight, states[i].blockCommRoot);
             vm.prank(prover);
             lc.newFinalizedState(states[i], nextStakeTables[i], proofs[i]);
 
-            (viewNum, blockHeight, blockCommRoot) = lc.finalizedState();
-            assertEq(viewNum, states[i].viewNum);
-            assertEq(blockHeight, states[i].blockHeight);
-            assertEq(abi.encode(blockCommRoot), abi.encode(states[i].blockCommRoot));
+            expectFinalizedState(states[i]);
         }
     }
 
     /// @dev Test happy path for updating after skipping a few blocks
     function test_UpdateAfterSkippedBlocks() external {
         // note: numBlockSkipped=1 is already tested in `testCorrectUpdate()`
-        for (uint32 numBlockSkipped = 3; numBlockSkipped < 6; numBlockSkipped++) {
+        // test cases:
+        // 1. still in the 1st epoch (but before epoch/PoS get activated)
+        // 2. when we elapse the entire first epoch (but still before activation)
+        // 3. when we elapse until the epoch start boundary
+        uint64[3] memory numBlockSkippedTestCases = [3, BLOCKS_PER_EPOCH, EPOCH_START_BLOCK];
+        for (uint256 i = 0; i < 3; i++) {
             string[] memory cmds = new string[](3);
             cmds[0] = "diff-test";
             cmds[1] = "mock-skip-blocks";
-            cmds[2] = vm.toString(numBlockSkipped);
+            cmds[2] = vm.toString(numBlockSkippedTestCases[i]);
 
             bytes memory result = vm.ffi(cmds);
             (
@@ -433,6 +460,240 @@ contract LightClient_newFinalizedState_Test is LightClientCommonTest {
         lc.newFinalizedState(newState, nextStakeTable, dummyProof);
 
         vm.stopPrank();
+    }
+}
+
+/// @dev Test the state update at the very epoch where PoS gets activated
+contract LightClient_newFinalizedState_OnEpochActivation_Test is LightClientCommonTest {
+    function setUp() public {
+        init();
+    }
+
+    /// @dev test a normal update within the first epoch succeed (not yet epoch root)
+    function test_FirstEpochInEpochUpdate() external {
+        string[] memory cmds = new string[](3);
+        cmds[0] = "diff-test";
+        cmds[1] = "mock-skip-blocks";
+        cmds[2] = vm.toString(EPOCH_START_BLOCK + 1);
+
+        // sanity check: the block reached is yet epoch root of 2nd epoch (also the "first epoch")
+        assertTrue(EPOCH_START_BLOCK + 1 < 2 * BLOCKS_PER_EPOCH - 5);
+
+        bytes memory result = vm.ffi(cmds);
+        (
+            LC.LightClientState memory newState,
+            LC.StakeTableState memory nextStakeTable,
+            V.PlonkProof memory proof
+        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, V.PlonkProof));
+
+        // first check that nextStakeTable is still the same as the genesis stake
+        assertEq(nextStakeTable.threshold, genesisStakeTableState.threshold);
+        assertEq(nextStakeTable.blsKeyComm, genesisStakeTableState.blsKeyComm);
+        assertEq(nextStakeTable.schnorrKeyComm, genesisStakeTableState.schnorrKeyComm);
+        assertEq(nextStakeTable.amountComm, genesisStakeTableState.amountComm);
+
+        vm.prank(prover);
+        lc.newFinalizedState(newState, nextStakeTable, proof);
+        expectFinalizedState(newState);
+        expectVotingStake(nextStakeTable);
+    }
+
+    /// @dev test epoch root update in the first epoch
+    function test_FirstEpochRootUpdate() external {
+        uint64 height = 2 * BLOCKS_PER_EPOCH - 5;
+        string[] memory cmds = new string[](3);
+        cmds[0] = "diff-test";
+        cmds[1] = "mock-skip-blocks";
+        cmds[2] = vm.toString(height); // epoch root of first epoch
+
+        assertTrue(lc.isEpochRoot(height));
+
+        bytes memory result = vm.ffi(cmds);
+        (
+            LC.LightClientState memory newState,
+            LC.StakeTableState memory nextStakeTable,
+            V.PlonkProof memory proof
+        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, V.PlonkProof));
+        assertEq(newState.blockHeight, height);
+
+        vm.expectEmit(true, true, true, true);
+        emit LCV2.NewEpoch(lc.epochFromBlockNumber(height, BLOCKS_PER_EPOCH) + 1);
+        vm.prank(prover);
+        lc.newFinalizedState(newState, nextStakeTable, proof);
+        expectFinalizedState(newState);
+        expectVotingStake(nextStakeTable);
+    }
+
+    /// @dev test if we update the block after the epoch root, should fail
+    function test_RevertWhen_UpdateAfterEpochRoot() external {
+        string[] memory cmds = new string[](3);
+        cmds[0] = "diff-test";
+        cmds[1] = "dummy-proof";
+        cmds[2] = vm.toString(uint64(42));
+
+        bytes memory result = vm.ffi(cmds);
+        (V.PlonkProof memory dummyProof) = abi.decode(result, (V.PlonkProof));
+
+        LC.LightClientState memory newState = LC.LightClientState({
+            viewNum: 16,
+            blockHeight: 16, // this > 15 which is the epoch root of the first epoch
+            blockCommRoot: BN254.ScalarField.wrap(42)
+        });
+
+        vm.expectRevert(LCV2.MissingEpochRootUpdate.selector);
+        vm.prank(prover);
+        lc.newFinalizedState(newState, genesisStakeTableState, dummyProof);
+    }
+}
+
+/// @dev Test the state update after PoS gets activated (activation_epoch+1 onwards)
+contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientCommonTest {
+    uint64 firstEpochRoot = 2 * BLOCKS_PER_EPOCH - 5;
+    uint64 secondEpochRoot = 3 * BLOCKS_PER_EPOCH - 5;
+
+    function setUp() public {
+        init();
+    }
+
+    function test_SecondEpochInEpochUpdate() external {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "diff-test";
+        cmds[1] = "first-and-second-epoch-update";
+        cmds[2] = vm.toString(firstEpochRoot);
+        cmds[3] = vm.toString(2 * BLOCKS_PER_EPOCH + 1); // first block in second epoch
+
+        bytes memory result = vm.ffi(cmds);
+        (
+            LC.LightClientState[] memory states,
+            LC.StakeTableState[] memory nextStakeTables,
+            V.PlonkProof[] memory proofs
+        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+
+        vm.startPrank(prover);
+        vm.expectEmit(true, true, true, true);
+        emit LCV2.NewEpoch(3); // 3 is the numerical epoch, but represents second epoch
+        lc.newFinalizedState(states[0], nextStakeTables[0], proofs[0]);
+
+        lc.newFinalizedState(states[1], nextStakeTables[1], proofs[1]);
+        expectFinalizedState(states[1]);
+    }
+
+    /// @dev this test describe the expected behavior of epoch changes and stake table updates
+    function test_SecondEpochRootUpdate() external {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "diff-test";
+        cmds[1] = "first-and-second-epoch-update";
+        cmds[2] = vm.toString(firstEpochRoot);
+        cmds[3] = vm.toString(secondEpochRoot);
+
+        bytes memory result = vm.ffi(cmds);
+        (
+            LC.LightClientState[] memory states,
+            LC.StakeTableState[] memory nextStakeTables,
+            V.PlonkProof[] memory proofs
+        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+
+        vm.startPrank(prover);
+        vm.expectEmit(true, true, true, true);
+        emit LCV2.NewEpoch(3); // 3 is the numerical epoch, but represents second epoch
+        lc.newFinalizedState(states[0], nextStakeTables[0], proofs[0]);
+
+        vm.expectEmit(true, true, true, true);
+        emit LCV2.NewEpoch(4); // 4 is the numerical epoch, but represents third epoch
+        lc.newFinalizedState(states[1], nextStakeTables[1], proofs[1]);
+        expectFinalizedState(states[1]);
+        expectVotingStake(nextStakeTables[1]);
+
+        // also test that new stake table is different from genesis, i.e. indeed updated
+        (, BN254.ScalarField blsKeyComm, BN254.ScalarField schnorrKeyComm,) =
+            lc.votingStakeTableState();
+        assertNotEq(blsKeyComm, genesisStakeTableState.blsKeyComm);
+        assertNotEq(schnorrKeyComm, genesisStakeTableState.schnorrKeyComm);
+    }
+
+    function test_RevertWhen_SkipLastEpochRootUpdate() external {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "diff-test";
+        cmds[1] = "first-and-second-epoch-update";
+        cmds[2] = vm.toString(firstEpochRoot - 1);
+        cmds[3] = vm.toString(secondEpochRoot);
+
+        bytes memory result = vm.ffi(cmds);
+        (
+            LC.LightClientState[] memory states,
+            LC.StakeTableState[] memory nextStakeTables,
+            V.PlonkProof[] memory proofs
+        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+
+        vm.startPrank(prover);
+        lc.newFinalizedState(states[0], nextStakeTables[0], proofs[0]);
+
+        vm.expectRevert(LCV2.MissingEpochRootUpdate.selector);
+        lc.newFinalizedState(states[1], nextStakeTables[1], proofs[1]);
+    }
+
+    function test_RevertWhen_UpdateAfterSecondEpochRoot() external {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "diff-test";
+        cmds[1] = "first-and-second-epoch-update";
+        cmds[2] = vm.toString(firstEpochRoot);
+        cmds[3] = vm.toString(secondEpochRoot + 1);
+
+        bytes memory result = vm.ffi(cmds);
+        (
+            LC.LightClientState[] memory states,
+            LC.StakeTableState[] memory nextStakeTables,
+            V.PlonkProof[] memory proofs
+        ) = abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
+
+        vm.startPrank(prover);
+        lc.newFinalizedState(states[0], nextStakeTables[0], proofs[0]);
+
+        vm.expectRevert(LCV2.MissingEpochRootUpdate.selector);
+        lc.newFinalizedState(states[1], nextStakeTables[1], proofs[1]);
+    }
+
+    function test_RevertWhen_SkipEntireEpoch() external {
+        string[] memory cmds = new string[](3);
+        cmds[0] = "diff-test";
+        cmds[1] = "mock-skip-blocks";
+        cmds[2] = vm.toString(3 * BLOCKS_PER_EPOCH);
+
+        bytes memory result = vm.ffi(cmds);
+        (
+            LC.LightClientState memory newState,
+            LC.StakeTableState memory nextStakeTable,
+            V.PlonkProof memory newProof
+        ) = abi.decode(result, (LC.LightClientState, LC.StakeTableState, V.PlonkProof));
+
+        vm.startPrank(prover);
+        vm.expectRevert(LCV2.MissingEpochRootUpdate.selector);
+        lc.newFinalizedState(newState, nextStakeTable, newProof);
+    }
+}
+
+contract LightClient_EpochParamCompute_Test is LightClientCommonTest {
+    function setUp() public {
+        init();
+    }
+
+    function testFuzz_EpochCompute(uint256 _blockNum, uint256 _blocksPerEpoch) external {
+        uint64 blockNum = uint64(bound(_blockNum, 0, uint256(type(uint64).max) / 2));
+        uint64 blocksPerEpoch = uint64(bound(_blocksPerEpoch, 6, uint256(type(uint64).max) / 2));
+
+        string[] memory cmds = new string[](4);
+        cmds[0] = "diff-test";
+        cmds[1] = "epoch-compute";
+        cmds[2] = vm.toString(blockNum);
+        cmds[3] = vm.toString(blocksPerEpoch);
+
+        bytes memory result = vm.ffi(cmds);
+        (uint64 epoch, bool isEpochRoot, bool isGtEpochRoot) =
+            abi.decode(result, (uint64, bool, bool));
+        assertEq(lc.epochFromBlockNumber(blockNum, blocksPerEpoch), epoch);
+        lc.setBlocksPerEpoch(blocksPerEpoch);
+        assertEq(lc.isEpochRoot(blockNum), isEpochRoot);
+        assertEq(lc.isGtEpochRoot(blockNum), isGtEpochRoot);
     }
 }
 
@@ -722,27 +983,28 @@ contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest {
             BN254.ScalarField genesisAmountComm
         ) = LC(proxy).genesisStakeTableState();
 
-        // first deploy LCV2
-        LC lcv2 = new LCV2();
-        bytes memory lcv2InitData =
-            abi.encodeWithSignature("initializeV2(uint64)", BLOCKS_PER_EPOCH);
-        // upgrade V1 to V2 and initialize LCV2
+        // first deploy LCV2Mock
+        LC lcv2 = new LCV2Mock();
+        bytes memory lcv2InitData = abi.encodeWithSignature(
+            "initializeV2(uint64,uint64)", BLOCKS_PER_EPOCH, EPOCH_START_BLOCK
+        );
+        // upgrade V1 to V2 and initialize LCV2Mock
         admin = LC(proxy).owner();
         vm.prank(admin);
         LC(proxy).upgradeToAndCall(address(lcv2), lcv2InitData);
 
-        // test LCV2 is successfully in effect
-        (majorVersion, minorVersion, patchVersion) = LCV2(proxy).getVersion();
+        // test LCV2Mock is successfully in effect
+        (majorVersion, minorVersion, patchVersion) = LCV2Mock(proxy).getVersion();
         assertEq(majorVersion, 2);
         assertEq(minorVersion, 0);
         assertEq(patchVersion, 0);
-        assertEq(LCV2(proxy)._blocksPerEpoch(), BLOCKS_PER_EPOCH);
+        assertEq(LCV2Mock(proxy).blocksPerEpoch(), BLOCKS_PER_EPOCH);
         (
             uint256 threshold,
             BN254.ScalarField blsKeyComm,
             BN254.ScalarField schnorrKeyComm,
             BN254.ScalarField amountComm
-        ) = LCV2(proxy).votingStakeTableState();
+        ) = LCV2Mock(proxy).votingStakeTableState();
         assertEq(threshold, genesisThreshold);
         assertEq(blsKeyComm, genesisBlsKeyComm);
         assertEq(schnorrKeyComm, genesisSchnorrKeyComm);
