@@ -1080,6 +1080,8 @@ pub mod testing {
             let chain_config = state.chain_config.resolve().unwrap_or_default();
             let l1_client =
                 L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
+
+            l1_client.spawn_tasks().await;
             let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
             // Create the HotShot membership
             let membership = EpochCommittees::new_stake(
