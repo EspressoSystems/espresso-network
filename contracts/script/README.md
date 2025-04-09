@@ -294,7 +294,7 @@ source .env.contracts && \
 forge clean && \
 forge script contracts/script/LightClient.s.sol:LightClientContractUpgradeToV2Script \
 --ffi \
---rpc-url https://ethereum-sepolia.publicnode.com  \
+--rpc-url $RPC_URL \
 --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS \
 --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS \
 --build-info true \
