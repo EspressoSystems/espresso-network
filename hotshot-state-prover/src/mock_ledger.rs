@@ -16,7 +16,7 @@ use hotshot_types::{
         GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
     },
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
-    utils::is_epoch_root,
+    utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -42,6 +42,8 @@ type SchnorrSignKey = jf_signature::schnorr::SignKey<ark_ed_on_bn254::Fr>;
 pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 /// Number of block per epoch for testing
 pub const EPOCH_HEIGHT_FOR_TEST: u64 = 10;
+/// Our "first epoch" in test is epoch 2: ceil(EPOCH_START_BLOCK / EPOCH_HEIGHT_FOR_TEST)
+pub const EPOCH_START_BLOCK_FOR_TEST: u64 = 12;
 
 /// Mock for system parameter of `MockLedger`
 pub struct MockSystemParam {
@@ -49,6 +51,8 @@ pub struct MockSystemParam {
     st_cap: usize,
     /// number of block per epoch
     epoch_height: u64,
+    /// indicate the first epoch
+    epoch_start_bock: u64,
 }
 
 impl MockSystemParam {
@@ -57,6 +61,7 @@ impl MockSystemParam {
         Self {
             st_cap: STAKE_TABLE_CAPACITY_FOR_TEST,
             epoch_height: EPOCH_HEIGHT_FOR_TEST,
+            epoch_start_bock: EPOCH_START_BLOCK_FOR_TEST,
         }
     }
 }
@@ -106,26 +111,74 @@ impl MockLedger {
         }
     }
 
-    /// attempt to advance epoch, should be invoked at the *beginning* of every `fn elapse_xx()`
+    /// returns the current epoch
+    pub fn cur_epoch(&self) -> u64 {
+        epoch_from_block_number(self.state.block_height, self.pp.epoch_height)
+    }
+
+    /// return true if epoch is activated
+    pub fn epoch_activated(&self) -> bool {
+        self.state.block_height >= self.pp.epoch_start_bock
+    }
+
+    /// return true of the current state is epoch root
+    /// since it has no meaning before activation, always return false before epoch_start_block
+    pub fn is_epoch_root(&self) -> bool {
+        self.epoch_activated() && is_epoch_root(self.state.block_height, self.pp.epoch_height)
+    }
+
+    /// return true of the current state is between epoch root and the last block
+    /// since it has no meaning before activation, always return false before epoch_start_block
+    pub fn is_ge_epoch_root(&self) -> bool {
+        self.epoch_activated() && is_ge_epoch_root(self.state.block_height, self.pp.epoch_height)
+    }
+
+    /// return the first epoch (activation epoch)
+    pub fn first_epoch(&self) -> u64 {
+        epoch_from_block_number(self.pp.epoch_start_bock, self.pp.epoch_height)
+    }
+
+    /// compute the epoch corresponding to `height`
+    pub fn derive_epoch(&self, height: u64) -> u64 {
+        epoch_from_block_number(height, self.pp.epoch_height)
+    }
+
+    fn is_last_block_in_epoch(&self) -> bool {
+        is_last_block(self.state.block_height, self.pp.epoch_height)
+    }
+
+    /// attempt to advance epoch, should be invoked at the *beginning* of every `fn elapse_with_block()`
+    /// when we reach epoch root, we will elapse the rest of the blocks in this epoch and enter the next epoch
     fn try_advance_epoch(&mut self) {
-        // if the new block is the first block of an epoch, update epoch
-        if is_epoch_root(self.state.block_height, self.pp.epoch_height) {
-            self.epoch += 1;
-            self.st.advance();
+        if self.epoch_activated() {
+            if self.is_epoch_root() {
+                // skip the rest of the blocks (between epoch_root and last_block_in_epoch)
+                while self.cur_epoch() == self.epoch {
+                    self.state.view_number += 1;
+                    self.state.block_height += 1;
+                    self.state.block_comm_root = self.new_dummy_comm();
+                }
+                // simulate 2 new registration, 1 exit, this snapshot only take effect another 1 epoch later
+                self.sync_stake_table(2, 1);
+                self.epoch += 1;
+                self.st.advance();
+            }
+        } else {
+            // before epoch activation, only advance at the end/last block of each epoch
+            // no need to update stake table since it's still static
+            if self.is_last_block_in_epoch() {
+                self.epoch += 1;
+            }
         }
-        // TODO: (alex) this logic isn't complete when we move on beyond the epoch root,
-        // we shall modify it so that we can elapse over the epoch root into the next epoch
     }
 
     /// Elapse a view with a new finalized block
     pub fn elapse_with_block(&mut self) {
-        let new_root = self.new_dummy_comm();
-        // let new_fee_ledger_comm = self.new_dummy_comm();
+        self.try_advance_epoch();
 
         self.state.view_number += 1;
         self.state.block_height += 1;
-        self.state.block_comm_root = new_root;
-        self.try_advance_epoch();
+        self.state.block_comm_root = self.new_dummy_comm();
     }
 
     /// Elapse a view without a new finalized block
@@ -136,6 +189,9 @@ impl MockLedger {
 
     /// Update stake table with `num_reg` number of new registrations and `num_exit` number of exits on L1
     pub fn sync_stake_table(&mut self, num_reg: usize, num_exit: usize) {
+        if !self.epoch_activated() {
+            return;
+        }
         // ensure input parameter won't exceed stake table capacity
         let before_st_size = self.qc_keys.len();
         assert!(self.qc_keys.len() + num_reg - num_exit <= self.pp.st_cap);
@@ -334,7 +390,7 @@ impl MockLedger {
     /// Returns epoch-aware stake table state for the next block.
     /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
-        if is_epoch_root(self.state.block_height, self.pp.epoch_height) {
+        if self.epoch_activated() && self.is_ge_epoch_root() {
             self.st.next_voting_state().unwrap()
         } else {
             self.voting_stake_table_state()

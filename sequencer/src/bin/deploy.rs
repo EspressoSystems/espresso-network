@@ -253,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
             // fetch epoch length from HotShot config
             let config_url = opt.sequencer_url.join("/config/hotshot")?;
             // Request the configuration until it is successful
-            let mut blocks_per_epoch = loop {
+            let (mut blocks_per_epoch, epoch_start_block) = loop {
                 match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
                     config_url.clone(),
                 )
@@ -261,7 +261,10 @@ async fn main() -> anyhow::Result<()> {
                 .send()
                 .await
                 {
-                    Ok(resp) => break resp.hotshot_config().blocks_per_epoch(),
+                    Ok(resp) => {
+                        let config = resp.hotshot_config();
+                        break (config.blocks_per_epoch(), config.epoch_start_block());
+                    },
                     Err(e) => {
                         tracing::error!("Failed to fetch the network config: {e}");
                         sleep(Duration::from_secs(5));
@@ -283,6 +286,7 @@ async fn main() -> anyhow::Result<()> {
                 &mut contracts,
                 opt.use_mock,
                 blocks_per_epoch,
+                epoch_start_block,
             )
             .await?;
         }

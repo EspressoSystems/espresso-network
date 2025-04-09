@@ -321,6 +321,7 @@ async fn main() -> anyhow::Result<()> {
             contracts,
             true, // use mock
             blocks_per_epoch,
+            epoch_start_block,
         )
         .await?;
         if let Some(multisig) = multisig_address {
