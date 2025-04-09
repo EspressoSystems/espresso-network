@@ -873,7 +873,7 @@ impl L1Client {
     /// Get `StakeTable` at specific l1 block height.
     /// This function fetches and processes various events (ValidatorRegistered, ValidatorExit,
     /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
-    /// contract's initialization block ( 0 if not provided )to the provided `to_block` value.
+    /// contract's initialization block to the provided `to_block` value.
     /// Events are fetched in chunks to and retries are implemented for failed requests.
     pub async fn get_stake_table(
         &self,
@@ -882,13 +882,15 @@ impl L1Client {
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         let stake_table_contract = StakeTable::new(contract, self.provider.clone());
 
-        // Retry fetching the L1 block number when the contract was initialized.
+        // get the block number when the contract was initialized
+        // to avoid fetching events from block number 0
         let from_block = loop {
             match stake_table_contract.initializedAtBlock().call().await {
                 Ok(init_block) => {
                     break init_block._0.to::<u64>();
                 },
                 Err(err) => {
+                    // Retry fetching incase of an error
                     tracing::warn!(%err, "Failed to retrieve initial block, retrying..");
                     sleep(self.options().l1_retry_delay).await;
                 },
