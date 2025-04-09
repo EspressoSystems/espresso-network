@@ -63,6 +63,7 @@ pub fn build_instance_state<V: Versions>(
             peers.clone(),
             NoStorage,
         ))),
+        None,
         100,
     );
 

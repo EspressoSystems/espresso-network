@@ -128,7 +128,7 @@ impl NodeState {
             NoStorage,
         )));
 
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
         Self::new(
             0,
             chain_config,
@@ -155,7 +155,7 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
 
         Self::new(
             0,
@@ -184,7 +184,7 @@ impl NodeState {
             NoStorage,
         )));
 
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
         Self::new(
             0,
             ChainConfig::default(),
@@ -211,7 +211,7 @@ impl NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
 
         Self::new(
             0,
@@ -272,7 +272,7 @@ impl Default for NodeState {
             Arc::new(mock::MockStateCatchup::default()),
             NoStorage,
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
 
         Self::new(
             1u64,
