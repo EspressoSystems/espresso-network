@@ -15,7 +15,7 @@ use hotshot_contract_adapter::{field_to_u256, jellyfish::*, sol_types::*, u256_t
 use hotshot_state_prover::mock_ledger::{
     gen_plonk_proof_for_test, MockLedger, MockSystemParam, STAKE_TABLE_CAPACITY_FOR_TEST,
 };
-use hotshot_types::utils::epoch_from_block_number;
+use hotshot_types::utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root};
 use jf_pcs::prelude::Commitment;
 use jf_plonk::{
     proof_system::{
@@ -89,6 +89,8 @@ enum Action {
     MockSkipBlocks,
     /// Compute the epoch number from block height
     EpochCompute,
+    /// Compute two updates in two first and second epoch epochs
+    FirstAndSecondEpochUpdate,
 }
 
 #[allow(clippy::type_complexity)]
@@ -443,7 +445,7 @@ fn main() {
                 panic!("Should provide arg1=numBlockSkipped,arg2(opt)=requireValidProof");
             }
 
-            let num_block_skipped = cli.args[0].parse::<u32>().unwrap();
+            let num_block_skipped = cli.args[0].parse::<u64>().unwrap();
             let require_valid_proof: bool = if cli.args.len() == 2 {
                 cli.args[1].parse::<bool>().unwrap()
             } else {
@@ -453,7 +455,7 @@ fn main() {
             let pp = MockSystemParam::init();
             let mut ledger = MockLedger::init(pp, STAKE_TABLE_CAPACITY_FOR_TEST / 2);
 
-            for _ in 0..num_block_skipped {
+            while ledger.light_client_state().block_height < num_block_skipped {
                 ledger.elapse_with_block();
             }
 
@@ -520,8 +522,57 @@ fn main() {
             let block_num = cli.args[0].parse::<u64>().unwrap();
             let epoch_height = cli.args[1].parse::<u64>().unwrap();
 
-            let res = epoch_from_block_number(block_num, epoch_height);
-            println!("{}", res.abi_encode().encode_hex());
+            let epoch = epoch_from_block_number(block_num, epoch_height);
+            let is_epoch_root = is_epoch_root(block_num, epoch_height);
+            let is_gt_epoch_root = is_ge_epoch_root(block_num, epoch_height) && !is_epoch_root;
+            println!(
+                "{}",
+                (epoch, is_epoch_root, is_gt_epoch_root)
+                    .abi_encode_params()
+                    .encode_hex()
+            );
+        },
+        Action::FirstAndSecondEpochUpdate => {
+            if cli.args.len() != 2 {
+                panic!("Should provide arg1=heightOne, arg2=heightTwo");
+            }
+            let height_one = cli.args[0].parse::<u64>().unwrap();
+            let height_two = cli.args[1].parse::<u64>().unwrap();
+
+            let pp = MockSystemParam::init();
+            let mut ledger = MockLedger::init(pp, STAKE_TABLE_CAPACITY_FOR_TEST / 2);
+
+            assert_eq!(ledger.derive_epoch(height_one), ledger.first_epoch());
+            assert_eq!(ledger.derive_epoch(height_two), ledger.first_epoch() + 1);
+
+            let mut new_states: Vec<LightClientStateSol> = vec![];
+            let mut proofs: Vec<PlonkProofSol> = vec![];
+            let mut next_st_states: Vec<StakeTableStateSol> = vec![];
+
+            while ledger.light_client_state().block_height < height_one {
+                ledger.elapse_with_block();
+            }
+            // generate the updates for the first height
+            let (pi, proof) = ledger.gen_state_proof();
+            next_st_states.push(pi.next_st_state.into());
+            new_states.push(pi.lc_state.into());
+            proofs.push(proof.into());
+
+            while ledger.light_client_state().block_height < height_two {
+                ledger.elapse_with_block();
+            }
+            // generate the updates for the first height
+            let (pi, proof) = ledger.gen_state_proof();
+            next_st_states.push(pi.next_st_state.into());
+            new_states.push(pi.lc_state.into());
+            proofs.push(proof.into());
+
+            println!(
+                "{}",
+                (new_states, next_st_states, proofs)
+                    .abi_encode_params()
+                    .encode_hex()
+            );
         },
     };
 }
