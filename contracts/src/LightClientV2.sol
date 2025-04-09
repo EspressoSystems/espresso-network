@@ -95,21 +95,20 @@ contract LightClientV2 is LightClient {
 
         // epoch-related checks
         uint64 lastUpdateEpoch = currentEpoch();
-        uint64 newEpoch = epochFromBlockNumber(newState.blockHeight, blocksPerEpoch);
+        uint64 newStateEpoch = epochFromBlockNumber(newState.blockHeight, blocksPerEpoch);
         // after epoch gets activated, for each epoch, we allow updates from
-        // `start_block..=epoch_root`
-        // but disallow any transitioning blocks `epoch_block+1..=last_block`, effectively
-        // `epoch_root`
-        // is the "last block" of every epoch from light client's perspective.
-        if (newEpoch >= firstEpoch) {
+        // `start_block..=epoch_root` but disallow any transitioning blocks
+        // `epoch_block+1..=last_block`, effectively
+        // `epoch_root` is the "last block" of every epoch from light client's perspective.
+        if (newStateEpoch >= firstEpoch) {
             require(!isGtEpochRoot(newState.blockHeight), MissingEpochRootUpdate());
         }
-        if (newEpoch > firstEpoch) {
+        if (newStateEpoch > firstEpoch) {
             // disallow skipping an epoch without an update
-            require(newEpoch - lastUpdateEpoch < 2, MissingEpochRootUpdate());
+            require(newStateEpoch - lastUpdateEpoch < 2, MissingEpochRootUpdate());
             // advancing 1 epoch is only allowed if the epoch root (last block - 5) of the last
             // epoch was submitted
-            if (newEpoch == lastUpdateEpoch + 1 && !isEpochRoot(finalizedState.blockHeight)) {
+            if (newStateEpoch == lastUpdateEpoch + 1 && !isEpochRoot(finalizedState.blockHeight)) {
                 revert MissingEpochRootUpdate();
             }
         }
@@ -127,9 +126,9 @@ contract LightClientV2 is LightClient {
         // are skipped. We simply don't accept them. From LC contract's perspective, the stake
         // table has been updated, thus only accepting quorum signatures (thus SNARK proof) from
         // the new stakers.
-        if (newEpoch >= firstEpoch && isEpochRoot(newState.blockHeight)) {
+        if (newStateEpoch >= firstEpoch && isEpochRoot(newState.blockHeight)) {
             votingStakeTableState = nextStakeTable;
-            emit NewEpoch(newEpoch + 1);
+            emit NewEpoch(newStateEpoch + 1);
         }
 
         updateStateHistory(uint64(currentBlockNumber()), uint64(block.timestamp), newState);
@@ -217,6 +216,8 @@ contract LightClientV2 is LightClient {
     }
 
     /// @notice Decide if a block height is the an "epoch root" (defined as last block in epoch - 5)
+    /// @dev see
+    /// <https://github.com/EspressoSystems/espresso-network/blob/2a904fa17838961cef130d0e87d7b371acaaea42/hotshot-types/src/utils.rs#L475>
     function isEpochRoot(uint64 blockHeight) public view virtual returns (bool) {
         if (blockHeight == 0 || blocksPerEpoch == 0) {
             return false;
