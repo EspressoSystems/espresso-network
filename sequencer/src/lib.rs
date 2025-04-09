@@ -664,7 +664,7 @@ pub mod testing {
 
     pub async fn run_legacy_builder<const NUM_NODES: usize>(
         port: Option<u16>,
-        max_block_size: u64,
+        max_block_size: Option<u64>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
         let builder_key_pair = TestConfig::<0>::builder_key();
         let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
@@ -687,7 +687,7 @@ pub mod testing {
                 base_fee: 10,
             },
             NodeState::default(),
-            max_block_size,
+            max_block_size.unwrap_or(300),
             NUM_NODES,
         );
 

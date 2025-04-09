@@ -852,9 +852,13 @@ pub mod test_helpers {
             let mut marketplace_builder_url = "http://example.com".parse().unwrap();
 
             if <V as Versions>::Base::VERSION < MarketplaceVersion::VERSION {
+                let chain_config = cfg.state[0].chain_config.resolve();
+                if chain_config.is_none() {
+                    tracing::warn!("Chain config is not set, using default max_block_size");
+                }
                 let (task, url) = run_legacy_builder::<{ NUM_NODES }>(
                     cfg.network_config.builder_port(),
-                    *cfg.state[0].chain_config.resolve().unwrap().max_block_size,
+                    chain_config.map(|c| *c.max_block_size),
                 )
                 .await;
                 builder_tasks.push(task);
