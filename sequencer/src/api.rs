@@ -2979,10 +2979,7 @@ mod test {
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let instance = Anvil::new()
-            .block_time(1)
-            .args(["--slots-in-an-epoch", "0"])
-            .spawn();
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
         let url = instance.endpoint_url();
         dbg!(&url);
         let secret_key = instance.keys()[0].clone();
