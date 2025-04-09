@@ -380,7 +380,7 @@ async fn fetch_epoch_state_from_sequencer(
     let state_cert =
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url
-                .join(&format!("availability"))
+                .join("availability")
                 .with_context(|| "Invalid Url")
                 .map_err(ProverError::NetworkError)?,
         )
