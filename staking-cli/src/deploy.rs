@@ -36,6 +36,7 @@ pub struct TestSystem {
     pub bls_key_pair: BLSKeyPair,
     pub schnorr_key_pair: SchnorrKeyPair,
     pub commission: Commission,
+    pub approval_amount: U256,
 }
 
 impl TestSystem {
@@ -75,9 +76,10 @@ impl TestSystem {
         let st_proxy =
             ERC1967Proxy::deploy(provider.clone(), *stake_table_impl.address(), data).await?;
 
+        let approval_amount = parse_ether("1000000")?;
         // Approve the stake table contract so it can transfer tokens to itself
         let receipt = token
-            .approve(*st_proxy.address(), parse_ether("1000000")?)
+            .approve(*st_proxy.address(), approval_amount)
             .send()
             .await?
             .get_receipt()
@@ -96,6 +98,7 @@ impl TestSystem {
             bls_key_pair,
             schnorr_key_pair,
             commission: Commission::try_from("12.34")?,
+            approval_amount,
         })
     }
 
@@ -170,6 +173,23 @@ impl TestSystem {
     pub async fn balance(&self, address: Address) -> Result<U256> {
         let token = EspToken::new(self.token, &self.provider);
         Ok(token.balanceOf(address).call().await?._0)
+    }
+
+    pub async fn allowance(&self, owner: Address) -> Result<U256> {
+        let token = EspToken::new(self.token, &self.provider);
+        Ok(token.allowance(owner, self.stake_table).call().await?._0)
+    }
+
+    pub async fn approve(&self, amount: U256) -> Result<()> {
+        let token = EspToken::new(self.token, &self.provider);
+        token
+            .approve(self.stake_table, amount)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(self.allowance(self.deployer_address).await? == amount);
+        Ok(())
     }
 
     pub fn cmd(&self) -> Command {
