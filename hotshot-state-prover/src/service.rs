@@ -104,6 +104,12 @@ impl ProverServiceState {
     }
 
     pub async fn from_epoch(config: StateProverConfig, epoch: u64) -> Result<Self> {
+        // If the epoch upgrade is not yet there, use the genesis stake table
+        let epoch = if epoch < config.start_epoch() {
+            0
+        } else {
+            epoch
+        };
         let stake_table = fetch_stake_table_from_sequencer(
             &config.sequencer_url,
             epoch,
@@ -119,6 +125,12 @@ impl ProverServiceState {
     }
 
     pub async fn sync_with_epoch(&mut self, epoch: u64) -> Result<()> {
+        // If the epoch upgrade is not yet there, use the genesis stake table
+        let epoch = if epoch < self.config.start_epoch() {
+            0
+        } else {
+            epoch
+        };
         if epoch != self.epoch {
             self.stake_table = fetch_stake_table_from_sequencer(
                 &self.config.sequencer_url,
@@ -145,6 +157,10 @@ impl StateProverConfig {
         }
 
         Ok(())
+    }
+
+    pub fn start_epoch(&self) -> u64 {
+        epoch_from_block_number(self.epoch_start_block, self.blocks_per_epoch)
     }
 }
 
@@ -466,6 +482,8 @@ async fn advance_epoch(
     contract_epoch: u64,
     target_epoch: u64,
 ) -> Result<(), ProverError> {
+    // Ignore the "epochs" before the epoch upgrade
+    let contract_epoch = contract_epoch.max(state.config.start_epoch());
     // First sync the local stake table if necessary.
     if state.epoch != contract_epoch {
         state
