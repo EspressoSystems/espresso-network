@@ -2986,6 +2986,14 @@ mod test {
         dbg!(&secret_key);
         let signer = LocalSigner::from(secret_key);
 
+        let mnemonic = "test test test test test test test test test test test junk";
+        let signer = MnemonicBuilder::<English>::default()
+            .phrase(mnemonic)
+            .index(0)
+            .expect("error building wallet")
+            .build()
+            .expect("error opening wallet");
+
         let contracts = &mut Contracts::new();
 
         let wallet = EthereumWallet::from(signer.clone());
