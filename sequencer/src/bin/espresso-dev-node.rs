@@ -342,7 +342,8 @@ async fn main() -> anyhow::Result<()> {
             relay_server: relay_server_url.clone(),
             update_interval,
             retry_interval,
-            sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}")).unwrap(),
+            sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}/v1/"))
+                .unwrap(),
             port: Some(prover_port),
             stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST as usize,
             provider_endpoint: url.clone(),
