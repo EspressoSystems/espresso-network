@@ -536,6 +536,7 @@ impl L1Client {
                     match block_timeout {
                         // We got a block
                         Ok(Some(head)) => {
+                            tracing::error!("Head: {:?}", head);
                             let head = head.number;
                             tracing::debug!(head, "Received L1 block");
 

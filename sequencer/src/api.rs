@@ -2979,7 +2979,10 @@ mod test {
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let instance = Anvil::new()
+            .block_time(1)
+            .args(["--slots-in-an-epoch", "0"])
+            .spawn();
         let url = instance.endpoint_url();
         dbg!(&url);
         let secret_key = instance.keys()[0].clone();
@@ -2999,7 +3002,7 @@ mod test {
             .epoch_height(epoch_height)
             .build();
 
-        let blocks_per_epoch = network_config.hotshot_config().epoch_height;
+        let blocks_per_epoch = epoch_height;
         let epoch_start_block = network_config.hotshot_config().epoch_start_block;
         let initial_stake_table = network_config.stake_table();
         let (genesis_state, genesis_stake) =
