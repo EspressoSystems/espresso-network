@@ -1816,6 +1816,7 @@ mod test {
     };
 
     use alloy::{
+        eips::BlockId,
         network::EthereumWallet,
         node_bindings::Anvil,
         primitives::{utils::parse_ether, Address, U256},
@@ -3002,6 +3003,18 @@ mod test {
             .on_http(l1_url.clone());
         let admin = provider.get_accounts().await?[0];
 
+        let latest_block = provider.get_block(BlockId::latest()).full().await.unwrap();
+        let finalized_block = provider
+            .get_block(BlockId::finalized())
+            .full()
+            .await
+            .unwrap();
+
+        tracing::error!(
+            "latest: {:?}, finalized: {:?}",
+            latest_block,
+            finalized_block
+        );
         let network_config = TestConfigBuilder::default()
             .l1_url(l1_url.clone())
             .epoch_height(epoch_height)
@@ -3118,6 +3131,14 @@ mod test {
         let mut views = HashSet::new();
         let mut epochs = HashSet::new();
         for _ in 0..=600 {
+            let finalized_block = provider
+                .get_block(BlockId::finalized())
+                .full()
+                .await
+                .unwrap();
+
+            tracing::error!("finalized: {:?}", finalized_block);
+
             let event = subscribed_events.next().await.unwrap();
             let event = event.unwrap();
             let view_number = event.view_number;
