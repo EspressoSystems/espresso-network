@@ -158,7 +158,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         let version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(err) => {
-                tracing::error!("Upgrade certificate requires unsupported version, refusing to request blocks: {err}");
+                tracing::error!("Upgrade certificate requires unsupported version, refusing to request blocks: {}", err);
                 return None;
             },
         };
@@ -211,7 +211,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             {
                 // We are proposing a transition block it should be empty
                 if !is_last_block(high_qc_block_number, self.epoch_height) {
-                    tracing::info!("Sending empty block event. View number: {block_view}. Parent Block number: {high_qc_block_number}");
+                    tracing::info!(
+                        "Sending empty block event. View number: {}. Parent Block number: {}",
+                        block_view,
+                        high_qc_block_number
+                    );
                     self.send_empty_block(event_stream, block_view, block_epoch, version)
                         .await;
                     return None;
@@ -270,7 +274,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         version: Version,
     ) {
         // If we couldn't get a block, send an empty block
-        tracing::info!("Failed to get a block for view {block_view:?}, proposing empty block");
+        tracing::info!(
+            "Failed to get a block for view {:?}, proposing empty block",
+            block_view
+        );
 
         // Increment the metric for number of empty blocks proposed
         self.consensus
@@ -469,7 +476,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         let version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(err) => {
-                tracing::error!("Upgrade certificate requires unsupported version, refusing to request blocks: {err}");
+                tracing::error!("Upgrade certificate requires unsupported version, refusing to request blocks: {}", err);
                 return None;
             },
         };
@@ -480,7 +487,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         {
             Ok(b) => b,
             Err(e) => {
-                tracing::info!("Failed to get a block for view {block_view:?}: {e}. Continuing with empty block.");
+                tracing::info!(
+                    "Failed to get a block for view {:?}: {}. Continuing with empty block.",
+                    block_view,
+                    e
+                );
 
                 let num_storage_nodes = self
                     .membership_coordinator
@@ -608,7 +619,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                 .validated_state_map()
                 .get(&target_view)
                 .context(info!(
-                    "Missing record for view {target_view} in validated state",
+                    "Missing record for view {} in validated state",
+                    target_view
                 ))?;
 
             match &view_data.view_inner {
@@ -623,7 +635,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                         .saved_leaves()
                         .get(leaf_commitment)
                         .context(info!(
-                            "Missing leaf with commitment {leaf_commitment} for view {target_view} in saved_leaves",
+                            "Missing leaf with commitment {} for view {} in saved_leaves",
+                            leaf_commitment, target_view,
                         ))?;
                     return Ok((target_view, leaf.payload_commitment()));
                 },
@@ -880,8 +893,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                 // verify the message signature and the fee_signature
                 if !header_input.validate_signature(block_info.offered_fee, &block_data.metadata) {
                     tracing::warn!(
-                        "Failed to verify available block header input data response message signature"
-                    );
+                    "Failed to verify available block header input data response message signature"
+                );
                     continue;
                 }
 

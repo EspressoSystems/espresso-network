@@ -130,7 +130,12 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
             upgrade_lock,
         )
         .await
-        .context(|e| warn!("Invalid justify_qc in proposal for view {view_number}: {e}"))?;
+        .context(|e| {
+            warn!(
+                "Invalid justify_qc in proposal for view {}: {}",
+                *view_number, e
+            )
+        })?;
 
     let mut consensus_writer = consensus.write().await;
     let leaf = Leaf2::from_quorum_proposal(&proposal.data);
@@ -161,14 +166,14 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     let mut consensus_writer = consensus.write().await;
     consensus_writer.drb_results.store_result(epoch, drb_result);
     drop(consensus_writer);
-    tracing::debug!("Calling add_drb_result for epoch {epoch}");
+    tracing::debug!("Calling add_drb_result for epoch {:?}", epoch);
     if let Err(e) = storage
         .write()
         .await
         .add_drb_result(epoch, drb_result)
         .await
     {
-        tracing::error!("Failed to store drb result for epoch {epoch}: {e}");
+        tracing::error!("Failed to store drb result for epoch {:?}: {}", epoch, e);
     }
 
     membership.write().await.add_drb_result(epoch, drb_result)
@@ -216,11 +221,15 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
             .await
         {
-            tracing::error!("Failed to store epoch root for epoch {next_epoch_number}: {e}");
+            tracing::error!(
+                "Failed to store epoch root for epoch {:?}: {}",
+                next_epoch_number,
+                e
+            );
         }
 
         let write_callback = {
-            tracing::debug!("Calling add_epoch_root for epoch {next_epoch_number}");
+            tracing::debug!("Calling add_epoch_root for epoch {:?}", next_epoch_number);
             let membership_reader = membership.read().await;
             membership_reader
                 .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
@@ -348,7 +357,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
                 if cert.data.decide_by < decided_view_number {
                     tracing::warn!("Failed to decide an upgrade certificate in time. Ignoring.");
                 } else {
-                    tracing::info!("Reached decide on upgrade certificate: {cert:?}");
+                    tracing::info!("Reached decide on upgrade certificate: {:?}", cert);
                     res.decided_upgrade_cert = Some(cert.clone());
                 }
             }
@@ -499,7 +508,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
                                 "Failed to decide an upgrade certificate in time. Ignoring."
                             );
                         } else {
-                            tracing::info!("Reached decide on upgrade certificate: {cert:?}");
+                            tracing::info!("Reached decide on upgrade certificate: {:?}", cert);
                             res.decided_upgrade_cert = Some(cert.clone());
                         }
                     }
@@ -618,12 +627,13 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     }
 
     let consensus_reader = consensus.read().await;
+    //let parent_view_number = consensus_reader.high_qc().view_number();
     let parent_view = consensus_reader.validated_state_map().get(&parent_qc.view_number()).context(
         debug!("Couldn't find parent view in state map, waiting for replica to see proposal; parent_view_number: {}", *parent_qc.view_number())
     )?;
 
     let (leaf_commitment, state) = parent_view.leaf_and_state().context(
-        info!("Parent of high QC points to a view without a proposal; parent_view_number: {}, parent_view {:?}", *parent_qc.view_number(), parent_view)
+        info!("Parent of high QC points to a view without a proposal; parent_view_number: {parent_view_number:?}, parent_view {parent_view:?}")
     )?;
 
     if leaf_commitment != consensus_reader.high_qc().data().leaf_commit {
@@ -672,7 +682,7 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
             .update_high_qc2(justify_qc.clone())
             .await
         {
-            bail!("Failed to store High QC, not voting; error = {e:?}");
+            bail!("Failed to store High QC, not voting; error = {:?}", e);
         }
         if justify_qc
             .data
@@ -705,7 +715,10 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
                 .update_next_epoch_high_qc2(next_epoch_justify_qc.clone())
                 .await
             {
-                bail!("Failed to store next epoch High QC, not voting; error = {e:?}");
+                bail!(
+                    "Failed to store next epoch High QC, not voting; error = {:?}",
+                    e
+                );
             }
         }
     }
@@ -911,7 +924,11 @@ pub async fn validate_proposal_safety_and_liveness<
             proposal_epoch == justify_qc_epoch
                 || consensus_reader.check_eqc(&proposed_leaf, &parent_leaf),
             {
-                error!("Failed epoch safety check \n Proposed leaf is {proposed_leaf:?} \n justify QC leaf is {parent_leaf:?}")
+                error!(
+                    "Failed epoch safety check \n Proposed leaf is {:?} \n justify QC leaf is {:?}",
+                    proposed_leaf.clone(),
+                    parent_leaf.clone(),
+                )
             }
         );
 
@@ -1004,7 +1021,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
     ensure!(
         view_number >= validation_info.consensus.read().await.cur_view(),
         "Proposal is from an older view {:?}",
-        proposal.data
+        proposal.data.clone()
     );
 
     // Validate the proposal's signature. This should also catch if the leaf_commitment does not equal our calculated parent commitment
@@ -1015,14 +1032,16 @@ pub(crate) async fn validate_proposal_view_and_certs<
     if proposal.data.justify_qc().view_number() != view_number - 1 {
         let received_proposal_cert =
             proposal.data.view_change_evidence().clone().context(debug!(
-                "Quorum proposal for view {view_number} needed a timeout or view sync certificate, but did not have one",
+                "Quorum proposal for view {} needed a timeout or view sync certificate, but did not have one",
+                *view_number
         ))?;
 
         match received_proposal_cert {
             ViewChangeEvidence2::Timeout(timeout_cert) => {
                 ensure!(
                     timeout_cert.data().view == view_number - 1,
-                    "Timeout certificate for view {view_number} was not for the immediately preceding view"
+                    "Timeout certificate for view {} was not for the immediately preceding view",
+                    *view_number
                 );
                 let timeout_cert_epoch = timeout_cert.data().epoch();
                 membership = membership.get_new_epoch(timeout_cert_epoch).await?;
@@ -1038,7 +1057,10 @@ pub(crate) async fn validate_proposal_view_and_certs<
                     )
                     .await
                     .context(|e| {
-                        warn!("Timeout certificate for view {view_number} was invalid: {e}")
+                        warn!(
+                            "Timeout certificate for view {} was invalid: {}",
+                            *view_number, e
+                        )
                     })?;
             },
             ViewChangeEvidence2::ViewSync(view_sync_cert) => {
@@ -1063,7 +1085,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
                         &validation_info.upgrade_lock,
                     )
                     .await
-                    .context(|e| warn!("Invalid view sync finalize cert provided: {e}"))?;
+                    .context(|e| warn!("Invalid view sync finalize cert provided: {}", e))?;
             },
         }
     }
@@ -1094,11 +1116,15 @@ pub async fn broadcast_event<E: Clone + std::fmt::Debug>(event: E, sender: &Send
         Ok(None) => (),
         Ok(Some(overflowed)) => {
             tracing::error!(
-                "Event sender queue overflow, Oldest event removed form queue: {overflowed:?}"
+                "Event sender queue overflow, Oldest event removed form queue: {:?}",
+                overflowed
             );
         },
         Err(SendError(e)) => {
-            tracing::warn!("Event: {e:?}\n Sending failed, event stream probably shutdown");
+            tracing::warn!(
+                "Event: {:?}\n Sending failed, event stream probably shutdown",
+                e
+            );
         },
     }
 }
@@ -1185,7 +1211,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
         .context(|e| {
             consensus_reader.metrics.invalid_qc.update(1);
 
-            warn!("Invalid certificate: {e}")
+            warn!("Invalid certificate: {}", e)
         })?;
     }
 
@@ -1225,7 +1251,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
                 upgrade_lock,
             )
             .await
-            .context(|e| warn!("Invalid next epoch certificate: {e}"))?;
+            .context(|e| warn!("Invalid next epoch certificate: {}", e))?;
     }
     Ok(())
 }

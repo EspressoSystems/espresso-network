@@ -386,7 +386,11 @@ pub(crate) async fn handle_quorum_proposal_recv<
             justify_qc.data.leaf_commit
         );
         validate_proposal_liveness(proposal, &validation_info).await?;
-        tracing::trace!("Sending ViewChange for view {view_number} and epoch {proposal_epoch:?}");
+        tracing::trace!(
+            "Sending ViewChange for view {} and epoch {:?}",
+            view_number,
+            proposal_epoch
+        );
         validation_info
             .consensus
             .write()
@@ -410,7 +414,11 @@ pub(crate) async fn handle_quorum_proposal_recv<
     )
     .await?;
 
-    tracing::trace!("Sending ViewChange for view {view_number} and epoch {proposal_epoch:?}");
+    tracing::trace!(
+        "Sending ViewChange for view {} and epoch {:?}",
+        view_number,
+        proposal_epoch
+    );
     validation_info
         .consensus
         .write()
