@@ -882,19 +882,23 @@ impl L1Client {
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         let stake_table_contract = StakeTable::new(contract, self.provider.clone());
 
-        // Retrieve the L1 block number when this contract was initialized.
-        // This helps avoid starting the event fetching from block number 0.
-        let from = if let Ok(init_block) = stake_table_contract.initializedAtBlock().call().await {
-            init_block._0.to::<u64>()
-        } else {
-            tracing::error!("Failed to retrieve initial block from stake-table contract");
-            0
+        // Retry fetching the L1 block number when the contract was initialized.
+        let from_block = loop {
+            match stake_table_contract.initializedAtBlock().call().await {
+                Ok(init_block) => {
+                    break init_block._0.to::<u64>();
+                },
+                Err(err) => {
+                    tracing::warn!(%err, "Failed to retrieve initial block, retrying..");
+                    sleep(self.options().l1_retry_delay).await;
+                },
+            }
         };
 
         // To avoid making large RPC calls, divide the range into smaller chunks.
         // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
         // default value  is `10000` if env variable is not set
-        let mut start = from;
+        let mut start = from_block;
         let end = to_block;
         let chunk_size = self.options().l1_events_max_block_range;
         let chunks = std::iter::from_fn(move || {
