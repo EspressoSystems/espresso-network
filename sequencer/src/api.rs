@@ -717,7 +717,7 @@ pub mod test_helpers {
         network,
         persistence::no_storage,
         testing::{
-            run_marketplace_builder, run_test_builder, wait_for_decide_on_handle, TestConfig,
+            run_legacy_builder, run_marketplace_builder, wait_for_decide_on_handle, TestConfig,
             TestConfigBuilder,
         },
     };
@@ -852,8 +852,11 @@ pub mod test_helpers {
             let mut marketplace_builder_url = "http://example.com".parse().unwrap();
 
             if <V as Versions>::Base::VERSION < MarketplaceVersion::VERSION {
-                let (task, url) =
-                    run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
+                let (task, url) = run_legacy_builder::<{ NUM_NODES }>(
+                    cfg.network_config.builder_port(),
+                    *cfg.state[0].chain_config.resolve().unwrap().max_block_size,
+                )
+                .await;
                 builder_tasks.push(task);
                 cfg.network_config.set_builder_urls(vec1::vec1![url]);
             };
@@ -866,8 +869,6 @@ pub mod test_helpers {
                 )
                 .await;
                 builder_tasks.push(task);
-                cfg.network_config
-                    .set_builder_urls(vec1::vec1![url.clone()]);
                 marketplace_builder_url = url;
             }
 

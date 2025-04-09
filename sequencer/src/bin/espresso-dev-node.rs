@@ -834,38 +834,37 @@ mod tests {
             Client::new(format!("http://localhost:{builder_port}").parse().unwrap());
         builder_api_client.connect(None).await;
 
-        // TODO: MA: re-enable the txn_submit builder API
-        // let tx = Transaction::new(100_u32.into(), vec![1, 2, 3]);
+        let tx = Transaction::new(100_u32.into(), vec![1, 2, 3]);
 
-        // let hash: Commitment<Transaction> = builder_api_client
-        //     .post("txn_submit/submit")
-        //     .body_json(&tx)
-        //     .unwrap()
-        //     .send()
-        //     .await
-        //     .unwrap();
+        let hash: Commitment<Transaction> = builder_api_client
+            .post("txn_submit/submit")
+            .body_json(&tx)
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
 
-        // let tx_hash = tx.commit();
-        // assert_eq!(hash, tx_hash);
+        let tx_hash = tx.commit();
+        assert_eq!(hash, tx_hash);
 
-        // let mut tx_result = api_client
-        //     .get::<TransactionQueryData<SeqTypes>>(&format!(
-        //         "availability/transaction/hash/{tx_hash}",
-        //     ))
-        //     .send()
-        //     .await;
-        // while tx_result.is_err() {
-        //     sleep(Duration::from_secs(1)).await;
-        //     tracing::warn!("waiting for tx");
+        let mut tx_result = api_client
+            .get::<TransactionQueryData<SeqTypes>>(&format!(
+                "availability/transaction/hash/{tx_hash}",
+            ))
+            .send()
+            .await;
+        while tx_result.is_err() {
+            sleep(Duration::from_secs(1)).await;
+            tracing::warn!("waiting for tx");
 
-        //     tx_result = api_client
-        //         .get::<TransactionQueryData<SeqTypes>>(&format!(
-        //             "availability/transaction/hash/{}",
-        //             tx_hash
-        //         ))
-        //         .send()
-        //         .await;
-        // }
+            tx_result = api_client
+                .get::<TransactionQueryData<SeqTypes>>(&format!(
+                    "availability/transaction/hash/{}",
+                    tx_hash
+                ))
+                .send()
+                .await;
+        }
 
         let large_tx = Transaction::new(100_u32.into(), vec![0; 20000]);
         let large_hash: Commitment<Transaction> = api_client
