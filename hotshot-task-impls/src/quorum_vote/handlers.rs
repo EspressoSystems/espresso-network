@@ -294,7 +294,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .number_of_views_per_decide_event
             .add_point(cur_number_of_views_per_decide_event as f64);
 
-        tracing::debug!(
+        tracing::info!(
             "Sending Decide for view {:?}",
             consensus_writer.last_decided_view()
         );
