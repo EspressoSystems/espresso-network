@@ -22,7 +22,6 @@ contract DeployLightClientScript is Script {
     /// @param stateHistoryRetentionPeriod state history retention period in seconds
     /// @param owner The address that will be set as the owner of the proxy (typically a multisig
     /// wallet).
-
     function run(uint32 numInitValidators, uint32 stateHistoryRetentionPeriod, address owner)
         public
         returns (
