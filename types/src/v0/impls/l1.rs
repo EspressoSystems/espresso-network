@@ -873,7 +873,7 @@ impl L1Client {
     /// Get `StakeTable` at specific l1 block height.
     /// This function fetches and processes various events (ValidatorRegistered, ValidatorExit,
     /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
-    /// contract's initialization block or `0`` is not provided to the provided `to_block` value.
+    /// contract's initialization block ( 0 if not provided )to the provided `to_block` value.
     /// Events are fetched in chunks to and retries are implemented for failed requests.
     pub async fn get_stake_table(
         &self,
@@ -893,7 +893,7 @@ impl L1Client {
 
         // To avoid making large RPC calls, divide the range into smaller chunks.
         // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
-        // default is `10000`
+        // default value  is `10000` if env variable is not set
         let mut start = from;
         let end = to_block;
         let chunk_size = self.options().l1_events_max_block_range;
@@ -934,8 +934,6 @@ impl L1Client {
             }
         });
 
-        let registered = registered_events.flatten().collect().await;
-
         // fetch validator de registration events
         let deregistered_events = stream::iter(chunks.clone()).then(|(from, to)| {
             let retry_delay = self.options().l1_retry_delay;
@@ -960,8 +958,6 @@ impl L1Client {
             }
         });
 
-        let deregistered = deregistered_events.flatten().collect().await;
-
         // fetch delegated events
         let delegated_events = stream::iter(chunks.clone()).then(|(from, to)| {
             let retry_delay = self.options().l1_retry_delay;
@@ -985,9 +981,6 @@ impl L1Client {
                 }
             }
         });
-
-        let delegated = delegated_events.flatten().collect().await;
-
         // fetch undelegated events
         let undelegated_events = stream::iter(chunks.clone()).then(|(from, to)| {
             let retry_delay = self.options().l1_retry_delay;
@@ -1011,8 +1004,6 @@ impl L1Client {
                 }
             }
         });
-
-        let undelegated = undelegated_events.flatten().collect().await;
 
         // fetch consensus keys updated events
         let keys_update_events = stream::iter(chunks).then(|(from, to)| {
@@ -1038,6 +1029,10 @@ impl L1Client {
             }
         });
 
+        let registered = registered_events.flatten().collect().await;
+        let deregistered = deregistered_events.flatten().collect().await;
+        let delegated = delegated_events.flatten().collect().await;
+        let undelegated = undelegated_events.flatten().collect().await;
         let keys_update = keys_update_events.flatten().collect().await;
 
         // Sort all events by log index and log block number for correct order.
