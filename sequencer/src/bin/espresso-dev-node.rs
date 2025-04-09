@@ -14,11 +14,15 @@ use alloy::{
 };
 use async_trait::async_trait;
 use clap::Parser;
-use espresso_types::{parse_duration, MarketplaceVersion, SequencerVersions, V0_1};
+use espresso_types::{
+    parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
+};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_stake_table::utils::one_honest_threshold;
-use hotshot_state_prover::service::{run_prover_service, StateProverConfig};
+use hotshot_state_prover::service::{
+    light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
+};
 use hotshot_types::{
     light_client::StateVerKey,
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
@@ -40,6 +44,7 @@ use sequencer_utils::{
     logging, HttpProviderWithWallet,
 };
 use serde::{Deserialize, Serialize};
+use staking_cli::demo::stake_in_contract_for_test;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
 use tokio::spawn;
 use url::Url;
@@ -57,7 +62,7 @@ struct Args {
         short,
         long,
         env = "ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL",
-        default_value = "7s",
+        default_value = "200ms",
         value_parser = parse_duration
     )]
     l1_interval: Duration,
@@ -163,6 +168,10 @@ struct Args {
     )]
     max_block_size: u64,
 
+    /// The length of a hotshot epoch in hotshot blocks.
+    #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 40)]
+    epoch_height: u64,
+
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
@@ -196,22 +205,16 @@ async fn main() -> anyhow::Result<()> {
         alt_prover_update_intervals: _,
         l1_interval: _,
         max_block_size,
+        epoch_height,
     } = cli_params;
 
     logging.init();
-
-    let api_options = options::Options::from(options::Http {
-        port: sequencer_api_port,
-        max_connections: sequencer_api_max_connections,
-    })
-    .submit(Default::default())
-    .query_sql(Default::default(), sql);
 
     let (l1_url, _anvil) = if let Some(url) = rpc_url {
         (url, None)
     } else {
         tracing::warn!("L1 url is not provided. running an anvil node");
-        let instance = Anvil::new().spawn();
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
         let url = instance.endpoint_url();
         tracing::info!("l1 url: {}", url);
         (url, Some(instance))
@@ -223,28 +226,17 @@ async fn main() -> anyhow::Result<()> {
         .unwrap();
 
     let network_config = TestConfigBuilder::default()
-        .marketplace_builder_port(builder_port)
+        .epoch_height(epoch_height)
+        .builder_port(builder_port)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
         .build();
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
 
-    const NUM_NODES: usize = 2;
-    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-        .api_config(api_options)
-        .network_config(network_config)
-        .with_max_block_size(max_block_size)
-        .build();
-
-    let network =
-        TestNetwork::new(config, SequencerVersions::<MarketplaceVersion, V0_1>::new()).await;
-    let st = network.cfg.stake_table();
-    let config = network.cfg.hotshot_config();
-
-    tracing::info!("Hotshot config {config:?}");
-
-    let (genesis_state, genesis_stake) = network.light_client_genesis();
+    let initial_stake_table = network_config.stake_table();
+    let (genesis_state, genesis_stake) =
+        light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
     let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];
@@ -264,7 +256,11 @@ async fn main() -> anyhow::Result<()> {
     .chain(
         alt_chain_providers
             .iter()
-            .zip(alt_mnemonics.into_iter().chain(std::iter::repeat(mnemonic)))
+            .zip(
+                alt_mnemonics
+                    .into_iter()
+                    .chain(std::iter::repeat(mnemonic.clone())),
+            )
             .zip(
                 alt_account_indices
                     .into_iter()
@@ -283,7 +279,7 @@ async fn main() -> anyhow::Result<()> {
             )
             .map(|((((url, mnc), idx), mlts), retry)| (url.clone(), mnc, idx, mlts, retry)),
     ) {
-        tracing::info!("deploying the contract for provider: {url:?}");
+        tracing::info!("deploying the contract for provider: {url}");
 
         let signer = MnemonicBuilder::<English>::default()
             .phrase(mnemonic.as_str())
@@ -347,7 +343,7 @@ async fn main() -> anyhow::Result<()> {
             relay_server: relay_server_url.clone(),
             update_interval,
             retry_interval,
-            sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}")).unwrap(),
+            sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}/")).unwrap(),
             port: Some(prover_port),
             stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST as usize,
             provider_endpoint: url.clone(),
@@ -415,8 +411,66 @@ async fn main() -> anyhow::Result<()> {
 
             client_states.wallet = wallet;
             client_states.l1_chain_id = chain_id;
+
+            let staking_priv_keys = network_config.staking_priv_keys();
+            stake_in_contract_for_test(
+                l1_url.clone(),
+                signer,
+                l1_contracts
+                    .address(Contract::StakeTableProxy)
+                    .expect("stake table deployed"),
+                l1_contracts
+                    .address(Contract::EspTokenProxy)
+                    .expect("ESP token deployed"),
+                staking_priv_keys,
+            )
+            .await?;
         }
     }
+
+    const NUM_NODES: usize = 2;
+
+    let stake_table_address = l1_contracts
+        .address(Contract::StakeTableProxy)
+        .expect("stake table deployed");
+    let chain_config = ChainConfig {
+        max_block_size: max_block_size.into(),
+        // TODO: MA: the builder has block fee `123` hardcoded so we have to set this to zero for now.
+        base_fee: 0.into(),
+        stake_table_contract: Some(stake_table_address),
+        ..Default::default()
+    };
+    tracing::info!("Chain config: {chain_config:?}");
+
+    let state = ValidatedState {
+        chain_config: chain_config.into(),
+        ..Default::default()
+    };
+    tracing::info!("Initial state: {state:?}");
+    let states = std::array::from_fn(|_| state.clone());
+
+    let config = network_config.hotshot_config();
+    tracing::info!("Hotshot config {config:?}");
+
+    let api_options = options::Options::from(options::Http {
+        port: sequencer_api_port,
+        max_connections: sequencer_api_max_connections,
+    })
+    .submit(Default::default())
+    .query_sql(Default::default(), sql);
+
+    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+        .api_config(api_options)
+        .network_config(network_config)
+        .states(states)
+        .build();
+
+    // Start the nodes
+    let network = TestNetwork::new(
+        config,
+        SequencerVersions::<EpochVersion, EpochVersion>::new(),
+    )
+    .await;
 
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,
@@ -425,11 +479,13 @@ async fn main() -> anyhow::Result<()> {
         let mut thresholds = HashMap::new();
         thresholds.insert(
             first_epoch,
-            one_honest_threshold(st.total_stake(SnapshotVersion::LastEpochStart)?),
+            one_honest_threshold(initial_stake_table.total_stake(SnapshotVersion::LastEpochStart)?),
         );
 
         let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
-        for (_bls_vk, amt, schnorr_vk) in st.try_iter(SnapshotVersion::LastEpochStart)? {
+        for (_bls_vk, amt, schnorr_vk) in
+            initial_stake_table.try_iter(SnapshotVersion::LastEpochStart)?
+        {
             genesis_known_nodes.insert(schnorr_vk, amt);
         }
         let mut known_nodes = HashMap::new();
@@ -493,8 +549,8 @@ async fn main() -> anyhow::Result<()> {
     handles.push(dev_node_handle);
 
     // if any of the async task is complete then dev node binary exits
-    if (handles.next().await).is_some() {
-        tracing::error!("exiting dev node");
+    if let Some(item) = handles.next().await {
+        tracing::error!("exiting dev node: {item:?}");
         drop(network);
     }
 
@@ -636,7 +692,15 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     app.register_module("api", api)
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
-    app.serve(format!("0.0.0.0:{port}"), bind_version).await?;
+    tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
+
+    app.serve(format!("0.0.0.0:{port}"), bind_version)
+        .await
+        .map_err(|err| {
+            // If we get an "Address in use" during startup, make it a bit easier to find the cause.
+            tracing::error!("Failed to start dev-node API on http://0.0.0.0:{port} : {err}");
+            err
+        })?;
 
     Ok(())
 }

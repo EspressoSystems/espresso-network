@@ -9874,6 +9874,7 @@ dependencies = [
  "espresso-types",
  "futures",
  "hotshot",
+ "hotshot-builder-core-refactored",
  "hotshot-contract-adapter",
  "hotshot-events-service",
  "hotshot-example-types",
