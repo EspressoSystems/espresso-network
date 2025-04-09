@@ -270,7 +270,7 @@ forge script contracts/script/FeeContract.s.sol:UpgradeFeeContractScript \
 
 Ensure that you update the version in the `getVersion()` method of the latest implementation contract.
 
-Since the LightClient contract uses the PlonkVerifier library, the PlonkVerifier library has to be deployed and then
+Since the LightClient contract uses the PlonkVerifier & PlonkVerifierV2 libraries, they have to be deployed and then
 referenced at deployment time. Thus ensure you've deployed the PlonkVerifier
 ([see steps below](#deploy-the-plonk-verifier-library)) and set the `$PLONK_VERIFIER_ADDRESS` variable in the command
 below. Each time modifications are made to the Plonk Verifier, contracts that depend on it such as the Light Client
@@ -287,14 +287,22 @@ In `.env.contracts` set:
 ```bash
 source .env.contracts && \
 forge clean && \
-forge script contracts/script/LightClient.s.sol:LightClientContractUpgradeScript \
+forge script contracts/script/LightClient.s.sol:LightClientContractUpgradeToV2Script \
 --ffi \
 --rpc-url https://ethereum-sepolia.publicnode.com  \
 --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS \
+--libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS \
 --build-info true \
---legacy \
 --broadcast
 ```
+
+2. Go to safe.global and have the signers confirm the transaction and finally execute it
+
+### Via Hardware Wallet
+
+In `.env.contracts` set:
+
+- `USE_HARDWARE_WALLET=true` and add the `--ledger` flag to the `forge script` command
 
 # Deploy the Plonk Verifier Library
 

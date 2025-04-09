@@ -4,8 +4,8 @@ import { Script } from "forge-std/Script.sol";
 import { Upgrades, Options } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import { LightClient as LC } from "../src/LightClient.sol";
 import { LightClientV2 as LCV2 } from "../src/LightClientV2.sol";
-
 /// @notice Deploy the upgradeable light client contract using the OpenZeppelin Upgrades plugin.
+
 contract DeployLightClientScript is Script {
     string public contractName = "LightClient.sol:LightClient";
 
@@ -87,7 +87,7 @@ contract DeployLightClientScript is Script {
 
 /// @notice Upgrades the light client contract first by deploying the new implementation
 /// and then executing the upgrade via the Safe Multisig wallet using the SAFE SDK.
-contract LightClientContractUpgradeScript is Script {
+contract LightClientContractUpgradeToV2Script is Script {
     string internal originalContractName = "LightClient.sol:LightClient";
     string internal upgradeContractName = "LightClientV2.sol:LightClientV2";
 
@@ -140,7 +140,6 @@ contract LightClientContractUpgradeScript is Script {
         );
 
         result = vm.ffi(cmds);
-
         return (address(implementationContract), result);
     }
 }
