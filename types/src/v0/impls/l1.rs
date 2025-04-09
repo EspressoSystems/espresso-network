@@ -874,44 +874,57 @@ impl L1Client {
     pub async fn get_stake_table(
         &self,
         contract: Address,
-        block: u64,
+        to_block: u64,
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         // TODO stake_table_address needs to be passed in to L1Client
         // before update loop starts.
+
         let stake_table_contract = StakeTable::new(contract, self.provider.clone());
+
+        let init_block =
+            if let Ok(init_block) = stake_table_contract.initializedAtBlock().call().await {
+                let init_block = Some(init_block._0.to::<u64>());
+
+                init_block
+            } else {
+                tracing::error!("Failed to retrieve initial block from stake-table contract");
+                None
+            };
+
+        let from = init_block.unwrap_or(0);
 
         let registered = stake_table_contract
             .ValidatorRegistered_filter()
-            .from_block(0)
-            .to_block(block)
+            .from_block(from)
+            .to_block(to_block)
             .query()
             .await?;
 
         let deregistered = stake_table_contract
             .ValidatorExit_filter()
-            .from_block(0)
-            .to_block(block)
+            .from_block(from)
+            .to_block(to_block)
             .query()
             .await?;
 
         let delegated = stake_table_contract
             .Delegated_filter()
-            .from_block(0)
-            .to_block(block)
+            .from_block(from)
+            .to_block(to_block)
             .query()
             .await?;
 
         let undelegated = stake_table_contract
             .Undelegated_filter()
-            .from_block(0)
-            .to_block(block)
+            .from_block(from)
+            .to_block(to_block)
             .query()
             .await?;
 
         let keys_update = stake_table_contract
             .ConsensusKeysUpdated_filter()
-            .from_block(0)
-            .to_block(block)
+            .from_block(from)
+            .to_block(to_block)
             .query()
             .await?;
 
