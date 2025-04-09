@@ -62,6 +62,7 @@ use hotshot_types::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
+        storage::{storage_add_drb_result, Storage},
     },
     utils::BuilderCommitment,
     ValidatorConfig,
@@ -206,7 +207,10 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     identity: Identity,
     marketplace_config: MarketplaceConfig<SeqTypes, Node<network::Production, P>>,
     proposal_fetcher_config: ProposalFetcherConfig,
-) -> anyhow::Result<SequencerContext<network::Production, P, V>> {
+) -> anyhow::Result<SequencerContext<network::Production, P, V>>
+where
+    Arc<P>: Storage<SeqTypes>,
+{
     // Expose git information via status API.
     metrics
         .text_family(
@@ -515,8 +519,12 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
-    let coordinator =
-        EpochMembershipCoordinator::new(membership, network_config.config.epoch_height);
+    let persistence = Arc::new(RwLock::new(Arc::new(persistence)));
+    let coordinator = EpochMembershipCoordinator::new(
+        membership,
+        Some(storage_add_drb_result(persistence.clone())),
+        network_config.config.epoch_height,
+    );
 
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
@@ -1248,8 +1256,13 @@ pub mod testing {
             membership.reload_stake(50).await;
 
             let membership = Arc::new(RwLock::new(membership));
+            let persistence = Arc::new(RwLock::new(Arc::new(persistence)));
 
-            let coordinator = EpochMembershipCoordinator::new(membership, 100);
+            let coordinator = EpochMembershipCoordinator::new(
+                membership,
+                Some(storage_add_drb_result(persistence.clone())),
+                100,
+            );
 
             let node_state = NodeState::new(
                 i as u64,
@@ -1271,7 +1284,6 @@ pub mod testing {
                 "starting node",
             );
 
-            let persistence = persistence_opt.create().await.unwrap();
             SequencerContext::init(
                 NetworkConfig {
                     config,

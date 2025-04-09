@@ -216,7 +216,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
-        storage: I::Storage,
+        storage: Arc<RwLock<I::Storage>>,
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> Arc<Self> {
         let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
@@ -258,7 +258,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
-        storage: I::Storage,
+        storage: Arc<RwLock<I::Storage>>,
         marketplace_config: MarketplaceConfig<TYPES, I>,
         internal_channel: (
             Sender<Arc<HotShotEvent<TYPES>>>,
@@ -390,7 +390,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             output_event_stream: (external_tx.clone(), external_rx.clone().deactivate()),
             external_event_stream: (external_tx, external_rx.deactivate()),
             anchored_leaf: anchored_leaf.clone(),
-            storage: Arc::new(RwLock::new(storage)),
+            storage,
             upgrade_lock,
             marketplace_config,
         });
@@ -648,7 +648,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
-        storage: I::Storage,
+        storage: Arc<RwLock<I::Storage>>,
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> Result<
         (
@@ -813,7 +813,7 @@ where
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
-        storage: I::Storage,
+        storage: Arc<RwLock<I::Storage>>,
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> (
         SystemContextHandle<TYPES, I, V>,
@@ -830,7 +830,7 @@ where
             Arc::clone(&network),
             initializer.clone(),
             metrics.clone(),
-            storage.clone(),
+            Arc::clone(&storage),
             marketplace_config.clone(),
         )
         .await;

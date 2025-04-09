@@ -72,6 +72,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             committee,
             StakeTableFetcher::mock(),
         ))),
+        None,
         10,
     );
     let upgrade_data = UpgradeProposalData {

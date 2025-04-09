@@ -66,6 +66,7 @@ pub fn build_instance_state<V: Versions>(
             vec![],
             fetcher,
         ))),
+        None,
         100,
     );
 

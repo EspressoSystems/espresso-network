@@ -331,7 +331,7 @@ where
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
-        storage: I::Storage,
+        storage: Arc<RwLock<I::Storage>>,
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> SystemContextHandle<TYPES, I, V> {
         let epoch_height = config.epoch_height;
