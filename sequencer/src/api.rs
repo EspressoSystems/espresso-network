@@ -2980,8 +2980,8 @@ mod test {
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
-        let url = instance.endpoint_url();
-        dbg!(&url);
+        let l1_url = instance.endpoint_url();
+        dbg!(&l1_url);
         let secret_key = instance.keys()[0].clone();
         dbg!(&secret_key);
         let signer = LocalSigner::from(secret_key);
@@ -2991,11 +2991,11 @@ mod test {
         let wallet = EthereumWallet::from(signer.clone());
         let provider = ProviderBuilder::new()
             .wallet(wallet.clone())
-            .on_http(url.clone());
+            .on_http(l1_url.clone());
         let admin = provider.get_accounts().await?[0];
 
         let network_config = TestConfigBuilder::default()
-            .l1_url(url.clone())
+            .l1_url(l1_url.clone())
             .epoch_height(epoch_height)
             .build();
 
@@ -3068,7 +3068,7 @@ mod test {
 
         tracing::error!("stake_table_address: {:?}", stake_table_address);
         stake_in_contract_for_test(
-            url.clone(),
+            l1_url.clone(),
             signer,
             stake_table_address,
             contracts
