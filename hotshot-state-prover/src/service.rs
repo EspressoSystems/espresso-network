@@ -151,16 +151,12 @@ impl StateProverConfig {
 /// Get the epoch-related  from the sequencer's `PublicHotShotConfig` struct
 /// return (blocks_per_epoch, epoch_start_block)
 pub async fn fetch_epoch_config_from_sequencer(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
-    let config_url = sequencer_url
-        .join("/config/hotshot")
-        .with_context(|| "Invalid URL")?;
-
     // Request the configuration until it is successful
     let epoch_config = loop {
         match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-            config_url.clone(),
+            sequencer_url.clone(),
         )
-        .get::<PublicNetworkConfig>(config_url.as_str())
+        .get::<PublicNetworkConfig>("config/hotshot")
         .send()
         .await
         {
@@ -187,17 +183,12 @@ pub async fn fetch_stake_table_from_sequencer(
 ) -> Result<StakeTable<BLSPubKey, StateVerKey, CircuitField>> {
     tracing::info!("Initializing stake table from node at {sequencer_url}");
 
-    // Construct the URL to fetch the network config
-    let config_url = sequencer_url
-        .join(&format!("/node/stake-table/{epoch}"))
-        .with_context(|| "Invalid URL")?;
-
     // Request the configuration until it is successful
     let peer_configs = loop {
         match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-            config_url.clone(),
+            sequencer_url.clone(),
         )
-        .get::<Vec<PeerConfig<SeqTypes>>>(config_url.as_str())
+        .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{epoch}"))
         .send()
         .await
         {
