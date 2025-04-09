@@ -548,8 +548,8 @@ contract LightClient_newFinalizedState_OnEpochActivation_Test is LightClientComm
 
 /// @dev Test the state update after PoS gets activated (activation_epoch+1 onwards)
 contract LightClient_newFinalizedState_AfterEpochActivation_Test is LightClientCommonTest {
-    uint64 constant firstEpochRoot = 2 * BLOCKS_PER_EPOCH - 5;
-    uint64 constant secondEpochRoot = 3 * BLOCKS_PER_EPOCH - 5;
+    uint64 firstEpochRoot = 2 * BLOCKS_PER_EPOCH - 5;
+    uint64 secondEpochRoot = 3 * BLOCKS_PER_EPOCH - 5;
 
     function setUp() public {
         init();
