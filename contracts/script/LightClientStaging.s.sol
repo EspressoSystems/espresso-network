@@ -99,8 +99,11 @@ contract UpgradeLightClientWithoutMultisigAdminScript is Script {
         }
 
         vm.startBroadcast(deployer);
-        bytes memory data =
-            abi.encodeWithSignature("initializeV2(uint64)", vm.envUint("BLOCKS_PER_EPOCH"));
+        bytes memory data = abi.encodeWithSignature(
+            "initializeV2(uint64,uint64)",
+            vm.envUint("BLOCKS_PER_EPOCH"),
+            vm.envUint("EPOCH_START_BLOCK")
+        );
 
         address proxy =
             upgradeLightClient(mostRecentlyDeployedProxy, address(new LightClientV2()), data);

@@ -205,3 +205,15 @@ dev-download-srs:
     @echo "Check existence or download SRS for dev/test"
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
     2>&1 | tee log.txt
+
+upgrade-light-client-contract-to-v2:
+    @sh -c 'source ./.env.contracts'
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    forge script contracts/script/LightClient.s.sol:LightClientContractUpgradeToV2Script \
+    --ffi \
+    --rpc-url https://ethereum-sepolia.publicnode.com  \
+    --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS \
+    --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS \
+    --build-info true \
+    --broadcast

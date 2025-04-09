@@ -50,6 +50,11 @@ In `.env` or `.env.contracts` set the following:
 source .env.contracts && forge clean && forge script contracts/script/PlonkVerifierV2.s.sol:DeployPlonkVerifierV2Script --rpc-url $RPC_URL --build-info true --legacy --broadcast
 ```
 
+#### Deploy LightClient V1
+
+````bash
+source .env.contracts &&    forge clean &&  forge script contracts/script/LightClientStaging.s.sol:DeployLightClientContractScript --sig "run(uint32,uint32)" $NUM_INIT_VALIDATORS $STATE_HISTORY_RETENTION_PERIOD --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast```
+
 #### Upgrade to LightClientV2
 
 In `.env` or `.env.contracts` set the following:
@@ -64,7 +69,7 @@ In `.env` or `.env.contracts` set the following:
 
 ```bash
 source .env.contracts &&    forge clean &&  forge script contracts/script/LightClientStaging.s.sol:UpgradeLightClientWithoutMultisigAdminScript --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
-```
+````
 
 ## Deployments (Multisig)
 
@@ -266,7 +271,7 @@ forge script contracts/script/FeeContract.s.sol:UpgradeFeeContractScript \
 --broadcast
 ```
 
-## Upgrading the Light Client Contract
+## Upgrading the Light Client Contract (with Multisig owner)
 
 Ensure that you update the version in the `getVersion()` method of the latest implementation contract.
 

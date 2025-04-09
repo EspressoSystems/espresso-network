@@ -120,8 +120,11 @@ contract LightClientContractUpgradeToV2Script is Script {
 
         vm.stopBroadcast();
 
-        bytes memory initData =
-            abi.encodeWithSignature("initializeV2(uint64)", vm.envUint("BLOCKS_PER_EPOCH"));
+        bytes memory initData = abi.encodeWithSignature(
+            "initializeV2(uint64,uint64)",
+            vm.envUint("BLOCKS_PER_EPOCH"),
+            vm.envUint("EPOCH_START_BLOCK")
+        );
         // call upgradeToAndCall command so that the proxy can be upgraded to call from the new
         // implementation above and
         // execute the command via the Safe Multisig wallet
