@@ -301,20 +301,17 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .number_of_views_per_decide_event
             .add_point(cur_number_of_views_per_decide_event as f64);
 
-        tracing::info!(
-            "Sending Decide for view {:?}",
-            consensus_writer.last_decided_view()
-        );
-
         // We don't need to hold this while we broadcast
         drop(consensus_writer);
 
-        tracing::debug!(
-            "Successfully sent decide event, leaf views: {:?}, leaf views len: {:?}, qc view: {:?}",
-            decided_view_number,
-            leaf_views.len(),
-            new_decide_qc.as_ref().unwrap().view_number()
-        );
+        for leaf_info in &leaf_views {
+            tracing::info!(
+                "Sending decide for view {:?} at height {:?}",
+                leaf_info.leaf.view_number(),
+                leaf_info.leaf.block_header().block_number(),
+            );
+        }
+
         // Send an update to everyone saying that we've reached a decide
         broadcast_event(
             Event {
@@ -329,6 +326,13 @@ pub(crate) async fn handle_quorum_proposal_validated<
             &task_state.output_event_stream,
         )
         .await;
+
+        tracing::debug!(
+            "Successfully sent decide event, leaf views: {:?}, leaf views len: {:?}, qc view: {:?}",
+            decided_view_number,
+            leaf_views.len(),
+            new_decide_qc.as_ref().unwrap().view_number()
+        );
 
         if version >= V::Epochs::VERSION {
             for leaf_view in leaf_views {
