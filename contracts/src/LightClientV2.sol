@@ -101,7 +101,9 @@ contract LightClientV2 is LightClient {
         // but disallow any transitioning blocks `epoch_block+1..=last_block`, effectively
         // `epoch_root`
         // is the "last block" of every epoch from light client's perspective.
-        require(!isGtEpochRoot(newState.blockHeight), MissingEpochRootUpdate());
+        if (newEpoch >= firstEpoch) {
+            require(!isGtEpochRoot(newState.blockHeight), MissingEpochRootUpdate());
+        }
         if (newEpoch > firstEpoch) {
             // disallow skipping an epoch without an update
             require(newEpoch - lastUpdateEpoch < 2, MissingEpochRootUpdate());
