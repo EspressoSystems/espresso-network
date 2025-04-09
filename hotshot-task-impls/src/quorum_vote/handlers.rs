@@ -539,7 +539,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .get_light_client_state(view_number)
             .wrap()
             .context(error!("Failed to generate light client state"))?;
-        let next_membership = membership.next_epoch().await?;
+        let next_membership = membership.next_epoch_stake_table().await?;
         let next_stake_table_state = compute_stake_table_commitment(
             &next_membership.stake_table().await,
             hotshot_types::light_client::STAKE_TABLE_CAPACITY,

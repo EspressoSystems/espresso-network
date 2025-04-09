@@ -185,12 +185,30 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 );
                 // Transition to the new epoch by sending ViewChange
                 let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
-                tracing::info!("Entering new epoch: {:?}", next_epoch);
                 broadcast_event(
                     Arc::new(HotShotEvent::ViewChange(cert_view + 1, Some(next_epoch))),
                     &sender,
                 )
                 .await;
+                tracing::info!("Entering new epoch: {:?}", next_epoch);
+                tracing::info!(
+                    "Stake table for epoch {:?}:\n\n{:?}",
+                    next_epoch,
+                    self.membership_coordinator
+                        .stake_table_for_epoch(Some(next_epoch))
+                        .await?
+                        .stake_table()
+                        .await
+                );
+                tracing::info!(
+                    "Stake table for epoch {:?}:\n\n{:?}",
+                    next_epoch + 1,
+                    self.membership_coordinator
+                        .stake_table_for_epoch(Some(next_epoch + 1))
+                        .await?
+                        .stake_table()
+                        .await
+                );
             },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {
                 if !high_qc

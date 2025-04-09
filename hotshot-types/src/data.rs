@@ -1320,7 +1320,7 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
             block_header,
             upgrade_certificate,
             block_payload: _,
-            view_change_evidence: _,
+            view_change_evidence,
             next_drb_result,
             with_epoch,
         } = self;
@@ -1341,6 +1341,16 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
                 cb = cb
                     .constant_str("next_drb_result")
                     .fixed_size_bytes(next_drb_result);
+            }
+
+            match view_change_evidence {
+                Some(ViewChangeEvidence2::Timeout(cert)) => {
+                    cb = cb.field("timeout cert", cert.commit());
+                },
+                Some(ViewChangeEvidence2::ViewSync(cert)) => {
+                    cb = cb.field("viewsync cert", cert.commit());
+                },
+                None => {},
             }
         }
 
