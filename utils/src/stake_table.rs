@@ -32,16 +32,10 @@ where
 {
     pub fn from_toml_file(path: &Path) -> anyhow::Result<Self> {
         let config_file_as_string: String = fs::read_to_string(path)
-            .unwrap_or_else(|_| panic!("Could not read config file located at {}", path.display()));
+            .with_context(|| format!("Could not read config file located at {}", path.display()))?;
 
-        Ok(
-            toml::from_str::<Self>(&config_file_as_string).unwrap_or_else(|err| {
-                panic!(
-                    "Unable to convert config file {} to TOML: {err}",
-                    path.display()
-                )
-            }),
-        )
+        toml::from_str::<Self>(&config_file_as_string)
+            .with_context(|| format!("Unable to convert config file {} to TOML", path.display()))?
     }
 }
 
@@ -88,17 +82,12 @@ where
 {
     pub fn from_toml_file(path: &Path) -> anyhow::Result<Self> {
         let config_file_as_string: String = fs::read_to_string(path)
-            .unwrap_or_else(|_| panic!("Could not read config file located at {}", path.display()));
+            .with_context(|| format!("Could not read config file located at {}", path.display()))?;
 
-        Ok(
-            toml::from_str::<Self>(&config_file_as_string).unwrap_or_else(|err| {
-                panic!(
-                    "Unable to convert config file {} to TOML: {err}",
-                    path.display()
-                )
-            }),
-        )
+        toml::from_str::<Self>(&config_file_as_string)
+            .with_context(|| format!("Unable to convert config file {} to TOML", path.display())?
     }
+}
 
     fn stakers_to_remove(&self) -> Vec<G2PointSol> {
         self.stakers_to_remove
