@@ -24,7 +24,7 @@ contract LightClientV2 is LightClient {
     error DeprecatedApi();
 
     /// @notice Initialize V2
-    function initializeV2(uint64 blocksPerEpoch) public reinitializer(2) {
+    function initializeV2(uint64 blocksPerEpoch) public reinitializer(3) {
         _initializeV2(blocksPerEpoch);
     }
 

@@ -4,10 +4,10 @@ import { Script } from "forge-std/Script.sol";
 import { LightClientV2 } from "../src/LightClientV2.sol";
 import { LightClient as LC } from "../src/LightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-
 /// @notice Deploys the upgradable light client contract
 /// the admin is not a multisig wallet but is the same as the associated mnemonic
 /// used in staging deployments only
+
 contract DeployLightClientContractScript is Script {
     function run(uint32 numInitValidators, uint32 stateHistoryRetentionPeriod)
         external

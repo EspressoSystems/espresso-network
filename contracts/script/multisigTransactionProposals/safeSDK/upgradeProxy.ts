@@ -6,7 +6,7 @@ import Safe from "@safe-global/protocol-kit";
 import { getEnvVar, validateEthereumAddress, getSigner, createAndSignSafeTransaction } from "./utils";
 const UPGRADE_PROXY_CMD = "upgradeProxy" as const;
 
-interface UpgradeData {
+export interface UpgradeData {
   proxyAddress: string;
   implementationAddress: string;
   initData: string;

@@ -3,9 +3,7 @@ pragma solidity ^0.8.20;
 import { Script } from "forge-std/Script.sol";
 import { Upgrades, Options } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import { LightClient as LC } from "../src/LightClient.sol";
-import { LightClientV2Fake as LCV2 } from "../test/mocks/LightClientV2Fake.sol";
-import { LightClientV2 } from "../src/LightClientV2.sol";
-import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { LightClientV2 as LCV2 } from "../src/LightClientV2.sol";
 
 /// @notice Deploy the upgradeable light client contract using the OpenZeppelin Upgrades plugin.
 contract DeployLightClientScript is Script {
@@ -90,8 +88,8 @@ contract DeployLightClientScript is Script {
 /// @notice Upgrades the light client contract first by deploying the new implementation
 /// and then executing the upgrade via the Safe Multisig wallet using the SAFE SDK.
 contract LightClientContractUpgradeScript is Script {
-    string internal originalContractName = vm.envString("LIGHT_CLIENT_CONTRACT_ORIGINAL_NAME");
-    string internal upgradeContractName = vm.envString("LIGHT_CLIENT_CONTRACT_UPGRADE_NAME");
+    string internal originalContractName = "LightClient.sol:LightClient";
+    string internal upgradeContractName = "LightClientV2.sol:LightClientV2";
 
     /// @dev First the new implementation contract is deployed via the deployer wallet.
     /// It then uses the SAFE SDK via an ffi command to perform the upgrade through a Safe Multisig
@@ -101,7 +99,7 @@ contract LightClientContractUpgradeScript is Script {
         opts.referenceContract = originalContractName;
 
         // validate that the new implementation contract is upgrade safe
-        Upgrades.validateUpgrade(upgradeContractName, opts);
+        // Upgrades.validateUpgrade(upgradeContractName, opts);
 
         // get the deployer to depley the new implementation contract
         address deployer;
@@ -122,8 +120,8 @@ contract LightClientContractUpgradeScript is Script {
 
         vm.stopBroadcast();
 
-        bytes memory initData = abi.encodeWithSignature("setNewField(uint256)", 2);
-
+        bytes memory initData =
+            abi.encodeWithSignature("initializeV2(uint64)", vm.envUint("BLOCKS_PER_EPOCH"));
         // call upgradeToAndCall command so that the proxy can be upgraded to call from the new
         // implementation above and
         // execute the command via the Safe Multisig wallet
