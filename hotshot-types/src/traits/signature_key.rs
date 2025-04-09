@@ -24,7 +24,9 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 
 use super::EncodeBytes;
 use crate::{
-    bundle::Bundle, light_client::LightClientStateMsg, traits::node_implementation::NodeType,
+    bundle::Bundle,
+    light_client::{LightClientState, StakeTableState, ToFieldsLightClientCompat},
+    traits::node_implementation::NodeType,
     utils::BuilderCommitment,
 };
 
@@ -70,6 +72,7 @@ pub trait SignatureKey:
     + PartialOrd
     + Ord
     + Display
+    + ToFieldsLightClientCompat
     + for<'a> TryFrom<&'a TaggedBase64>
     + Into<TaggedBase64>
 {
@@ -377,6 +380,7 @@ pub trait StateSignatureKey:
     + PartialEq
     + Eq
     + Display
+    + ToFieldsLightClientCompat
     + for<'a> TryFrom<&'a TaggedBase64>
     + Into<TaggedBase64>
 {
@@ -400,14 +404,16 @@ pub trait StateSignatureKey:
     /// Sign the light client state
     fn sign_state(
         private_key: &Self::StatePrivateKey,
-        state: &LightClientStateMsg,
+        light_client_state: &LightClientState,
+        next_stake_table_state: &StakeTableState,
     ) -> Result<Self::StateSignature, Self::SignError>;
 
     /// Verify the light client state signature
     fn verify_state_sig(
         &self,
         signature: &Self::StateSignature,
-        state: &LightClientStateMsg,
+        light_client_state: &LightClientState,
+        next_stake_table_state: &StakeTableState,
     ) -> bool;
 
     /// Generate a new key pair

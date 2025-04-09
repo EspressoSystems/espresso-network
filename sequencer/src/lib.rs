@@ -32,7 +32,6 @@ use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
 use proposal_fetcher::ProposalFetcherConfig;
-use state_signature::compute_stake_table_commitment;
 use tokio::select;
 use tracing::info;
 use url::Url;

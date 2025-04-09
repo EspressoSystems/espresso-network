@@ -535,6 +535,7 @@ impl Inner {
                 bincode::deserialize(&bytes)?;
             let epoch = state_cert.epoch.u64();
             let finalized_dir_path = self.finalized_state_cert_dir_path();
+            fs::create_dir_all(&finalized_dir_path).context("creating finalized state cert dir")?;
             let finalized_file_path = finalized_dir_path
                 .join(epoch.to_string())
                 .with_extension("txt");
@@ -1765,6 +1766,7 @@ mod test {
                     block_height: i,
                     block_comm_root: Default::default(),
                 },
+                next_stake_table_state: Default::default(),
                 signatures: vec![], // filling arbitrary value
             };
             assert!(storage.add_state_cert(state_cert).await.is_ok());

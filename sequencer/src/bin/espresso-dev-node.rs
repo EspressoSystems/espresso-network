@@ -2,7 +2,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     io,
     iter::once,
-    sync::Arc,
     time::Duration,
 };
 
@@ -22,7 +21,7 @@ use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt}
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
-    light_client_genesis_from_stake_table, run_prover_service_with_stake_table, StateProverConfig,
+    light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
 };
 use hotshot_types::{
     light_client::StateVerKey,
@@ -349,14 +348,14 @@ async fn main() -> anyhow::Result<()> {
             provider_endpoint: url.clone(),
             light_client_address: lc_proxy_addr,
             signer: signer.clone(),
-            blocks_per_epoch: Some(blocks_per_epoch),
+            blocks_per_epoch,
+            epoch_start_block,
         };
 
         // spawn off prover service for this chain
-        let prover_handle = spawn(run_prover_service_with_stake_table(
+        let prover_handle = spawn(run_prover_service(
             prover_config,
             SequencerApiVersion::instance(),
-            Arc::new(initial_stake_table.clone()),
         ));
         handles.push(prover_handle);
 

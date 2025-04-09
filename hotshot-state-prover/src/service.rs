@@ -1,6 +1,7 @@
 //! A light client prover service
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -14,32 +15,31 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use displaydoc::Display;
-use espresso_types::config::PublicNetworkConfig;
+use espresso_types::{config::PublicNetworkConfig, SeqTypes};
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
     sol_types::{LightClientStateSol, LightClientV2, PlonkProofSol, StakeTableStateSol},
 };
-use hotshot_stake_table::{
-    utils::one_honest_threshold,
-    vec_based::{config::FieldType, StakeTable},
-};
+use hotshot_query_service::availability::StateCertQueryData;
+use hotshot_stake_table::{utils::one_honest_threshold, vec_based::StakeTable};
 use hotshot_types::{
     light_client::{
-        CircuitField, LightClientState, PublicInput, StakeTableState, StateSignaturesBundle,
-        StateVerKey,
+        CircuitField, LightClientState, PublicInput, StakeTableState, StateSignature,
+        StateSignaturesBundle, StateVerKey,
     },
     signature_key::BLSPubKey,
+    simple_certificate::LightClientStateUpdateCertificate,
     traits::{
-        signature_key::StakeTableEntryType,
+        signature_key::{StakeTableEntryType, StateSignatureKey},
         stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme as _},
     },
-    utils::is_last_block,
+    utils::{epoch_from_block_number, is_ge_epoch_root},
+    PeerConfig,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
-use jf_signature::constants::CS_ID_SCHNORR;
 use sequencer_utils::deployer::is_proxy_contract;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
@@ -74,8 +74,63 @@ pub struct StateProverConfig {
     pub port: Option<u16>,
     /// Stake table capacity for the prover circuit.
     pub stake_table_capacity: usize,
-    /// Epoch length in number of Hotshot blocks. If None, config will be fetched from sequencer on demand
-    pub blocks_per_epoch: Option<u64>,
+    /// Epoch length in number of Hotshot blocks.
+    pub blocks_per_epoch: u64,
+    /// The epoch start block.
+    pub epoch_start_block: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProverServiceState {
+    /// The configuration of the prover service
+    pub config: StateProverConfig,
+    /// The current epoch number of the stake table
+    pub epoch: u64,
+    /// The stake table
+    pub stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
+}
+
+impl ProverServiceState {
+    pub async fn new_genesis(config: StateProverConfig) -> Result<Self> {
+        let stake_table =
+            fetch_stake_table_from_sequencer(&config.sequencer_url, 0, config.stake_table_capacity)
+                .await
+                .with_context(|| "Failed to initialize stake table")?;
+        Ok(Self {
+            config,
+            epoch: 0,
+            stake_table,
+        })
+    }
+
+    pub async fn from_epoch(config: StateProverConfig, epoch: u64) -> Result<Self> {
+        let stake_table = fetch_stake_table_from_sequencer(
+            &config.sequencer_url,
+            epoch,
+            config.stake_table_capacity,
+        )
+        .await
+        .with_context(|| format!("Failed to initialize stake table for epoch: {}", epoch))?;
+        Ok(Self {
+            config,
+            epoch,
+            stake_table,
+        })
+    }
+
+    pub async fn sync_with_epoch(&mut self, epoch: u64) -> Result<()> {
+        if epoch != self.epoch {
+            self.stake_table = fetch_stake_table_from_sequencer(
+                &self.config.sequencer_url,
+                epoch,
+                self.config.stake_table_capacity,
+            )
+            .await
+            .with_context(|| format!("Failed to update stake table for epoch: {}", epoch))?;
+            self.epoch = epoch;
+        }
+        Ok(())
+    }
 }
 
 impl StateProverConfig {
@@ -91,24 +146,17 @@ impl StateProverConfig {
 
         Ok(())
     }
-
-    pub async fn blocks_per_epoch(&self) -> anyhow::Result<u64> {
-        match self.blocks_per_epoch {
-            Some(v) => Ok(v),
-            None => Ok(epoch_config(&self.sequencer_url).await?.0),
-        }
-    }
 }
 
 /// Get the epoch-related  from the sequencer's `PublicHotShotConfig` struct
 /// return (blocks_per_epoch, epoch_start_block)
-pub async fn epoch_config(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
+pub async fn fetch_epoch_config_from_sequencer(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
     let config_url = sequencer_url
         .join("/config/hotshot")
         .with_context(|| "Invalid URL")?;
 
     // Request the configuration until it is successful
-    let blocks_per_epoch = loop {
+    let epoch_config = loop {
         match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             config_url.clone(),
         )
@@ -126,34 +174,34 @@ pub async fn epoch_config(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
             },
         }
     };
-    Ok(blocks_per_epoch)
+    Ok(epoch_config)
 }
 
-/// Initialize the stake table from a sequencer node that
-/// is currently providing the HotShot config.
+/// Initialize the stake table from a sequencer node given the epoch number
 ///
 /// Does not error, runs until the stake table is provided.
-pub async fn init_stake_table_from_sequencer(
+pub async fn fetch_stake_table_from_sequencer(
     sequencer_url: &Url,
+    epoch: u64,
     stake_table_capacity: usize,
 ) -> Result<StakeTable<BLSPubKey, StateVerKey, CircuitField>> {
     tracing::info!("Initializing stake table from node at {sequencer_url}");
 
     // Construct the URL to fetch the network config
     let config_url = sequencer_url
-        .join("/config/hotshot")
+        .join(&format!("/node/stake-table/{epoch}"))
         .with_context(|| "Invalid URL")?;
 
     // Request the configuration until it is successful
-    let hotshot_config = loop {
+    let peer_configs = loop {
         match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             config_url.clone(),
         )
-        .get::<PublicNetworkConfig>(config_url.as_str())
+        .get::<Vec<PeerConfig<SeqTypes>>>(config_url.as_str())
         .send()
         .await
         {
-            Ok(resp) => break resp.hotshot_config(),
+            Ok(resp) => break resp,
             Err(e) => {
                 tracing::error!("Failed to fetch the network config: {e}");
                 sleep(Duration::from_secs(5)).await;
@@ -165,7 +213,7 @@ pub async fn init_stake_table_from_sequencer(
     let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(stake_table_capacity);
 
     // Populate the stake table
-    for node in hotshot_config.known_nodes_with_stake().into_iter() {
+    for node in peer_configs.into_iter() {
         st.register(
             *node.stake_table_entry.key(),
             node.stake_table_entry.stake(),
@@ -186,7 +234,7 @@ pub async fn light_client_genesis(
     sequencer_url: &Url,
     stake_table_capacity: usize,
 ) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let st = init_stake_table_from_sequencer(sequencer_url, stake_table_capacity)
+    let st = fetch_stake_table_from_sequencer(sequencer_url, 0, stake_table_capacity)
         .await
         .with_context(|| "Failed to initialize stake table")?;
     light_client_genesis_from_stake_table(st)
@@ -325,51 +373,34 @@ pub async fn submit_state_and_proof(
     Ok(receipt)
 }
 
-pub async fn sync_state<ApiVer: StaticVersionType>(
-    st: &StakeTable<BLSPubKey, StateVerKey, CircuitField>,
-    proving_key: Arc<ProvingKey>,
-    relay_server_client: &Client<ServerError, ApiVer>,
-    config: &StateProverConfig,
-) -> Result<(), ProverError> {
-    let light_client_address = config.light_client_address;
-    let wallet = EthereumWallet::from(config.signer.clone());
-    let provider = ProviderBuilder::new()
-        .wallet(wallet)
-        .on_http(config.provider_endpoint.clone());
+async fn fetch_epoch_state_from_sequencer(
+    sequencer_url: &Url,
+    epoch: u64,
+) -> Result<LightClientStateUpdateCertificate<SeqTypes>, ProverError> {
+    let state_cert =
+        surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+            sequencer_url
+                .join(&format!("availability/state-cert/{}", epoch))
+                .with_context(|| "Invalid Url")
+                .map_err(ProverError::NetworkError)?,
+        )
+        .get::<StateCertQueryData<SeqTypes>>(&format!("/state-cert/{}", epoch))
+        .send()
+        .await?;
+    Ok(state_cert.0)
+}
 
-    tracing::info!(
-        ?light_client_address,
-        "Start syncing light client state for provider: {}",
-        config.provider_endpoint,
-    );
-
-    let bundle = fetch_latest_state(relay_server_client).await?;
-    tracing::info!("Bundle accumulated weight: {}", bundle.accumulated_weight);
-    tracing::info!("Latest HotShot block height: {}", bundle.state.block_height);
-
-    let (old_state, st_state) = read_contract_state(&provider, light_client_address).await?;
-    tracing::info!(
-        "Current HotShot block height on contract: {}",
-        old_state.block_height
-    );
-    if old_state.block_height >= bundle.state.block_height {
-        tracing::info!("No update needed.");
-        return Ok(());
-    }
-    tracing::debug!("Old state: {old_state:?}");
-    tracing::debug!("New state: {:?}", bundle.state);
-
-    let blocks_per_epoch = config
-        .blocks_per_epoch()
-        .await
-        .map_err(ProverError::NetworkError)?;
-    let next_stake = if is_last_block(bundle.state.block_height as u64, blocks_per_epoch) {
-        st.next_voting_state()?
-    } else {
-        st_state
-    };
-
-    let entries = st
+async fn generate_proof_helper(
+    state: &mut ProverServiceState,
+    light_client_state: LightClientState,
+    current_stake_table_state: StakeTableState,
+    next_stake_table_state: StakeTableState,
+    signature_map: HashMap<StateVerKey, StateSignature>,
+    proving_key: &ProvingKey,
+) -> Result<(Proof, PublicInput), ProverError> {
+    // Stake table update is already handled in the epoch catchup
+    let entries = state
+        .stake_table
         .try_iter(SnapshotVersion::LastEpochStart)
         .unwrap()
         .map(|(_, stake_amount, state_key)| (state_key, stake_amount))
@@ -378,23 +409,19 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let mut signatures = vec![Default::default(); entries.len()];
     let mut accumulated_weight = U256::ZERO;
     entries.iter().enumerate().for_each(|(i, (key, stake))| {
-        if let Some(sig) = bundle.signatures.get(key) {
+        if let Some(sig) = signature_map.get(key) {
             // Check if the signature is valid
-            let mut msg = Vec::with_capacity(7);
-            let state_msg: [FieldType; 3] = (&bundle.state).into();
-            msg.extend_from_slice(&state_msg);
-            let next_stake_msg: [FieldType; 4] = next_stake.into();
-            msg.extend_from_slice(&next_stake_msg);
-
-            if key.verify(&msg, sig, CS_ID_SCHNORR).is_ok() {
+            if key.verify_state_sig(sig, &light_client_state, &next_stake_table_state) {
                 signer_bit_vec[i] = true;
                 signatures[i] = sig.clone();
                 accumulated_weight += *stake;
+            } else {
+                tracing::info!("Invalid signature for key: {:?}", key);
             }
         }
     });
 
-    if accumulated_weight < field_to_u256(st_state.threshold) {
+    if accumulated_weight < field_to_u256(current_stake_table_state.threshold) {
         return Err(ProverError::InvalidState(
             "The signers' total weight doesn't reach the threshold.".to_string(),
         ));
@@ -403,18 +430,18 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     tracing::info!("Collected latest state and signatures. Start generating SNARK proof.");
     let proof_gen_start = Instant::now();
     let proving_key_clone = proving_key.clone();
-    let stake_table_capacity = config.stake_table_capacity;
+    let stake_table_capacity = state.config.stake_table_capacity;
     let (proof, public_input) = spawn_blocking(move || {
         generate_state_update_proof(
             &mut ark_std::rand::thread_rng(),
             &proving_key_clone,
-            &entries,
+            entries,
             signer_bit_vec,
             signatures,
-            &bundle.state,
-            &st_state,
+            &light_client_state,
+            &current_stake_table_state,
             stake_table_capacity,
-            &next_stake,
+            &next_stake_table_state,
         )
     })
     .await
@@ -423,9 +450,179 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let proof_gen_elapsed = Instant::now().signed_duration_since(proof_gen_start);
     tracing::info!("Proof generation completed. Elapsed: {proof_gen_elapsed:.3}");
 
-    submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
+    Ok((proof, public_input))
+}
 
-    tracing::info!("Successfully synced light client state.");
+/// This function will fetch the cross epoch state update information from the sequencer query node
+/// and update the light client state in the contract to the `target_epoch`.
+/// In the end, both the locally stored stake table and the contract light client state will correspond
+/// to the `target_epoch`.
+async fn advance_epoch(
+    state: &mut ProverServiceState,
+    provider: &impl Provider,
+    light_client_address: Address,
+    mut cur_st_state: StakeTableState,
+    proving_key: &ProvingKey,
+    contract_epoch: u64,
+    target_epoch: u64,
+) -> Result<(), ProverError> {
+    // First sync the local stake table if necessary.
+    if state.epoch != contract_epoch {
+        state
+            .sync_with_epoch(contract_epoch)
+            .await
+            .map_err(ProverError::NetworkError)?;
+    }
+    for epoch in contract_epoch..target_epoch {
+        tracing::info!("Advancing to epoch {}...", epoch + 1);
+        let state_cert =
+            fetch_epoch_state_from_sequencer(&state.config.sequencer_url, epoch).await?;
+        let signature_map = state_cert
+            .signatures
+            .into_iter()
+            .collect::<HashMap<StateVerKey, StateSignature>>();
+
+        let (proof, public_input) = generate_proof_helper(
+            state,
+            state_cert.light_client_state,
+            cur_st_state,
+            state_cert.next_stake_table_state,
+            signature_map,
+            proving_key,
+        )
+        .await?;
+
+        submit_state_and_proof(provider, light_client_address, proof, public_input).await?;
+        tracing::info!(
+            "Successfully synced light client state to epoch {}.",
+            epoch + 1
+        );
+
+        state
+            .sync_with_epoch(epoch + 1)
+            .await
+            .map_err(ProverError::NetworkError)?;
+        cur_st_state = state_cert.next_stake_table_state;
+    }
+    Ok(())
+}
+
+/// Sync the light client state from the relay server and submit the proof to the L1 LightClient contract
+pub async fn sync_state<ApiVer: StaticVersionType>(
+    state: &mut ProverServiceState,
+    proving_key: Arc<ProvingKey>,
+    relay_server_client: &Client<ServerError, ApiVer>,
+) -> Result<(), ProverError> {
+    let light_client_address = state.config.light_client_address;
+    let wallet = EthereumWallet::from(state.config.signer.clone());
+    let provider = ProviderBuilder::new()
+        .wallet(wallet)
+        .on_http(state.config.provider_endpoint.clone());
+
+    tracing::info!(
+        ?light_client_address,
+        "Start syncing light client state for provider: {}",
+        state.config.provider_endpoint,
+    );
+
+    let blocks_per_epoch = state.config.blocks_per_epoch;
+    let epoch_start_block = state.config.epoch_start_block;
+
+    let (contract_state, st_state) = read_contract_state(&provider, light_client_address).await?;
+    tracing::info!(
+        "Current HotShot block height on contract: {}",
+        contract_state.block_height
+    );
+
+    let bundle = fetch_latest_state(relay_server_client).await?;
+    tracing::debug!("Bundle accumulated weight: {}", bundle.accumulated_weight);
+    tracing::debug!("Latest HotShot block height: {}", bundle.state.block_height);
+
+    if contract_state.block_height >= bundle.state.block_height {
+        tracing::info!("No update needed.");
+        return Ok(());
+    }
+    tracing::debug!("Old state: {contract_state:?}");
+    tracing::debug!("New state: {:?}", bundle.state);
+
+    let epoch_enabled = bundle.state.block_height >= epoch_start_block;
+
+    if !epoch_enabled {
+        // If epoch hasn't been enabled, directly update the contract.
+        let (proof, public_input) = generate_proof_helper(
+            state,
+            bundle.state,
+            st_state,
+            st_state,
+            bundle.signatures,
+            &proving_key,
+        )
+        .await?;
+
+        submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
+
+        tracing::info!("Successfully synced light client state.");
+    } else {
+        // After the epoch is enabled
+
+        let contract_epoch = epoch_from_block_number(contract_state.block_height, blocks_per_epoch);
+        let bundle_epoch = epoch_from_block_number(bundle.state.block_height, blocks_per_epoch);
+
+        // Update the local stake table if necessary
+        if contract_epoch != state.epoch {
+            state
+                .sync_with_epoch(contract_epoch)
+                .await
+                .map_err(ProverError::NetworkError)?;
+        }
+
+        // A catchup is needed if the contract epoch is behind.
+        if bundle_epoch > state.epoch {
+            tracing::info!("Catching up from epoch {contract_epoch} to epoch {bundle_epoch}...");
+            advance_epoch(
+                state,
+                &provider,
+                light_client_address,
+                st_state,
+                &proving_key,
+                contract_epoch,
+                bundle_epoch,
+            )
+            .await?;
+        }
+
+        // Now that the contract epoch should be equal to the bundle epoch.
+
+        if is_ge_epoch_root(bundle.state.block_height as u64, blocks_per_epoch) {
+            // If we reached the epoch root, proceed to the next epoch directly
+            tracing::info!("Epoch reaching an end, proceed to the next epoch...");
+            advance_epoch(
+                state,
+                &provider,
+                light_client_address,
+                st_state,
+                &proving_key,
+                bundle_epoch,
+                bundle_epoch + 1,
+            )
+            .await?;
+        } else {
+            // Otherwise process the bundle update information as usual
+            let (proof, public_input) = generate_proof_helper(
+                state,
+                bundle.state,
+                st_state,
+                st_state,
+                bundle.signatures,
+                &proving_key,
+            )
+            .await?;
+
+            submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
+
+            tracing::info!("Successfully synced light client state.");
+        }
+    }
     Ok(())
 }
 
@@ -456,42 +653,35 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     config: StateProverConfig,
     bind_version: ApiVer,
 ) -> Result<()> {
-    let stake_table_capacity = config.stake_table_capacity;
-    tracing::info!("Stake table capacity: {}", stake_table_capacity);
-    let st = Arc::new(
-        init_stake_table_from_sequencer(&config.sequencer_url, stake_table_capacity)
-            .await
-            .with_context(|| "Failed to initialize stake table")?,
-    );
-    run_prover_service_with_stake_table(config, bind_version, st).await
-}
+    let mut state = ProverServiceState::new_genesis(config).await?;
 
-pub async fn run_prover_service_with_stake_table<ApiVer: StaticVersionType + 'static>(
-    config: StateProverConfig,
-    bind_version: ApiVer,
-    st: Arc<StakeTable<BLSPubKey, StateVerKey, CircuitField>>,
-) -> Result<()> {
-    tracing::info!("Light client address: {:?}", config.light_client_address);
+    let stake_table_capacity = state.config.stake_table_capacity;
+    tracing::info!("Stake table capacity: {}", stake_table_capacity);
+
+    tracing::info!(
+        "Light client address: {:?}",
+        state.config.light_client_address
+    );
 
     let relay_server_client = Arc::new(Client::<ServerError, ApiVer>::new(
-        config.relay_server.clone(),
+        state.config.relay_server.clone(),
     ));
 
     // Start the HTTP server to get a functioning healthcheck before any heavy computations.
-    if let Some(port) = config.port {
-        if let Err(err) = start_http_server(port, config.light_client_address, bind_version) {
+    if let Some(port) = state.config.port {
+        if let Err(err) = start_http_server(port, state.config.light_client_address, bind_version) {
             tracing::error!("Error starting http server: {}", err);
         }
     }
 
     let proving_key =
-        spawn_blocking(move || Arc::new(load_proving_key(config.stake_table_capacity))).await?;
+        spawn_blocking(move || Arc::new(load_proving_key(state.config.stake_table_capacity)))
+            .await?;
 
-    let update_interval = config.update_interval;
-    let retry_interval = config.retry_interval;
+    let update_interval = state.config.update_interval;
+    let retry_interval = state.config.retry_interval;
     loop {
-        if let Err(err) = sync_state(&st, proving_key.clone(), &relay_server_client, &config).await
-        {
+        if let Err(err) = sync_state(&mut state, proving_key.clone(), &relay_server_client).await {
             tracing::error!("Cannot sync the light client state, will retry: {}", err);
             sleep(retry_interval).await;
         } else {
@@ -506,16 +696,14 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     config: StateProverConfig,
     _: ApiVer,
 ) -> Result<()> {
-    // TODO: (alex) use `/node/stake-table/:epoch` to reconstruct the `st: StakeTable` locally before passing in.
-    let st = init_stake_table_from_sequencer(&config.sequencer_url, config.stake_table_capacity)
-        .await
-        .with_context(|| "Failed to initialize stake table")?;
-    let stake_table_capacity = config.stake_table_capacity;
+    let mut state = ProverServiceState::new_genesis(config).await?;
+
+    let stake_table_capacity = state.config.stake_table_capacity;
     let proving_key =
         spawn_blocking(move || Arc::new(load_proving_key(stake_table_capacity))).await?;
-    let relay_server_client = Client::<ServerError, ApiVer>::new(config.relay_server.clone());
+    let relay_server_client = Client::<ServerError, ApiVer>::new(state.config.relay_server.clone());
 
-    sync_state(&st, proving_key, &relay_server_client, &config)
+    sync_state(&mut state, proving_key, &relay_server_client)
         .await
         .expect("Error syncing the light client state.");
 
@@ -524,17 +712,17 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
 
 #[derive(Debug, Display)]
 pub enum ProverError {
-    /// Invalid light client state or signatures
+    /// Invalid light client state or signatures: {0}
     InvalidState(String),
     /// Error when communicating with the smart contract: {0}
     ContractError(anyhow::Error),
     /// Error when communicating with the state relay server: {0}
     RelayServerError(ServerError),
-    /// Internal error with the stake table
+    /// Internal error with the stake table: {0}
     StakeTableError(StakeTableError),
     /// Internal error when generating the SNARK proof: {0}
     PlonkError(PlonkError),
-    /// Internal error
+    /// Internal error: {0}
     Internal(String),
     /// General network issue: {0}
     NetworkError(anyhow::Error),
@@ -690,12 +878,12 @@ mod test {
         let lc_v2 = LightClientV2Mock::new(lc_proxy_addr, &provider);
 
         // simulate some block elapsing
-        for _ in 0..EPOCH_HEIGHT_FOR_TEST - 1 {
+        for _ in 0..EPOCH_HEIGHT_FOR_TEST - 6 {
             ledger.elapse_with_block();
         }
         ledger.sync_stake_table(5, 2); // update the stake table, some register, some exit
         ledger.elapse_with_block(); // the last block in the first epoch, thus updating the `next_stake_table`
-        assert_eq!(ledger.state.block_height, EPOCH_HEIGHT_FOR_TEST);
+        assert_eq!(ledger.state.block_height, EPOCH_HEIGHT_FOR_TEST - 5);
 
         let (pi, proof) = ledger.gen_state_proof();
         tracing::info!("Successfully generated proof for new state.");
