@@ -16,17 +16,20 @@ use hotshot_types::{
     data::{Leaf2, QuorumProposal, QuorumProposalWrapper},
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
-    simple_certificate::QuorumCertificate,
+    simple_certificate::{QuorumCertificate, QuorumCertificate2},
     simple_vote::HasEpoch,
     traits::{
-        block_contents::BlockHeader,
+        block_contents::{BlockHeader, BlockPayload},
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
         ValidatedState,
     },
-    utils::{option_epoch_from_block_number, View, ViewInner},
+    utils::{
+        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
+        option_epoch_from_block_number, View, ViewInner,
+    },
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace::*;
@@ -38,18 +41,71 @@ use super::{QuorumProposalRecvTaskState, ValidationInfo};
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, fetch_proposal, validate_proposal_safety_and_liveness,
-        validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc,
+        broadcast_event, check_qc_state_cert_correspondence, fetch_proposal, update_high_qc,
+        validate_epoch_transition_qc, validate_light_client_state_update_certificate,
+        validate_proposal_safety_and_liveness, validate_proposal_view_and_certs,
+        validate_qc_and_next_epoch_qc,
     },
     quorum_proposal_recv::{UpgradeLock, Versions},
 };
 
+/// Spawn a task which will fire a request to get a proposal, and store it.
+#[allow(clippy::too_many_arguments)]
+fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
+    qc: &QuorumCertificate2<TYPES>,
+    event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
+    event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
+    membership: EpochMembershipCoordinator<TYPES>,
+    consensus: OuterConsensus<TYPES>,
+    sender_public_key: TYPES::SignatureKey,
+    sender_private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
+    upgrade_lock: UpgradeLock<TYPES, V>,
+    epoch_height: u64,
+) {
+    let qc = qc.clone();
+    spawn(async move {
+        let lock = upgrade_lock;
+
+        let _ = fetch_proposal(
+            &qc,
+            event_sender,
+            event_receiver,
+            membership,
+            consensus,
+            sender_public_key,
+            sender_private_key,
+            &lock,
+            epoch_height,
+        )
+        .await;
+    });
+}
+
 /// Update states in the event that the parent state is not found for a given `proposal`.
 #[instrument(skip_all)]
-async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+pub async fn validate_proposal_liveness<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
     proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     validation_info: &ValidationInfo<TYPES, I, V>,
 ) -> Result<()> {
+    let mut valid_epoch_transition = false;
+    if validation_info
+        .upgrade_lock
+        .version(proposal.data.view_number())
+        .await
+        .is_ok_and(|v| v >= V::Epochs::VERSION)
+    {
+        let Some(block_number) = proposal.data.justify_qc().data.block_number else {
+            bail!("Quorum Proposal has no block number but it's after the epoch upgrade");
+        };
+        if is_epoch_transition(block_number, validation_info.epoch_height) {
+            validate_epoch_transition_qc(proposal, validation_info).await?;
+            valid_epoch_transition = true;
+        }
+    }
     let mut consensus_writer = validation_info.consensus.write().await;
 
     let leaf = Leaf2::from_quorum_proposal(&proposal.data);
@@ -62,7 +118,6 @@ async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<TYPES
         tracing::trace!("{e:?}");
     }
 
-    // #3967 REVIEW NOTE: Why are we cloning justify_qc here just to get the view_number out?
     let liveness_check = proposal.data.justify_qc().view_number() > consensus_writer.locked_view();
     // if we are using HS2 we update our locked view for any QC from a leader greater than our current lock
     if liveness_check
@@ -77,42 +132,104 @@ async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<TYPES
 
     drop(consensus_writer);
 
-    if !liveness_check {
+    if !liveness_check && !valid_epoch_transition {
         bail!("Quorum Proposal failed the liveness check");
     }
 
     Ok(())
 }
 
-/// Spawn a task which will fire a request to get a proposal, and store it.
-#[allow(clippy::too_many_arguments)]
-fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
-    view: TYPES::View,
-    event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
-    event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
-    membership: EpochMembershipCoordinator<TYPES>,
-    consensus: OuterConsensus<TYPES>,
-    sender_public_key: TYPES::SignatureKey,
-    sender_private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-    upgrade_lock: UpgradeLock<TYPES, V>,
-    epoch_height: u64,
-) {
-    spawn(async move {
-        let lock = upgrade_lock;
+async fn validate_epoch_transition_block<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
+    proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
+    validation_info: &ValidationInfo<TYPES, I, V>,
+) -> Result<()> {
+    if !validation_info
+        .upgrade_lock
+        .epochs_enabled(proposal.data.view_number())
+        .await
+    {
+        return Ok(());
+    }
+    if !is_epoch_transition(
+        proposal.data.block_header().block_number(),
+        validation_info.epoch_height,
+    ) {
+        return Ok(());
+    }
+    // transition block does not have to be empty
+    if is_transition_block(
+        proposal.data.block_header().block_number(),
+        validation_info.epoch_height,
+    ) {
+        return Ok(());
+    }
+    // TODO: Is this the best way to do this?
+    let (empty_payload, metadata) = <TYPES as NodeType>::BlockPayload::empty();
+    let header = proposal.data.block_header();
+    ensure!(
+        empty_payload.builder_commitment(&metadata) == header.builder_commitment()
+            && &metadata == header.metadata(),
+        "Block is not empty"
+    );
+    Ok(())
+}
 
-        let _ = fetch_proposal(
-            view,
-            event_sender,
-            event_receiver,
-            membership,
-            consensus,
-            sender_public_key,
-            sender_private_key,
-            &lock,
-            epoch_height,
-        )
-        .await;
-    });
+async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+    proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
+    validation_info: &ValidationInfo<TYPES, I, V>,
+) -> Result<()> {
+    if !validation_info
+        .upgrade_lock
+        .epochs_enabled(proposal.data.view_number())
+        .await
+        || proposal.data.justify_qc().view_number()
+            <= validation_info
+                .upgrade_lock
+                .upgrade_view()
+                .await
+                .unwrap_or(TYPES::View::new(0))
+    {
+        return Ok(());
+    }
+
+    let block_number = proposal.data.block_header().block_number();
+
+    let Some(high_block_number) = validation_info
+        .consensus
+        .read()
+        .await
+        .high_qc()
+        .data
+        .block_number
+    else {
+        bail!("High QC has no block number");
+    };
+
+    ensure!(
+        epoch_from_block_number(block_number, validation_info.epoch_height)
+            >= epoch_from_block_number(high_block_number + 1, validation_info.epoch_height),
+        "Quorum proposal has an inconsistent epoch"
+    );
+
+    Ok(())
+}
+
+/// Validate that the proposal's block height is one greater than the justification QC's block height.
+async fn validate_block_height<TYPES: NodeType>(
+    proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
+) -> Result<()> {
+    let Some(qc_block_number) = proposal.data.justify_qc().data.block_number else {
+        return Ok(());
+    };
+    ensure!(
+        qc_block_number + 1 == proposal.data.block_header().block_number(),
+        "Quorum proposal has an inconsistent block height"
+    );
+    Ok(())
 }
 
 /// Handles the `QuorumProposalRecv` event by first validating the cert itself for the view, and then
@@ -139,11 +256,15 @@ pub(crate) async fn handle_quorum_proposal_recv<
         .data
         .validate_epoch(&validation_info.upgrade_lock, validation_info.epoch_height)
         .await?;
+    // validate the proposal's epoch matches ours
+    validate_current_epoch(proposal, &validation_info).await?;
     let quorum_proposal_sender_key = quorum_proposal_sender_key.clone();
 
     validate_proposal_view_and_certs(proposal, &validation_info)
         .await
         .context(warn!("Failed to validate proposal view or attached certs"))?;
+
+    validate_block_height(proposal).await?;
 
     let view_number = proposal.data.view_number();
 
@@ -156,6 +277,31 @@ pub(crate) async fn handle_quorum_proposal_recv<
         proposal_block_number,
         validation_info.epoch_height,
     );
+
+    if justify_qc
+        .data
+        .block_number
+        .is_some_and(|bn| is_epoch_root(bn, validation_info.epoch_height))
+    {
+        let Some(state_cert) = proposal.data.state_cert() else {
+            bail!("Epoch root QC has no state cert");
+        };
+        ensure!(
+            check_qc_state_cert_correspondence(
+                &justify_qc,
+                state_cert,
+                validation_info.epoch_height
+            ),
+            "Epoch root QC has no corresponding state cert"
+        );
+        validate_light_client_state_update_certificate(
+            state_cert,
+            &validation_info.membership.coordinator,
+        )
+        .await?;
+    }
+
+    validate_epoch_transition_block(proposal, &validation_info).await?;
 
     validate_qc_and_next_epoch_qc(
         &justify_qc,
@@ -186,7 +332,7 @@ pub(crate) async fn handle_quorum_proposal_recv<
 
     if parent_leaf.is_none() {
         spawn_fetch_proposal(
-            justify_qc.view_number(),
+            &justify_qc,
             event_sender.clone(),
             event_receiver.clone(),
             validation_info.membership.coordinator.clone(),
@@ -212,44 +358,17 @@ pub(crate) async fn handle_quorum_proposal_recv<
         },
         None => None,
     };
-
-    if justify_qc.view_number() > consensus_reader.high_qc().view_number {
-        if let Err(e) = validation_info
-            .storage
-            .write()
-            .await
-            .update_high_qc2(justify_qc.clone())
-            .await
-        {
-            bail!("Failed to store High QC, not voting; error = {:?}", e);
-        }
-        if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
-            if let Err(e) = validation_info
-                .storage
-                .write()
-                .await
-                .update_next_epoch_high_qc2(next_epoch_justify_qc.clone())
-                .await
-            {
-                bail!(
-                    "Failed to store next epoch High QC, not voting; error = {:?}",
-                    e
-                );
-            }
-        }
-    }
     drop(consensus_reader);
-
-    let mut consensus_writer = validation_info.consensus.write().await;
-    if let Err(e) = consensus_writer.update_high_qc(justify_qc.clone()) {
-        tracing::trace!("{e:?}");
+    if justify_qc.view_number()
+        > validation_info
+            .consensus
+            .read()
+            .await
+            .high_qc()
+            .view_number()
+    {
+        update_high_qc(proposal, &validation_info).await?;
     }
-    if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
-        if let Err(e) = consensus_writer.update_next_epoch_high_qc(next_epoch_justify_qc.clone()) {
-            tracing::trace!("{e:?}");
-        }
-    }
-    drop(consensus_writer);
 
     let Some((parent_leaf, _parent_state)) = parent else {
         tracing::warn!(
@@ -257,11 +376,12 @@ pub(crate) async fn handle_quorum_proposal_recv<
             justify_qc.data.leaf_commit
         );
         validate_proposal_liveness(proposal, &validation_info).await?;
-        tracing::trace!(
-            "Sending ViewChange for view {} and epoch {:?}",
-            view_number,
-            proposal_epoch
-        );
+        tracing::trace!("Sending ViewChange for view {view_number} and epoch {proposal_epoch:?}");
+        validation_info
+            .consensus
+            .write()
+            .await
+            .update_highest_block(proposal_block_number);
         broadcast_event(
             Arc::new(HotShotEvent::ViewChange(view_number, proposal_epoch)),
             event_sender,
@@ -280,11 +400,15 @@ pub(crate) async fn handle_quorum_proposal_recv<
     )
     .await?;
 
-    tracing::trace!(
-        "Sending ViewChange for view {} and epoch {:?}",
-        view_number,
-        proposal_epoch
-    );
+    tracing::trace!("Sending ViewChange for view {view_number} and epoch {proposal_epoch:?}");
+    validation_info
+        .consensus
+        .write()
+        .await
+        .update_highest_block(proposal_block_number);
+    {
+        validation_info.consensus.write().await.highest_block = proposal_block_number;
+    }
     broadcast_event(
         Arc::new(HotShotEvent::ViewChange(view_number, proposal_epoch)),
         event_sender,

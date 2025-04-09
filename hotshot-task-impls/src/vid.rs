@@ -10,7 +10,7 @@ use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
-    consensus::OuterConsensus,
+    consensus::{OuterConsensus, PayloadWithMetadata},
     data::{PackedBundle, VidDisperse, VidDisperseShare},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal, UpgradeLock},
@@ -21,7 +21,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
         BlockPayload,
     },
-    utils::option_epoch_from_block_number,
+    utils::{is_epoch_transition, option_epoch_from_block_number},
 };
 use hotshot_utils::anytrace::Result;
 use tracing::{debug, error, info, instrument};
@@ -114,7 +114,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 .ok()?;
                 let payload_commitment = vid_disperse.payload_commitment();
                 let shares = VidDisperseShare::from_vid_disperse(vid_disperse.clone());
+                let payload_with_metadata = Arc::new(PayloadWithMetadata {
+                    payload,
+                    metadata: metadata.clone(),
+                });
+
                 let mut consensus_writer = self.consensus.write().await;
+                // Make sure we save the payload; we might need it to send the next epoch VID shares.
+                if let Err(e) =
+                    consensus_writer.update_saved_payloads(*view_number, payload_with_metadata)
+                {
+                    tracing::debug!(error=?e);
+                }
                 for share in shares {
                     if let Some(share) = share.to_proposal(&self.private_key) {
                         consensus_writer.update_vid_shares(*view_number, share);
@@ -144,10 +155,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     error!("VID: failed to sign dispersal payload");
                     return None;
                 };
-                debug!(
-                    "publishing VID disperse for view {} and epoch {:?}",
-                    *view_number, epoch
-                );
+                debug!("publishing VID disperse for view {view_number} and epoch {epoch:?}");
                 broadcast_event(
                     Arc::new(HotShotEvent::VidDisperseSend(
                         Proposal {
@@ -173,7 +181,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                 }
 
                 if *view - *self.cur_view > 1 {
-                    info!("View changed by more than 1 going to view {:?}", view);
+                    info!("View changed by more than 1 going to view {view:?}");
                 }
                 self.cur_view = view;
 
@@ -182,7 +190,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
 
             HotShotEvent::QuorumProposalSend(proposal, _) => {
                 let proposed_block_number = proposal.data.block_header().block_number();
-                if proposal.data.epoch().is_none() || proposed_block_number % self.epoch_height != 0
+                if proposal.data.epoch().is_none()
+                    || !is_epoch_transition(proposed_block_number, self.epoch_height)
                 {
                     // This is not the last block in the epoch, do nothing.
                     return None;
@@ -228,8 +237,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> VidTaskState<TY
                     return None;
                 };
                 debug!(
-                    "publishing VID disperse for view {} and epoch {:?}",
-                    *proposal_view_number, target_epoch
+                    "publishing VID disperse for view {proposal_view_number} and epoch {target_epoch:?}"
                 );
                 broadcast_event(
                     Arc::new(HotShotEvent::VidDisperseSend(

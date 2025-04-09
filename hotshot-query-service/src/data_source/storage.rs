@@ -68,8 +68,8 @@ use vec1::Vec1;
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        TransactionQueryData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
         query_data::{
@@ -195,6 +195,8 @@ where
 
     /// Get the first leaf which is available in the database with height >= `from`.
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>>;
 }
 
 pub trait UpdateAvailabilityStorage<Types>
@@ -213,6 +215,10 @@ where
         &mut self,
         common: VidCommonQueryData<Types>,
         share: Option<VidShare>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 

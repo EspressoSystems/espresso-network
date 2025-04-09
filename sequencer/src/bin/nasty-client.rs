@@ -35,11 +35,10 @@ use futures::{
     stream::{Peekable, StreamExt},
 };
 use hotshot_query_service::{
-    availability::{self, BlockQueryData, LeafQueryData, PayloadQueryData, VidCommonQueryData},
+    availability::{self, ADVZCommonQueryData, BlockQueryData, LeafQueryData, PayloadQueryData},
     metrics::PrometheusMetrics,
     node::TimeWindowQueryData,
     types::HeightIndexed,
-    VidCommon,
 };
 use hotshot_types::traits::{
     block_contents::BlockHeader,
@@ -49,7 +48,7 @@ use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use rand::{seq::SliceRandom, RngCore};
-use sequencer::{api::endpoints::NamespaceProofQueryData, SequencerApiVersion};
+use sequencer::{api::endpoints::ADVZNamespaceProofQueryData, SequencerApiVersion};
 use sequencer_utils::logging;
 use serde::de::DeserializeOwned;
 use strum::{EnumDiscriminants, VariantArray};
@@ -1133,7 +1132,7 @@ impl ResourceManager<BlockQueryData<SeqTypes>> {
             .unwrap();
         let ns = header.ns_table().read_ns_id(&ns_index).unwrap();
 
-        let ns_proof: NamespaceProofQueryData = self
+        let ns_proof: ADVZNamespaceProofQueryData = self
             .retry(info_span!("fetch namespace", %ns), || async {
                 self.get(format!("availability/block/{block}/namespace/{ns}"))
                     .await
@@ -1141,7 +1140,7 @@ impl ResourceManager<BlockQueryData<SeqTypes>> {
             .await?;
 
         // Verify proof.
-        let vid_common: VidCommonQueryData<SeqTypes> = self
+        let vid_common: ADVZCommonQueryData<SeqTypes> = self
             .retry(info_span!("fetch VID common"), || async {
                 self.get(format!("availability/vid/common/{block}")).await
             })
@@ -1150,14 +1149,15 @@ impl ResourceManager<BlockQueryData<SeqTypes>> {
             ns_proof.proof.is_some(),
             format!("missing namespace proof for {block}:{ns}")
         );
-        let VidCommon::V0(common) = &vid_common.common().clone() else {
-            panic!("Failed to get vid V0 for namespace");
-        };
         ensure!(
             ns_proof
                 .proof
                 .unwrap()
-                .verify(header.ns_table(), &header.payload_commitment(), common,)
+                .verify(
+                    header.ns_table(),
+                    &header.payload_commitment(),
+                    vid_common.common(),
+                )
                 .is_some(),
             format!("failure to verify namespace proof for {block}:{ns}")
         );

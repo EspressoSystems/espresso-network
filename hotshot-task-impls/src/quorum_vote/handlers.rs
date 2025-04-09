@@ -16,17 +16,21 @@ use hotshot_types::{
     drb::{DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
+    light_client::compute_stake_table_commitment,
     message::{Proposal, UpgradeLock},
-    simple_vote::{QuorumData2, QuorumVote2},
+    simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-        signature_key::SignatureKey,
+        signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
         ValidatedState,
     },
-    utils::{epoch_from_block_number, is_last_block_in_epoch, option_epoch_from_block_number},
+    utils::{
+        epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block,
+        option_epoch_from_block_number,
+    },
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -73,7 +77,7 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
 ) -> Result<()> {
     // Skip if this is not the expected block.
     if task_state.epoch_height == 0
-        || !is_last_block_in_epoch(
+        || !is_epoch_transition(
             proposal.block_header().block_number(),
             task_state.epoch_height,
         )
@@ -101,9 +105,9 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
     if let Some(epoch_val) = epoch {
         let has_stake_current_epoch = task_state
             .membership
-            .membership_for_epoch(epoch)
+            .stake_table_for_epoch(epoch)
             .await
-            .context(warn!("No stake table for epoch"))?
+            .context(warn!("No stake table for epoch {epoch_val}"))?
             .has_stake(&task_state.public_key)
             .await;
 
@@ -136,8 +140,8 @@ async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Vers
         decided_block_number,
         task_state.epoch_height,
     ));
-    // Skip storing the received result if this is not the last block.
-    if is_last_block_in_epoch(decided_block_number, task_state.epoch_height) {
+    // Skip storing the received result if this is not the transition block.
+    if is_transition_block(decided_block_number, task_state.epoch_height) {
         if let Some(result) = decided_leaf.next_drb_result {
             // We don't need to check value existence and consistency because it should be
             // impossible to decide on a block with different DRB results.
@@ -184,16 +188,25 @@ pub(crate) async fn handle_quorum_proposal_validated<
         included_txns,
         decided_upgrade_cert,
     } = if version >= V::Epochs::VERSION {
-        decide_from_proposal_2::<TYPES, I, V>(
-            proposal,
-            OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
-            Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
-            &task_state.public_key,
-            version >= V::Epochs::VERSION,
-            task_state.membership.membership(),
-            &task_state.storage,
-        )
-        .await
+        // Skip the decide rule for the last block of the epoch.  This is so
+        // that we do not decide the block with epoch_height -2 before we enter the new epoch
+        if !is_last_block(
+            proposal.block_header().block_number(),
+            task_state.epoch_height,
+        ) {
+            decide_from_proposal_2::<TYPES, I, V>(
+                proposal,
+                OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
+                Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
+                &task_state.public_key,
+                version >= V::Epochs::VERSION,
+                task_state.membership.membership(),
+                &task_state.storage,
+            )
+            .await
+        } else {
+            LeafChainTraversalOutcome::default()
+        }
     } else {
         decide_from_proposal::<TYPES, I, V>(
             proposal,
@@ -301,6 +314,12 @@ pub(crate) async fn handle_quorum_proposal_validated<
         // We don't need to hold this while we broadcast
         drop(consensus_writer);
 
+        tracing::debug!(
+            "Successfully sent decide event, leaf views: {:?}, leaf views len: {:?}, qc view: {:?}",
+            decided_view_number,
+            leaf_views.len(),
+            new_decide_qc.as_ref().unwrap().view_number()
+        );
         // Send an update to everyone saying that we've reached a decide
         broadcast_event(
             Event {
@@ -315,7 +334,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
             &task_state.output_event_stream,
         )
         .await;
-        tracing::debug!("Successfully sent decide event");
 
         if version >= V::Epochs::VERSION {
             for leaf_view in leaf_views {
@@ -373,7 +391,7 @@ pub(crate) async fn update_shared_state<
         Some(p) => Some(p),
         None => {
             match fetch_proposal(
-                justify_qc.view_number(),
+                justify_qc,
                 sender.clone(),
                 receiver.activate_cloned(),
                 membership.clone(),
@@ -402,46 +420,36 @@ pub(crate) async fn update_shared_state<
     ))?;
 
     let Some(validated_view) = maybe_validated_view else {
-        bail!(
-            "Failed to fetch view for parent, parent view {:?}",
-            parent_view_number
-        );
+        bail!("Failed to fetch view for parent, parent view {parent_view_number:?}");
     };
 
-    let (Some(parent_state), maybe_parent_delta) = validated_view.state_and_delta() else {
+    let (Some(parent_state), _) = validated_view.state_and_delta() else {
         bail!("Parent state not found! Consensus internally inconsistent");
     };
 
-    let (state, delta) = if is_last_block_in_epoch(proposed_leaf.height(), epoch_height)
-        && proposed_leaf.height() == parent.height()
-    {
-        // This is an epoch transition. We do not want to call `validate_and_apply_header` second
-        // time for the same block. Just grab the state and delta from the parent and update the shared
-        // state with those.
-        (parent_state, maybe_parent_delta)
-    } else {
-        let version = upgrade_lock.version(view_number).await?;
+    let version = upgrade_lock.version(view_number).await?;
 
-        let (validated_state, state_delta) = parent_state
-            .validate_and_apply_header(
-                &instance_state,
-                &parent,
-                &proposed_leaf.block_header().clone(),
-                vid_share.data.payload_byte_len(),
-                version,
-                *view_number,
-            )
-            .await
-            .wrap()
-            .context(warn!("Block header doesn't extend the proposal!"))?;
-
-        (Arc::new(validated_state), Some(Arc::new(state_delta)))
-    };
+    let (validated_state, state_delta) = parent_state
+        .validate_and_apply_header(
+            &instance_state,
+            &parent,
+            &proposed_leaf.block_header().clone(),
+            vid_share.data.payload_byte_len(),
+            version,
+            *view_number,
+        )
+        .await
+        .wrap()
+        .context(warn!("Block header doesn't extend the proposal!"))?;
 
     // Now that we've rounded everyone up, we need to update the shared state
     let mut consensus_writer = consensus.write().await;
 
-    if let Err(e) = consensus_writer.update_leaf(proposed_leaf.clone(), Arc::clone(&state), delta) {
+    if let Err(e) = consensus_writer.update_leaf(
+        proposed_leaf.clone(),
+        Arc::new(validated_state),
+        Some(Arc::new(state_delta)),
+    ) {
         tracing::trace!("{e:?}");
     }
 
@@ -464,21 +472,24 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     leaf: Leaf2<TYPES>,
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
+    epoch_root_vote: bool,
     epoch_height: u64,
+    state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 ) -> Result<()> {
     let committee_member_in_current_epoch = membership.has_stake(&public_key).await;
     // If the proposed leaf is for the last block in the epoch and the node is part of the quorum committee
     // in the next epoch, the node should vote to achieve the double quorum.
     let committee_member_in_next_epoch = leaf.with_epoch
-        && is_last_block_in_epoch(leaf.height(), epoch_height)
-        && membership.next_epoch().await?.has_stake(&public_key).await;
+        && is_epoch_transition(leaf.height(), epoch_height)
+        && membership
+            .next_epoch_stake_table()
+            .await?
+            .has_stake(&public_key)
+            .await;
 
     ensure!(
         committee_member_in_current_epoch || committee_member_in_next_epoch,
-        info!(
-            "We were not chosen for quorum committee on {:?}",
-            view_number
-        )
+        info!("We were not chosen for quorum committee on {view_number:?}")
     );
 
     let height = if membership.epoch().is_some() {
@@ -511,10 +522,49 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .wrap()
         .context(error!("Failed to store VID share"))?;
 
-    if extended_vote {
+    // Make epoch root vote
+
+    let epoch_enabled = upgrade_lock.epochs_enabled(view_number).await;
+    if extended_vote && epoch_enabled {
         tracing::debug!("sending extended vote to everybody",);
         broadcast_event(
             Arc::new(HotShotEvent::ExtendedQuorumVoteSend(vote)),
+            &sender,
+        )
+        .await;
+    } else if epoch_root_vote && epoch_enabled {
+        tracing::debug!(
+            "sending epoch root vote to next quorum leader {:?}",
+            vote.view_number() + 1
+        );
+        let light_client_state = leaf
+            .block_header()
+            .get_light_client_state(view_number)
+            .wrap()
+            .context(error!("Failed to generate light client state"))?;
+        let next_membership = membership.next_epoch().await?;
+        let next_stake_table_state = compute_stake_table_commitment(
+            &next_membership.stake_table().await,
+            hotshot_types::light_client::STAKE_TABLE_CAPACITY,
+        );
+        let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
+            state_private_key,
+            &light_client_state,
+            &next_stake_table_state,
+        )
+        .wrap()
+        .context(error!("Failed to sign the light client state"))?;
+        let state_vote = LightClientStateUpdateVote {
+            epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
+            light_client_state,
+            next_stake_table_state,
+            signature,
+        };
+        broadcast_event(
+            Arc::new(HotShotEvent::EpochRootQuorumVoteSend(EpochRootQuorumVote {
+                vote,
+                state_vote,
+            })),
             &sender,
         )
         .await;

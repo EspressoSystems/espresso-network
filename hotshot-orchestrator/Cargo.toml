@@ -5,6 +5,7 @@ edition = { workspace = true }
 license = "MIT"
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 blake3 = { workspace = true }

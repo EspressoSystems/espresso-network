@@ -25,9 +25,10 @@ contract EspToken is Initializable, ERC20Upgradeable, OwnableUpgradeable, UUPSUp
 
     /// @notice This contract is called by the proxy when you deploy this contract
     function initialize(address _owner, address _initialGrantRecipient) public initializer {
+        __ERC20_init("Espresso Token", "ESP");
         __Ownable_init(_owner);
         __UUPSUpgradeable_init();
-        _mint(_initialGrantRecipient, 1000_000_000 ether);
+        _mint(_initialGrantRecipient, 10_000_000_000 ether);
     }
 
     /// @notice only the owner can authorize an upgrade

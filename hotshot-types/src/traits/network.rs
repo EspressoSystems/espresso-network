@@ -222,13 +222,7 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
             .map(|(recipient_key, message)| self.direct_message(message, recipient_key));
         let results = join_all(future_results).await;
 
-        let errors: Vec<_> = results
-            .into_iter()
-            .filter_map(|r| match r {
-                Err(error) => Some(error),
-                _ => None,
-            })
-            .collect();
+        let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
 
         if errors.is_empty() {
             Ok(())

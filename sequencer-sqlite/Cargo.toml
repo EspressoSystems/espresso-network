@@ -8,10 +8,14 @@ edition = "2021"
 
 [features]
 default = ["embedded-db"]
+fee = ["sequencer/fee"]
+pos = ["sequencer/pos"]
+marketplace = ["sequencer/marketplace"]
 sqlite-unbundled = ["sequencer/sqlite-unbundled"]
 embedded-db = ["sequencer/embedded-db"]
 
 [dependencies]
+alloy-node-bindings = "=0.12.5"
 sequencer = { path = "../sequencer" }
 tokio = { version = "1", default-features = false, features = [
 	"rt-multi-thread",

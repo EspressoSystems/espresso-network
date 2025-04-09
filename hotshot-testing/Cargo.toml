@@ -14,6 +14,7 @@ rewind = ["hotshot/rewind"]
 broken_3_chain_fixed = []
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
@@ -36,7 +37,6 @@ itertools = "0.14.0"
 jf-vid = { workspace = true }
 lru = { workspace = true }
 portpicker = { workspace = true }
-primitive-types = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

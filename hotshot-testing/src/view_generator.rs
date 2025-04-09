@@ -186,6 +186,7 @@ impl TestView {
                 upgrade_certificate: None,
                 view_change_evidence: None,
                 next_drb_result: None,
+                state_cert: None,
             },
         };
 
@@ -452,6 +453,7 @@ impl TestView {
                 upgrade_certificate: upgrade_certificate.clone(),
                 view_change_evidence,
                 next_drb_result: None,
+                state_cert: None,
             },
         };
 

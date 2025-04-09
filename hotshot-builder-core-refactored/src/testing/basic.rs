@@ -212,6 +212,7 @@ async fn test_pruning() {
             next_epoch_justify_qc: None,
             next_drb_result: None,
             epoch: None,
+            state_cert: None,
         },
     });
     event_stream_sender
@@ -223,6 +224,7 @@ async fn test_pruning() {
                     state: Arc::new(TestValidatedState::default()),
                     delta: None,
                     vid_share: None,
+                    state_cert: None,
                 }]),
                 qc: Arc::new(mock_qc),
                 block_size: None,

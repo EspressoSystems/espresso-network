@@ -1,8 +1,8 @@
 use clap::Parser;
-use ethers::types::U256;
-use hotshot_state_prover::service::one_honest_threshold;
+use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use sequencer::{state_signature::relay_server::run_relay_server, SequencerApiVersion};
 use sequencer_utils::logging;
+use url::Url;
 use vbs::version::StaticVersionType;
 
 #[derive(Parser)]
@@ -16,15 +16,18 @@ struct Args {
     )]
     port: u16,
 
-    /// Total amount of stake.
-    /// WARNING: this is a temporary flag, should remove after integrating with stake table.
-    /// Related issue: [https://github.com/EspressoSystems/espresso-sequencer/issues/1022]
+    /// URL of a sequencer node that is currently providing the HotShot config.
+    /// This is used to initialize the stake table.
     #[clap(
         long,
-        env = "ESPRESSO_STATE_SIGNATURE_TOTAL_STAKE",
-        default_value = "5"
+        env = "ESPRESSO_SEQUENCER_URL",
+        default_value = "http://localhost:24000"
     )]
-    total_stake: u64,
+    pub sequencer_url: Url,
+
+    /// Stake table capacity for the prover circuit
+    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    pub stake_table_capacity: usize,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -35,15 +38,12 @@ async fn main() {
     let args = Args::parse();
     args.logging.init();
 
-    let threshold = one_honest_threshold(U256::from(args.total_stake));
+    tracing::info!(port = args.port, "starting state relay server");
 
-    tracing::info!(
-        port = args.port,
-        "starting state relay server, quorum threshold: {threshold}"
-    );
     run_relay_server(
         None,
-        threshold,
+        args.sequencer_url,
+        args.stake_table_capacity as u64,
         format!("http://0.0.0.0:{}", args.port).parse().unwrap(),
         SequencerApiVersion::instance(),
     )

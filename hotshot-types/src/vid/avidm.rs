@@ -15,7 +15,7 @@ pub type AvidMShare = vid::avid_m::namespaced::NsAvidMShare;
 pub type AvidMCommon = AvidMParam;
 
 pub fn init_avidm_param(total_weight: usize) -> Result<AvidMParam> {
-    let recovery_threshold = (total_weight + 2) / 3;
+    let recovery_threshold = total_weight.div_ceil(3);
     AvidMParam::new(recovery_threshold, total_weight)
         .map_err(|err| error!("Failed to initialize VID: {}", err.to_string()))
 }

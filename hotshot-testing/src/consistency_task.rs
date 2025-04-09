@@ -96,7 +96,9 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
     for (parent, child) in leaf_pairs {
         ensure!(
               child.justify_qc().view_number >= parent.view_number(),
-              "The node has provided leaf:\n\n{child:?}\n\nbut its quorum certificate points to a view before the most recent leaf:\n\n{parent:?}"
+              "The node has provided leaf:\n\n{:?}\n\nbut its quorum certificate points to a view before the most recent leaf:\n\n{:?}",
+              child,
+              parent
         );
 
         child
@@ -108,6 +110,13 @@ async fn validate_node_map<TYPES: NodeType, V: Versions>(
                     e
                 )
             })?;
+
+        ensure!(
+          child.height() > parent.height(),
+          "The node has decided leaf\n\n{:?}\n\nextending leaf\n\n{:?}but the block height did not increase.",
+          child,
+          parent
+        );
 
         // We want to make sure the commitment matches,
         // but allow for the possibility that we may have skipped views in between.

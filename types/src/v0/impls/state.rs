@@ -1,9 +1,8 @@
 use std::ops::Add;
 
+use alloy::primitives::{Address, U256};
 use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
-use ethers::types::Address;
-use ethers_conv::{ToAlloy, ToEthers};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
@@ -30,7 +29,7 @@ use super::{
     auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
-    reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
+    reward::{apply_rewards, find_validator_info, first_two_epochs},
     v0_1::{
         RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
@@ -306,15 +305,10 @@ impl ValidatedState {
         self.reward_merkle_tree = reward_state;
 
         // Update delta rewards
+        delta.rewards_delta.insert(RewardAccount(validator.account));
         delta
             .rewards_delta
-            .insert(RewardAccount(validator.account.to_ethers()));
-        delta.rewards_delta.extend(
-            validator
-                .delegators
-                .keys()
-                .map(|d| RewardAccount(d.to_ethers())),
-        );
+            .extend(validator.delegators.keys().map(|d| RewardAccount(*d)));
 
         Ok(())
     }
@@ -482,7 +476,7 @@ impl<'a> ValidatedTransition<'a> {
 
     /// Top level validation routine. Performs all validation units in
     /// the given order.
-    /// ```
+    /// ```ignore
     /// self.validate_timestamp()?;
     /// self.validate_builder_fee()?;
     /// self.validate_height()?;
@@ -523,8 +517,9 @@ impl<'a> ValidatedTransition<'a> {
             // cases. The hash seems less useful and explodes the size
             // of the error, so we strip it out.
             return Err(ProposalValidationError::L1FinalizedDecrementing {
-                parent: parent_finalized.map(|block| (block.number, block.timestamp.as_u64())),
-                proposed: proposed_finalized.map(|block| (block.number, block.timestamp.as_u64())),
+                parent: parent_finalized.map(|block| (block.number, block.timestamp.to::<u64>())),
+                proposed: proposed_finalized
+                    .map(|block| (block.number, block.timestamp.to::<u64>())),
             });
         }
         Ok(())
@@ -608,7 +603,7 @@ impl<'a> ValidatedTransition<'a> {
             return Err(ProposalValidationError::SomeFeeAmountOutOfRange);
         };
 
-        if amount < self.expected_chain_config.base_fee * self.proposal.block_size {
+        if amount < self.expected_chain_config.base_fee * U256::from(self.proposal.block_size) {
             return Err(ProposalValidationError::InsufficientFee {
                 max_block_size: self.expected_chain_config.max_block_size,
                 base_fee: self.expected_chain_config.base_fee,
@@ -791,6 +786,7 @@ impl ValidatedState {
         parent_leaf: &Leaf2,
         proposed_header: &Header,
         version: Version,
+        view_number: ViewNumber,
     ) -> anyhow::Result<(Self, Delta)> {
         // Clone state to avoid mutation. Consumer can take update
         // through returned value.
@@ -885,18 +881,17 @@ impl ValidatedState {
         // when we deploy the permissionless contract in native demo
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
-        if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height(), instance).await?
+        if version >= EpochVersion::version()
+            && !first_two_epochs(parent_leaf.height() + 1, instance).await?
         {
             let validator =
-                catchup_missing_accounts(instance, &mut validated_state, parent_leaf, parent_view)
+                find_validator_info(instance, &mut validated_state, parent_leaf, view_number)
                     .await?;
 
             // apply rewards
-
             validated_state
                 .distribute_rewards(&mut delta, validator)
-                .context("failed to distribute rewards")?
+                .context("failed to distribute rewards")?;
         }
 
         Ok((validated_state, delta))
@@ -970,7 +965,7 @@ pub async fn get_l1_deposits(
         instance
             .l1_client
             .get_finalized_deposits(
-                addr.to_alloy(),
+                addr,
                 parent_leaf
                     .block_header()
                     .l1_finalized()
@@ -1010,8 +1005,6 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
-        // Unwrapping here is okay as we retry in a loop
-        //so we should either get a validated state or until hotshot cancels the task
         let (validated_state, delta) = self
             // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
             .apply_header(
@@ -1020,9 +1013,10 @@ impl HotShotState<SeqTypes> for ValidatedState {
                 parent_leaf,
                 proposed_header,
                 version,
+                ViewNumber::new(view_number),
             )
             .await
-            .unwrap();
+            .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
         // Validate the proposal.
         let validated_state = ValidatedTransition::new(
@@ -1064,9 +1058,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
 
         let mut reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
         if let Some(root) = block_header.reward_merkle_tree_root() {
-            if !root.size() == 0 {
-                reward_merkle_tree = RewardMerkleTree::from_commitment(root);
-            }
+            reward_merkle_tree = RewardMerkleTree::from_commitment(root);
         }
 
         Self {
@@ -1200,7 +1192,6 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
 
 #[cfg(test)]
 mod test {
-    use ethers::types::U256;
     use hotshot::{helpers::initialize_logging, traits::BlockPayload};
     use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
     use hotshot_types::{
@@ -1394,9 +1385,9 @@ mod test {
         // Non-membership proof.
         let (proof2, balance) = FeeAccountProof::prove(&tree, account2).unwrap();
         tracing::info!(?proof2, %balance);
-        assert_eq!(balance, 0.into());
+        assert_eq!(balance, U256::ZERO);
         assert!(matches!(proof2.proof, FeeMerkleProof::Absence(_)));
-        assert_eq!(proof2.verify(&tree.commitment()).unwrap(), 0.into());
+        assert_eq!(proof2.verify(&tree.commitment()).unwrap(), U256::ZERO);
 
         // Test forget/remember. We cannot generate proofs in a completely sparse tree:
         let mut tree = FeeMerkleTree::from_commitment(tree.commitment());
@@ -1875,8 +1866,9 @@ mod test {
     #[test]
     fn test_fee_amount_serde_bincode_unchanged() {
         // For non-human-readable formats, FeeAmount just serializes as the underlying U256.
-        let n = U256::from(123);
-        let amt = FeeAmount(n);
+        // note: for backward compat, it has to be the same as ethers' U256 instead of alloy's
+        let n = ethers_core::types::U256::from(123);
+        let amt = FeeAmount(U256::from(123));
         assert_eq!(
             bincode::serialize(&n).unwrap(),
             bincode::serialize(&amt).unwrap(),

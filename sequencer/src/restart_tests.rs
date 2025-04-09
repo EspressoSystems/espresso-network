@@ -2,6 +2,7 @@
 
 use std::{collections::HashSet, path::Path, time::Duration};
 
+use alloy::node_bindings::{Anvil, AnvilInstance};
 use anyhow::bail;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
@@ -14,7 +15,6 @@ use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, FeeAccount,
     MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
 };
-use ethers::utils::{Anvil, AnvilInstance};
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},
@@ -546,7 +546,7 @@ impl TestNetwork {
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
-
+            epoch_start_block: None,
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
@@ -830,7 +830,7 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
         })
         .collect();
 
-    let mut config = NetworkConfig::<PubKey> {
+    let mut config = NetworkConfig::<SeqTypes> {
         indexed_da: false,
         libp2p_config: Some(Libp2pConfig { bootstrap_nodes }),
         ..Default::default()

@@ -47,7 +47,7 @@ use crate::{
     genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
     ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, EpochMembershipCoordinator,
     HotShotConfig, HotShotInitializer, MarketplaceConfig, NetworkTaskRegistry, SignatureKey,
-    SystemContext, Versions,
+    StateSignatureKey, SystemContext, Versions,
 };
 
 /// event for global event stream
@@ -320,8 +320,9 @@ where
         &'static mut self,
         public_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
+        state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
-        config: HotShotConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -334,6 +335,7 @@ where
         let hotshot = SystemContext::new(
             public_key,
             private_key,
+            state_private_key,
             nonce,
             config,
             memberships.clone(),

@@ -11,7 +11,7 @@ use std::default::Default;
 
 /// Proof of correctness for namespace payload bytes in a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct NsProof {
+pub struct ADVZNsProof {
     pub(crate) ns_index: NsIndex,
     pub(crate) ns_payload: NsPayloadOwned,
     pub(crate) ns_proof: Option<LargeRangeProofType>, // `None` if ns_payload is empty

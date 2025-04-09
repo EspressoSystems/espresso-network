@@ -1,9 +1,9 @@
 use std::{path::PathBuf, time::Duration};
 
+use alloy::primitives::Address;
 use anyhow::Result;
 use clap::Parser;
-use espresso_types::parse_duration;
-use ethers::types::Address;
+use espresso_types::{parse_duration, SeqTypes};
 use sequencer_utils::{
     logging,
     stake_table::{update_stake_table, PermissionedStakeTableUpdate},
@@ -88,11 +88,10 @@ struct Options {
 async fn main() -> Result<()> {
     let opts = Options::parse();
     opts.logging.init();
-    let update = PermissionedStakeTableUpdate::from_toml_file(&opts.update_toml_path)?;
+    let update = PermissionedStakeTableUpdate::<SeqTypes>::from_toml_file(&opts.update_toml_path)?;
 
     update_stake_table(
         opts.rpc_url,
-        opts.l1_polling_interval,
         opts.mnemonic,
         opts.account_index,
         opts.contract_address,

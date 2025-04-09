@@ -12,6 +12,7 @@
 
 use std::{fmt::Display, num::NonZeroUsize, str::FromStr, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{
@@ -43,7 +44,6 @@ use hotshot_types::{
     },
     HotShotConfig, PeerConfig,
 };
-use primitive_types::U256;
 use tokio::{
     runtime::Handle,
     task::{block_in_place, yield_now},
@@ -80,6 +80,7 @@ pub type MockDataSource = FileSystemDataSource<MockTypes, NoFetching>;
 pub type MockSqlDataSource = SqlDataSource<MockTypes, NoFetching>;
 
 pub const NUM_NODES: usize = 2;
+const EPOCH_HEIGHT: u64 = 10;
 
 impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
     pub async fn init() -> Self {
@@ -91,7 +92,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
     }
 
     pub async fn init_with_config(
-        update_config: impl FnOnce(&mut HotShotConfig<BLSPubKey>),
+        update_config: impl FnOnce(&mut HotShotConfig<MockTypes>),
         leaf_only: bool,
     ) -> Self {
         let (pub_keys, priv_keys): (Vec<_>, Vec<_>) = (0..NUM_NODES)
@@ -156,7 +157,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             stop_proposing_time: 0,
             start_voting_time: 0,
             stop_voting_time: 0,
-            epoch_height: 10,
+            epoch_height: EPOCH_HEIGHT,
             epoch_start_block: 0,
         };
         update_config(&mut config);
@@ -171,6 +172,10 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
 
                     let pub_keys = pub_keys.clone();
                     let master_map = master_map.clone();
+                    let state_priv_keys = state_key_pairs
+                        .iter()
+                        .map(|kp| kp.sign_key())
+                        .collect::<Vec<_>>();
 
                     let span = info_span!("initialize node", node_id);
                     async move {
@@ -199,6 +204,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                         let hotshot = SystemContext::init(
                             pub_keys[node_id],
                             priv_key,
+                            state_priv_keys[node_id].clone(),
                             node_id as u64,
                             config,
                             memberships,
@@ -290,6 +296,10 @@ impl<D: DataSourceLifeCycle, V: Versions> MockNetwork<D, V> {
         for node in &mut self.nodes {
             node.hotshot.shut_down().await;
         }
+    }
+
+    pub fn epoch_height(&self) -> u64 {
+        EPOCH_HEIGHT
     }
 }
 

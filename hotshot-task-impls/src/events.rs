@@ -17,12 +17,12 @@ use hotshot_types::{
     message::Proposal,
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        DaCertificate2, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
-        TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate2,
-        ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
+        DaCertificate2, EpochRootQuorumCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate,
+        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
-        DaVote2, QuorumVote2, TimeoutVote2, UpgradeVote, ViewSyncCommitVote2,
+        DaVote2, EpochRootQuorumVote, QuorumVote2, TimeoutVote2, UpgradeVote, ViewSyncCommitVote2,
         ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
     traits::{
@@ -77,6 +77,9 @@ pub enum HotShotEvent<TYPES: NodeType> {
     ),
     /// A quorum vote has been received from the network; handled by the consensus task
     QuorumVoteRecv(QuorumVote2<TYPES>),
+    /// A quorum vote for the epoch root has been received from the network; handled by the consensus task
+    /// An additional light client state update vote is bundled with the quorum vote
+    EpochRootQuorumVoteRecv(EpochRootQuorumVote<TYPES>),
     /// A timeout vote received from the network; handled by consensus task
     TimeoutVoteRecv(TimeoutVote2<TYPES>),
     /// Send a timeout vote to the network; emitted by consensus task replicas
@@ -100,6 +103,8 @@ pub enum HotShotEvent<TYPES: NodeType> {
     QuorumVoteSend(QuorumVote2<TYPES>),
     /// Broadcast a quorum vote to form an eQC; emitted by a replica in the consensus task after seeing a valid quorum proposal
     ExtendedQuorumVoteSend(QuorumVote2<TYPES>),
+    /// Send a epoch root quorum vote to the next leader; emitted by a replica in the consensus task after seeing a valid quorum proposal
+    EpochRootQuorumVoteSend(EpochRootQuorumVote<TYPES>),
     /// A quorum proposal with the given parent leaf is validated.
     /// The full validation checks include:
     /// 1. The proposal is not for an old view
@@ -132,6 +137,8 @@ pub enum HotShotEvent<TYPES: NodeType> {
     QcFormed(Either<QuorumCertificate<TYPES>, TimeoutCertificate<TYPES>>),
     /// The next leader has collected enough votes to form a QC; emitted by the next leader in the consensus task; an internal event only
     Qc2Formed(Either<QuorumCertificate2<TYPES>, TimeoutCertificate2<TYPES>>),
+    /// The next leader has collected enough votes to form an epoch root QC; emitted by the next leader in the consensus task; an internal event only
+    EpochRootQcFormed(EpochRootQuorumCertificate<TYPES>),
     /// The next leader has collected enough votes from the next epoch nodes to form a QC; emitted by the next leader in the consensus task; an internal event only
     NextEpochQc2Formed(Either<NextEpochQuorumCertificate2<TYPES>, TimeoutCertificate<TYPES>>),
     /// A validator formed both a current epoch eQC and a next epoch eQC
@@ -278,6 +285,15 @@ pub enum HotShotEvent<TYPES: NodeType> {
         NextEpochQuorumCertificate2<TYPES>,
         TYPES::SignatureKey,
     ),
+
+    /// A replica sends us an epoch root QC
+    EpochRootQcSend(
+        EpochRootQuorumCertificate<TYPES>,
+        TYPES::SignatureKey,
+        TYPES::SignatureKey,
+    ),
+    /// A replica receives an epoch root QC
+    EpochRootQcRecv(EpochRootQuorumCertificate<TYPES>, TYPES::SignatureKey),
 }
 
 impl<TYPES: NodeType> HotShotEvent<TYPES> {
@@ -285,7 +301,12 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
     /// Return the view number for a hotshot event if present
     pub fn view_number(&self) -> Option<TYPES::View> {
         match self {
-            HotShotEvent::QuorumVoteRecv(v) => Some(v.view_number()),
+            HotShotEvent::QuorumVoteSend(v)
+            | HotShotEvent::QuorumVoteRecv(v)
+            | HotShotEvent::ExtendedQuorumVoteSend(v) => Some(v.view_number()),
+            HotShotEvent::EpochRootQuorumVoteRecv(v) | HotShotEvent::EpochRootQuorumVoteSend(v) => {
+                Some(v.view_number())
+            },
             HotShotEvent::TimeoutVoteRecv(v) | HotShotEvent::TimeoutVoteSend(v) => {
                 Some(v.view_number())
             },
@@ -296,9 +317,6 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             | HotShotEvent::QuorumProposalResponseSend(_, proposal)
             | HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 Some(proposal.data.view_number())
-            },
-            HotShotEvent::QuorumVoteSend(vote) | HotShotEvent::ExtendedQuorumVoteSend(vote) => {
-                Some(vote.view_number())
             },
             HotShotEvent::DaProposalRecv(proposal, _)
             | HotShotEvent::DaProposalValidated(proposal, _)
@@ -318,6 +336,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
                 either::Left(qc) => Some(qc.view_number()),
                 either::Right(tc) => Some(tc.view_number()),
             },
+            HotShotEvent::EpochRootQcFormed(root_qc) => Some(root_qc.view_number()),
             HotShotEvent::ExtendedQc2Formed(cert) => Some(cert.view_number()),
             HotShotEvent::ViewSyncCommitVoteSend(vote)
             | HotShotEvent::ViewSyncCommitVoteRecv(vote) => Some(vote.view_number()),
@@ -366,6 +385,9 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             | HotShotEvent::HighQcSend(qc, ..)
             | HotShotEvent::ExtendedQcRecv(qc, ..)
             | HotShotEvent::ExtendedQcSend(qc, ..) => Some(qc.view_number()),
+            HotShotEvent::EpochRootQcSend(cert, ..) | HotShotEvent::EpochRootQcRecv(cert, _) => {
+                Some(cert.view_number())
+            },
         }
     }
 }
@@ -382,6 +404,20 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             ),
             HotShotEvent::QuorumVoteRecv(v) => {
                 write!(f, "QuorumVoteRecv(view_number={:?})", v.view_number())
+            },
+            HotShotEvent::EpochRootQuorumVoteRecv(v) => {
+                write!(
+                    f,
+                    "EpochRootQuorumVoteRecv(view_number={:?})",
+                    v.view_number()
+                )
+            },
+            HotShotEvent::EpochRootQuorumVoteSend(v) => {
+                write!(
+                    f,
+                    "EpochRootQuorumVoteSend(view_number={:?})",
+                    v.view_number()
+                )
             },
             HotShotEvent::ExtendedQuorumVoteSend(v) => {
                 write!(
@@ -445,6 +481,13 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             HotShotEvent::Qc2Formed(cert) => match cert {
                 either::Left(qc) => write!(f, "QcFormed2(view_number={:?})", qc.view_number()),
                 either::Right(tc) => write!(f, "QcFormed2(view_number={:?})", tc.view_number()),
+            },
+            HotShotEvent::EpochRootQcFormed(root_qc) => {
+                write!(
+                    f,
+                    "EpochRootQcFormed(view_number={:?})",
+                    root_qc.view_number()
+                )
             },
             HotShotEvent::NextEpochQc2Formed(cert) => match cert {
                 either::Left(qc) => {
@@ -652,6 +695,12 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             },
             HotShotEvent::ExtendedQcSend(qc, ..) => {
                 write!(f, "ExtendedQcSend(view_number={:?}", qc.view_number())
+            },
+            HotShotEvent::EpochRootQcSend(cert, ..) => {
+                write!(f, "EpochRootQcSend(view_number={:?}", cert.view_number())
+            },
+            HotShotEvent::EpochRootQcRecv(cert, ..) => {
+                write!(f, "EpochRootQcRecv(view_number={:?}", cert.view_number())
             },
         }
     }

@@ -171,7 +171,7 @@ impl AvidMScheme {
             payload
                 .iter()
                 .chain(iter::once(&1u8))
-                .chain(iter::repeat(&0u8).take(pad_num_zeros)),
+                .chain(iter::repeat_n(&0u8, pad_num_zeros)),
         )
         .collect()
     }

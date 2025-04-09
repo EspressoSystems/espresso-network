@@ -143,10 +143,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
     ) {
         match event.as_ref() {
             HotShotEvent::QuorumProposalRecv(proposal, sender) => {
+                tracing::debug!(
+                    "Quorum proposal recv for view {:?}",
+                    proposal.data.view_number()
+                );
                 if self.consensus.read().await.cur_view() > proposal.data.view_number()
                     || self.cur_view > proposal.data.view_number()
                 {
-                    tracing::error!("Throwing away old proposal");
+                    tracing::warn!(
+                        "Throwing away old proposal for view {:?}",
+                        proposal.data.view_number()
+                    );
                     return;
                 }
                 let proposal_epoch = option_epoch_from_block_number::<TYPES>(
@@ -157,7 +164,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 let Ok(epoch_membership) =
                     self.membership.membership_for_epoch(proposal_epoch).await
                 else {
-                    tracing::warn!("No Stake table for epoch = {:?}", proposal_epoch);
+                    tracing::warn!("No Stake table for epoch = {proposal_epoch:?}");
                     return;
                 };
                 let validation_info = ValidationInfo::<TYPES, I, V> {

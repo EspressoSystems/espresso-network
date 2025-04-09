@@ -71,6 +71,7 @@ pub async fn handle_events(
 pub mod mock {
     use std::{sync::Arc, time::Duration};
 
+    use alloy::primitives::U256;
     use async_lock::RwLock;
     use espresso_types::SeqTypes;
     use hotshot::rand::{self};
@@ -84,7 +85,6 @@ pub mod mock {
         PeerConfig,
     };
     use portpicker::pick_unused_port;
-    use primitive_types::U256;
     use rand::{rngs::OsRng, RngCore};
     use tide_disco::{App, Url};
     use tokio::{spawn, task::JoinHandle, time::sleep};
@@ -95,7 +95,7 @@ pub mod mock {
     const STAKED_NODES: usize = 10;
     pub type StaticVer01 = StaticVersion<0, 1>;
 
-    pub fn generate_stake_table() -> Vec<PeerConfig<BLSPubKey>> {
+    pub fn generate_stake_table() -> Vec<PeerConfig<SeqTypes>> {
         (0..STAKED_NODES)
             .map(|_| {
                 let private_key =
@@ -103,7 +103,7 @@ pub mod mock {
                 let pub_key = BLSPubKey::from_private(&private_key);
                 let state_key_pair = StateKeyPair::generate();
 
-                PeerConfig::<BLSPubKey> {
+                PeerConfig::<SeqTypes> {
                     stake_table_entry: pub_key.stake_table_entry(U256::from(NODE_STAKE)),
                     state_ver_key: state_key_pair.ver_key(),
                 }

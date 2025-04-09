@@ -6,7 +6,7 @@ import "forge-std/Script.sol";
 import { LightClientMock as LCMock } from "../mocks/LightClientMock.sol";
 import { LightClient as LC } from "../../src/LightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { LightClientV2 as LCV2 } from "../LightClientV2.sol";
+import { LightClientV2Fake as LCV2 } from "../mocks/LightClientV2Fake.sol";
 
 contract DeployLightClientTestScript is Script {
     function run(uint64 numInitValidators, uint32 stateHistoryRetentionPeriod, address owner)
@@ -57,7 +57,7 @@ contract DeployLightClientTestScript is Script {
     ) public returns (address payable proxyAddress, address admin, LC.LightClientState memory) {
         vm.startBroadcast(owner);
 
-        LCMock lightClientContract = new LCMock(state, stakeState, stateHistoryRetentionPeriod);
+        LCMock lightClientContract = new LCMock();
 
         // Encode the initializer function call
         bytes memory data = abi.encodeWithSignature(

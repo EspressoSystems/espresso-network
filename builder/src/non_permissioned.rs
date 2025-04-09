@@ -7,7 +7,6 @@ use espresso_types::{
     eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_99::ChainConfig, EpochCommittees, FeeAmount,
     NodeState, Payload, SeqTypes, ValidatedState,
 };
-use ethers_conv::ToAlloy;
 use hotshot::traits::BlockPayload;
 use hotshot_builder_core::{
     builder_state::{BuilderState, MessageType},
@@ -60,7 +59,7 @@ pub fn build_instance_state<V: Versions>(
             vec![],
             vec![],
             l1_client.clone(),
-            chain_config.stake_table_contract.map(|a| a.to_alloy()),
+            chain_config,
             peers.clone(),
             NoStorage,
         ))),
@@ -234,8 +233,8 @@ impl BuilderConfig {
 
 #[cfg(test)]
 mod test {
+    use alloy::node_bindings::Anvil;
     use espresso_types::MockSequencerVersions;
-    use ethers::utils::Anvil;
     use futures::StreamExt;
     use portpicker::pick_unused_port;
     use sequencer::{
@@ -271,7 +270,7 @@ mod test {
 
         // Set up and start the network
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
 
         let tmpdir = TempDir::new().unwrap();

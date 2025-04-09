@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::{broadcast, Receiver, Sender};
 use async_lock::RwLock;
 use futures::future::join_all;
@@ -199,6 +200,7 @@ where
             async_delay_config: launcher.metadata.async_delay_config,
             restart_contexts: HashMap::new(),
             channel_generator: launcher.resource_generators.channel_generator,
+            state_cert: None,
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I, V>>::new(
             spinning_task_state,
@@ -481,8 +483,12 @@ where
                     let is_da = node_id < config.da_staked_committee_size as u64;
 
                     // We assign node's public key and stake value rather than read from config file since it's a test
-                    let validator_config =
-                        ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, 1, is_da);
+                    let validator_config = ValidatorConfig::generated_from_seed_indexed(
+                        [0u8; 32],
+                        node_id,
+                        U256::from(1),
+                        is_da,
+                    );
 
                     let hotshot = Self::add_node_with_config(
                         node_id,
@@ -589,19 +595,21 @@ where
         network: Network<TYPES, I>,
         memberships: TYPES::Membership,
         initializer: HotShotInitializer<TYPES>,
-        config: HotShotConfig<TYPES::SignatureKey>,
-        validator_config: ValidatorConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
+        validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> Arc<SystemContext<TYPES, I, V>> {
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
         let public_key = validator_config.public_key.clone();
+        let state_private_key = validator_config.state_private_key.clone();
         let epoch_height = config.epoch_height;
 
         SystemContext::new(
             public_key,
             private_key,
+            state_private_key,
             node_id,
             config,
             EpochMembershipCoordinator::new(Arc::new(RwLock::new(memberships)), epoch_height),
@@ -623,8 +631,8 @@ where
         network: Network<TYPES, I>,
         memberships: Arc<RwLock<TYPES::Membership>>,
         initializer: HotShotInitializer<TYPES>,
-        config: HotShotConfig<TYPES::SignatureKey>,
-        validator_config: ValidatorConfig<TYPES::SignatureKey>,
+        config: HotShotConfig<TYPES>,
+        validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
         marketplace_config: MarketplaceConfig<TYPES, I>,
         internal_channel: (
@@ -636,11 +644,13 @@ where
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
         let public_key = validator_config.public_key.clone();
+        let state_private_key = validator_config.state_private_key.clone();
         let epoch_height = config.epoch_height;
 
         SystemContext::new_from_channels(
             public_key,
             private_key,
+            state_private_key,
             node_id,
             config,
             EpochMembershipCoordinator::new(memberships, epoch_height),
@@ -676,7 +686,7 @@ pub struct LateNodeContextParameters<TYPES: NodeType, I: TestableNodeImplementat
     pub memberships: TYPES::Membership,
 
     /// The config associated with this node.
-    pub config: HotShotConfig<TYPES::SignatureKey>,
+    pub config: HotShotConfig<TYPES>,
 
     /// The marketplace config for this node.
     pub marketplace_config: MarketplaceConfig<TYPES, I>,

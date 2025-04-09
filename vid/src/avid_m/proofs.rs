@@ -1,6 +1,6 @@
 //! This module implements encoding proofs for the Avid-M Scheme.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, ops::Range};
 
 use jf_merkle_tree::MerkleTreeScheme;
 use jf_utils::canonical;
@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     avid_m::{
-        config::AvidMConfig, AvidMCommit, AvidMParam, AvidMScheme, AvidMShare, Config, MerkleProof,
-        MerkleTree, F,
+        config::AvidMConfig,
+        namespaced::{NsAvidMCommit, NsAvidMScheme},
+        AvidMCommit, AvidMParam, AvidMScheme, AvidMShare, Config, MerkleProof, MerkleTree, F,
     },
     VerificationResult, VidError, VidResult, VidScheme,
 };
@@ -126,6 +127,63 @@ impl MalEncodingProof {
     }
 }
 
+/// A proof of a namespace payload.
+/// It consists of the index of the namespace, the namespace payload, and a merkle proof
+/// of the namespace payload against the namespaced VID commitment.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct NsProof {
+    /// The index of the namespace.
+    pub ns_index: usize,
+    /// The namespace payload.
+    pub ns_payload: Vec<u8>,
+    /// The merkle proof of the namespace payload against the namespaced VID commitment.
+    pub ns_proof: MerkleProof,
+}
+
+impl NsAvidMScheme {
+    /// Generate a proof of inclusion for a namespace payload.
+    pub fn namespace_proof(
+        param: &AvidMParam,
+        payload: &[u8],
+        ns_index: usize,
+        ns_table: impl IntoIterator<Item = Range<usize>>,
+    ) -> VidResult<NsProof> {
+        let ns_table = ns_table.into_iter().collect::<Vec<_>>();
+        let ns_payload_range = ns_table[ns_index].clone();
+        let ns_commits = ns_table
+            .into_iter()
+            .map(|ns_range| {
+                AvidMScheme::commit(param, &payload[ns_range]).map(|commit| commit.commit)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mt = MerkleTree::from_elems(None, &ns_commits)?;
+        Ok(NsProof {
+            ns_index,
+            ns_payload: payload[ns_payload_range].to_vec(),
+            ns_proof: mt
+                .lookup(ns_index as u64)
+                .expect_ok()
+                .expect("MT lookup shouldn't fail")
+                .1,
+        })
+    }
+
+    /// Verify a namespace proof against a namespaced VID commitment.
+    pub fn verify_namespace_proof(
+        param: &AvidMParam,
+        commit: &NsAvidMCommit,
+        proof: &NsProof,
+    ) -> VidResult<VerificationResult> {
+        let ns_commit = AvidMScheme::commit(param, &proof.ns_payload)?;
+        Ok(MerkleTree::verify(
+            &commit.commit,
+            proof.ns_index as u64,
+            &ns_commit.commit,
+            &proof.ns_proof,
+        )?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use ark_poly::EvaluationDomain;
@@ -133,8 +191,8 @@ mod tests {
 
     use crate::{
         avid_m::{
-            config::AvidMConfig, proofs::MalEncodingProof, radix2_domain, AvidMScheme, Config,
-            MerkleTree, F,
+            config::AvidMConfig, namespaced::NsAvidMScheme, proofs::MalEncodingProof,
+            radix2_domain, AvidMScheme, Config, MerkleTree, F,
         },
         utils::bytes_to_field,
         VidScheme,
@@ -199,10 +257,47 @@ mod tests {
         bad_witness[0] = shares[0].content.payload[0][0];
         let bad_proof2 = MalEncodingProof {
             recovered_poly: bad_witness,
-            raw_shares: std::iter::repeat(bad_proof.raw_shares[0].clone())
-                .take(6)
-                .collect(),
+            raw_shares: std::iter::repeat_n(bad_proof.raw_shares[0].clone(), 6).collect(),
         };
         assert!(bad_proof2.verify(&param, &commit).is_err());
+    }
+
+    #[test]
+    fn test_ns_proof() {
+        let param = AvidMScheme::setup(5usize, 10usize).unwrap();
+        let payload = vec![1u8; 100];
+        let ns_table = vec![(0..10), (10..21), (21..33), (33..48), (48..100)];
+        let commit = NsAvidMScheme::commit(&param, &payload, ns_table.clone()).unwrap();
+
+        for (i, _) in ns_table.iter().enumerate() {
+            let proof =
+                NsAvidMScheme::namespace_proof(&param, &payload, i, ns_table.clone()).unwrap();
+            assert!(
+                NsAvidMScheme::verify_namespace_proof(&param, &commit, &proof)
+                    .unwrap()
+                    .is_ok()
+            );
+        }
+        let mut proof =
+            NsAvidMScheme::namespace_proof(&param, &payload, 1, ns_table.clone()).unwrap();
+        proof.ns_index = 0;
+        assert!(
+            NsAvidMScheme::verify_namespace_proof(&param, &commit, &proof)
+                .unwrap()
+                .is_err()
+        );
+        proof.ns_index = 1;
+        proof.ns_payload[0] = 0u8;
+        assert!(
+            NsAvidMScheme::verify_namespace_proof(&param, &commit, &proof)
+                .unwrap()
+                .is_err()
+        );
+        proof.ns_index = 100;
+        assert!(
+            NsAvidMScheme::verify_namespace_proof(&param, &commit, &proof)
+                .unwrap()
+                .is_err()
+        );
     }
 }

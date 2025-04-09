@@ -107,7 +107,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::UpgradeProposalRecv(proposal, sender) => {
-                tracing::info!("Received upgrade proposal: {:?}", proposal);
+                tracing::info!("Received upgrade proposal: {proposal:?}");
 
                 let view = *proposal.data.view_number();
 
@@ -311,7 +311,7 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     )
                     .expect("Failed to sign upgrade proposal commitment!");
 
-                    tracing::warn!("Sending upgrade proposal:\n\n {:?}", upgrade_proposal);
+                    tracing::warn!("Sending upgrade proposal:\n\n {upgrade_proposal:?}");
 
                     let message = Proposal {
                         data: upgrade_proposal,

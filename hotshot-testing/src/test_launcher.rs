@@ -35,9 +35,9 @@ pub struct ResourceGenerators<TYPES: NodeType, I: TestableNodeImplementation<TYP
     /// generate new storage for each node
     pub storage: Generator<TestStorage<TYPES>>,
     /// configuration used to generate each hotshot node
-    pub hotshot_config: Generator<HotShotConfig<TYPES::SignatureKey>>,
+    pub hotshot_config: Generator<HotShotConfig<TYPES>>,
     /// config that contains the signature keys
-    pub validator_config: Generator<ValidatorConfig<TYPES::SignatureKey>>,
+    pub validator_config: Generator<ValidatorConfig<TYPES>>,
     /// generate a new marketplace config for each node
     pub marketplace_config: Generator<MarketplaceConfig<TYPES, I>>,
 }
@@ -67,10 +67,7 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> TestLau
     }
     /// Modifies the config used when generating nodes with `f`
     #[must_use]
-    pub fn map_hotshot_config(
-        mut self,
-        f: impl Fn(&mut HotShotConfig<TYPES::SignatureKey>) + 'static,
-    ) -> Self {
+    pub fn map_hotshot_config(mut self, f: impl Fn(&mut HotShotConfig<TYPES>) + 'static) -> Self {
         let mut test_config = self.metadata.test_config.clone();
         f(&mut test_config);
 

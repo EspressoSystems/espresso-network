@@ -13,40 +13,14 @@ contract LightClientMock is LC {
     bool internal hotShotDown;
     uint256 internal frozenL1Height;
 
-    constructor(
-        LC.LightClientState memory genesis,
-        LC.StakeTableState memory genesisStakeTableState,
-        uint32 maxHistorySeconds
-    ) LC() {
-        _initializeState(genesis, genesisStakeTableState, maxHistorySeconds);
-    }
-
     /// @dev Directly mutate finalizedState variable for test
     function setFinalizedState(LC.LightClientState memory state) public {
         finalizedState = state;
     }
 
     /// @dev override the production-implementation with test VK.
-    function verifyProof(LC.LightClientState memory state, IPlonkVerifier.PlonkProof memory proof)
-        internal
-        view
-        override
-    {
-        IPlonkVerifier.VerifyingKey memory vk = VkLib.getVk();
-
-        // Prepare the public input
-        uint256[7] memory publicInput;
-        publicInput[0] = uint256(state.viewNum);
-        publicInput[1] = uint256(state.blockHeight);
-        publicInput[2] = BN254.ScalarField.unwrap(state.blockCommRoot);
-        publicInput[3] = BN254.ScalarField.unwrap(genesisStakeTableState.blsKeyComm);
-        publicInput[4] = BN254.ScalarField.unwrap(genesisStakeTableState.schnorrKeyComm);
-        publicInput[5] = BN254.ScalarField.unwrap(genesisStakeTableState.amountComm);
-        publicInput[6] = genesisStakeTableState.threshold;
-
-        if (!PlonkVerifier.verify(vk, publicInput, proof)) {
-            revert InvalidProof();
-        }
+    function _getVk() public pure override returns (IPlonkVerifier.VerifyingKey memory vk) {
+        vk = VkLib.getVk();
     }
 
     function setStateHistory(StateHistoryCommitment[] memory _stateHistoryCommitments) public {

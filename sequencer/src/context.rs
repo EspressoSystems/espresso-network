@@ -25,12 +25,9 @@ use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    light_client::compute_stake_table_commitment,
     network::NetworkConfig,
-    traits::{
-        metrics::Metrics,
-        network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-    },
+    traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
     PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
@@ -51,7 +48,7 @@ use crate::{
         recipient_source::RecipientSource, request::Request,
     },
     state_signature::StateSigner,
-    static_stake_table_commitment, Node, SeqTypes, SequencerApiVersion,
+    Node, SeqTypes, SequencerApiVersion,
 };
 
 /// The consensus handle
@@ -78,7 +75,7 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     >,
 
     /// Context for generating state signatures.
-    state_signer: Arc<StateSigner<SequencerApiVersion>>,
+    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
 
     /// An orchestrator to wait for before starting consensus.
     #[derivative(Debug = "ignore")]
@@ -94,18 +91,18 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
 
     node_state: NodeState,
 
-    network_config: NetworkConfig<PubKey>,
+    network_config: NetworkConfig<SeqTypes>,
 
     #[derivative(Debug = "ignore")]
-    validator_config: ValidatorConfig<<SeqTypes as NodeType>::SignatureKey>,
+    validator_config: ValidatorConfig<SeqTypes>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> SequencerContext<N, P, V> {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
-        network_config: NetworkConfig<PubKey>,
-        validator_config: ValidatorConfig<<SeqTypes as NodeType>::SignatureKey>,
+        network_config: NetworkConfig<SeqTypes>,
+        validator_config: ValidatorConfig<SeqTypes>,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
         persistence: P,
@@ -135,13 +132,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             .load_consensus_state::<V>(instance_state.clone())
             .await?;
 
-        let stake_table_commit = static_stake_table_commitment(
+        let stake_table_commit = compute_stake_table_commitment(
             &config.known_nodes_with_stake,
             stake_table_capacity
                 .try_into()
                 .context("stake table capacity out of range")?,
         );
-        let state_key_pair = validator_config.state_key_pair.clone();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             config.known_nodes_with_stake.clone(),
@@ -154,6 +150,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         let handle = SystemContext::init(
             validator_config.public_key,
             validator_config.private_key.clone(),
+            validator_config.state_private_key.clone(),
             instance_state.node_id,
             config.clone(),
             coordinator,
@@ -166,7 +163,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         .await?
         .0;
 
-        let mut state_signer = StateSigner::new(state_key_pair, stake_table_commit);
+        let mut state_signer = StateSigner::new(
+            validator_config.state_private_key.clone(),
+            validator_config.state_public_key.clone(),
+            stake_table_commit,
+            stake_table_capacity,
+        );
         if let Some(url) = state_relay_server {
             state_signer = state_signer.with_relay_server(url);
         }
@@ -245,8 +247,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         >,
         event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
-        network_config: NetworkConfig<PubKey>,
-        validator_config: ValidatorConfig<<SeqTypes as NodeType>::SignatureKey>,
+        network_config: NetworkConfig<SeqTypes>,
+        validator_config: ValidatorConfig<SeqTypes>,
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
@@ -257,7 +259,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         let node_id = node_state.node_id;
         let mut ctx = Self {
             handle: Arc::new(RwLock::new(handle)),
-            state_signer: Arc::new(state_signer),
+            state_signer: Arc::new(RwLock::new(state_signer)),
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
@@ -280,6 +282,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         ctx.spawn(
             "event handler",
             handle_events(
+                ctx.handle.clone(),
                 node_id,
                 events,
                 persistence,
@@ -307,7 +310,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 
     /// Return a reference to the consensus state signer.
-    pub fn state_signer(&self) -> Arc<StateSigner<SequencerApiVersion>> {
+    pub fn state_signer(&self) -> Arc<RwLock<StateSigner<SequencerApiVersion>>> {
         self.state_signer.clone()
     }
 
@@ -420,7 +423,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     }
 
     /// Get the network config
-    pub fn network_config(&self) -> NetworkConfig<PubKey> {
+    pub fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.network_config.clone()
     }
 }
@@ -450,16 +453,21 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop
 
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
-async fn handle_events<V: Versions>(
+async fn handle_events<N, P, V>(
+    consensus: Arc<RwLock<Consensus<N, P, V>>>,
     node_id: u64,
     mut events: impl Stream<Item = Event<SeqTypes>> + Unpin,
-    persistence: Arc<impl SequencerPersistence>,
-    state_signer: Arc<StateSigner<SequencerApiVersion>>,
+    persistence: Arc<P>,
+    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler<V>,
     events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
     event_consumer: impl PersistenceEventConsumer + 'static,
     anchor_view: Option<ViewNumber>,
-) {
+) where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+    V: Versions,
+{
     if let Some(view) = anchor_view {
         // Process and clean up any leaves that we may have persisted last time we were running but
         // failed to handle due to a shutdown.
@@ -480,7 +488,11 @@ async fn handle_events<V: Versions>(
         persistence.handle_event(&event, &event_consumer).await;
 
         // Generate state signature.
-        state_signer.handle_event(&event).await;
+        state_signer
+            .write()
+            .await
+            .handle_event(&event, consensus.clone())
+            .await;
 
         // Handle external messages
         if let EventType::ExternalMessageReceived { data, .. } = &event.event {

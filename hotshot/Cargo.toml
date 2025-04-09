@@ -18,6 +18,7 @@ doc-images = []
 hotshot-testing = []
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
@@ -25,9 +26,9 @@ async-trait = { workspace = true }
 bimap = "0.6"
 bincode = { workspace = true }
 blake3 = { workspace = true }
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.6", package = "cdn-broker", features = ["global-permits"] }
-cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.6", package = "cdn-client" }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.6", package = "cdn-marshal" }
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.7", package = "cdn-broker", features = ["global-permits"] }
+cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.7", package = "cdn-client" }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.7", package = "cdn-marshal" }
 chrono = { workspace = true }
 committable = { workspace = true }
 dashmap = { workspace = true }
@@ -44,7 +45,6 @@ lru = { workspace = true }
 num_enum = "0.7"
 parking_lot = { workspace = true }
 portpicker = "0.1"
-primitive-types = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 sha2 = { workspace = true }

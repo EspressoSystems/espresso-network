@@ -6,6 +6,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+alloy = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ec = { workspace = true }
 ark-ed-on-bn254 = { workspace = true }
@@ -13,10 +14,9 @@ ark-ff = { workspace = true }
 ark-poly = { workspace = true }
 ark-std = { workspace = true }
 clap = { version = "^4.4", features = ["derive"] }
-diff-test-bn254 = { workspace = true }
-ethers = { version = "2.0.4" }
-hotshot-contract-adapter = { path = "../adapter" }
+hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
+hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
 jf-signature = { workspace = true }

@@ -10,9 +10,10 @@ use async_broadcast::{Receiver, Sender};
 use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
-    simple_vote::{HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
+    simple_certificate::EpochRootQuorumCertificate,
+    simple_vote::{EpochRootQuorumVote, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-    utils::{is_last_block_in_epoch, EpochTransitionIndicator},
+    utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
@@ -24,8 +25,11 @@ use super::ConsensusTaskState;
 use crate::{
     consensus::Versions,
     events::HotShotEvent,
-    helpers::{broadcast_event, validate_qc_and_next_epoch_qc, wait_for_next_epoch_qc},
-    vote_collection::handle_vote,
+    helpers::{
+        broadcast_event, check_qc_state_cert_correspondence, validate_qc_and_next_epoch_qc,
+        wait_for_next_epoch_qc,
+    },
+    vote_collection::{handle_epoch_root_vote, handle_vote},
 };
 
 /// Handle a `QuorumVoteRecv` event.
@@ -78,10 +82,15 @@ pub(crate) async fn handle_quorum_vote_recv<
     )
     .await?;
 
-    if vote.epoch().is_some() {
+    if vote.epoch().is_some()
+        && vote
+            .data
+            .block_number
+            .is_some_and(|b| is_epoch_transition(b, task_state.epoch_height))
+    {
         // If the vote sender belongs to the next epoch, collect it separately to form the second QC
         let has_stake = epoch_membership
-            .next_epoch()
+            .next_epoch_stake_table()
             .await?
             .has_stake(&vote.signing_key())
             .await;
@@ -90,6 +99,10 @@ pub(crate) async fn handle_quorum_vote_recv<
                 &mut task_state.next_epoch_vote_collectors,
                 &vote.clone().into(),
                 task_state.public_key.clone(),
+                // We eventually verify in `handle_vote` that we are the leader before assembling the certificate here,
+                // so we must request the full randomized stake table.
+                //
+                // I'm not sure this is really necessary, but I've opted not to modify the logic.
                 &epoch_membership.next_epoch().await?.clone(),
                 task_state.id,
                 &event,
@@ -100,6 +113,56 @@ pub(crate) async fn handle_quorum_vote_recv<
             .await?;
         }
     }
+
+    Ok(())
+}
+
+/// Handle a `QuorumVoteRecv` event.
+pub(crate) async fn handle_epoch_root_quorum_vote_recv<
+    TYPES: NodeType,
+    I: NodeImplementation<TYPES>,
+    V: Versions,
+>(
+    vote: &EpochRootQuorumVote<TYPES>,
+    event: Arc<HotShotEvent<TYPES>>,
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+) -> Result<()> {
+    ensure!(
+        vote.vote
+            .data
+            .block_number
+            .is_some_and(|bn| is_epoch_root(bn, task_state.epoch_height)),
+        error!("Received epoch root quorum vote for non epoch root block.")
+    );
+
+    let epoch_membership = task_state
+        .membership_coordinator
+        .membership_for_epoch(vote.vote.data.epoch)
+        .await
+        .context(warn!("No stake table for epoch"))?;
+
+    let we_are_leader =
+        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key;
+    ensure!(
+        we_are_leader,
+        info!(
+            "We are not the leader for view {:?}",
+            vote.view_number() + 1
+        )
+    );
+
+    handle_epoch_root_vote(
+        &mut task_state.epoch_root_vote_collectors,
+        vote,
+        task_state.public_key.clone(),
+        &epoch_membership,
+        task_state.id,
+        &event,
+        sender,
+        &task_state.upgrade_lock,
+    )
+    .await?;
 
     Ok(())
 }
@@ -168,7 +231,19 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
 
     let consensus_reader = task_state.consensus.read().await;
     let high_qc = consensus_reader.high_qc().clone();
-    let is_eqc = consensus_reader.is_leaf_extended(high_qc.data.leaf_commit);
+    let is_eqc = high_qc
+        .data
+        .block_number
+        .is_some_and(|b| is_last_block(b, task_state.epoch_height));
+    let is_epoch_root = high_qc
+        .data
+        .block_number
+        .is_some_and(|b| is_epoch_root(b, task_state.epoch_height));
+    let state_cert = if is_epoch_root {
+        consensus_reader.state_cert().cloned()
+    } else {
+        None
+    };
     drop(consensus_reader);
 
     if is_eqc {
@@ -205,24 +280,29 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             .await?
             .leader(new_view_number)
             .await?;
-        let maybe_next_epoch_qc = if high_qc
+
+        let (high_qc, maybe_next_epoch_qc) = if high_qc
             .data
             .block_number
-            .is_some_and(|b| is_last_block_in_epoch(b, task_state.epoch_height))
+            .is_some_and(|b| is_epoch_transition(b, task_state.epoch_height))
         {
-            Some(
-                task_state
-                    .consensus
-                    .read()
-                    .await
-                    .next_epoch_high_qc()
-                    .ok_or(warn!(
-                        "High QC is for the last block but we don't have next epoch QC."
-                    ))?
-                    .clone(),
+            let Some((qc, next_epoch_qc)) =
+                task_state.consensus.read().await.transition_qc().cloned()
+            else {
+                bail!("We don't have a transition QC");
+            };
+            validate_qc_and_next_epoch_qc(
+                &high_qc,
+                Some(&next_epoch_qc),
+                &task_state.consensus,
+                &task_state.membership_coordinator,
+                &task_state.upgrade_lock,
+                task_state.epoch_height,
             )
+            .await?;
+            (qc, Some(next_epoch_qc))
         } else {
-            None
+            (high_qc, None)
         };
         validate_qc_and_next_epoch_qc(
             &high_qc,
@@ -233,16 +313,51 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             task_state.epoch_height,
         )
         .await?;
-        broadcast_event(
-            Arc::new(HotShotEvent::HighQcSend(
-                high_qc,
-                maybe_next_epoch_qc,
-                leader,
-                task_state.public_key.clone(),
-            )),
-            sender,
-        )
-        .await;
+
+        if is_epoch_root {
+            // For epoch root QC, we are sending high QC and state cert
+            let Some(state_cert) = state_cert else {
+                bail!("We are sending an epoch root QC but we don't have the corresponding state cert.");
+            };
+            ensure!(
+                check_qc_state_cert_correspondence(&high_qc, &state_cert, task_state.epoch_height),
+                "We are sending an epoch root QC but we don't have the corresponding state cert."
+            );
+
+            tracing::trace!(
+                "Sending epoch root QC for view {:?}, height {:?}",
+                high_qc.view_number(),
+                high_qc.data.block_number
+            );
+            broadcast_event(
+                Arc::new(HotShotEvent::EpochRootQcSend(
+                    EpochRootQuorumCertificate {
+                        qc: high_qc,
+                        state_cert,
+                    },
+                    leader,
+                    task_state.public_key.clone(),
+                )),
+                sender,
+            )
+            .await;
+        } else {
+            tracing::trace!(
+                "Sending high QC for view {:?}, height {:?}",
+                high_qc.view_number(),
+                high_qc.data.block_number
+            );
+            broadcast_event(
+                Arc::new(HotShotEvent::HighQcSend(
+                    high_qc,
+                    maybe_next_epoch_qc,
+                    leader,
+                    task_state.public_key.clone(),
+                )),
+                sender,
+            )
+            .await;
+        }
     }
     Ok(())
 }
@@ -285,7 +400,7 @@ pub(crate) async fn handle_view_change<
     let _ = send_high_qc(new_view_number, sender, receiver, task_state)
         .await
         .inspect_err(|e| {
-            tracing::debug!("High QC sending failed with error: {:?}", e);
+            tracing::debug!("High QC sending failed with error: {e:?}");
         });
 
     // Move this node to the next view
@@ -305,10 +420,7 @@ pub(crate) async fn handle_view_change<
         .clone();
     if let Some(cert) = decided_upgrade_certificate_read {
         if new_view_number == cert.data.new_version_first_view {
-            tracing::error!(
-                "Version upgraded based on a decided upgrade cert: {:?}",
-                cert
-            );
+            tracing::error!("Version upgraded based on a decided upgrade cert: {cert:?}");
         }
     }
 
@@ -399,15 +511,12 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     ensure!(
         task_state
             .membership_coordinator
-            .membership_for_epoch(epoch)
+            .stake_table_for_epoch(epoch)
             .await
             .context(warn!("No stake table for epoch"))?
             .has_stake(&task_state.public_key)
             .await,
-        debug!(
-            "We were not chosen for the consensus committee for view {:?}",
-            view_number
-        )
+        debug!("We were not chosen for the consensus committee for view {view_number:?}",)
     );
 
     let vote = TimeoutVote2::create_signed_vote(
@@ -434,10 +543,7 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     )
     .await;
 
-    tracing::error!(
-        "We did not receive evidence for view {} in time, sending timeout vote for that view!",
-        *view_number
-    );
+    tracing::error!("We did not receive evidence for view {view_number} in time, sending timeout vote for that view!");
 
     broadcast_event(
         Event {

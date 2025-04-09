@@ -6,6 +6,7 @@
 
 //! Types and structs for the hotshot signature keys
 
+use alloy::primitives::U256;
 use ark_serialize::SerializationError;
 use bitvec::{slice::BitSlice, vec::BitVec};
 use digest::generic_array::GenericArray;
@@ -13,17 +14,19 @@ use jf_signature::{
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair, SignKey, VerKey},
     SignatureError, SignatureScheme,
 };
-use primitive_types::U256;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use tracing::instrument;
 
 use crate::{
+    light_client::{LightClientState, StakeTableState},
     qc::{BitVectorQc, QcParams},
     stake_table::StakeTableEntry,
     traits::{
         qc::QuorumCertificateScheme,
-        signature_key::{BuilderSignatureKey, PrivateSignatureKey, SignatureKey},
+        signature_key::{
+            BuilderSignatureKey, PrivateSignatureKey, SignatureKey, StateSignatureKey,
+        },
     },
 };
 
@@ -31,6 +34,7 @@ use crate::{
 pub type BLSPrivKey = SignKey;
 /// BLS public key used to verify a signature
 pub type BLSPubKey = VerKey;
+pub type BLSKeyPair = KeyPair;
 /// Public parameters for BLS signature scheme
 pub type BLSPublicParam = ();
 
@@ -183,5 +187,68 @@ impl BuilderSignatureKey for BuilderKey {
         let new_seed = *hasher.finalize().as_bytes();
         let kp = KeyPair::generate(&mut ChaCha20Rng::from_seed(new_seed));
         (kp.ver_key(), kp.sign_key_ref().clone())
+    }
+}
+
+pub type SchnorrPubKey = jf_signature::schnorr::VerKey<ark_ed_on_bn254::EdwardsConfig>;
+pub type SchnorrPrivKey = jf_signature::schnorr::SignKey<ark_ed_on_bn254::Fr>;
+pub type SchnorrSignatureScheme =
+    jf_signature::schnorr::SchnorrSignatureScheme<ark_ed_on_bn254::EdwardsConfig>;
+
+impl PrivateSignatureKey for SchnorrPrivKey {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_bytes()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        Ok(Self::from_bytes(bytes))
+    }
+
+    fn to_tagged_base64(&self) -> Result<tagged_base64::TaggedBase64, tagged_base64::Tb64Error> {
+        self.to_tagged_base64()
+    }
+}
+
+impl StateSignatureKey for SchnorrPubKey {
+    type StatePrivateKey = SchnorrPrivKey;
+
+    type StateSignature = jf_signature::schnorr::Signature<ark_ed_on_bn254::EdwardsConfig>;
+
+    type SignError = SignatureError;
+
+    fn sign_state(
+        sk: &Self::StatePrivateKey,
+        light_client_state: &LightClientState,
+        next_stake_table_state: &StakeTableState,
+    ) -> Result<Self::StateSignature, Self::SignError> {
+        let mut msg = Vec::with_capacity(7);
+        let state_msg: [_; 3] = light_client_state.clone().into();
+        msg.extend_from_slice(&state_msg);
+        let adv_st_state_msg: [_; 4] = (*next_stake_table_state).into();
+        msg.extend_from_slice(&adv_st_state_msg);
+        SchnorrSignatureScheme::sign(&(), sk, msg, &mut rand::thread_rng())
+    }
+
+    fn verify_state_sig(
+        &self,
+        signature: &Self::StateSignature,
+        light_client_state: &LightClientState,
+        next_stake_table_state: &StakeTableState,
+    ) -> bool {
+        let mut msg = Vec::with_capacity(7);
+        let state_msg: [_; 3] = light_client_state.clone().into();
+        msg.extend_from_slice(&state_msg);
+        let adv_st_state_msg: [_; 4] = (*next_stake_table_state).into();
+        msg.extend_from_slice(&adv_st_state_msg);
+        SchnorrSignatureScheme::verify(&(), self, msg, signature).is_ok()
+    }
+
+    fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey) {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&seed);
+        hasher.update(&index.to_le_bytes());
+        let new_seed = *hasher.finalize().as_bytes();
+        let kp = jf_signature::schnorr::KeyPair::generate(&mut ChaCha20Rng::from_seed(new_seed));
+        (kp.ver_key(), kp.sign_key())
     }
 }

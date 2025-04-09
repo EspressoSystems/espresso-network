@@ -8,7 +8,6 @@ mod fee_info;
 mod header;
 mod instance_state;
 mod l1;
-mod signature;
 mod state;
 mod transaction;
 
@@ -18,6 +17,6 @@ pub use fee_info::*;
 pub use header::Header;
 pub use instance_state::*;
 pub use l1::*;
-pub use signature::BuilderSignature;
 pub use state::*;
 pub use transaction::*;
+pub use crate::eth_signature_key::BuilderSignature;

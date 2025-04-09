@@ -31,7 +31,7 @@ const FLOOD_INCREMENT: usize = 1000;
 /// - `Random` submits a certain amount of random transactions every view
 /// - `Seeded` accepts a map of transactions to submit on each view
 /// - `Flood` continually submits transactions, re-trying if it encounters an error on
-///    private mempool API.
+///   private mempool API.
 /// <div class="warning">
 /// Using [`Flood`] with [`SubmissionEndpoint::Public`] can overload network with transactions,
 /// because there's no form of backpressure on gossiped transactions
