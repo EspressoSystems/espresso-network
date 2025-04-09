@@ -848,6 +848,8 @@ pub mod test_helpers {
             bind_version: V,
         ) -> Self {
             let mut cfg = cfg;
+
+            tracing::error!("l1 url: {:?}", cfg.network_config.l1_url());
             let mut builder_tasks = Vec::new();
             let mut marketplace_builder_url = "http://example.com".parse().unwrap();
 
@@ -2982,7 +2984,7 @@ mod test {
 
         let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
         let l1_url = instance.endpoint_url();
-        dbg!(&l1_url);
+        tracing::error!("l1 url: {:?}", l1_url.clone());
         let secret_key = instance.keys()[0].clone();
         dbg!(&secret_key);
         let signer = LocalSigner::from(secret_key);
@@ -3012,13 +3014,15 @@ mod test {
 
         tracing::error!(
             "latest: {:?}, finalized: {:?}",
-            latest_block,
-            finalized_block
+            latest_block.unwrap().header.number,
+            finalized_block.unwrap().header.number
         );
         let network_config = TestConfigBuilder::default()
             .l1_url(l1_url.clone())
             .epoch_height(epoch_height)
             .build();
+
+        tracing::error!("network_config l1 url: {:?}", network_config.l1_url());
 
         let blocks_per_epoch = epoch_height;
         let epoch_start_block = network_config.hotshot_config().epoch_start_block;
@@ -3065,6 +3069,7 @@ mod test {
             contracts,
             true, // use mock
             blocks_per_epoch,
+            epoch_start_block,
         )
         .await?;
 
@@ -3089,7 +3094,7 @@ mod test {
 
         tracing::error!("stake_table_address: {:?}", stake_table_address);
         stake_in_contract_for_test(
-            l1_url.clone(),
+            network_config.l1_url(),
             signer,
             stake_table_address,
             contracts
@@ -3131,13 +3136,9 @@ mod test {
         let mut views = HashSet::new();
         let mut epochs = HashSet::new();
         for _ in 0..=600 {
-            let finalized_block = provider
-                .get_block(BlockId::finalized())
-                .full()
-                .await
-                .unwrap();
+            let finalized_block = provider.get_block(BlockId::finalized()).await.unwrap();
 
-            tracing::error!("finalized: {:?}", finalized_block);
+            tracing::error!("finalized: {:?}", finalized_block.unwrap().header.number);
 
             let event = subscribed_events.next().await.unwrap();
             let event = event.unwrap();

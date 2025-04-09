@@ -29,6 +29,7 @@ pub async fn stake_in_contract_for_test(
 ) -> Result<()> {
     tracing::info!("staking to stake table contract for demo");
 
+    tracing::error!("l1 url: {:?}", rpc_url);
     let mk_provider = |signer| {
         let wallet = EthereumWallet::from(signer);
         ProviderBuilder::new()

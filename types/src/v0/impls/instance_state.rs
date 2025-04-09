@@ -188,8 +188,7 @@ impl NodeState {
         Self::new(
             0,
             ChainConfig::default(),
-            L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
-                .expect("Failed to create L1 client"),
+            l1,
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 3>::version(),
             coordinator,
