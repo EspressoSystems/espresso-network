@@ -11,7 +11,9 @@ use alloy::{
 use clap::Parser;
 use espresso_types::parse_duration;
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
-use hotshot_state_prover::service::{run_prover_once, run_prover_service, StateProverConfig};
+use hotshot_state_prover::service::{
+    fetch_epoch_config_from_sequencer, run_prover_once, run_prover_service, StateProverConfig,
+};
 use sequencer_utils::logging;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -100,6 +102,30 @@ async fn main() {
         .build()
         .expect("fail to build signer")
         .with_chain_id(Some(chain_id));
+
+    let (blocks_per_epoch, epoch_start_block) =
+        fetch_epoch_config_from_sequencer(&args.sequencer_url)
+            .await
+            .unwrap_or((u64::MAX, u64::MAX));
+
+    // If the sequencer returns 0 for pre-epoch configuration.
+    let blocks_per_epoch = if blocks_per_epoch == 0 {
+        u64::MAX
+    } else {
+        blocks_per_epoch
+    };
+    let epoch_start_block = if epoch_start_block == 0 {
+        u64::MAX
+    } else {
+        epoch_start_block
+    };
+
+    tracing::info!(
+        "Epoch config fetched from sequencer: blocks_per_epoch = {}, epoch_start_block = {}",
+        blocks_per_epoch,
+        epoch_start_block
+    );
+
     let config = StateProverConfig {
         relay_server: args.relay_server,
         update_interval: args.update_interval,
@@ -110,7 +136,8 @@ async fn main() {
         sequencer_url: args.sequencer_url,
         port: args.port,
         stake_table_capacity: args.stake_table_capacity,
-        blocks_per_epoch: None, // fetch from sequencer on-demand
+        blocks_per_epoch,
+        epoch_start_block,
     };
 
     // validate that the light client contract is a proxy, panics otherwise

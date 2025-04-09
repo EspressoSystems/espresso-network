@@ -1251,11 +1251,14 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     });
 
     let mut accumulated_stake = U256::from(0);
-    let state_msg = (&state_cert.light_client_state).into();
     for (key, sig) in state_cert.signatures.iter() {
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
-            if !key.verify_state_sig(sig, &state_msg) {
+            if !key.verify_state_sig(
+                sig,
+                &state_cert.light_client_state,
+                &state_cert.next_stake_table_state,
+            ) {
                 bail!("Invalid light client state update certificate signature");
             }
         } else {

@@ -314,6 +314,7 @@ pub enum DaConsensusMessage<TYPES: NodeType> {
 /// Messages for sequencing consensus.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(bound(deserialize = "", serialize = ""))]
+#[allow(clippy::large_enum_variant)]
 pub enum SequencingMessage<TYPES: NodeType> {
     /// Messages related to validating and sequencing consensus
     General(GeneralConsensusMessage<TYPES>),

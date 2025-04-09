@@ -7,27 +7,22 @@ use std::{
 
 use async_lock::RwLock;
 use espresso_types::{traits::SequencerPersistence, PubKey};
-use hotshot::types::{Event, EventType};
-use hotshot_stake_table::vec_based::StakeTable;
+use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_types::{
     data::EpochNumber,
     event::LeafInfo,
     light_client::{
-        CircuitField, LightClientState, StakeTableState, StateSignKey, StateSignature,
-        StateSignatureRequestBody, StateSignatureScheme, StateVerKey,
+        compute_stake_table_commitment, LightClientState, StakeTableState, StateSignKey,
+        StateSignature, StateSignatureRequestBody, StateVerKey,
     },
-    signature_key::BLSPubKey,
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, Versions},
-        signature_key::StakeTableEntryType,
-        stake_table::StakeTableScheme as _,
+        signature_key::StateSignatureKey,
     },
     utils::{epoch_from_block_number, is_last_block},
-    PeerConfig,
 };
-use jf_signature::SignatureScheme;
 use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
@@ -171,14 +166,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         state: &LightClientState,
         next_stake_table: StakeTableState,
     ) -> StateSignature {
-        let mut msg = Vec::with_capacity(7);
-        let state_msg: [CircuitField; 3] = state.into();
-        msg.extend_from_slice(&state_msg);
-        let next_stake_msg: [CircuitField; 4] = next_stake_table.into();
-        msg.extend_from_slice(&next_stake_msg);
-
-        let signature =
-            StateSignatureScheme::sign(&(), &self.sign_key, msg, &mut rand::thread_rng()).unwrap();
+        let signature = <SchnorrPubKey as StateSignatureKey>::sign_state(
+            &self.sign_key,
+            state,
+            &next_stake_table,
+        )
+        .unwrap();
         let mut pool_guard = self.signatures.write().await;
         pool_guard.push(
             state.block_height,
@@ -216,24 +209,4 @@ impl StateSignatureMemStorage {
     pub fn get_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
         self.pool.get(&height).cloned()
     }
-}
-
-/// Given a list of stakers from `PeerConfig`, compute the stake table commitment
-pub fn compute_stake_table_commitment(
-    known_nodes_with_stakes: &[PeerConfig<SeqTypes>],
-    capacity: usize,
-) -> StakeTableState {
-    let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(capacity);
-    known_nodes_with_stakes.iter().for_each(|peer| {
-        // This `unwrap()` won't fail unless number of entries exceeds `capacity`
-        st.register(
-            *peer.stake_table_entry.key(),
-            peer.stake_table_entry.stake(),
-            peer.state_ver_key.clone(),
-        )
-        .unwrap();
-    });
-    st.advance();
-    st.advance();
-    st.voting_state().unwrap() // safe unwrap
 }

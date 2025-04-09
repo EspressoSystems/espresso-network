@@ -27,7 +27,7 @@ contract LightClientCommonTest is Test {
     address payable public proxyAddr;
     address public admin = makeAddr("admin");
     address public prover = makeAddr("prover");
-    uint64 public constant BLOCKS_PER_EPOCH = 3;
+    uint64 public constant BLOCKS_PER_EPOCH = 10;
 
     /// @dev initialized ledger like genesis and system params
     function init() public {
@@ -342,7 +342,7 @@ contract LightClient_newFinalizedState_Test is LightClientCommonTest {
     /// @dev Test happy path for updating after skipping a few blocks
     function test_UpdateAfterSkippedBlocks() external {
         // note: numBlockSkipped=1 is already tested in `testCorrectUpdate()`
-        for (uint32 numBlockSkipped = 2; numBlockSkipped < 5; numBlockSkipped++) {
+        for (uint32 numBlockSkipped = 3; numBlockSkipped < 6; numBlockSkipped++) {
             string[] memory cmds = new string[](3);
             cmds[0] = "diff-test";
             cmds[1] = "mock-skip-blocks";

@@ -16,7 +16,7 @@ use hotshot_types::{
         GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
     },
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
-    utils::is_last_block,
+    utils::is_epoch_root,
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -41,7 +41,7 @@ type SchnorrSignKey = jf_signature::schnorr::SignKey<ark_ed_on_bn254::Fr>;
 /// Stake table capacity used for testing
 pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 /// Number of block per epoch for testing
-pub const EPOCH_HEIGHT_FOR_TEST: u64 = 4;
+pub const EPOCH_HEIGHT_FOR_TEST: u64 = 10;
 
 /// Mock for system parameter of `MockLedger`
 pub struct MockSystemParam {
@@ -109,10 +109,12 @@ impl MockLedger {
     /// attempt to advance epoch, should be invoked at the *beginning* of every `fn elapse_xx()`
     fn try_advance_epoch(&mut self) {
         // if the new block is the first block of an epoch, update epoch
-        if is_last_block(self.state.block_height, self.pp.epoch_height) {
+        if is_epoch_root(self.state.block_height, self.pp.epoch_height) {
             self.epoch += 1;
             self.st.advance();
         }
+        // TODO: (alex) this logic isn't complete when we move on beyond the epoch root,
+        // we shall modify it so that we can elapse over the epoch root into the next epoch
     }
 
     /// Elapse a view with a new finalized block
@@ -332,7 +334,7 @@ impl MockLedger {
     /// Returns epoch-aware stake table state for the next block.
     /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
-        if is_last_block(self.state.block_height, self.pp.epoch_height) {
+        if is_epoch_root(self.state.block_height, self.pp.epoch_height) {
             self.st.next_voting_state().unwrap()
         } else {
             self.voting_stake_table_state()

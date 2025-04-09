@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     data::serialize_signature2,
     epoch_membership::EpochMembership,
-    light_client::LightClientState,
+    light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     simple_vote::{
         DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
@@ -749,6 +749,8 @@ pub struct LightClientStateUpdateCertificate<TYPES: NodeType> {
     pub epoch: TYPES::Epoch,
     /// Light client state for epoch transition
     pub light_client_state: LightClientState,
+    /// Next epoch stake table state
+    pub next_stake_table_state: StakeTableState,
     /// Signatures to the light client state
     pub signatures: Vec<(
         TYPES::StateSignatureKey,
@@ -773,6 +775,7 @@ impl<TYPES: NodeType> LightClientStateUpdateCertificate<TYPES> {
         Self {
             epoch: TYPES::Epoch::genesis(),
             light_client_state: Default::default(),
+            next_stake_table_state: Default::default(),
             signatures: vec![],
         }
     }

@@ -55,7 +55,7 @@ use sequencer::{
     catchup::StatePeers,
     context::{Consensus, SequencerContext},
     network,
-    state_signature::{compute_stake_table_commitment, StateSigner},
+    state_signature::StateSigner,
     L1Params, NetworkParams, Node, SequencerApiVersion,
 };
 use surf_disco::Client;

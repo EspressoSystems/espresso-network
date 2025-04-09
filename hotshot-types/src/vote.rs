@@ -20,7 +20,7 @@ use tracing::error;
 
 use crate::{
     epoch_membership::EpochMembership,
-    light_client::LightClientState,
+    light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     simple_certificate::{LightClientStateUpdateCertificate, Threshold},
     simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
@@ -246,7 +246,7 @@ type VoteMap2<COMMITMENT, PK, SIG> = HashMap<COMMITMENT, (U256, BTreeMap<PK, (SI
 #[allow(clippy::type_complexity)]
 pub struct LightClientStateUpdateVoteAccumulator<TYPES: NodeType> {
     pub vote_outcomes: HashMap<
-        LightClientState,
+        (LightClientState, StakeTableState),
         (
             U256,
             HashMap<
@@ -274,14 +274,17 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             state_ver_key,
         } = membership.stake(key).await?;
 
-        let state_msg = (&vote.light_client_state).into();
-        if !state_ver_key.verify_state_sig(&vote.signature, &state_msg) {
+        if !state_ver_key.verify_state_sig(
+            &vote.signature,
+            &vote.light_client_state,
+            &vote.next_stake_table_state,
+        ) {
             error!("Invalid light client state update vote {:?}", vote);
             return None;
         }
         let (total_stake_casted, vote_map) = self
             .vote_outcomes
-            .entry(vote.light_client_state.clone())
+            .entry((vote.light_client_state.clone(), vote.next_stake_table_state))
             .or_insert_with(|| (U256::from(0), HashMap::new()));
 
         // Check for duplicate vote
@@ -297,6 +300,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
             return Some(LightClientStateUpdateCertificate {
                 epoch,
                 light_client_state: vote.light_client_state.clone(),
+                next_stake_table_state: vote.next_stake_table_state,
                 signatures: Vec::from_iter(vote_map.iter().map(|(k, v)| (k.clone(), v.clone()))),
             });
         }
