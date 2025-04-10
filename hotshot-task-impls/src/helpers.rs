@@ -233,18 +233,25 @@ fn spawn_epoch_root_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
                 .add_epoch_root(next_epoch_number, header.clone())
                 .await
         };
+        tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
+
+        start = Instant::now();
         if let Some(write_callback) = write_callback {
             let mut membership_writer = membership.write().await;
             write_callback(&mut *membership_writer);
         }
-        tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
+        tracing::info!("Time write to membership: {:?}", start.elapsed());
 
+        start = Instant::now();
         let mut consensus_writer = consensus.write().await;
         consensus_writer
             .drb_results
             .garbage_collect(next_epoch_number);
         drop(consensus_writer);
-
+        tracing::info!(
+            "Time taken to garbage collect DRB results: {:?}",
+            start.elapsed()
+        );
         start_drb_task::<TYPES, I>(
             drb_seed_input,
             next_epoch_number,
