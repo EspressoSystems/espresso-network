@@ -457,6 +457,7 @@ async fn main() -> anyhow::Result<()> {
         max_connections: sequencer_api_max_connections,
     })
     .submit(Default::default())
+    .config(Default::default())
     .query_sql(Default::default(), sql);
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
