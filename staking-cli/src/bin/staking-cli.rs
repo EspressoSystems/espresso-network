@@ -193,7 +193,10 @@ pub async fn main() -> Result<()> {
     let token = EspToken::new(config.token_address, &provider);
 
     let result = match config.commands {
-        Commands::Info { l1_block_number } => {
+        Commands::Info {
+            l1_block_number,
+            compact,
+        } => {
             let query_block = l1_block_number.unwrap_or(BlockId::latest());
             let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
                 exit_err("Failed to get block {query_block}", "Block not found");
@@ -206,7 +209,7 @@ pub async fn main() -> Result<()> {
                 l1_block_resolved,
             )
             .await?;
-            display_stake_table(stake_table)?;
+            display_stake_table(stake_table, compact)?;
             return Ok(());
         },
         Commands::RegisterValidator {

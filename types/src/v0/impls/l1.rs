@@ -1,5 +1,6 @@
 use std::{
     cmp::{min, Ordering},
+    collections::BTreeMap,
     num::NonZeroUsize,
     pin::Pin,
     result::Result as StdResult,
@@ -43,10 +44,11 @@ use tracing::Instrument;
 use url::Url;
 
 use super::{
-    from_l1_events,
+    active_validator_set_from_l1_events,
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
     v0_3::Validator,
-    L1BlockInfo, L1BlockInfoWithParent, L1ClientMetrics, L1State, L1UpdateTask, StakeTableEvent,
+    validators_from_l1_events, L1BlockInfo, L1BlockInfoWithParent, L1ClientMetrics, L1State,
+    L1UpdateTask, StakeTableEvent,
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 
@@ -870,16 +872,12 @@ impl L1Client {
             .await
     }
 
-    /// Get `StakeTable` at specific l1 block height.
-    /// This function fetches and processes various events (ValidatorRegistered, ValidatorExit,
-    /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
-    /// contract's initialization block to the provided `to_block` value.
-    /// Events are fetched in chunks to and retries are implemented for failed requests.
-    pub async fn get_stake_table(
+    /// Fetch all stake table events from L1
+    pub async fn fetch_stake_table_events(
         &self,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<BTreeMap<(u64, u64), StakeTableEvent>> {
         let stake_table_contract = StakeTable::new(contract, self.provider.clone());
 
         // get the block number when the contract was initialized
@@ -1042,16 +1040,37 @@ impl L1Client {
         let keys_update = keys_update_events.flatten().collect().await;
 
         // Sort all events by log index and log block number for correct order.
-        let events = StakeTableEvent::sort_events(
+        StakeTableEvent::sort_events(
             registered,
             deregistered,
             delegated,
             undelegated,
             keys_update,
-        )?;
+        )
+    }
 
+    /// Get `StakeTable` at specific l1 block height.
+    /// This function fetches and processes various events (ValidatorRegistered, ValidatorExit,
+    /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
+    /// contract's initialization block to the provided `to_block` value.
+    /// Events are fetched in chunks to and retries are implemented for failed requests.
+    pub async fn fetch_stake_table(
+        &self,
+        contract: Address,
+        to_block: u64,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        let events = self.fetch_stake_table_events(contract, to_block).await?;
+        active_validator_set_from_l1_events(events.values().cloned())
+    }
+
+    pub async fn fetch_all_validators(
+        &self,
+        contract: Address,
+        to_block: u64,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        let events = self.fetch_stake_table_events(contract, to_block).await?;
         // Process the sorted events and return the resulting stake table.
-        from_l1_events(events.values().cloned())
+        validators_from_l1_events(events.values().cloned())
     }
 
     /// Check if the given address is a proxy contract.
