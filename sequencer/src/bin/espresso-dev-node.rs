@@ -9,7 +9,7 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::{Address, U256},
-    providers::{Provider, ProviderBuilder},
+    providers::{Provider, ProviderBuilder, WalletProvider},
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use async_trait::async_trait;
@@ -291,7 +291,7 @@ async fn main() -> anyhow::Result<()> {
         let provider = ProviderBuilder::new()
             .wallet(wallet.clone())
             .on_http(url.clone());
-        let admin = provider.get_accounts().await?[0];
+        let admin = provider.default_signer_address();
 
         let contracts = if url == l1_url {
             &mut l1_contracts
