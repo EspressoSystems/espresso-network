@@ -370,12 +370,9 @@ async fn fetch_epoch_state_from_sequencer(
 ) -> Result<LightClientStateUpdateCertificate<SeqTypes>, ProverError> {
     let state_cert =
         surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-            sequencer_url
-                .join("availability")
-                .with_context(|| "Invalid Url")
-                .map_err(ProverError::NetworkError)?,
+            sequencer_url.clone(),
         )
-        .get::<StateCertQueryData<SeqTypes>>(&format!("/state-cert/{}", epoch))
+        .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{}", epoch))
         .send()
         .await?;
     Ok(state_cert.0)
