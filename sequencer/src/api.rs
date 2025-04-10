@@ -3054,7 +3054,6 @@ mod test {
             admin,
         )
         .await?;
-        tracing::error!("stake_table_proxy_address: {:?}", stake_table_proxy_addr);
 
         let staking_priv_keys = network_config.staking_priv_keys();
 
@@ -3104,10 +3103,6 @@ mod test {
         let mut views = HashSet::new();
         let mut epochs = HashSet::new();
         for _ in 0..=600 {
-            let finalized_block = provider.get_block(BlockId::finalized()).await.unwrap();
-
-            tracing::error!("finalized: {:?}", finalized_block.unwrap().header.number);
-
             let event = subscribed_events.next().await.unwrap();
             let event = event.unwrap();
             let view_number = event.view_number;
