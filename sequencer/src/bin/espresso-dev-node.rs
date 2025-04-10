@@ -21,7 +21,7 @@ use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt}
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
-    light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
+    legacy_light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
 };
 use hotshot_types::{
     light_client::StateVerKey,
@@ -236,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
 
     let initial_stake_table = network_config.stake_table();
     let (genesis_state, genesis_stake) =
-        light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+        legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
     let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];
@@ -494,7 +494,6 @@ async fn main() -> anyhow::Result<()> {
         // manually fill up the relay server state
         let state = StateRelayServerState::new(
             Url::parse(&format!("http://localhost:{}", sequencer_api_port)).unwrap(),
-            STAKE_TABLE_CAPACITY_FOR_TEST,
         )
         .with_blocks_per_epoch(blocks_per_epoch)
         .with_epoch_start_block(epoch_start_block)

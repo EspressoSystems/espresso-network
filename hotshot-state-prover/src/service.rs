@@ -240,6 +240,38 @@ pub fn light_client_genesis_from_stake_table(
     ))
 }
 
+use hotshot_stake_table::vec_based::StakeTable;
+use hotshot_types::{
+    light_client::one_honest_threshold,
+    signature_key::BLSPubKey,
+    traits::stake_table::{SnapshotVersion, StakeTableScheme},
+};
+
+#[inline]
+// We'll get rid of it someday
+pub fn legacy_light_client_genesis_from_stake_table(
+    st: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
+) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
+    let (bls_comm, schnorr_comm, stake_comm) = st
+        .commitment(SnapshotVersion::LastEpochStart)
+        .expect("Commitment computation shouldn't fail.");
+    let threshold = one_honest_threshold(st.total_stake(SnapshotVersion::LastEpochStart)?);
+
+    Ok((
+        LightClientStateSol {
+            viewNum: 0,
+            blockHeight: 0,
+            blockCommRoot: U256::from(0u32),
+        },
+        StakeTableStateSol {
+            blsKeyComm: field_to_u256(bls_comm),
+            schnorrKeyComm: field_to_u256(schnorr_comm),
+            amountComm: field_to_u256(stake_comm),
+            threshold,
+        },
+    ))
+}
+
 pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
     let srs = {
         let num_gates = crate::circuit::build_for_preprocessing::<
