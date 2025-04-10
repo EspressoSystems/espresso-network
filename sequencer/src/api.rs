@@ -1821,9 +1821,9 @@ mod test {
         eips::BlockId,
         network::EthereumWallet,
         node_bindings::Anvil,
-        primitives::{utils::parse_ether, Address, U256},
+        primitives::{U256},
         providers::{Provider, ProviderBuilder},
-        signers::local::{coins_bip39::English, LocalSigner, MnemonicBuilder},
+        signers::local::{LocalSigner},
     };
 
     use committable::{Commitment, Committable};
@@ -1868,7 +1868,6 @@ mod test {
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use time::OffsetDateTime;
     use tokio::time::sleep;
-    use tracing::instrument::WithSubscriber;
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use self::{
