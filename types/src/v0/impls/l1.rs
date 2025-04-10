@@ -440,9 +440,26 @@ impl L1Client {
         let transport = self.transport.clone();
 
         let span = tracing::warn_span!("L1 client update");
+
         async move {
+
             for i in 0.. {
                 let ws;
+
+                // Fetch current L1 head block for the first value of the stream to avoid having
+                // to wait for new L1 blocks until the update loop starts processing blocks.
+                let l1_head = loop {
+                    match rpc.get_block(BlockId::latest()).await {
+                        Ok(Some(block)) => break block.header,
+                        Ok(None) => {
+                            tracing::info!("Failed to fetch L1 head block, will retry");
+                        },
+                        Err(err) => {
+                            tracing::info!("Failed to fetch L1 head block, will retry: err {err}");
+                        }
+                    }
+                    sleep(retry_delay).await;
+                };
 
                 // Subscribe to new blocks.
                 let mut block_stream = {
@@ -460,8 +477,8 @@ impl L1Client {
                                     continue;
                                 }
                             };
-                            ws.subscribe_blocks().await.map(|stream| stream.into_stream().boxed())
-                        }
+                            ws.subscribe_blocks().await.map(|stream| {stream::once(async { l1_head.clone() }).chain(stream.into_stream()).boxed()})
+                        },
                         None => {
                            rpc
                             .watch_blocks()
@@ -475,24 +492,26 @@ impl L1Client {
                                 // For HTTP, we simulate a subscription by polling. The polling
                                 // stream provided by ethers only yields block hashes, so for each
                                 // one, we have to go fetch the block itself.
-                                stream.map(stream::iter).flatten().filter_map(move |hash| {
-                                    let rpc = rpc.clone();
-                                    async move {
-                                        match rpc.get_block(BlockId::hash(hash)).await {
-                                            Ok(Some(block)) => Some(block.header),
-                                            // If we can't fetch the block for some reason, we can
-                                            // just skip it.
-                                            Ok(None) => {
-                                                tracing::warn!(%hash, "HTTP stream yielded a block hash that was not available");
-                                                None
-                                            }
-                                            Err(err) => {
-                                                tracing::warn!(%hash, "Error fetching block from HTTP stream: {err:#}");
-                                                None
+                                stream::once(async { l1_head.clone() })
+                                 .chain(
+                                    stream.map(stream::iter).flatten().filter_map(move |hash| {
+                                        let rpc = rpc.clone();
+                                        async move {
+                                            match rpc.get_block(BlockId::hash(hash)).await {
+                                                Ok(Some(block)) => Some(block.header),
+                                                // If we can't fetch the block for some reason, we can
+                                                // just skip it.
+                                                Ok(None) => {
+                                                    tracing::warn!(%hash, "HTTP stream yielded a block hash that was not available");
+                                                    None
+                                                }
+                                                Err(err) => {
+                                                    tracing::warn!(%hash, "Error fetching block from HTTP stream: {err:#}");
+                                                    None
+                                                }
                                             }
                                         }
-                                    }
-                                })
+                                    }))
                                 // Take until the transport is switched, so we will call `watch_blocks` instantly on it
                             }.take_until(transport.wait_switch())
                             .boxed())
