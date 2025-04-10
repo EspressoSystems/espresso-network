@@ -764,10 +764,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             .into_iter()
             .filter_map(|result| match result {
                 Ok(value) => Some(value),
-                Err(err) => {
-                    tracing::warn!(%err,"Error getting available blocks");
-                    None
-                },
+                Err(_) => None,
             })
             .flatten()
             .collect::<Vec<_>>()
@@ -804,6 +801,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         });
 
         if available_blocks.is_empty() {
+            tracing::info!("No available blocks");
             bail!("No available blocks");
         }
 
