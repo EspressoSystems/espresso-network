@@ -571,10 +571,7 @@ impl L1Client {
                                     );
                                     metrics.finalized.set(finalized.info.number as usize);
                                     state.snapshot.finalized = Some(finalized.info);
-                                    state.finalized.push(
-                                        finalized.info.number,
-                                        finalized,
-                                    );
+                                    state.put_finalized(finalized);
                                     sender
                                         .broadcast_direct(L1Event::NewFinalized { finalized })
                                         .await
