@@ -450,6 +450,7 @@ async fn epoch_root_update(
     proving_key: Arc<ProvingKey>,
     epoch: u64,
 ) -> Result<u64, ProverError> {
+    let epoch = epoch.max(state.config.start_epoch());
     tracing::info!("Syncing the epoch root of epoch={epoch}");
     let state_cert =
         fetch_epoch_root_state_from_sequencer(&state.config.sequencer_url, epoch).await?;
@@ -560,7 +561,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     tracing::debug!("Old state: {contract_state:?}");
     tracing::debug!("New state: {:?}", bundle.state);
 
-    tracing::debug!("contract stake table state: {st_state}");
+    tracing::debug!("contract stake table state: {voting_st_state}");
     tracing::debug!("bundle stake table state: {}", bundle.next_stake);
 
     let epoch_enabled = bundle.state.block_height >= epoch_start_block;
