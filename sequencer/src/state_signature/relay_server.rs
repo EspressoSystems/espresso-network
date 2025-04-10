@@ -5,7 +5,6 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use anyhow::Context;
 use async_lock::RwLock;
 use clap::Args;
 use espresso_types::{config::PublicNetworkConfig, SeqTypes};
