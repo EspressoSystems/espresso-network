@@ -442,9 +442,26 @@ impl L1Client {
         let transport = self.transport.clone();
 
         let span = tracing::warn_span!("L1 client update");
+
         async move {
+
             for i in 0.. {
                 let ws;
+
+                // Fetch current L1 head block for the first value of the stream to avoid having
+                // to wait for new L1 blocks until the update loop starts processing blocks.
+                let l1_head = loop {
+                    match rpc.get_block(BlockId::latest()).await {
+                        Ok(Some(block)) => break block.header,
+                        Ok(None) => {
+                            tracing::info!("Failed to fetch L1 head block, will retry");
+                        },
+                        Err(err) => {
+                            tracing::info!("Failed to fetch L1 head block, will retry: err {err}");
+                        }
+                    }
+                    sleep(retry_delay).await;
+                };
 
                 // Subscribe to new blocks.
                 let mut block_stream = {
@@ -462,8 +479,8 @@ impl L1Client {
                                     continue;
                                 }
                             };
-                            ws.subscribe_blocks().await.map(|stream| stream.into_stream().boxed())
-                        }
+                            ws.subscribe_blocks().await.map(|stream| {stream::once(async { l1_head.clone() }).chain(stream.into_stream()).boxed()})
+                        },
                         None => {
                            rpc
                             .watch_blocks()
@@ -477,24 +494,26 @@ impl L1Client {
                                 // For HTTP, we simulate a subscription by polling. The polling
                                 // stream provided by ethers only yields block hashes, so for each
                                 // one, we have to go fetch the block itself.
-                                stream.map(stream::iter).flatten().filter_map(move |hash| {
-                                    let rpc = rpc.clone();
-                                    async move {
-                                        match rpc.get_block(BlockId::hash(hash)).await {
-                                            Ok(Some(block)) => Some(block.header),
-                                            // If we can't fetch the block for some reason, we can
-                                            // just skip it.
-                                            Ok(None) => {
-                                                tracing::warn!(%hash, "HTTP stream yielded a block hash that was not available");
-                                                None
-                                            }
-                                            Err(err) => {
-                                                tracing::warn!(%hash, "Error fetching block from HTTP stream: {err:#}");
-                                                None
+                                stream::once(async { l1_head.clone() })
+                                 .chain(
+                                    stream.map(stream::iter).flatten().filter_map(move |hash| {
+                                        let rpc = rpc.clone();
+                                        async move {
+                                            match rpc.get_block(BlockId::hash(hash)).await {
+                                                Ok(Some(block)) => Some(block.header),
+                                                // If we can't fetch the block for some reason, we can
+                                                // just skip it.
+                                                Ok(None) => {
+                                                    tracing::warn!(%hash, "HTTP stream yielded a block hash that was not available");
+                                                    None
+                                                }
+                                                Err(err) => {
+                                                    tracing::warn!(%hash, "Error fetching block from HTTP stream: {err:#}");
+                                                    None
+                                                }
                                             }
                                         }
-                                    }
-                                })
+                                    }))
                                 // Take until the transport is switched, so we will call `watch_blocks` instantly on it
                             }.take_until(transport.wait_switch())
                             .boxed())
@@ -523,7 +542,7 @@ impl L1Client {
                             // A new block has been produced. This happens fairly rarely, so it is now ok to
                             // poll to see if a new block has been finalized.
                             let finalized = loop {
-                                match get_finalized_block(&rpc).await {
+                                match fetch_finalized_block_from_rpc(&rpc).await {
                                     Ok(finalized) => break finalized,
                                     Err(err) => {
                                         tracing::warn!("Error getting finalized block: {err:#}");
@@ -554,6 +573,7 @@ impl L1Client {
                                     );
                                     metrics.finalized.set(finalized.info.number as usize);
                                     state.snapshot.finalized = Some(finalized.info);
+                                    state.put_finalized(finalized);
                                     sender
                                         .broadcast_direct(L1Event::NewFinalized { finalized })
                                         .await
@@ -638,7 +658,7 @@ impl L1Client {
                 let state = self.state.lock().await;
                 if let Some(finalized) = state.snapshot.finalized {
                     if finalized.number >= number {
-                        return self.get_finalized_block(state, number).await.1;
+                        return self.fetch_finalized_block_by_number(state, number).await.1;
                     }
                     tracing::info!(
                         number,
@@ -657,7 +677,7 @@ impl L1Client {
                 state.put_finalized(finalized);
                 if finalized.info.number >= number {
                     tracing::info!(number, ?finalized, "got finalized L1 block");
-                    return self.get_finalized_block(state, number).await.1;
+                    return self.fetch_finalized_block_by_number(state, number).await.1;
                 }
                 tracing::debug!(number, ?finalized, "waiting for finalized L1 block");
             }
@@ -712,7 +732,9 @@ impl L1Client {
         // It is possible there is some earlier block that also has the proper timestamp. Work
         // backwards until we find the true earliest block.
         loop {
-            let (state_lock, parent) = self.get_finalized_block(state, block.number - 1).await;
+            let (state_lock, parent) = self
+                .fetch_finalized_block_by_number(state, block.number - 1)
+                .await;
             if parent.timestamp < timestamp {
                 return block;
             }
@@ -721,7 +743,7 @@ impl L1Client {
         }
     }
 
-    async fn get_finalized_block<'a>(
+    async fn fetch_finalized_block_by_number<'a>(
         &'a self,
         mut state: MutexGuard<'a, L1State>,
         number: u64,
@@ -753,7 +775,7 @@ impl L1Client {
                 // Don't hold state lock while fetching from network.
                 drop(state);
                 let block = loop {
-                    match get_finalized_block(&self.provider).await {
+                    match fetch_finalized_block_from_rpc(&self.provider).await {
                         Ok(Some(block)) => {
                             break block;
                         },
@@ -1157,7 +1179,9 @@ impl L1State {
     }
 }
 
-async fn get_finalized_block(rpc: &impl Provider) -> anyhow::Result<Option<L1BlockInfoWithParent>> {
+async fn fetch_finalized_block_from_rpc(
+    rpc: &impl Provider,
+) -> anyhow::Result<Option<L1BlockInfoWithParent>> {
     let Some(block) = rpc.get_block(BlockId::finalized()).await? else {
         // This can happen in rare cases where the L1 chain is very young and has not finalized a
         // block yet. This is more common in testing and demo environments. In any case, we proceed
@@ -1655,5 +1679,27 @@ mod test {
         provider.get_block_number().await.unwrap_err();
         provider.get_block_number().await.unwrap();
         assert!(get_failover_index(&provider) == 1);
+    }
+
+    // Checks that the L1 client initialized the state on startup even
+    // if the L1 is not currently mining blocks. It's useful for testing that we
+    // don't require an L1 that is continuously mining blocks.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_update_loop_initializes_l1_state() {
+        setup_test();
+        let anvil = Arc::new(Anvil::new().port(9988u16).spawn());
+        let l1_client = new_l1_client(&anvil, true).await;
+
+        for _try in 0..10 {
+            let mut state = l1_client.state.lock().await;
+            let has_snapshot = state.snapshot.finalized.is_some();
+            let has_cache = state.finalized.get(&0).is_some();
+            drop(state);
+            if has_snapshot && has_cache {
+                return;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        panic!("L1 state of L1Client not initialized");
     }
 }
