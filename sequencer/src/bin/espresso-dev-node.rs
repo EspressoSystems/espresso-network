@@ -172,10 +172,6 @@ struct Args {
     #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 40)]
     epoch_height: u64,
 
-    /// The block number at which the epoch starts.
-    #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_START_BLOCK", default_value_t = 1)]
-    epoch_start_block: u64,
-
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
@@ -210,7 +206,6 @@ async fn main() -> anyhow::Result<()> {
         l1_interval: _,
         max_block_size,
         epoch_height,
-        epoch_start_block,
     } = cli_params;
 
     logging.init();
@@ -235,7 +230,6 @@ async fn main() -> anyhow::Result<()> {
         .builder_port(builder_port)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
-        .epoch_start_block(epoch_start_block)
         .build();
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
