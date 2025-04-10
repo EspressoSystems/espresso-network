@@ -35,7 +35,7 @@ use hotshot_types::{
         stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme as _},
     },
     utils::{epoch_from_block_number, is_epoch_root, is_gt_epoch_root},
-    HotShotConfig, PeerConfig,
+    PeerConfig,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
@@ -187,11 +187,11 @@ pub async fn fetch_stake_table_from_sequencer(
         if epoch == 0 {
             loop {
                 match client
-                    .get::<HotShotConfig<SeqTypes>>("config/hotshot")
+                    .get::<PublicNetworkConfig>("config/hotshot")
                     .send()
                     .await
                 {
-                    Ok(resp) => break resp.known_nodes_with_stake,
+                    Ok(resp) => break resp.hotshot_config().known_nodes_with_stake(),
                     Err(e) => {
                         tracing::error!("Failed to fetch the network config: {e}");
                         sleep(Duration::from_secs(5)).await;
