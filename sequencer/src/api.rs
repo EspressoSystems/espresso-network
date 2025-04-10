@@ -1818,8 +1818,12 @@ mod test {
     };
 
     use alloy::{
-        network::EthereumWallet, node_bindings::Anvil, primitives::U256,
-        providers::ProviderBuilder, signers::local::LocalSigner,
+        eips::BlockId,
+        network::EthereumWallet,
+        node_bindings::Anvil,
+        primitives::{utils::parse_ether, Address, U256},
+        providers::{Provider, ProviderBuilder},
+        signers::local::{coins_bip39::English, LocalSigner, MnemonicBuilder},
     };
 
     use committable::{Commitment, Committable};
@@ -1841,6 +1845,7 @@ mod test {
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         types::HeightIndexed,
     };
+    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -1863,6 +1868,7 @@ mod test {
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use time::OffsetDateTime;
     use tokio::time::sleep;
+    use tracing::instrument::WithSubscriber;
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use self::{
@@ -2980,12 +2986,22 @@ mod test {
         let secret_key = instance.keys()[0].clone();
         let signer = LocalSigner::from(secret_key);
 
+        let mnemonic = "test test test test test test test test test test test junk";
+        let signer = MnemonicBuilder::<English>::default()
+            .phrase(mnemonic)
+            .index(0)
+            .expect("error building wallet")
+            .build()
+            .expect("error opening wallet");
+
         let contracts = &mut Contracts::new();
 
         let wallet = EthereumWallet::from(signer.clone());
         let provider = ProviderBuilder::new()
             .wallet(wallet.clone())
             .on_http(l1_url.clone());
+        let admin = provider.get_accounts().await?[0];
+
 
         let network_config = TestConfigBuilder::default()
             .l1_url(l1_url.clone())
@@ -2994,6 +3010,9 @@ mod test {
 
         let blocks_per_epoch = epoch_height;
         let epoch_start_block = network_config.hotshot_config().epoch_start_block;
+        let initial_stake_table = network_config.stake_table();
+        let (genesis_state, genesis_stake) =
+            light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
@@ -3010,6 +3029,24 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
 
+        let fee_proxy_addr =
+            deployer::deploy_fee_contract_proxy(&provider, contracts, admin).await?;
+
+        // deploy EspToken, proxy
+        let token_proxy_addr =
+            deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+
+        // deploy light client v1, proxy
+        let lc_proxy_addr = deployer::deploy_light_client_proxy(
+            &provider,
+            contracts,
+            true, // use mock
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            None, // no permissioned prover
+        )
+        .await?;
         // upgrade to LightClientV2
         deployer::upgrade_light_client_v2(
             &provider,
@@ -3019,6 +3056,19 @@ mod test {
             epoch_start_block,
         )
         .await?;
+
+        // deploy permissionless stake table
+        let exit_escrow_period = U256::from(300); // 300 sec
+        let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+            &provider,
+            contracts,
+            token_proxy_addr,
+            lc_proxy_addr,
+            exit_escrow_period,
+            admin,
+        )
+        .await?;
+        tracing::error!("stake_table_proxy_address: {:?}", stake_table_proxy_addr);
 
         let staking_priv_keys = network_config.staking_priv_keys();
 
@@ -3055,7 +3105,7 @@ mod test {
             .network_config(network_config.clone())
             .build();
 
-        let _ = TestNetwork::new(config, PosVersion::new()).await;
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
 
         let mut subscribed_events = client
             .socket("hotshot-events/events")
@@ -3068,6 +3118,10 @@ mod test {
         let mut views = HashSet::new();
         let mut epochs = HashSet::new();
         for _ in 0..=600 {
+            let finalized_block = provider.get_block(BlockId::finalized()).await.unwrap();
+
+            tracing::error!("finalized: {:?}", finalized_block.unwrap().header.number);
+
             let event = subscribed_events.next().await.unwrap();
             let event = event.unwrap();
             let view_number = event.view_number;
