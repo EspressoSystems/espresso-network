@@ -1821,11 +1821,10 @@ mod test {
         eips::BlockId,
         network::EthereumWallet,
         node_bindings::Anvil,
-        primitives::{U256},
+        primitives::U256,
         providers::{Provider, ProviderBuilder},
-        signers::local::{LocalSigner},
+        signers::local::LocalSigner,
     };
-
     use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
@@ -2993,7 +2992,6 @@ mod test {
             .on_http(l1_url.clone());
         let admin = provider.get_accounts().await?[0];
 
-
         let network_config = TestConfigBuilder::default()
             .l1_url(l1_url.clone())
             .epoch_height(epoch_height)
@@ -3019,7 +3017,6 @@ mod test {
 
         let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
-
 
         // deploy EspToken, proxy
         let token_proxy_addr =
