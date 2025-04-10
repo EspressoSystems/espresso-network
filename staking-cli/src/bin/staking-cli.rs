@@ -115,7 +115,7 @@ pub async fn main() -> Result<()> {
     // commands are not present.
     match config.commands {
         Commands::Init => {
-            let config = toml::from_str::<Config>(include_str!("../../config.demo.toml"))?;
+            let config = toml::from_str::<Config>(include_str!("../../config.decaf.toml"))?;
 
             // Create directory where config file will be saved
             std::fs::create_dir_all(cli.config_dir()).unwrap_or_else(|err| {
@@ -126,7 +126,11 @@ pub async fn main() -> Result<()> {
             std::fs::write(&config_path, toml::to_string(&config)?)
                 .unwrap_or_else(|err| exit_err("failed to write config file", err));
 
-            println!("Config file saved to {}", config_path.display());
+            println!("New config file saved to {}", config_path.display());
+            println!(
+                "Fill in your mnemonic in the config file at {}",
+                config_path.display()
+            );
             return Ok(());
         },
         Commands::Purge { force } => {
@@ -173,9 +177,6 @@ pub async fn main() -> Result<()> {
     // common configuration mistakes.
     if config.stake_table_address == Address::ZERO {
         exit("Stake table address is not set")
-    };
-    if config.token_address == Address::ZERO {
-        exit("ESP token address is not set")
     };
 
     let signer = MnemonicBuilder::<English>::default()
