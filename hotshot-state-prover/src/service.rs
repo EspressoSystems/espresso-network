@@ -35,7 +35,7 @@ use hotshot_types::{
         stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme as _},
     },
     utils::{epoch_from_block_number, is_epoch_root},
-    PeerConfig,
+    HotShotConfig, PeerConfig,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
@@ -104,6 +104,11 @@ impl ProverServiceState {
     }
 
     pub async fn sync_with_epoch(&mut self, epoch: u64) -> Result<()> {
+        let epoch = if epoch < self.config.start_epoch() {
+            0
+        } else {
+            epoch
+        };
         if epoch != self.epoch {
             self.stake_table = fetch_stake_table_from_sequencer(
                 &self.config.sequencer_url,
@@ -173,20 +178,40 @@ pub async fn fetch_stake_table_from_sequencer(
     tracing::info!("Updating stake table from sequencer: {sequencer_url}");
 
     // Request the configuration until it is successful
-    let peer_configs = loop {
-        // TODO: (alex) remove hardcoded version number
-        match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
+    let peer_configs = {
+        let client = surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
-        )
-        .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{epoch}"))
-        .send()
-        .await
-        {
-            Ok(resp) => break resp,
-            Err(e) => {
-                tracing::error!("Failed to fetch the network config: {e}");
-                sleep(Duration::from_secs(5)).await;
-            },
+        );
+        if epoch == 0 {
+            loop {
+                // TODO: (alex) remove hardcoded version number
+                match client
+                    .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{epoch}"))
+                    .send()
+                    .await
+                {
+                    Ok(resp) => break resp,
+                    Err(e) => {
+                        tracing::error!("Failed to fetch the network config: {e}");
+                        sleep(Duration::from_secs(5)).await;
+                    },
+                }
+            }
+        } else {
+            loop {
+                // TODO: (alex) remove hardcoded version number
+                match client
+                    .get::<HotShotConfig<SeqTypes>>("config/hotshot")
+                    .send()
+                    .await
+                {
+                    Ok(resp) => break resp.known_nodes_with_stake,
+                    Err(e) => {
+                        tracing::error!("Failed to fetch the network config: {e}");
+                        sleep(Duration::from_secs(5)).await;
+                    },
+                }
+            }
         }
     };
 
