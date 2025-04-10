@@ -848,8 +848,6 @@ pub mod test_helpers {
             bind_version: V,
         ) -> Self {
             let mut cfg = cfg;
-
-            tracing::error!("l1 url: {:?}", cfg.network_config.l1_url());
             let mut builder_tasks = Vec::new();
             let mut marketplace_builder_url = "http://example.com".parse().unwrap();
 
