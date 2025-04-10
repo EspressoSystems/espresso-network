@@ -105,25 +105,26 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = consensus.epoch_height;
 
-                let next_stake_table = if is_last_block(cur_block_height, blocks_per_epoch) {
-                    // during the last block of each epoch, we will use a new `next_stake_table`
-                    let cur_epoch = epoch_from_block_number(cur_block_height, blocks_per_epoch);
-                    let Ok(membership) = consensus
-                        .membership_coordinator
-                        .membership_for_epoch(Some(EpochNumber::new(cur_epoch + 1)))
-                        .await
-                    else {
-                        tracing::error!("Fail to get membership for epoch: {}", cur_epoch + 1);
-                        return;
+                let next_stake_table =
+                    if leaf.with_epoch & is_last_block(cur_block_height, blocks_per_epoch) {
+                        // during the last block of each epoch, we will use a new `next_stake_table`
+                        let cur_epoch = epoch_from_block_number(cur_block_height, blocks_per_epoch);
+                        let Ok(membership) = consensus
+                            .membership_coordinator
+                            .membership_for_epoch(Some(EpochNumber::new(cur_epoch + 1)))
+                            .await
+                        else {
+                            tracing::error!("Fail to get membership for epoch: {}", cur_epoch + 1);
+                            return;
+                        };
+                        compute_stake_table_commitment(
+                            &membership.stake_table().await,
+                            self.stake_table_capacity as usize,
+                        )
+                    } else {
+                        // during non-last-block (most cases), the stake table used for the next block is exactly the same
+                        self.voting_stake_table
                     };
-                    compute_stake_table_commitment(
-                        &membership.stake_table().await,
-                        self.stake_table_capacity as usize,
-                    )
-                } else {
-                    // during non-last-block (most cases), the stake table used for the next block is exactly the same
-                    self.voting_stake_table
-                };
 
                 let signature = self.sign_new_state(&state, next_stake_table).await;
 
