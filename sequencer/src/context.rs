@@ -138,6 +138,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
                 .try_into()
                 .context("stake table capacity out of range")?,
         );
+        let stake_table_epoch = None;
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             config.known_nodes_with_stake.clone(),
@@ -167,6 +168,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             validator_config.state_private_key.clone(),
             validator_config.state_public_key.clone(),
             stake_table_commit,
+            stake_table_epoch,
             stake_table_capacity,
         );
         if let Some(url) = state_relay_server {

@@ -9,7 +9,6 @@ use async_lock::RwLock;
 use espresso_types::{traits::SequencerPersistence, PubKey};
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_types::{
-    data::EpochNumber,
     event::LeafInfo,
     light_client::{
         compute_stake_table_commitment, LightClientState, StakeTableState, StateSignKey,
@@ -18,12 +17,10 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{NodeType, Versions},
         signature_key::StateSignatureKey,
     },
-    utils::{
-        epoch_from_block_number, is_ge_epoch_root, is_last_block, option_epoch_from_block_number,
-    },
+    utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
 use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
@@ -113,7 +110,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let blocks_per_epoch = consensus.epoch_height;
 
                 // The last few state update is handled in the consensus, we do not sign them.
-                if is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
+                if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
                     return;
                 }
 
