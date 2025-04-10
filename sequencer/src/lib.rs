@@ -846,6 +846,11 @@ pub mod testing {
             self
         }
 
+        pub fn epoch_start_block(mut self, epoch_start_block: u64) -> Self {
+            self.config.epoch_start_block = epoch_start_block;
+            self
+        }
+
         pub fn build(self) -> TestConfig<NUM_NODES> {
             TestConfig {
                 config: self.config,
