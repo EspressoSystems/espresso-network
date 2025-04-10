@@ -1637,4 +1637,26 @@ mod test {
         provider.get_block_number().await.unwrap();
         assert!(get_failover_index(&provider) == 1);
     }
+
+    // Checks that the L1 client initialized the state on startup even
+    // if the L1 is not currently mining blocks. It's useful for testing that we
+    // don't require an L1 that is continuously mining blocks.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_update_loop_initializes_l1_state() {
+        setup_test();
+        let anvil = Arc::new(Anvil::new().port(9988u16).spawn());
+        let l1_client = new_l1_client(&anvil, true).await;
+
+        for _try in 0..10 {
+            let mut state = l1_client.state.lock().await;
+            let has_snaphot = state.snapshot.finalized.is_some();
+            let has_cache = state.finalized.get(&0).is_some();
+            drop(state);
+            if has_snaphot && has_cache {
+                return;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        panic!("L1 state of L1Client not initialized");
+    }
 }
