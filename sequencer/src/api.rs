@@ -3020,8 +3020,6 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
 
-        let fee_proxy_addr =
-            deployer::deploy_fee_contract_proxy(&provider, contracts, admin).await?;
 
         // deploy EspToken, proxy
         let token_proxy_addr =
