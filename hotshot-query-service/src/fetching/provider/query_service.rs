@@ -271,7 +271,10 @@ where
 
                 Some(payload.data)
             },
-            Err(_err) => self.fetch_legacy_payload::<Types>(req).await,
+            Err(err) => {
+                tracing::warn!("error fetching block payload {err}");
+                self.fetch_legacy_payload::<Types>(req).await
+            },
         }
     }
 }
@@ -311,7 +314,10 @@ where
 
                 Some(leaf)
             },
-            Err(_err) => self.fetch_legacy_leaf(req).await,
+            Err(err) => {
+                tracing::warn!("error fetching v2 leaf {err}");
+                self.fetch_legacy_leaf(req).await
+            },
         }
     }
 }
@@ -354,7 +360,10 @@ where
                     }
                 },
             },
-            Err(_err) => self.fetch_legacy_vid_common::<Types>(req).await,
+            Err(err) => {
+                tracing::warn!("error fetching v1 vid common {err}");
+                self.fetch_legacy_vid_common::<Types>(req).await
+            },
         }
     }
 }
