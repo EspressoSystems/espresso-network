@@ -29,7 +29,7 @@ use crate::{
 
 /// Capacity of the stake table, used for light client
 /// TODO(Chengyu): this should be loaded from the sequencer config
-pub const STAKE_TABLE_CAPACITY: usize = 100;
+pub const STAKE_TABLE_CAPACITY: usize = 200;
 /// Base field in the prover circuit
 pub type CircuitField = ark_ed_on_bn254::Fq;
 /// Concrete type for light client state
