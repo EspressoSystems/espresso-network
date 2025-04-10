@@ -5,10 +5,9 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use anyhow::Context;
 use async_lock::RwLock;
 use clap::Args;
-use espresso_types::SeqTypes;
+use espresso_types::{config::PublicNetworkConfig, SeqTypes};
 use futures::FutureExt;
 use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
@@ -133,6 +132,7 @@ impl StateRelayServerState {
     /// NOTE: should not be publicly invocable, always in-sync with `self.queue` for easier garbage collection.
     async fn sync_stake_table(&mut self, height: u64) -> anyhow::Result<()> {
         let blocks_per_epoch = self.blocks_per_epoch.expect("forget to init genesis");
+        let epoch_start_block = self.epoch_start_block.expect("forget to init genesis");
         let epoch = epoch_from_block_number(height, blocks_per_epoch);
         let latest_epoch = epoch_from_block_number(
             self.latest_block_height.unwrap_or_default(),
@@ -153,21 +153,38 @@ impl StateRelayServerState {
 
         tracing::info!(%epoch,"Syncing stake table ");
 
-        let endpoint = self
-            .sequencer_url
-            .join(&format!("/node/stake-table/{epoch}"))
-            .with_context(|| "invalid URL")?;
-        let peer_configs = loop {
-            match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(endpoint.clone())
-                .get::<Vec<PeerConfig<SeqTypes>>>(endpoint.as_str())
-                .send()
-                .await
-            {
-                Ok(config) => break config,
-                Err(e) => {
-                    tracing::error!("Failed to fetch stake table: {e}");
-                    sleep(Duration::from_secs(5)).await;
-                },
+        let peer_configs = {
+            let client = surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                self.sequencer_url.clone(),
+            );
+            if height >= epoch_start_block {
+                loop {
+                    match client
+                        .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{epoch}"))
+                        .send()
+                        .await
+                    {
+                        Ok(config) => break config,
+                        Err(e) => {
+                            tracing::error!("Failed to fetch stake table: {e}");
+                            sleep(Duration::from_secs(5)).await;
+                        },
+                    }
+                }
+            } else {
+                loop {
+                    match client
+                        .get::<PublicNetworkConfig>("config/hotshot")
+                        .send()
+                        .await
+                    {
+                        Ok(config) => break config.hotshot_config().known_nodes_with_stake(),
+                        Err(e) => {
+                            tracing::error!("Failed to fetch stake table: {e}");
+                            sleep(Duration::from_secs(5)).await;
+                        },
+                    }
+                }
             }
         };
 
