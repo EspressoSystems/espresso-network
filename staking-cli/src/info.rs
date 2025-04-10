@@ -31,7 +31,7 @@ pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool
         let bls_key = validator.stake_table_key.to_string();
         let key_str = if compact {
             let end = bls_key.chars().map(|c| c.len_utf8()).take(40).sum();
-            format!("{}..", bls_key[..end].to_string())
+            format!("{}..", &bls_key[..end])
         } else {
             bls_key.to_string()
         };
@@ -48,7 +48,7 @@ pub fn display_stake_table(stake_table: Vec<Validator<BLSPubKey>>, compact: bool
 
         // sort delegators by address for easier reading
         let mut delegators = validator.delegators.iter().collect::<Vec<_>>();
-        delegators.sort_by(|a, b| a.0.cmp(&b.0));
+        delegators.sort_by(|a, b| a.0.cmp(b.0));
         for (delegator, stake) in delegators {
             tracing::info!(
                 " - Delegator {delegator}: stake={} ESP",
