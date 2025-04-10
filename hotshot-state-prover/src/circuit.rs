@@ -307,7 +307,7 @@ where
     Ok((
         circuit,
         GenericPublicInput::new(
-            lightclient_state.clone(),
+            *lightclient_state,
             *stake_table_state,
             *next_stake_table_state,
         ),
@@ -494,7 +494,7 @@ mod tests {
             .is_err());
 
         // bad path: bad stake table commitment
-        let mut bad_lightclient_state = lightclient_state.clone();
+        let mut bad_lightclient_state = lightclient_state;
         bad_lightclient_state.view_number += 1;
 
         let (bad_circuit, public_inputs) = build(

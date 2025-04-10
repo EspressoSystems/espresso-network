@@ -284,7 +284,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         }
         let (total_stake_casted, vote_map) = self
             .vote_outcomes
-            .entry((vote.light_client_state.clone(), vote.next_stake_table_state))
+            .entry((vote.light_client_state, vote.next_stake_table_state))
             .or_insert_with(|| (U256::from(0), HashMap::new()));
 
         // Check for duplicate vote
@@ -299,7 +299,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         if *total_stake_casted >= threshold {
             return Some(LightClientStateUpdateCertificate {
                 epoch,
-                light_client_state: vote.light_client_state.clone(),
+                light_client_state: vote.light_client_state,
                 next_stake_table_state: vote.next_stake_table_state,
                 signatures: Vec::from_iter(vote_map.iter().map(|(k, v)| (k.clone(), v.clone()))),
             });

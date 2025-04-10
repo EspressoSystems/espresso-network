@@ -34,7 +34,7 @@ use hotshot_types::{
         signature_key::{StakeTableEntryType, StateSignatureKey},
         stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme as _},
     },
-    utils::{epoch_from_block_number, is_ge_epoch_root},
+    utils::{epoch_from_block_number, is_epoch_root},
     PeerConfig,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -86,7 +86,7 @@ pub struct ProverServiceState {
     pub config: StateProverConfig,
     /// The current epoch number of the stake table
     pub epoch: u64,
-    /// The stake table
+    /// The actively voting stake table
     pub stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
 }
 
@@ -99,21 +99,6 @@ impl ProverServiceState {
         Ok(Self {
             config,
             epoch: 0,
-            stake_table,
-        })
-    }
-
-    pub async fn from_epoch(config: StateProverConfig, epoch: u64) -> Result<Self> {
-        let stake_table = fetch_stake_table_from_sequencer(
-            &config.sequencer_url,
-            epoch,
-            config.stake_table_capacity,
-        )
-        .await
-        .with_context(|| format!("Failed to initialize stake table for epoch: {}", epoch))?;
-        Ok(Self {
-            config,
-            epoch,
             stake_table,
         })
     }
@@ -173,7 +158,7 @@ pub async fn fetch_epoch_config_from_sequencer(sequencer_url: &Url) -> anyhow::R
     Ok(epoch_config)
 }
 
-/// Initialize the stake table from a sequencer node given the epoch number
+/// Fetch the stake table from a sequencer node given the epoch number
 ///
 /// Does not error, runs until the stake table is provided.
 pub async fn fetch_stake_table_from_sequencer(
@@ -181,10 +166,11 @@ pub async fn fetch_stake_table_from_sequencer(
     epoch: u64,
     stake_table_capacity: usize,
 ) -> Result<StakeTable<BLSPubKey, StateVerKey, CircuitField>> {
-    tracing::info!("Initializing stake table from node at {sequencer_url}");
+    tracing::info!("Updating stake table from sequencer: {sequencer_url}");
 
     // Request the configuration until it is successful
     let peer_configs = loop {
+        // TODO: (alex) remove hardcoded version number
         match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         )
@@ -291,7 +277,7 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 }
 
 #[inline(always)]
-/// Get the latest LightClientState and signature bundle from Sequencer network
+/// Get the latest LightClientState and signature bundle from the relay-server
 pub async fn fetch_latest_state<ApiVer: StaticVersionType>(
     client: &Client<ServerError, ApiVer>,
 ) -> Result<StateSignaturesBundle, ServerError> {
@@ -353,7 +339,7 @@ pub async fn submit_state_and_proof(
         .map_err(ProverError::ContractError)?;
 
     tracing::info!(
-        "Submitted state and proof to L1: tx=0x{:x} block={included_block}; success={}",
+        "Submitted state and proof to L1: tx=0x{:x} at block={included_block}; success={}",
         receipt.transaction_hash,
         receipt.inner.status()
     );
@@ -364,7 +350,9 @@ pub async fn submit_state_and_proof(
     Ok(receipt)
 }
 
-async fn fetch_epoch_state_from_sequencer(
+/// Fetch the epoch root directly from sequencer. Normally in-epoch updates/bundle are received from
+/// the relay server, but epoch root update is special due to availability concern.
+async fn fetch_epoch_root_state_from_sequencer(
     sequencer_url: &Url,
     epoch: u64,
 ) -> Result<LightClientStateUpdateCertificate<SeqTypes>, ProverError> {
@@ -378,8 +366,10 @@ async fn fetch_epoch_state_from_sequencer(
     Ok(state_cert.0)
 }
 
-async fn generate_proof_helper(
-    state: &mut ProverServiceState,
+/// Generate the SNARK proof given all necessary data
+/// Returns the (proof, public_input) tuple
+async fn generate_proof(
+    state: &ProverServiceState,
     light_client_state: LightClientState,
     current_stake_table_state: StakeTableState,
     next_stake_table_state: StakeTableState,
@@ -441,57 +431,70 @@ async fn generate_proof_helper(
     Ok((proof, public_input))
 }
 
-/// This function will fetch the cross epoch state update information from the sequencer query node
-/// and update the light client state in the contract to the `target_epoch`.
-/// In the end, both the locally stored stake table and the contract light client state will correspond
-/// to the `target_epoch`.
-async fn advance_epoch(
+/// submit a light client update for the epoch root in the `epoch`, returns its block height upon success
+async fn epoch_root_update(
     state: &mut ProverServiceState,
-    provider: &impl Provider,
+    provider: impl Provider,
     light_client_address: Address,
-    mut cur_st_state: StakeTableState,
-    proving_key: &ProvingKey,
-    contract_epoch: u64,
-    target_epoch: u64,
+    voting_st_state: StakeTableState,
+    proving_key: Arc<ProvingKey>,
+    epoch: u64,
+) -> Result<u64, ProverError> {
+    tracing::info!("Syncing the epoch root of epoch={epoch}");
+    let state_cert =
+        fetch_epoch_root_state_from_sequencer(&state.config.sequencer_url, epoch).await?;
+    let signature_map = state_cert
+        .signatures
+        .into_iter()
+        .collect::<HashMap<StateVerKey, StateSignature>>();
+
+    let (proof, public_input) = generate_proof(
+        state,
+        state_cert.light_client_state,
+        voting_st_state,
+        state_cert.next_stake_table_state,
+        signature_map,
+        &proving_key,
+    )
+    .await?;
+
+    submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
+
+    // since we sync until `fetch_epoch`'s epoch root, we need stake table for the next epoch
+    state
+        .sync_with_epoch(epoch + 1)
+        .await
+        .map_err(ProverError::NetworkError)?;
+    tracing::info!("Successfully synced the epoch root of epoch={epoch}.",);
+
+    Ok(state_cert.light_client_state.block_height)
+}
+
+/// submit a light client update within the same epoch AND the new update state is not epoch state
+async fn in_epoch_update(
+    state: &mut ProverServiceState,
+    provider: impl Provider,
+    light_client_address: Address,
+    bundle: StateSignaturesBundle,
+    voting_st_state: StakeTableState,
+    proving_key: Arc<ProvingKey>,
 ) -> Result<(), ProverError> {
-    // First sync the local stake table if necessary.
-    if state.epoch != contract_epoch {
-        state
-            .sync_with_epoch(contract_epoch)
-            .await
-            .map_err(ProverError::NetworkError)?;
-    }
-    for epoch in contract_epoch..target_epoch {
-        tracing::info!("Advancing to epoch {}...", epoch + 1);
-        let state_cert =
-            fetch_epoch_state_from_sequencer(&state.config.sequencer_url, epoch).await?;
-        let signature_map = state_cert
-            .signatures
-            .into_iter()
-            .collect::<HashMap<StateVerKey, StateSignature>>();
+    let (proof, public_input) = generate_proof(
+        state,
+        bundle.state,
+        voting_st_state,
+        voting_st_state,
+        bundle.signatures,
+        &proving_key,
+    )
+    .await?;
 
-        let (proof, public_input) = generate_proof_helper(
-            state,
-            state_cert.light_client_state,
-            cur_st_state,
-            state_cert.next_stake_table_state,
-            signature_map,
-            proving_key,
-        )
-        .await?;
-
-        submit_state_and_proof(provider, light_client_address, proof, public_input).await?;
-        tracing::info!(
-            "Successfully synced light client state to epoch {}.",
-            epoch + 1
-        );
-
-        state
-            .sync_with_epoch(epoch + 1)
-            .await
-            .map_err(ProverError::NetworkError)?;
-        cur_st_state = state_cert.next_stake_table_state;
-    }
+    submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
+    tracing::info!(
+        "Successfully synced light client state: height={}, epoch={}",
+        bundle.state.block_height,
+        state.epoch,
+    );
     Ok(())
 }
 
@@ -515,8 +518,22 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
 
     let blocks_per_epoch = state.config.blocks_per_epoch;
     let epoch_start_block = state.config.epoch_start_block;
+    let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
 
-    let (contract_state, st_state) = read_contract_state(&provider, light_client_address).await?;
+    let (contract_state, mut voting_st_state) =
+        read_contract_state(&provider, light_client_address).await?;
+    if voting_st_state
+        != state
+            .stake_table
+            .voting_state()
+            .map_err(ProverError::StakeTableError)?
+    {
+        tracing::error!("internal err: voting stake mismatch");
+        return Err(ProverError::Internal(
+            "Prover state management has bug".to_string(),
+        ));
+    }
+
     tracing::info!(
         "Current HotShot block height on contract: {}",
         contract_state.block_height
@@ -534,83 +551,109 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     tracing::debug!("New state: {:?}", bundle.state);
 
     let epoch_enabled = bundle.state.block_height >= epoch_start_block;
-
     if !epoch_enabled {
-        // If epoch hasn't been enabled, directly update the contract.
-        let (proof, public_input) = generate_proof_helper(
+        // If epoch is not activated, use the genesis state and don't need to update stake
+        tracing::info!("PreEpochActivationUpdate");
+        in_epoch_update(
             state,
-            bundle.state,
-            st_state,
-            st_state,
-            bundle.signatures,
-            &proving_key,
+            &provider,
+            light_client_address,
+            bundle,
+            voting_st_state,
+            proving_key.clone(),
         )
         .await?;
-
-        submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
-
-        tracing::info!("Successfully synced light client state.");
     } else {
         // After the epoch is enabled
+        // notation: h is last_update_height, h' is new_update_height, similarly for e and e' for epoch
+        // first epoch is e1
+        let mut last_update_height = contract_state.block_height;
+        let mut last_update_epoch =
+            epoch_from_block_number(contract_state.block_height, blocks_per_epoch);
+        let new_update_epoch = epoch_from_block_number(bundle.state.block_height, blocks_per_epoch);
 
-        let contract_epoch = epoch_from_block_number(contract_state.block_height, blocks_per_epoch);
-        let bundle_epoch = epoch_from_block_number(bundle.state.block_height, blocks_per_epoch);
+        // There are three cases where we need to catchup:
+        // 1. e < e1 AND e' > e1
+        // 2. e >= e1 AND e'-e > 1
+        // 3. e >= e1 AND e'-e = 1 AND !isEpochRoot(h)
+        //
+        // note: case 3 is subtle, since when e'-e=1, but e<e1, we don't need to require updates from EpochRoot(e)
+        // note: case 3 only need to catch up once, namely the epoch root of e
+        // note: case 1 and 2 can be succinctly predicated as e'-e > 1
 
-        // Update the local stake table if necessary
-        if contract_epoch != state.epoch {
-            state
-                .sync_with_epoch(contract_epoch)
-                .await
-                .map_err(ProverError::NetworkError)?;
-        }
+        while last_update_epoch - new_update_epoch > 1 {
+            tracing::info!(%last_update_epoch, %new_update_epoch, "EpochCatchup ");
 
-        // A catchup is needed if the contract epoch is behind.
-        if bundle_epoch > state.epoch {
-            tracing::info!("Catching up from epoch {contract_epoch} to epoch {bundle_epoch}...");
-            advance_epoch(
+            let fetch_epoch = if is_epoch_root(last_update_height, blocks_per_epoch) {
+                // last update is epoch root, the voting stake must have been updated, skip stake table sync
+                last_update_epoch + 1
+            } else {
+                last_update_epoch
+            };
+
+            last_update_height = epoch_root_update(
                 state,
                 &provider,
                 light_client_address,
-                st_state,
-                &proving_key,
-                contract_epoch,
-                bundle_epoch,
+                voting_st_state,
+                proving_key.clone(),
+                fetch_epoch,
             )
             .await?;
+            last_update_epoch = fetch_epoch;
+            voting_st_state = state
+                .stake_table
+                .voting_state()
+                .map_err(ProverError::StakeTableError)?;
         }
 
-        // Now that the contract epoch should be equal to the bundle epoch.
-
-        if is_ge_epoch_root(bundle.state.block_height as u64, blocks_per_epoch) {
-            // If we reached the epoch root, proceed to the next epoch directly
-            tracing::info!("Epoch reaching an end, proceed to the next epoch...");
-            advance_epoch(
+        // case 3 catchup
+        if last_update_epoch >= first_epoch
+            && last_update_epoch - new_update_epoch == 1
+            && is_epoch_root(contract_state.block_height, blocks_per_epoch)
+        {
+            tracing::info!(%last_update_epoch, "EpochCatchup Once ");
+            epoch_root_update(
                 state,
                 &provider,
                 light_client_address,
-                st_state,
-                &proving_key,
-                bundle_epoch,
-                bundle_epoch + 1,
+                voting_st_state,
+                proving_key.clone(),
+                last_update_epoch,
+            )
+            .await?;
+            // last_update_epoch is the same, but the voting_stake is updated
+            voting_st_state = state
+                .stake_table
+                .voting_state()
+                .map_err(ProverError::StakeTableError)?;
+        }
+
+        // after catch-up, the guarantee is that either e'=e, OR (e'=e+1 AND isEpochRoot(h)) OR e<e1
+        // we further determine whether we should use next_stake != voting_stake depending on isEpochRoot(h')
+        if is_epoch_root(bundle.state.block_height, blocks_per_epoch) {
+            epoch_root_update(
+                state,
+                &provider,
+                light_client_address,
+                voting_st_state,
+                proving_key.clone(),
+                last_update_epoch,
             )
             .await?;
         } else {
-            // Otherwise process the bundle update information as usual
-            let (proof, public_input) = generate_proof_helper(
+            in_epoch_update(
                 state,
-                bundle.state,
-                st_state,
-                st_state,
-                bundle.signatures,
-                &proving_key,
+                &provider,
+                light_client_address,
+                bundle,
+                voting_st_state,
+                proving_key.clone(),
             )
             .await?;
-
-            submit_state_and_proof(&provider, light_client_address, proof, public_input).await?;
-
-            tracing::info!("Successfully synced light client state.");
         }
     }
+
     Ok(())
 }
 

@@ -6,7 +6,6 @@ use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_1::RewardMerkleTree,
     BlockMerkleTree, PubKey,
 };
 use futures::{
@@ -385,14 +384,11 @@ impl Options {
             endpoints::merklized_state::<N, P, _, BlockMerkleTree, _, 3>()?,
         )?;
         // Initialize merklized state module for fee merkle tree
-        app.register_module(
-            "fee-state",
-            endpoints::get_balance::<_, SequencerApiVersion>()?,
-        )?;
+        app.register_module("fee-state", endpoints::fee::<_, SequencerApiVersion>()?)?;
 
         app.register_module(
             "reward-state",
-            endpoints::merklized_state::<N, P, _, RewardMerkleTree, _, 256>()?,
+            endpoints::reward::<_, SequencerApiVersion>()?,
         )?;
 
         let get_node_state = {
