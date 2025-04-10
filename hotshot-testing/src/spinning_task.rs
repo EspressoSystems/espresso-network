@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::broadcast;
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -41,7 +42,6 @@ use hotshot_types::{
     ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
-use primitive_types::U256;
 
 use crate::{
     test_launcher::Network,

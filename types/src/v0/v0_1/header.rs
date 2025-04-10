@@ -4,6 +4,7 @@ use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
     ResolvableChainConfig,
 };
+use alloy_compat::ethers_serde;
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
@@ -11,6 +12,7 @@ use serde::{
     de::{self, SeqAccess},
     Deserialize, Serialize,
 };
+
 /// A header is like a [`Block`] with the body replaced by a digest.
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
 pub struct Header {
@@ -26,6 +28,7 @@ pub struct Header {
     pub(crate) block_merkle_tree_root: BlockMerkleCommitment,
     pub(crate) fee_merkle_tree_root: FeeMerkleCommitment,
     pub(crate) fee_info: FeeInfo,
+    #[serde(with = "ethers_serde::option_signature")]
     pub(crate) builder_signature: Option<BuilderSignature>,
 }
 

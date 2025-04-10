@@ -47,7 +47,7 @@ jobs:
         run: just nextest --features embedded-db --no-run
 
       - name: Run slow test
-        run: just nextest --features embedded-db --no-fail-fast --nocapture
+        run: just nextest --features embedded-db --no-fail-fast
         timeout-minutes: 40
 
   slow-tests-postgres:
@@ -72,5 +72,5 @@ jobs:
         run: just nextest --no-run
 
       - name: Run slow test
-        run: just nextest --no-fail-fast --nocapture
+        run: just nextest --no-fail-fast
         timeout-minutes: 40

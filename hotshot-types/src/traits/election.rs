@@ -7,9 +7,9 @@
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
 use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use hotshot_utils::anytrace::Result;
-use primitive_types::U256;
 
 use super::node_implementation::NodeType;
 use crate::{data::Leaf2, drb::DrbResult, traits::signature_key::StakeTableEntryType, PeerConfig};
@@ -29,7 +29,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn total_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.stake_table(epoch)
             .iter()
-            .fold(U256::zero(), |acc, entry| {
+            .fold(U256::ZERO, |acc, entry| {
                 acc + entry.stake_table_entry.stake()
             })
     }
@@ -37,7 +37,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn total_da_stake(&self, epoch: Option<TYPES::Epoch>) -> U256 {
         self.da_stake_table(epoch)
             .iter()
-            .fold(U256::zero(), |acc, entry| {
+            .fold(U256::ZERO, |acc, entry| {
                 acc + entry.stake_table_entry.stake()
             })
     }

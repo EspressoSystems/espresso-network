@@ -1,70 +1,33 @@
 use alloy::{
     primitives::Address, providers::Provider, rpc::types::TransactionReceipt,
-    sol_types::SolValue as _, transports::Transport,
+    sol_types::SolValue as _,
 };
 use anyhow::Result;
 use ark_ec::CurveGroup;
-use contract_bindings_alloy::staketable::{
-    EdOnBN254::EdOnBN254Point,
-    StakeTable::StakeTableInstance,
-    BN254::{G1Point, G2Point},
-};
-use ethers_conv::ToAlloy;
-use hotshot_contract_adapter::{
-    jellyfish::ParsedG1Point,
-    stake_table::{ParsedEdOnBN254Point, ParsedG2Point},
-};
+use hotshot_contract_adapter::sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTable};
 use jf_signature::constants::CS_ID_BLS_BN254;
 
 use crate::{parse::Commission, BLSKeyPair, StateVerKey};
 
-fn to_alloy_g1_point(p: ParsedG1Point) -> G1Point {
-    G1Point {
-        x: p.x.to_alloy(),
-        y: p.y.to_alloy(),
-    }
-}
-
-fn to_alloy_g2_point(p: ParsedG2Point) -> G2Point {
-    G2Point {
-        x0: p.x0.to_alloy(),
-        x1: p.x1.to_alloy(),
-        y0: p.y0.to_alloy(),
-        y1: p.y1.to_alloy(),
-    }
-}
-
-fn to_alloy_ed_on_bn_point(p: ParsedEdOnBN254Point) -> EdOnBN254Point {
-    EdOnBN254Point {
-        x: p.x.to_alloy(),
-        y: p.y.to_alloy(),
-    }
-}
-
-pub async fn register_validator<P: Provider<T>, T: Transport + Clone>(
-    stake_table: StakeTableInstance<T, P>,
+pub async fn register_validator(
+    provider: impl Provider,
+    stake_table_addr: Address,
     commission: Commission,
     validator_address: Address,
     bls_key_pair: BLSKeyPair,
     schnorr_vk: StateVerKey,
 ) -> Result<TransactionReceipt> {
-    let bls_vk = bls_key_pair.ver_key();
-
-    let sig_parsed: ParsedG2Point = bls_vk.to_affine().into();
-    let bls_vk_alloy = to_alloy_g2_point(sig_parsed);
-
+    let stake_table = StakeTable::new(stake_table_addr, &provider);
     let sig = bls_key_pair.sign(&validator_address.abi_encode(), CS_ID_BLS_BN254);
-    let sig_parsed: ParsedG1Point = sig.sigma.into_affine().into();
-    let sig_alloy = to_alloy_g1_point(sig_parsed);
 
-    let schnorr_vk_parsed: ParsedEdOnBN254Point = schnorr_vk.to_affine().into();
-    let schnorr_vk_alloy = to_alloy_ed_on_bn_point(schnorr_vk_parsed);
-
+    let bls_vk_sol: G2PointSol = bls_key_pair.ver_key().to_affine().into();
+    let schnorr_vk_sol: EdOnBN254PointSol = schnorr_vk.to_affine().into();
+    let sig_sol: G1PointSol = sig.sigma.into_affine().into();
     Ok(stake_table
         .registerValidator(
-            bls_vk_alloy,
-            schnorr_vk_alloy,
-            sig_alloy,
+            bls_vk_sol.into(),
+            schnorr_vk_sol.into(),
+            sig_sol.into(),
             commission.to_evm(),
         )
         .send()
@@ -73,9 +36,11 @@ pub async fn register_validator<P: Provider<T>, T: Transport + Clone>(
         .await?)
 }
 
-pub async fn deregister_validator<P: Provider<T>, T: Transport + Clone>(
-    stake_table: StakeTableInstance<T, P>,
+pub async fn deregister_validator(
+    provider: impl Provider,
+    stake_table_addr: Address,
 ) -> Result<TransactionReceipt> {
+    let stake_table = StakeTable::new(stake_table_addr, &provider);
     Ok(stake_table
         .deregisterValidator()
         .send()
@@ -86,8 +51,6 @@ pub async fn deregister_validator<P: Provider<T>, T: Transport + Clone>(
 
 #[cfg(test)]
 mod test {
-    use contract_bindings_alloy::staketable::StakeTable;
-
     use super::*;
     use crate::{deploy::TestSystem, l1::decode_log};
 
@@ -97,6 +60,7 @@ mod test {
 
         let validator_address = system.deployer_address;
         let receipt = register_validator(
+            &system.provider,
             system.stake_table,
             system.commission,
             validator_address,
@@ -120,7 +84,7 @@ mod test {
         let system = TestSystem::deploy().await?;
         system.register_validator().await?;
 
-        let receipt = deregister_validator(system.stake_table).await?;
+        let receipt = deregister_validator(&system.provider, system.stake_table).await?;
         assert!(receipt.status());
 
         let event = decode_log::<StakeTable::ValidatorExit>(&receipt).unwrap();

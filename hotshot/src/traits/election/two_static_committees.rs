@@ -9,6 +9,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
     traits::{
@@ -19,7 +20,6 @@ use hotshot_types::{
     PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
-use primitive_types::U256;
 
 /// Tuple type for eligible leaders
 type EligibleLeaders<T> = (Vec<PeerConfig<T>>, Vec<PeerConfig<T>>);
@@ -62,7 +62,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
         let eligible_leaders: Vec<PeerConfig<TYPES>> = committee_members
             .clone()
             .into_iter()
-            .filter(|member| member.stake_table_entry.stake() > U256::zero())
+            .filter(|member| member.stake_table_entry.stake() > U256::ZERO)
             .collect();
 
         let eligible_leaders1 = eligible_leaders
@@ -82,7 +82,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
         let members: Vec<PeerConfig<TYPES>> = committee_members
             .clone()
             .into_iter()
-            .filter(|member| member.stake_table_entry.stake() > U256::zero())
+            .filter(|member| member.stake_table_entry.stake() > U256::ZERO)
             .collect();
 
         let members1: Vec<PeerConfig<TYPES>> = members
@@ -102,7 +102,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
         let da_members: Vec<PeerConfig<TYPES>> = da_members
             .clone()
             .into_iter()
-            .filter(|member| member.stake_table_entry.stake() > U256::zero())
+            .filter(|member| member.stake_table_entry.stake() > U256::ZERO)
             .collect();
 
         let da_members1: Vec<PeerConfig<TYPES>> = da_members
@@ -274,12 +274,12 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
             self.indexed_stake_table
                 .0
                 .get(pub_key)
-                .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+                .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
         } else {
             self.indexed_stake_table
                 .1
                 .get(pub_key)
-                .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+                .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
         }
     }
     /// Check if a node has stake in the committee
@@ -293,12 +293,12 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
             self.indexed_da_stake_table
                 .0
                 .get(pub_key)
-                .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+                .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
         } else {
             self.indexed_da_stake_table
                 .1
                 .get(pub_key)
-                .is_some_and(|x| x.stake_table_entry.stake() > U256::zero())
+                .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
         }
     }
 

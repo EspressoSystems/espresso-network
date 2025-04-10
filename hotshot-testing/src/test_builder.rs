@@ -6,6 +6,7 @@
 
 use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use hotshot::{
     tasks::EventTransformerState,
@@ -24,7 +25,6 @@ use hotshot_types::{
     HotShotConfig, PeerConfig, ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
-use primitive_types::U256;
 use tide_disco::Url;
 use vec1::Vec1;
 

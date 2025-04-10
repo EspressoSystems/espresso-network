@@ -15,6 +15,7 @@ mod message_compat_tests;
 
 use std::sync::Arc;
 
+use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::RwLock;
 use catchup::StatePeers;
@@ -24,7 +25,6 @@ use espresso_types::{
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes,
     SolverAuctionResultsProvider, ValidatedState,
 };
-use ethers_conv::ToAlloy;
 use genesis::L1Finalized;
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
@@ -32,7 +32,6 @@ use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
 use proposal_fetcher::ProposalFetcherConfig;
-use state_signature::static_stake_table_commitment;
 use tokio::select;
 use tracing::info;
 use url::Url;
@@ -291,7 +290,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     let validator_config = ValidatorConfig {
         public_key: pub_key,
         private_key: network_params.private_staking_key,
-        stake_value: primitive_types::U256::from(1),
+        stake_value: U256::ONE,
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
@@ -365,8 +364,12 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     }
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
-    tracing::info!("setting epoch height={epoch_height:?}");
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
+
+    tracing::info!("setting epoch_height={epoch_height:?}");
+    tracing::info!("setting epoch_start_block={epoch_start_block:?}");
     network_config.config.epoch_height = epoch_height;
+    network_config.config.epoch_start_block = epoch_start_block;
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
@@ -453,9 +456,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         L1Finalized::Number { number } => l1_client.wait_for_finalized_block(number).await,
         L1Finalized::Timestamp { timestamp } => {
             l1_client
-                .wait_for_finalized_block_with_timestamp(
-                    ethers::types::U256::from(timestamp.unix_timestamp()).to_alloy(),
-                )
+                .wait_for_finalized_block_with_timestamp(U256::from(timestamp.unix_timestamp()))
                 .await
         },
     };
@@ -580,16 +581,19 @@ pub mod testing {
         time::Duration,
     };
 
+    use alloy::{
+        primitives::U256,
+        signers::{k256::ecdsa::SigningKey, local::PrivateKeySigner},
+    };
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey, SeqTypes,
-        Transaction, Upgrade,
+        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
+        SeqTypes, Transaction, Upgrade,
     };
-    use ethers::types::U256;
     use futures::{
         future::join_all,
         stream::{Stream, StreamExt},
@@ -601,6 +605,9 @@ pub mod testing {
         },
         types::EventType::Decide,
     };
+    use hotshot_builder_core_refactored::service::{
+        BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
+    };
     use hotshot_stake_table::vec_based::StakeTable;
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
@@ -608,6 +615,7 @@ pub mod testing {
     use hotshot_types::{
         event::LeafInfo,
         light_client::{CircuitField, StateKeyPair, StateVerKey},
+        signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader,
             metrics::NoMetrics,
@@ -622,6 +630,8 @@ pub mod testing {
         service::{BuilderConfig, GlobalState},
     };
     use portpicker::pick_unused_port;
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha20Rng;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -630,6 +640,74 @@ pub mod testing {
 
     const STAKE_TABLE_CAPACITY_FOR_TEST: u64 = 10;
     const BUILDER_CHANNEL_CAPACITY_FOR_TEST: usize = 128;
+
+    struct LegacyBuilderImplementation {
+        global_state: Arc<LegacyGlobalState<SeqTypes>>,
+    }
+
+    impl BuilderTask<SeqTypes> for LegacyBuilderImplementation {
+        fn start(
+            self: Box<Self>,
+            stream: Box<
+                dyn futures::prelude::Stream<Item = hotshot::types::Event<SeqTypes>>
+                    + std::marker::Unpin
+                    + Send
+                    + 'static,
+            >,
+        ) {
+            spawn(async move {
+                let res = self.global_state.start_event_loop(stream).await;
+                tracing::error!(?res, "testing legacy builder service exited");
+            });
+        }
+    }
+
+    pub async fn run_legacy_builder<const NUM_NODES: usize>(
+        port: Option<u16>,
+        max_block_size: Option<u64>,
+    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
+        let builder_key_pair = TestConfig::<0>::builder_key();
+        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
+
+        // This should never fail.
+        let url: Url = format!("http://localhost:{port}")
+            .parse()
+            .expect("Failed to parse builder URL");
+
+        // create the global state
+        let global_state = LegacyGlobalState::new(
+            LegacyBuilderConfig {
+                builder_keys: (builder_key_pair.fee_account(), builder_key_pair),
+                max_api_waiting_time: Duration::from_secs(1),
+                max_block_size_increment_period: Duration::from_secs(60),
+                maximize_txn_capture_timeout: Duration::from_millis(100),
+                txn_garbage_collect_duration: Duration::from_secs(60),
+                txn_channel_capacity: BUILDER_CHANNEL_CAPACITY_FOR_TEST,
+                tx_status_cache_capacity: 81920,
+                base_fee: 10,
+            },
+            NodeState::default(),
+            max_block_size.unwrap_or(300),
+            NUM_NODES,
+        );
+
+        // Create and spawn the tide-disco app to serve the builder APIs
+        let app = Arc::clone(&global_state)
+            .into_app()
+            .expect("Failed to create builder tide-disco app");
+
+        spawn(
+            app.serve(
+                format!("http://0.0.0.0:{port}")
+                    .parse::<Url>()
+                    .expect("Failed to parse builder listener"),
+                EpochVersion::instance(),
+            ),
+        );
+
+        // Pass on the builder task to be injected in the testing harness
+        (Box::new(LegacyBuilderImplementation { global_state }), url)
+    }
 
     struct MarketplaceBuilderImplementation {
         global_state: Arc<GlobalState<SeqTypes, NoHooks<SeqTypes>>>,
@@ -707,6 +785,7 @@ pub mod testing {
         let url: Url = format!("http://localhost:{port}")
             .parse()
             .expect("Failed to parse builder URL");
+        tracing::info!("Starting test builder on {url}");
 
         (
             <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
@@ -893,6 +972,17 @@ pub mod testing {
             self.upgrades.clone()
         }
 
+        pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+            let seed = [42u8; 32];
+            let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
+            let eth_key_pairs = (0..self.num_nodes()).map(|_| SigningKey::random(&mut rng).into());
+            eth_key_pairs
+                .zip(self.priv_keys.iter())
+                .zip(self.state_key_pairs.iter())
+                .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
+                .collect()
+        }
+
         pub async fn init_nodes<V: Versions>(
             &self,
             bind_version: V,
@@ -983,7 +1073,7 @@ pub mod testing {
             // Make sure the builder account is funded.
             let builder_account = Self::builder_key().fee_account();
             tracing::info!(%builder_account, "prefunding builder account");
-            state.prefund_account(builder_account, U256::max_value().into());
+            state.prefund_account(builder_account, U256::MAX.into());
 
             let persistence = persistence_opt.create().await.unwrap();
 
@@ -1095,6 +1185,7 @@ pub mod testing {
 #[cfg(test)]
 mod test {
 
+    use alloy::node_bindings::Anvil;
     use espresso_types::{Header, MockSequencerVersions, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
     use hotshot::types::EventType::Decide;
@@ -1106,7 +1197,7 @@ mod test {
             BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES,
         },
     };
-    use sequencer_utils::{test_utils::setup_test, AnvilOptions};
+    use sequencer_utils::test_utils::setup_test;
     use testing::{wait_for_decide_on_handle, TestConfigBuilder};
 
     use self::testing::run_test_builder;
@@ -1116,8 +1207,8 @@ mod test {
     async fn test_skeleton_instantiation() {
         setup_test();
         // Assign `config` so it isn't dropped early.
-        let anvil = AnvilOptions::default().spawn().await;
-        let url = anvil.url();
+        let anvil = Anvil::new().spawn();
+        let url = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
         let mut config = TestConfigBuilder::<NUM_NODES>::default()
             .l1_url(url)
@@ -1157,8 +1248,8 @@ mod test {
 
         let success_height = 30;
         // Assign `config` so it isn't dropped early.
-        let anvil = AnvilOptions::default().spawn().await;
-        let url = anvil.url();
+        let anvil = Anvil::new().spawn();
+        let url = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
         let mut config = TestConfigBuilder::<NUM_NODES>::default()
             .l1_url(url)
