@@ -54,7 +54,7 @@ type Epoch = <SeqTypes as NodeType>::Epoch;
 /// PermissionedStakeTable contract over the liftetime of the contract so it
 /// should not significantly affect performance to fetch all events and
 /// perform the computation in this functions once per epoch.
-pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
     let mut validators = IndexMap::new();
@@ -176,12 +176,10 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
         }
     }
 
-    select_validators(&mut validators)?;
-
     Ok(validators)
 }
 
-fn select_validators(
+pub(crate) fn select_validators_with_stake(
     validators: &mut IndexMap<Address, Validator<BLSPubKey>>,
 ) -> anyhow::Result<()> {
     // Remove invalid validators first
@@ -561,7 +559,7 @@ impl EpochCommittees {
     ) -> Result<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>, GetStakeTablesError>
     {
         self.l1_client
-            .get_stake_table(contract_address, l1_block)
+            .fetch_stake_table(contract_address, l1_block)
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
     }
@@ -1064,7 +1062,7 @@ mod tests {
         ]
         .to_vec();
 
-        let st = from_l1_events(events.iter().cloned())?;
+        let st = validators_from_l1_events(events.iter().cloned())?;
         let st_val = st.get(&val.account).unwrap();
         // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
         assert_eq!(st_val.stake, U256::from(8));
@@ -1081,7 +1079,7 @@ mod tests {
         );
 
         // This should fail because the validator has exited and no longer exists in the stake table.
-        assert!(from_l1_events(events.iter().cloned()).is_err());
+        assert!(validators_from_l1_events(events.iter().cloned()).is_err());
 
         Ok(())
     }
@@ -1132,7 +1130,7 @@ mod tests {
         ];
 
         for events in cases.iter() {
-            let res = from_l1_events(events.iter().cloned());
+            let res = validators_from_l1_events(events.iter().cloned());
             assert!(
                 res.is_err(),
                 "events {:?}, not a valid sequencer of events",
@@ -1158,7 +1156,7 @@ mod tests {
 
         let minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
 
-        select_validators(&mut validators).expect("Failed to select validators");
+        select_validators_with_stake(&mut validators).expect("Failed to select validators");
         assert!(
             validators.len() <= 100,
             "validators len is {}, expected at most 100",

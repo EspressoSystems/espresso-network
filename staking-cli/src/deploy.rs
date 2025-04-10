@@ -13,6 +13,7 @@ use alloy::{
 };
 use anyhow::Result;
 use hotshot_contract_adapter::sol_types::{ERC1967Proxy, EspToken, StakeTable};
+use rand::{rngs::StdRng, SeedableRng as _};
 use url::Url;
 
 use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
@@ -86,8 +87,9 @@ impl TestSystem {
             .await?;
         assert!(receipt.status());
 
-        let bls_key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
-        let schnorr_key_pair = SchnorrKeyPair::generate(&mut rand::thread_rng());
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let bls_key_pair = BLSKeyPair::generate(&mut rng);
+        let schnorr_key_pair = SchnorrKeyPair::generate(&mut rng);
         Ok(Self {
             provider,
             deployer_address,
