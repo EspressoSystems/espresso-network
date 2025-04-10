@@ -177,7 +177,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
             state.block_height,
             StateSignatureRequestBody {
                 key: self.ver_key.clone(),
-                state: state.clone(),
+                state: *state,
                 next_stake: next_stake_table,
                 signature: signature.clone(),
             },

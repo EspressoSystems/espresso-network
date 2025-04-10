@@ -342,9 +342,9 @@ impl StateRelayServerDataSource for StateRelayServerState {
         self.queue.insert(block_height);
 
         let bundle = bundles_at_height
-            .entry(req.state.clone())
+            .entry(req.state)
             .or_insert(StateSignaturesBundle {
-                state: req.state.clone(),
+                state: req.state,
                 next_stake: req.next_stake,
                 signatures: Default::default(),
                 accumulated_weight: U256::from(0),
