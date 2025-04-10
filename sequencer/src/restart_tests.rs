@@ -266,6 +266,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     .iter()
                     .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
                     .collect(),
+                fetch_timeout: None,
             });
         }
 
