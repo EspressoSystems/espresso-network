@@ -34,7 +34,7 @@ use hotshot_types::{
         signature_key::{StakeTableEntryType, StateSignatureKey},
         stake_table::{SnapshotVersion, StakeTableError, StakeTableScheme as _},
     },
-    utils::{epoch_from_block_number, is_epoch_root},
+    utils::{epoch_from_block_number, is_epoch_root, is_gt_epoch_root},
     HotShotConfig, PeerConfig,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -42,7 +42,7 @@ use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
 use sequencer_utils::deployer::is_proxy_contract;
 use surf_disco::Client;
-use tide_disco::{error::ServerError, Api};
+use tide_disco::{error::ServerError, Api, Error, StatusCode};
 use time::ext::InstantExt;
 use tokio::{io, spawn, task::spawn_blocking, time::sleep};
 use url::Url;
@@ -104,6 +104,7 @@ impl ProverServiceState {
     }
 
     pub async fn sync_with_epoch(&mut self, epoch: u64) -> Result<()> {
+        // don't count epoch before epoch activation
         let epoch = if epoch < self.config.start_epoch() {
             0
         } else {
@@ -179,27 +180,12 @@ pub async fn fetch_stake_table_from_sequencer(
 
     // Request the configuration until it is successful
     let peer_configs = {
+        // TODO: (alex) remove hardcoded version number
         let client = surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
             sequencer_url.clone(),
         );
         if epoch == 0 {
             loop {
-                // TODO: (alex) remove hardcoded version number
-                match client
-                    .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{epoch}"))
-                    .send()
-                    .await
-                {
-                    Ok(resp) => break resp,
-                    Err(e) => {
-                        tracing::error!("Failed to fetch the network config: {e}");
-                        sleep(Duration::from_secs(5)).await;
-                    },
-                }
-            }
-        } else {
-            loop {
-                // TODO: (alex) remove hardcoded version number
                 match client
                     .get::<HotShotConfig<SeqTypes>>("config/hotshot")
                     .send()
@@ -208,6 +194,20 @@ pub async fn fetch_stake_table_from_sequencer(
                     Ok(resp) => break resp.known_nodes_with_stake,
                     Err(e) => {
                         tracing::error!("Failed to fetch the network config: {e}");
+                        sleep(Duration::from_secs(5)).await;
+                    },
+                }
+            }
+        } else {
+            loop {
+                match client
+                    .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{epoch}"))
+                    .send()
+                    .await
+                {
+                    Ok(resp) => break resp,
+                    Err(e) => {
+                        tracing::error!("Failed to fetch the stake table: {e}");
                         sleep(Duration::from_secs(5)).await;
                     },
                 }
@@ -548,7 +548,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
 
     let blocks_per_epoch = state.config.blocks_per_epoch;
     let epoch_start_block = state.config.epoch_start_block;
-    let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
+    let start_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
 
     let (contract_state, mut voting_st_state) =
         read_contract_state(&provider, light_client_address).await?;
@@ -596,13 +596,22 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     } else {
         // After the epoch is enabled
         // notation: h is last_update_height, h' is new_update_height, similarly for e and e' for epoch
-        // first epoch is e1
+        // start epoch is e1
         let mut last_update_height = contract_state.block_height;
         let mut last_update_epoch =
             epoch_from_block_number(contract_state.block_height, blocks_per_epoch);
         let new_update_epoch = epoch_from_block_number(bundle.state.block_height, blocks_per_epoch);
 
-        // There are three cases where we need to catchup:
+        // an invariant of correct relay-server is that it will drop all signature bundles after epoch root (in that epoch)
+        // this helps with cleaner prover logic, thus we sanity check here.
+        if is_gt_epoch_root(bundle.state.block_height, blocks_per_epoch) {
+            return Err(ProverError::RelayServerError(ServerError::catch_all(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Relay server shouldn't send bundle beyond epoch root".to_string(),
+            )));
+        }
+
+        // There are four cases where we need to catchup:
         // 1. e < e1 AND e' > e1
         // 2. e >= e1 AND e'-e > 1
         // 3. e >= e1 AND e'-e = 1 AND !isEpochRoot(h)
@@ -638,9 +647,9 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         }
 
         // case 3 catchup
-        if last_update_epoch >= first_epoch
+        if last_update_epoch >= start_epoch
             && last_update_epoch - new_update_epoch == 1
-            && is_epoch_root(contract_state.block_height, blocks_per_epoch)
+            && !is_epoch_root(contract_state.block_height, blocks_per_epoch)
         {
             tracing::info!(%last_update_epoch, "EpochCatchup Once ");
             epoch_root_update(
@@ -660,6 +669,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         }
 
         // after catch-up, the guarantee is that either e'=e, OR (e'=e+1 AND isEpochRoot(h)) OR e<e1
+        // we also know that h' won't exceed epoch root thanks to relay server's promise
         // we further determine whether we should use next_stake != voting_stake depending on isEpochRoot(h')
         if is_epoch_root(bundle.state.block_height, blocks_per_epoch) {
             epoch_root_update(
