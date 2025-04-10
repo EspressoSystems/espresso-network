@@ -36,7 +36,6 @@ use hotshot_types::{
 };
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::OptionExt;
-use vec1::Vec1;
 
 use super::{
     ledger_log::{Iter, LedgerLog},
@@ -476,12 +475,6 @@ where
             .nth(n)
             .context(NotFoundSnafu)?
             .context(MissingSnafu)
-    }
-
-    async fn get_leaves(&mut self, _height: u64) -> QueryResult<Vec1<LeafQueryData<Types>>> {
-        return Err(QueryError::Error {
-            message: "get_leaves is not supported with file system backend".into(),
-        });
     }
 
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>> {

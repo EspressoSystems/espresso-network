@@ -18,7 +18,6 @@ use async_lock::Mutex;
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
-use vec1::Vec1;
 
 use super::{
     pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
@@ -48,7 +47,6 @@ pub enum FailableAction {
     // can always add more variants for other actions.
     GetHeader,
     GetLeaf,
-    GetLeaves,
     GetBlock,
     GetPayload,
     GetPayloadMetadata,
@@ -337,11 +335,6 @@ where
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>> {
         self.maybe_fail_read(FailableAction::GetLeaf).await?;
         self.inner.get_leaf(id).await
-    }
-
-    async fn get_leaves(&mut self, height: u64) -> QueryResult<Vec1<LeafQueryData<Types>>> {
-        self.maybe_fail_read(FailableAction::GetLeaves).await?;
-        self.inner.get_leaves(height).await
     }
 
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>> {
