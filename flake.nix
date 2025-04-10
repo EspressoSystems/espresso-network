@@ -54,14 +54,14 @@
       solhintPkg = { buildNpmPackage, fetchFromGitHub }:
         buildNpmPackage rec {
           pname = "solhint";
-          version = "3.6.2";
+          version = "5.05"; # TODO: normally semver, tag screwed up
           src = fetchFromGitHub {
             owner = "protofire";
             repo = pname;
-            rev = "refs/tags/${version}";
-            hash = "sha256-VI6J2iSgimcT9TWPlPD6aIDfRFmlQafCc/J4dwF9rMs=";
+            rev = "refs/tags/v${version}";
+            hash = "sha256-F8x3a9OKOQuhMRq6CHh5cVlOS72h+YGHTxnKKAh6c9A=";
           };
-          npmDepsHash = "sha256-lSe3Rt3I2yFy9Je3SLD2QJA/608ppvbLWmwDt6vkDIk=";
+          npmDepsHash = "sha256-FKoh5D6sjZwhu1Kp+pedb8q6Bv0YYFBimdulugZ2RT0=";
           dontNpmBuild = true;
         };
 
@@ -151,7 +151,7 @@
             solhint = {
               enable = true;
               description = "Solidity linter";
-              entry = "solhint --fix 'contracts/{script,src,test}/**/*.sol'";
+              entry = "solhint --fix --noPrompt 'contracts/{script,src,test}/**/*.sol'";
               types_or = [ "solidity" ];
               pass_filenames = true;
             };

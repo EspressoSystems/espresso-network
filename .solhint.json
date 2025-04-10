@@ -4,8 +4,7 @@
     "code-complexity": ["error", 8]
       , "compiler-version": ["error", ">=0.8.0"]
       , "const-name-snakecase": "error"
-      , "contract-name-camelcase": "error"
-      , "event-name-camelcase": "error"
+      , "contract-name-capwords": "off"
       , "func-name-mixedcase": "error"
       , "func-param-name-mixedcase": "error"
       , "func-visibility": ["error", { "ignoreConstructors": true }]
