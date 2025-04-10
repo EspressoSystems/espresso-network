@@ -289,6 +289,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         // block header.
         let validated_state = initializer.anchor_state;
 
+        load_start_epoch_info(
+            membership_coordinator.membership(),
+            &initializer.start_epoch_info,
+            config.epoch_height,
+            config.epoch_start_block,
+        )
+        .await;
+
         // #3967 REVIEW NOTE: Should this actually be Some()? How do we know?
         let epoch = initializer.high_qc.data.block_number.map(|block_number| {
             TYPES::Epoch::new(epoch_from_block_number(
@@ -296,18 +304,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 config.epoch_height,
             ))
         });
-
-        if epoch.is_some() {
-            load_start_epoch_info(
-                membership_coordinator.membership(),
-                &initializer.start_epoch_info,
-                config.epoch_height,
-                config.epoch_start_block,
-            )
-            .await;
-        } else {
-            tracing::error!("SKIPPING LOAD_START_EPOCH_INFO");
-        }
 
         // Insert the validated state to state map.
         let mut validated_state_map = BTreeMap::default();
