@@ -109,7 +109,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = consensus.epoch_height;
 
-                // The last few state update is handled in the consensus, we do not sign them.
+                // The last few state updates are handled in the consensus, we do not sign them.
                 if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
                     return;
                 }
