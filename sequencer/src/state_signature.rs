@@ -21,7 +21,7 @@ use hotshot_types::{
         node_implementation::{ConsensusTime, Versions},
         signature_key::StateSignatureKey,
     },
-    utils::{epoch_from_block_number, is_last_block},
+    utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
@@ -104,9 +104,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let consensus = consensus_state.read().await;
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = consensus.epoch_height;
+                let epoch_start_block = consensus.hotshot.config.epoch_start_block;
 
-                let next_stake_table = if is_last_block(cur_block_height, blocks_per_epoch) {
-                    // during the last block of each epoch, we will use a new `next_stake_table`
+                let next_stake_table = if cur_block_height > epoch_start_block
+                    && is_ge_epoch_root(cur_block_height, blocks_per_epoch)
+                {
+                    // during the epoch transition period (epoch root onwards), we will use a new `next_stake_table`
                     let cur_epoch = epoch_from_block_number(cur_block_height, blocks_per_epoch);
                     let Ok(membership) = consensus
                         .membership_coordinator
