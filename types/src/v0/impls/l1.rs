@@ -1668,10 +1668,10 @@ mod test {
 
         for _try in 0..10 {
             let mut state = l1_client.state.lock().await;
-            let has_snaphot = state.snapshot.finalized.is_some();
+            let has_snapshot = state.snapshot.finalized.is_some();
             let has_cache = state.finalized.get(&0).is_some();
             drop(state);
-            if has_snaphot && has_cache {
+            if has_snapshot && has_cache {
                 return;
             }
             sleep(Duration::from_millis(200)).await;
