@@ -1818,7 +1818,6 @@ mod test {
     };
 
     use alloy::{
-        eips::BlockId,
         network::EthereumWallet,
         node_bindings::Anvil,
         primitives::U256,
@@ -3045,7 +3044,7 @@ mod test {
 
         // deploy permissionless stake table
         let exit_escrow_period = U256::from(300); // 300 sec
-        let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+        let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
             &provider,
             contracts,
             token_proxy_addr,
