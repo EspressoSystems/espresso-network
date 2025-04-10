@@ -438,7 +438,6 @@ async fn main() -> anyhow::Result<()> {
         // manually fill up the relay server state
         let state = StateRelayServerState::new(
             Url::parse(&format!("http://localhost:{}", sequencer_api_port)).unwrap(),
-            STAKE_TABLE_CAPACITY_FOR_TEST,
         )
         .with_blocks_per_epoch(blocks_per_epoch)
         .with_epoch_start_block(epoch_start_block)
