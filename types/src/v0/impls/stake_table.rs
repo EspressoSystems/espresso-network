@@ -1140,9 +1140,12 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<Leaf2> {
-        let peers = membership.read().await.fetcher.peers.clone();
-        let stake_table = membership.read().await.stake_table(Some(epoch)).clone();
-        let success_threshold = membership.read().await.success_threshold(Some(epoch));
+        let membership_reader = membership.read().await;
+        let peers = membership_reader.fetcher.peers.clone();
+        let stake_table = membership_reader.stake_table(Some(epoch)).clone();
+        let success_threshold = membership_reader.success_threshold(Some(epoch));
+        drop(membership_reader);
+
         // Fetch leaves from peers
         let leaf: Leaf2 = peers
             .fetch_leaf(block_height, stake_table.clone(), success_threshold)
@@ -1156,9 +1159,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_height: u64,
         epoch: Epoch,
     ) -> anyhow::Result<DrbResult> {
-        let peers = membership.read().await.fetcher.peers.clone();
-        let stake_table = membership.read().await.stake_table(Some(epoch)).clone();
-        let success_threshold = membership.read().await.success_threshold(Some(epoch));
+        let membership_reader = membership.read().await;
+        let peers = membership_reader.fetcher.peers.clone();
+        let stake_table = membership_reader.stake_table(Some(epoch)).clone();
+        let success_threshold = membership_reader.success_threshold(Some(epoch));
+        drop(membership_reader);
 
         tracing::debug!(
             "Getting DRB for epoch {:?}, block height {:?}",
