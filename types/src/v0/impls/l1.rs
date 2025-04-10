@@ -44,7 +44,7 @@ use tracing::Instrument;
 use url::Url;
 
 use super::{
-    select_validators_with_stake,
+    active_validator_set_from_l1_events,
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
     v0_3::Validator,
     validators_from_l1_events, L1BlockInfo, L1BlockInfoWithParent, L1ClientMetrics, L1State,
@@ -1059,9 +1059,8 @@ impl L1Client {
         contract: Address,
         to_block: u64,
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
-        let mut validators = self.fetch_all_validators(contract, to_block).await?;
-        select_validators_with_stake(&mut validators)?;
-        Ok(validators)
+        let events = self.fetch_stake_table_events(contract, to_block).await?;
+        active_validator_set_from_l1_events(events.values().cloned())
     }
 
     pub async fn fetch_all_validators(
