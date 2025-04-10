@@ -131,6 +131,10 @@ impl StateProverConfig {
 
         Ok(())
     }
+
+    pub fn start_epoch(&self) -> u64 {
+        epoch_from_block_number(self.epoch_start_block, self.blocks_per_epoch)
+    }
 }
 
 /// Get the epoch-related  from the sequencer's `PublicHotShotConfig` struct
@@ -440,6 +444,7 @@ async fn epoch_root_update(
     proving_key: Arc<ProvingKey>,
     epoch: u64,
 ) -> Result<u64, ProverError> {
+    let epoch = epoch.max(state.config.start_epoch());
     tracing::info!("Syncing the epoch root of epoch={epoch}");
     let state_cert =
         fetch_epoch_root_state_from_sequencer(&state.config.sequencer_url, epoch).await?;
