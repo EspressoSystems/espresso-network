@@ -324,27 +324,20 @@ impl StakeTableEvent {
 pub struct EpochCommittees {
     /// Committee used when we're in pre-epoch state
     non_epoch_committee: NonEpochCommittee,
-
     /// Holds Stake table and da stake
     state: HashMap<Epoch, EpochCommittee>,
-
     /// L1 provider
     l1_client: L1Client,
-
     /// Verifiable `ChainConfig` holding contract address
     chain_config: ChainConfig,
-
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
-
     /// Peers for catching up the stake table
     #[debug(skip)]
     peers: Arc<dyn StateCatchup>,
-
     /// Methods for stake table persistence.
     #[debug(skip)]
     persistence: Arc<dyn MembershipPersistence>,
-
     first_epoch: Option<Epoch>,
 }
 
@@ -461,7 +454,10 @@ impl EpochCommittees {
     ) -> anyhow::Result<Validator<BLSPubKey>> {
         let address = self.address(epoch, key)?;
         let validators = self.validators(epoch)?;
-        Ok(validators.get(&address).unwrap().clone())
+        validators
+            .get(&address)
+            .context("validator not found")
+            .cloned()
     }
 
     // We need a constructor to match our concrete type.
