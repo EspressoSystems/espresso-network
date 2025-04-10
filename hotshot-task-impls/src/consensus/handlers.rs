@@ -247,7 +247,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
     drop(consensus_reader);
 
     if is_eqc {
-        let Some(next_epoch_high_qc) = wait_for_next_epoch_qc(
+        let next_epoch_high_qc = wait_for_next_epoch_qc(
             &high_qc,
             &task_state.consensus,
             task_state.timeout,
@@ -255,9 +255,10 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             receiver,
         )
         .await
-        else {
-            bail!("We've seen an extended QC but we don't have a corresponding next epoch extended QC");
-        };
+        .context(warn!(
+            "We've seen an extended QC but we don't have a corresponding next epoch extended QC"
+        ))?;
+
         tracing::debug!(
             "Broadcasting Extended QC for view {:?} and epoch {:?}, my id {:?}.",
             high_qc.view_number(),

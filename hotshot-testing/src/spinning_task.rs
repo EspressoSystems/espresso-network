@@ -272,7 +272,13 @@ where
                                 for (view, hash_map) in read_storage.vids_cloned().await {
                                     let mut converted_hash_map = HashMap::new();
                                     for (key, proposal) in hash_map {
-                                        converted_hash_map.insert(key, convert_proposal(proposal));
+                                        converted_hash_map
+                                            .entry(key)
+                                            .or_insert_with(BTreeMap::new)
+                                            .insert(
+                                                proposal.data.target_epoch,
+                                                convert_proposal(proposal),
+                                            );
                                     }
                                     vid_shares.insert(view, converted_hash_map);
                                 }

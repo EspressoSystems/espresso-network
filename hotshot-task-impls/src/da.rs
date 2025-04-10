@@ -278,6 +278,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
 
                 // Optimistically calculate and update VID if we know that the primary network is down.
                 if self.network.is_primary_down() {
+                    let my_id = self.id;
                     let consensus =
                         OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
                     let pk = self.private_key.clone();
@@ -286,45 +287,59 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     let upgrade_lock = self.upgrade_lock.clone();
                     let next_epoch = epoch_number.map(|epoch| epoch + 1);
 
-                    let target_epoch = if membership.has_stake(&public_key).await {
-                        epoch_number
-                    } else if membership
+                    let mut target_epochs = vec![];
+                    if membership.has_stake(&public_key).await {
+                        target_epochs.push(epoch_number);
+                    }
+                    if membership
                         .next_epoch_stake_table()
                         .await?
                         .has_stake(&public_key)
                         .await
                     {
-                        next_epoch
-                    } else {
+                        target_epochs.push(next_epoch);
+                    }
+                    if target_epochs.is_empty() {
                         bail!("Not calculating VID, the node doesn't belong to the current epoch or the next epoch.");
                     };
 
+                    tracing::debug!(
+                        "Primary network is down. Optimistically calculate own VID share."
+                    );
                     let membership = membership.clone();
                     spawn(async move {
-                        Consensus::calculate_and_update_vid::<V>(
-                            OuterConsensus::new(Arc::clone(&consensus.inner_consensus)),
-                            view_number,
-                            target_epoch,
-                            membership.coordinator.clone(),
-                            &pk,
-                            &upgrade_lock,
-                        )
-                        .await;
-                        if let Some(Some(vid_share)) = consensus
-                            .read()
-                            .await
-                            .vid_shares()
-                            .get(&view_number)
-                            .map(|shares| shares.get(&public_key).cloned())
-                        {
-                            broadcast_event(
-                                Arc::new(HotShotEvent::VidShareRecv(
-                                    public_key.clone(),
-                                    vid_share.clone(),
-                                )),
-                                &chan,
+                        for target_epoch in target_epochs {
+                            Consensus::calculate_and_update_vid::<V>(
+                                OuterConsensus::new(Arc::clone(&consensus.inner_consensus)),
+                                view_number,
+                                target_epoch,
+                                membership.coordinator.clone(),
+                                &pk,
+                                &upgrade_lock,
                             )
                             .await;
+                            if let Some(vid_share) = consensus
+                                .read()
+                                .await
+                                .vid_shares()
+                                .get(&view_number)
+                                .and_then(|key_map| key_map.get(&public_key))
+                                .and_then(|epoch_map| epoch_map.get(&target_epoch))
+                            {
+                                tracing::debug!(
+                                    "Primary network is down. Calculated own VID share for epoch {:?}, my id {:?}",
+                                    target_epoch,
+                                    my_id
+                                );
+                                broadcast_event(
+                                    Arc::new(HotShotEvent::VidShareRecv(
+                                        public_key.clone(),
+                                        vid_share.clone(),
+                                    )),
+                                    &chan,
+                                )
+                                .await;
+                            }
                         }
                     });
                 }

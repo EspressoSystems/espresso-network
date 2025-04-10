@@ -181,6 +181,7 @@ pub async fn add_network_message_test_task<
     upgrade_lock: UpgradeLock<TYPES, V>,
     channel: Arc<NET>,
     public_key: TYPES::SignatureKey,
+    id: u64,
 ) -> JoinHandle<()> {
     let net = Arc::clone(&channel);
     let network_state: NetworkMessageTaskState<_, _> = NetworkMessageTaskState {
@@ -189,6 +190,7 @@ pub async fn add_network_message_test_task<
         public_key,
         transactions_cache: lru::LruCache::new(NonZeroUsize::new(100_000).unwrap()),
         upgrade_lock: upgrade_lock.clone(),
+        id,
     };
 
     let network = Arc::clone(&net);

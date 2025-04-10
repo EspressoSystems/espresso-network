@@ -140,6 +140,7 @@ pub fn add_network_message_task<
         public_key: handle.public_key().clone(),
         transactions_cache: lru::LruCache::new(NonZeroUsize::new(100_000).unwrap()),
         upgrade_lock: upgrade_lock.clone(),
+        id: handle.hotshot.id,
     };
 
     let network = Arc::clone(channel);
@@ -202,6 +203,7 @@ pub fn add_network_event_task<
         upgrade_lock: handle.hotshot.upgrade_lock.clone(),
         transmit_tasks: BTreeMap::new(),
         epoch_height: handle.epoch_height,
+        id: handle.hotshot.id,
     };
     let task = Task::new(
         network_state,

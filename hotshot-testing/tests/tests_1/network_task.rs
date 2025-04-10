@@ -92,6 +92,7 @@ async fn test_network_task() {
         upgrade_lock,
         network.clone(),
         public_key,
+        node_id,
     )
     .await;
 
