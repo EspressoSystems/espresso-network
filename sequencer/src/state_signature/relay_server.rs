@@ -15,10 +15,7 @@ use hotshot_state_prover::service::{
 };
 use hotshot_types::{
     light_client::{StateSignaturesBundle, StateVerKey},
-    traits::{
-        signature_key::StateSignatureKey,
-        stake_table::{SnapshotVersion, StakeTableScheme},
-    },
+    traits::signature_key::{StakeTableEntryType, StateSignatureKey},
     utils::epoch_from_block_number,
     PeerConfig,
 };
@@ -38,8 +35,6 @@ use super::{LightClientState, StateSignatureRequestBody};
 pub struct StateRelayServerState {
     /// Sequencer endpoint to query for stake table info
     sequencer_url: Url,
-    /// The capacity for the stake table
-    stake_table_capacity: u64,
 
     /// Epoch length (fetched from HotShot config)
     blocks_per_epoch: Option<u64>,
@@ -67,10 +62,9 @@ pub struct StateRelayServerState {
 
 impl StateRelayServerState {
     /// Init the server state
-    pub fn new(sequencer_url: Url, stake_table_capacity: u64) -> Self {
+    pub fn new(sequencer_url: Url) -> Self {
         Self {
             sequencer_url,
-            stake_table_capacity,
             blocks_per_epoch: None,
             epoch_start_block: None,
             thresholds: HashMap::new(),
@@ -109,24 +103,21 @@ impl StateRelayServerState {
         let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
         tracing::info!(%blocks_per_epoch, %epoch_start_block, "Initializing genesis stake table with ");
 
-        let genesis_stake_table = fetch_stake_table_from_sequencer(
-            &self.sequencer_url,
-            0,
-            self.stake_table_capacity as usize,
-        )
-        .await?;
+        let genesis_stake_table =
+            fetch_stake_table_from_sequencer(&self.sequencer_url, None).await?;
+        let genesis_total_stake = genesis_stake_table
+            .iter()
+            .map(|entry| entry.stake_table_entry.stake())
+            .sum();
 
         // init local state
-        self.thresholds.insert(
-            first_epoch,
-            one_honest_threshold(genesis_stake_table.total_stake(SnapshotVersion::LastEpochStart)?),
-        );
+        self.thresholds
+            .insert(first_epoch, one_honest_threshold(genesis_total_stake));
 
         let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
-        for (_bls_vk, amt, schnorr_vk) in
-            genesis_stake_table.try_iter(SnapshotVersion::LastEpochStart)?
-        {
-            genesis_known_nodes.insert(schnorr_vk, amt);
+        for entry in genesis_stake_table {
+            genesis_known_nodes
+                .insert(entry.state_ver_key.clone(), entry.stake_table_entry.stake());
         }
 
         self.known_nodes.insert(first_epoch, genesis_known_nodes);
@@ -454,7 +445,6 @@ where
 pub async fn run_relay_server<ApiVer: StaticVersionType + 'static>(
     shutdown_listener: Option<oneshot::Receiver<()>>,
     sequencer_url: Url,
-    stake_table_capacity: u64,
     url: Url,
     bind_version: ApiVer,
 ) -> anyhow::Result<()> {
@@ -462,8 +452,7 @@ pub async fn run_relay_server<ApiVer: StaticVersionType + 'static>(
     let api = define_api(&options, bind_version).unwrap();
 
     let state = RwLock::new(
-        StateRelayServerState::new(sequencer_url, stake_table_capacity)
-            .with_shutdown_signal(shutdown_listener),
+        StateRelayServerState::new(sequencer_url).with_shutdown_signal(shutdown_listener),
     );
     let mut app = App::<RwLock<StateRelayServerState>, ServerError>::with_state(state);
 

@@ -695,7 +695,7 @@ pub mod test_helpers {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
-    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
+    use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -973,7 +973,7 @@ pub mod test_helpers {
 
         pub fn light_client_genesis(&self) -> (LightClientStateSol, StakeTableStateSol) {
             let st = self.cfg.stake_table();
-            light_client_genesis_from_stake_table(st).unwrap()
+            legacy_light_client_genesis_from_stake_table(st).unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {
