@@ -913,7 +913,7 @@ pub mod testing {
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
                 epoch_height: 300,
-                epoch_start_block: 0,
+                epoch_start_block: 1,
             };
 
             Self {
