@@ -399,7 +399,6 @@ impl L1Client {
 
     /// Construct a new L1 client with the default options.
     pub fn new(url: Vec<Url>) -> anyhow::Result<Self> {
-        tracing::error!("clinet new: {:?}", url);
         L1ClientOptions::default().connect(url)
     }
 
@@ -414,7 +413,6 @@ impl L1Client {
 
     /// Start the background tasks which keep the L1 client up to date.
     pub async fn spawn_tasks(&self) {
-        tracing::error!("spawn tasks: {:?}", self.provider);
         let mut update_task = self.update_task.0.lock().await;
         if update_task.is_none() {
             *update_task = Some(spawn(self.update_loop()));
@@ -470,7 +468,6 @@ impl L1Client {
                 let mut block_stream = {
                     let res = match &ws_urls {
                         Some(urls) => {
-                            tracing::error!("Urls: {:?}", urls);
                             // Use a new WebSockets host each time we retry in case there is a
                             // problem with one of the hosts specifically.
                             let provider = i % urls.len();
@@ -537,12 +534,9 @@ impl L1Client {
                 loop {
                     // Wait for a block, timing out if we don't get one soon enough
                     let block_timeout = tokio::time::timeout(subscription_timeout, block_stream.next()).await;
-
-                    tracing::error!("block_timeout: {:?}", block_timeout);
                     match block_timeout {
                         // We got a block
                         Ok(Some(head)) => {
-                            tracing::error!("Head: {:?}", head);
                             let head = head.number;
                             tracing::debug!(head, "Received L1 block");
 

@@ -447,8 +447,6 @@ impl Header {
             );
             l1.head = parent_header.l1_head();
         }
-
-        tracing::error!("Header::new, l1.finalized: {:?}", l1.finalized);
         if l1.finalized < parent_header.l1_finalized() {
             tracing::warn!(
                 "L1 finalized {:?} behind parent {:?}, L1 client may be lagging",
@@ -458,7 +456,6 @@ impl Header {
             l1.finalized = parent_header.l1_finalized();
         }
 
-        tracing::error!("Header::new, l1.finalized: {:?}", l1.finalized);
         // Enforce that the sequencer block timestamp is not behind the L1 block timestamp. This can
         // only happen if our clock is badly out of sync with L1.
         if let Some(l1_block) = &l1.finalized {
@@ -1016,15 +1013,6 @@ impl BlockHeader<SeqTypes> for Header {
 
         // Fetch the latest L1 snapshot.
         let l1_snapshot = instance_state.l1_client.snapshot().await;
-        tracing::error!("Header::new, l1_snapshot: {:?}", l1_snapshot);
-
-        tracing::error!(
-            "Header::new, parent_leaft finalized: {:?}",
-            parent_leaf
-                .block_header()
-                .l1_finalized()
-                .map(|block_info| block_info.number)
-        );
         // Fetch the new L1 deposits between parent and current finalized L1 block.
         let l1_deposits = if let (Some(addr), Some(block_info)) =
             (chain_config.fee_contract, l1_snapshot.finalized)
