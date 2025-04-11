@@ -687,7 +687,7 @@ pub mod test_helpers {
     use committable::Committable;
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -696,6 +696,7 @@ pub mod test_helpers {
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
     use hotshot_state_prover::service::light_client_genesis_from_stake_table;
+    use hotshot_testing::block_builder::BuilderTask;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -843,14 +844,14 @@ pub mod test_helpers {
     }
 
     impl<P: PersistenceOptions, const NUM_NODES: usize, V: Versions> TestNetwork<P, { NUM_NODES }, V> {
-        pub async fn new<C: StateCatchup + 'static>(
-            cfg: TestNetworkConfig<{ NUM_NODES }, P, C>,
-            bind_version: V,
-        ) -> Self {
-            let mut cfg = cfg;
-            let mut builder_tasks = Vec::new();
-            let mut marketplace_builder_url = "http://example.com".parse().unwrap();
-
+        pub async fn epoch_version_hook() {}
+        /// Execute version specific logic.
+        pub async fn version_hooks<C: StateCatchup + 'static>(
+            cfg: &mut TestNetworkConfig<{ NUM_NODES }, P, C>,
+            marketplace_builder_url: &mut Url,
+            builder_tasks: &mut Vec<Box<dyn BuilderTask<SeqTypes>>>,
+            _version: V,
+        ) {
             if <V as Versions>::Base::VERSION < MarketplaceVersion::VERSION {
                 let chain_config = cfg.state[0].chain_config.resolve();
                 if chain_config.is_none() {
@@ -865,6 +866,12 @@ pub mod test_helpers {
                 cfg.network_config.set_builder_urls(vec1::vec1![url]);
             };
 
+            if <V as Versions>::Upgrade::VERSION >= EpochVersion::VERSION
+                || <V as Versions>::Base::VERSION >= EpochVersion::VERSION
+            {
+                todo!("deploy contracts");
+            };
+
             if <V as Versions>::Upgrade::VERSION >= MarketplaceVersion::VERSION
                 || <V as Versions>::Base::VERSION >= MarketplaceVersion::VERSION
             {
@@ -873,8 +880,24 @@ pub mod test_helpers {
                 )
                 .await;
                 builder_tasks.push(task);
-                marketplace_builder_url = url;
+                *marketplace_builder_url = url;
             }
+        }
+
+        pub async fn new<C: StateCatchup + 'static>(
+            cfg: TestNetworkConfig<{ NUM_NODES }, P, C>,
+            bind_version: V,
+        ) -> Self {
+            let mut cfg = cfg;
+            let mut marketplace_builder_url = "http://example.com".parse().unwrap();
+            let mut builder_tasks = Vec::new();
+            Self::version_hooks(
+                &mut cfg,
+                &mut marketplace_builder_url,
+                &mut builder_tasks,
+                bind_version,
+            )
+            .await;
 
             // add default storage if none is provided as query module is now required
             let mut opt = cfg.api_config.clone();
