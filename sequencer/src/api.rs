@@ -3502,7 +3502,7 @@ mod test {
         let epoch = epoch_from_block_number(block, epoch_height);
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validator/{epoch}"))
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/{epoch}"))
             .send()
             .await
             .expect("failed to get validator");

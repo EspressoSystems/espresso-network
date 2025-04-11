@@ -341,7 +341,7 @@ where
         }
         .boxed()
     })?
-    .at("validator", |req, state| {
+    .at("get_validators", |req, state| {
         async move {
             let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {
                 hotshot_query_service::node::Error::Custom {
