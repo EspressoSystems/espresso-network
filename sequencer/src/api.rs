@@ -1826,7 +1826,7 @@ mod test {
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
-        v0_1::{UpgradeMode, ViewBasedUpgrade},
+        v0_1::{RewardAmount, UpgradeMode, ViewBasedUpgrade},
         BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState, V0_1,
@@ -3143,7 +3143,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pos_rewards() -> anyhow::Result<()> {
         setup_test();
-        let epoch_height = 35;
+        let epoch_height = 20;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
@@ -3222,7 +3222,7 @@ mod test {
             contracts
                 .address(Contract::EspTokenProxy)
                 .expect("ESP token deployed"),
-            staking_priv_keys,
+            staking_priv_keys.clone(),
         )
         .await?;
 
@@ -3238,7 +3238,7 @@ mod test {
             ..Default::default()
         };
 
-        const NUM_NODES: usize = 5;
+        const NUM_NODES: usize = 1;
         // Initialize nodes.
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -3248,7 +3248,7 @@ mod test {
             .try_into()
             .unwrap();
 
-        let config = TestNetworkConfigBuilder::default()
+        let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
                 Options::with_port(api_port),
@@ -3256,13 +3256,46 @@ mod test {
             .states(std::array::from_fn(|_| state.clone()))
             .persistences(persistence.clone())
             .network_config(network_config)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
             .build();
 
+        let network = TestNetwork::new(config, PosVersion::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
-            Client::new(format!("localhost:{api_port}").parse().unwrap());
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
-        sleep(Duration::from_secs(60 * 60 * 60)).await;
+        // first two epochs will be 1 and 2
+        // rewards are distributed starting third epoch
+        // third epoch starts from block 40 as epoch height is 20
+
+        // wait for atleast 50 blocks
+        let _leaves: Vec<BlockQueryData<SeqTypes>> = client
+            .socket("availability/stream/block/0")
+            .subscribe()
+            .await
+            .unwrap()
+            .take(50)
+            .try_collect()
+            .await
+            .unwrap();
+
+        let account = staking_priv_keys[0].0.clone();
+        let address = account.address();
+
+        let amount = client
+            .get::<Option<RewardAmount>>(&format!("reward-state/reward-balance/latest/{}", address))
+            .send()
+            .await
+            .unwrap()
+            .unwrap();
+
+        tracing::error!("amount={amount:?}");
+
         Ok(())
     }
 }
