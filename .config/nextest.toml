@@ -18,7 +18,13 @@ retries  = 10
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]
 filter = 'test(slow_test_restart)'
+slow-timeout = { period = "1m", terminate-after = 3 }
 threads-required = 'num-cpus'
+
+[[profile.default.overrides]]
+filter = 'package(request-response)'
+threads-required = 'num-cpus'
+retries  = 20
 
 # HotShot integration tests
 [profile.hotshot]
