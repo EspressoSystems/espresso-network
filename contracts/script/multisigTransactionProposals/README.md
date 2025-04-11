@@ -106,6 +106,42 @@ proxy and read the state history retention period on etherscan.
 2. Set the environment variables mentioned in the section, [Disable Permissioned Prover](#disable-permissioned-prover)
 3. Run the `ts-node` command as mentioned in the section, [Disable Permissioned Prover](#disable-permissioned-prover)
 
+## Approving Stake Amount to From Multisig to StakeTable
+
+1. Set the following environment variables in `.env.contracts`
+
+- RPC_URL
+- SAFE_MULTISIG_ADDRESS
+- TOKEN_CONTRACT_PROXY_ADDRESS
+- STAKE_TABLE_CONTRACT_PROXY_ADDRESS
+
+2. Run the script to propose the transaction the safe multisig address
+
+```bash
+source .env.contracts &&
+ts-node contracts/script/multisigTransactionProposals/safeSDK/approveStake.ts $STAKE_AMOUNT_IN_ETHER
+```
+
+3. Follow the URL in the terminal output to the multisig wallet to sign the proposal and eventually execute it
+
+## Staking to Validator from Multisig to StakeTable
+
+1. Set the following environment variables in `.env.contracts`
+
+- RPC_URL
+- SAFE_MULTISIG_ADDRESS
+- TOKEN_CONTRACT_PROXY_ADDRESS
+- STAKE_TABLE_CONTRACT_PROXY_ADDRESS
+
+2. Run the script to propose the transaction the safe multisig address
+
+```bash
+source .env.contracts &&
+ts-node contracts/script/multisigTransactionProposals/safeSDK/delegateStake.ts $VALIDATOR_ADDRESS $STAKE_AMOUNT_IN_ETHER
+```
+
+3. Follow the URL in the terminal output to the multisig wallet to sign the proposal and eventually execute it
+
 ## Testing
 
 ### Testing Safe Multisig Wallets

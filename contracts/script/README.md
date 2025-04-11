@@ -36,7 +36,42 @@
    - `DEPLOYER_MNEMONIC`
    - `DEPLOYER_MNEMONIC_OFFSET`
 
-## Deployments
+## Deployments - Staging (No-Multisig)
+
+#### Deploy PlonkVerifierV2
+
+In `.env` or `.env.contracts` set the following:
+
+- `MNEMONIC`
+- `MNEMONIC_OFFSET`
+- `RPC_URL`
+
+```bash
+source .env.contracts && forge clean && forge script contracts/script/PlonkVerifierV2.s.sol:DeployPlonkVerifierV2Script --rpc-url $RPC_URL --build-info true --legacy --broadcast
+```
+
+#### Deploy LightClient V1
+
+````bash
+source .env.contracts &&    forge clean &&  forge script contracts/script/LightClientStaging.s.sol:DeployLightClientContractScript --sig "run(uint32,uint32)" $NUM_INIT_VALIDATORS $STATE_HISTORY_RETENTION_PERIOD --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast```
+
+#### Upgrade to LightClientV2
+
+In `.env` or `.env.contracts` set the following:
+
+- `MNEMONIC`
+- `MNEMONIC_OFFSET`
+- `RPC_URL`
+- `LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS`
+- `PLONK_VERIFIER_ADDRESS`
+- `PLONK_VERIFIER_V2_ADDRESS`
+- `BLOCKS_PER_EPOCH`
+
+```bash
+source .env.contracts &&    forge clean &&  forge script contracts/script/LightClientStaging.s.sol:UpgradeLightClientWithoutMultisigAdminScript --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
+````
+
+## Deployments (Multisig)
 
 ## Deploying the Fee Contract
 
@@ -236,11 +271,11 @@ forge script contracts/script/FeeContract.s.sol:UpgradeFeeContractScript \
 --broadcast
 ```
 
-## Upgrading the Light Client Contract
+## Upgrading the Light Client Contract (with Multisig owner)
 
 Ensure that you update the version in the `getVersion()` method of the latest implementation contract.
 
-Since the LightClient contract uses the PlonkVerifier library, the PlonkVerifier library has to be deployed and then
+Since the LightClient contract uses the PlonkVerifier & PlonkVerifierV2 libraries, they have to be deployed and then
 referenced at deployment time. Thus ensure you've deployed the PlonkVerifier
 ([see steps below](#deploy-the-plonk-verifier-library)) and set the `$PLONK_VERIFIER_ADDRESS` variable in the command
 below. Each time modifications are made to the Plonk Verifier, contracts that depend on it such as the Light Client
@@ -257,62 +292,22 @@ In `.env.contracts` set:
 ```bash
 source .env.contracts && \
 forge clean && \
-forge script contracts/script/LightClient.s.sol:LightClientContractUpgradeScript \
+forge script contracts/script/LightClient.s.sol:LightClientContractUpgradeToV2Script \
 --ffi \
---rpc-url https://ethereum-sepolia.publicnode.com  \
+--rpc-url $RPC_URL \
 --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS \
+--libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS \
 --build-info true \
---legacy \
 --broadcast
 ```
 
-# Deploying Upgradable Contracts without a Safe Multisig Wallet Admin
+2. Go to safe.global and have the signers confirm the transaction and finally execute it
 
-Use these instructions for staging deployments only. Ensure that you have set the following variables in the `.env`
-file.
+### Via Hardware Wallet
 
-- `MNEMONIC`
-- `MNEMONIC_OFFSET`
+In `.env.contracts` set:
 
-## 1. Deploy the LightClient Contract
-
-```bash
-forge script contracts/script/LightClient.s.sol:DeployLightClientContractWithoutMultiSigScript $NUM_INIT_VALIDATORS $STATE_HISTORY_RETENTION_PERIOD \
---sig 'run(uint32, uint32)' \
---ffi \
---rpc-url https://ethereum-sepolia.publicnode.com
-```
-
-## 2. Upgrade the LightClient Contract
-
-```bash
-forge script contracts/script/LightClient.s.sol:UpgradeLightClientWithoutMultisigAdminScript $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS \
---sig 'run(address)' \
---ffi \
---rpc-url https://ethereum-sepolia.publicnode.com
-```
-
-\*\*_Note_: the `$MNEMONIC_OFFSET` should be zero by default if address referenced by the `$MNEMONIC` in the `.env` is
-the first address in that wallet. Otherwise, please specify the correct `$MNEMONIC_OFFSET`
-
-## 3. Verify the Contract
-
-```bash
-forge verify-contract --chain-id 11155111 \
---watch --etherscan-api-key $ETHERSCAN_API_KEY \
---compiler-version $SOLC_VERSION \
-$LIGHT_CLIENT_CONTRACT_ADDRESS \
-contracts/src/LightClient.sol:LightClient \
---libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS
-```
-
-## 4. [Inform Etherscan about your proxy](#3-inform-etherscan-about-your-proxy)
-
----
-
-<br/>
-<br/>
-<br/>
+- `USE_HARDWARE_WALLET=true` and add the `--ledger` flag to the `forge script` command
 
 # Deploy the Plonk Verifier Library
 
