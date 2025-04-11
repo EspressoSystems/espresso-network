@@ -837,6 +837,8 @@ pub mod test_helpers {
             self
         }
 
+        /// Setup for POS testing. Deploys contracts and adds the
+        /// stake table address to state. Must be called before `build()`.
         pub async fn pos_hook<V: Versions>(self) -> anyhow::Result<Self> {
             if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
                 && <V as Versions>::Base::VERSION < EpochVersion::VERSION
@@ -3068,7 +3070,7 @@ mod test {
     // TODO when `EpochVersion` becomes base version we can merge this
     // w/ above test.
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_hotshot_event_streaming_epoch_progression() -> anyhow::Result<()> {
+    async fn test_hotshot_event_streaming_epoch_progression() {
         setup_test();
         let epoch_height = 35;
         let wanted_epochs = 4;
@@ -3159,7 +3161,5 @@ mod test {
             epochs.contains(&wanted_epochs),
             "Epochs are not progressing"
         );
-
-        Ok(())
     }
 }
