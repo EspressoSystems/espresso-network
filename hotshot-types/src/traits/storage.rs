@@ -86,10 +86,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
     async fn append_proposal2(
         &self,
         proposal: &Proposal<TYPES, QuorumProposal2<TYPES>>,
-    ) -> Result<()> {
-        self.append_proposal(&convert_proposal(proposal.clone()))
-            .await
-    }
+    ) -> Result<()>;
     /// Add a proposal we sent to the store
     async fn append_proposal_wrapper(
         &self,
