@@ -2971,7 +2971,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_hotshot_event_streaming_epoch_progression() -> anyhow::Result<()> {
         setup_test();
-        let epoch_height = 35;
+        let epoch_height = 10;
         let wanted_epochs = 4;
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
@@ -3099,7 +3099,7 @@ mod test {
 
         let mut views = HashSet::new();
         let mut epochs = HashSet::new();
-        for _ in 0..=600 {
+        for _ in 0..=(wanted_views * 5) {
             let event = subscribed_events.next().await.unwrap();
             let event = event.unwrap();
             let view_number = event.view_number;
@@ -3124,17 +3124,22 @@ mod test {
 
                 assert_eq!(expected_epoch, epoch);
             }
-            if views.contains(&wanted_views) {
-                tracing::info!("Client Received at least desired views, exiting loop");
+            if views.contains(&wanted_views) && epochs.contains(&wanted_epochs) {
+                tracing::info!("Received desired views and epochs, exiting loop");
                 break;
             }
         }
 
         // prevent false positive when we overflow the range
-        assert!(views.contains(&wanted_views), "Views are not progressing");
+        assert!(
+            views.contains(&wanted_views),
+            "Not enough views: got {} want {wanted_views}",
+            views.iter().max().unwrap_or(&0),
+        );
         assert!(
             epochs.contains(&wanted_epochs),
-            "Epochs are not progressing"
+            "Not enough epochs: got {} want {wanted_epochs}",
+            epochs.iter().max().unwrap_or(&0)
         );
 
         Ok(())
