@@ -341,10 +341,7 @@ pub fn apply_rewards(
     let computed_rewards = compute_rewards(validator)?;
     for (address, reward) in computed_rewards {
         update_balance(&RewardAccount(address), reward)?;
-        tracing::info!(
-            "applied rewards address={address} reward={}",
-            reward.0.to::<u64>()
-        );
+        tracing::debug!("applied rewards address={address} reward={reward}",);
     }
     Ok(reward_state)
 }
