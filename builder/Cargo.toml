@@ -28,7 +28,7 @@ hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 marketplace-builder-shared = { workspace = true }
 portpicker = { workspace = true }
-rand = "0.8.5"
+rand = "0.9.0"
 sequencer = { path = "../sequencer" }
 sequencer-utils = { path = "../utils" }
 surf-disco = { workspace = true }
