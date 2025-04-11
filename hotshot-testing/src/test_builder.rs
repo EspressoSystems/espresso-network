@@ -21,7 +21,10 @@ use hotshot_example_types::{
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::{NodeType, Versions},
+    traits::{
+        node_implementation::{NodeType, Versions},
+        storage::storage_add_drb_result,
+    },
     HotShotConfig, PeerConfig, ValidatorConfig,
 };
 use hotshot_utils::anytrace::*;
@@ -255,11 +258,16 @@ pub async fn create_test_handle<
     let validator_config: ValidatorConfig<TYPES> =
         ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, U256::from(1), is_da);
 
+    let storage = Arc::new(RwLock::new(storage));
     // Get key pair for certificate aggregation
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();
-    let membership_coordinator = EpochMembershipCoordinator::new(memberships, config.epoch_height);
+    let membership_coordinator = EpochMembershipCoordinator::new(
+        memberships,
+        Some(storage_add_drb_result(Arc::clone(&storage))),
+        config.epoch_height,
+    );
 
     let behaviour = (metadata.behaviour)(node_id);
     match behaviour {

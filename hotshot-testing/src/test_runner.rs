@@ -39,6 +39,7 @@ use hotshot_types::{
         election::Membership,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        storage::storage_add_drb_result,
     },
     HotShotConfig, ValidatorConfig,
 };
@@ -605,6 +606,7 @@ where
         let public_key = validator_config.public_key.clone();
         let state_private_key = validator_config.state_private_key.clone();
         let epoch_height = config.epoch_height;
+        let storage = Arc::new(RwLock::new(storage));
 
         SystemContext::new(
             public_key,
@@ -612,7 +614,11 @@ where
             state_private_key,
             node_id,
             config,
-            EpochMembershipCoordinator::new(Arc::new(RwLock::new(memberships)), epoch_height),
+            EpochMembershipCoordinator::new(
+                Arc::new(RwLock::new(memberships)),
+                Some(storage_add_drb_result(Arc::clone(&storage))),
+                epoch_height,
+            ),
             network,
             initializer,
             ConsensusMetricsValue::default(),
@@ -646,6 +652,7 @@ where
         let public_key = validator_config.public_key.clone();
         let state_private_key = validator_config.state_private_key.clone();
         let epoch_height = config.epoch_height;
+        let storage = Arc::new(RwLock::new(storage));
 
         SystemContext::new_from_channels(
             public_key,
@@ -653,7 +660,11 @@ where
             state_private_key,
             node_id,
             config,
-            EpochMembershipCoordinator::new(memberships, epoch_height),
+            EpochMembershipCoordinator::new(
+                memberships,
+                Some(storage_add_drb_result(Arc::clone(&storage))),
+                epoch_height,
+            ),
             network,
             initializer,
             ConsensusMetricsValue::default(),

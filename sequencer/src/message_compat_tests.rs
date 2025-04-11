@@ -76,6 +76,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             node_state.peers,
             NoStorage,
         ))),
+        None,
         10,
     );
     let upgrade_data = UpgradeProposalData {

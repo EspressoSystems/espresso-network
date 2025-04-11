@@ -35,6 +35,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
+        storage::storage_add_drb_result,
         EncodeBytes,
     },
     utils::{option_epoch_from_block_number, View, ViewInner},
@@ -99,7 +100,7 @@ pub async fn build_system_handle_from_launcher<
     Arc<TestNodeKeyMap>,
 ) {
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
-    let storage = (launcher.resource_generators.storage)(node_id);
+    let storage = Arc::new(RwLock::new((launcher.resource_generators.storage)(node_id)));
     let marketplace_config = (launcher.resource_generators.marketplace_config)(node_id);
     let hotshot_config = (launcher.resource_generators.hotshot_config)(node_id);
 
@@ -127,7 +128,11 @@ pub async fn build_system_handle_from_launcher<
         hotshot_config.known_da_nodes.clone(),
     )));
 
-    let coordinator = EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height);
+    let coordinator = EpochMembershipCoordinator::new(
+        memberships,
+        Some(storage_add_drb_result(Arc::clone(&storage))),
+        hotshot_config.epoch_height,
+    );
     let node_key_map = launcher.metadata.build_node_key_map();
 
     let (c, s, r) = SystemContext::init(

@@ -105,7 +105,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         validator_config: ValidatorConfig<SeqTypes>,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
-        persistence: P,
+        persistence: Arc<RwLock<Arc<P>>>,
         network: Arc<N>,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
@@ -129,6 +129,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
         // Load saved consensus state from storage.
         let (initializer, anchor_view) = persistence
+            .read()
+            .await
             .load_consensus_state::<V>(instance_state.clone())
             .await?;
 
@@ -157,7 +159,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             network.clone(),
             initializer,
             ConsensusMetricsValue::new(metrics),
-            persistence.clone(),
+            Arc::clone(&persistence),
             marketplace_config,
         )
         .await?
@@ -212,9 +214,11 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         .await
         .with_context(|| "Failed to create external event handler")?;
 
+        let persistence_clone = Arc::clone(&*persistence.read().await);
+
         Ok(Self::new(
             handle,
-            persistence,
+            persistence_clone,
             state_signer,
             external_event_handler,
             request_response_protocol,
