@@ -20,6 +20,10 @@ retries  = 10
 filter = 'test(slow_test_restart)'
 threads-required = 'num-cpus'
 
+[[profile.default.overrides]]
+filter = 'package(request-response)'
+threads-required = 'num-cpus'
+
 # HotShot integration tests
 [profile.hotshot]
 retries = 2
