@@ -8,15 +8,12 @@
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Ok, Result};
+use anyhow::{anyhow, Context, Result};
 use async_broadcast::{InactiveReceiver, Receiver, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::Stream;
-use hotshot_task::{
-    dependency::{Dependency, EventDependency},
-    task::{ConsensusTaskRegistry, NetworkTaskRegistry, Task, TaskState},
-};
+use hotshot_task::task::{ConsensusTaskRegistry, NetworkTaskRegistry, Task, TaskState};
 use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 use hotshot_types::{
     consensus::Consensus,
@@ -26,13 +23,11 @@ use hotshot_types::{
     message::{Message, MessageKind, Proposal, RecipientList},
     request_response::ProposalRequestPayload,
     traits::{
-        block_contents::BlockHeader,
         consensus_api::ConsensusApi,
         network::{BroadcastDelay, ConnectedNetwork, Topic},
         node_implementation::NodeType,
         signature_key::SignatureKey,
     },
-    utils::option_epoch_from_block_number,
 };
 use tracing::instrument;
 
@@ -157,10 +152,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
             signed_proposal_request.commit().as_ref(),
         )?;
 
-        let membership_coordinator = self.membership_coordinator.clone();
-        let receiver = self.internal_event_stream.1.activate_cloned();
+        let mut receiver = self.internal_event_stream.1.activate_cloned();
         let sender = self.internal_event_stream.0.clone();
-        let epoch_height = self.epoch_height;
         Ok(async move {
             // First, broadcast that we need a proposal
             broadcast_event(
@@ -168,53 +161,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
                 &sender,
             )
             .await;
-            loop {
-                let hs_event = EventDependency::new(
-                    receiver.clone(),
-                    Box::new(move |event| {
-                        let event = event.as_ref();
-                        if let HotShotEvent::QuorumProposalResponseRecv(quorum_proposal) = event {
-                            quorum_proposal.data.view_number() == view
-                        } else {
-                            false
-                        }
-                    }),
-                )
-                .completed()
-                .await
-                .ok_or(anyhow!("Event dependency failed to get event"))?;
-
-                // Then, if it's `Some`, make sure that the data is correct
-                if let HotShotEvent::QuorumProposalResponseRecv(quorum_proposal) = hs_event.as_ref()
-                {
-                    let maybe_epoch = option_epoch_from_block_number::<TYPES>(
-                        quorum_proposal.data.proposal.epoch.is_some(),
-                        quorum_proposal.data.block_header().block_number(),
-                        epoch_height,
-                    );
-                    let membership = match membership_coordinator
-                        .membership_for_epoch(maybe_epoch)
-                        .await
-                    {
-                        Result::Ok(m) => m,
-                        Err(e) => {
-                            tracing::warn!(e.message);
-                            continue;
-                        },
-                    };
-                    // Make sure that the quorum_proposal is valid
-                    if let Err(err) = quorum_proposal.validate_signature(&membership).await {
-                        tracing::warn!("Invalid Proposal Received after Request.  Err {:?}", err);
-                        continue;
-                    }
-                    let proposed_leaf = Leaf2::from_quorum_proposal(&quorum_proposal.data);
-                    let commit = proposed_leaf.commit();
-                    if commit == leaf_commitment {
+            while let std::result::Result::Ok(event) = receiver.recv_direct().await {
+                if let HotShotEvent::QuorumProposalResponseRecv(quorum_proposal) = event.as_ref() {
+                    let leaf = Leaf2::from_quorum_proposal(&quorum_proposal.data);
+                    if leaf.view_number() == view && leaf.commit() == leaf_commitment {
                         return Ok(quorum_proposal.clone());
                     }
-                    tracing::warn!("Proposal received from request has different commitment than expected.\nExpected = {:?}\nReceived{:?}", leaf_commitment, commit);
                 }
             }
+            Err(anyhow!("No proposal found"))
         })
     }
 
