@@ -917,18 +917,28 @@ pub mod test_helpers {
             )
             .await?;
 
-            let chain_config = ChainConfig {
-                max_block_size: 300.into(),
-                base_fee: 0.into(),
-                stake_table_contract: Some(stake_table_address),
-                ..Default::default()
+            // Add stake table address to `ChainConfig` (held in state),
+            // avoiding overwrite other values. Base fee is set to `0` to avoid
+            // unnecessary catchup of `FeeState`.
+            let state = self.state[0].clone();
+            let chain_config = if let Some(cf) = state.chain_config.resolve() {
+                ChainConfig {
+                    base_fee: 0.into(),
+                    stake_table_contract: Some(stake_table_address),
+                    ..cf
+                }
+            } else {
+                ChainConfig {
+                    base_fee: 0.into(),
+                    stake_table_contract: Some(stake_table_address),
+                    ..Default::default()
+                }
             };
 
             let state = ValidatedState {
                 chain_config: chain_config.into(),
-                ..Default::default()
+                ..state
             };
-
             Ok(self.states(std::array::from_fn(|_| state.clone())))
         }
 
