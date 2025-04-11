@@ -3104,9 +3104,10 @@ mod test {
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
-            // .states(std::array::from_fn(|_| state.clone()))
             .network_config(network_config.clone())
-            .pos_hook::<PosVersion>().await.expect("Pos Deployment")
+            .pos_hook::<PosVersion>()
+            .await
+            .expect("Pos Deployment")
             .build();
 
         let _network = TestNetwork::new(config, PosVersion::new()).await;
