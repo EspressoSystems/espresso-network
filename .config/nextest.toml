@@ -15,9 +15,18 @@ test(test_process_client_handling_stream_subscribe_voters)
 slow-timeout = { period = "2s", terminate-after = 1 }
 retries  = 10
 
+[[profile.default.overrides]]
+filter = 'test(test_hotshot_event_streaming_epoch_progression)'
+slow-timeout = { period = "8m", terminate-after = 4 }
+
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]
 filter = 'test(slow_test_restart)'
+slow-timeout = { period = "1m", terminate-after = 3 }
+threads-required = 'num-cpus'
+
+[[profile.default.overrides]]
+filter = 'package(request-response)'
 threads-required = 'num-cpus'
 
 # HotShot integration tests
