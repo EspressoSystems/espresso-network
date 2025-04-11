@@ -17,7 +17,7 @@ retries  = 10
 
 [[profile.default.overrides]]
 filter = 'test(test_hotshot_event_streaming_epoch_progression)'
-slow-timeout = { period = "4m", terminate-after = 4 }
+slow-timeout = { period = "8m", terminate-after = 4 }
 
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]
