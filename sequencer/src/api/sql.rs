@@ -112,15 +112,8 @@ impl CatchupStorage for SqlStorage {
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, leaf) = reconstruct_state(
-                instance,
-                &mut tx,
-                block_height - 1,
-                view,
-                None,
-                Some(accounts),
-            )
-            .await?;
+            let (state, leaf) =
+                reconstruct_state(instance, &mut tx, block_height - 1, view, &[], accounts).await?;
             Ok((state.reward_merkle_tree, leaf))
         }
     }
@@ -151,15 +144,8 @@ impl CatchupStorage for SqlStorage {
         } else {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
-            let (state, leaf) = reconstruct_state(
-                instance,
-                &mut tx,
-                block_height - 1,
-                view,
-                Some(accounts),
-                None,
-            )
-            .await?;
+            let (state, leaf) =
+                reconstruct_state(instance, &mut tx, block_height - 1, view, accounts, &[]).await?;
             Ok((state.fee_merkle_tree, leaf))
         }
     }
@@ -190,7 +176,7 @@ impl CatchupStorage for SqlStorage {
             // If we do not have the exact snapshot we need, we can try going back to the last
             // snapshot we _do_ have and replaying subsequent blocks to compute the desired state.
             let (state, _) =
-                reconstruct_state(instance, &mut tx, block_height - 1, view, None, None).await?;
+                reconstruct_state(instance, &mut tx, block_height - 1, view, &[], &[]).await?;
             match state.block_merkle_tree.lookup(height - 1) {
                 LookupResult::Ok(_, proof) => Ok(proof),
                 _ => {
@@ -449,8 +435,8 @@ async fn reconstruct_state<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     from_height: u64,
     to_view: ViewNumber,
-    fee_accounts: Option<&[FeeAccount]>,
-    reward_accounts: Option<&[RewardAccount]>,
+    fee_accounts: &[FeeAccount],
+    reward_accounts: &[RewardAccount],
 ) -> anyhow::Result<(ValidatedState, Leaf2)> {
     tracing::info!("attempting to reconstruct fee state");
     let from_leaf = tx
@@ -492,48 +478,50 @@ async fn reconstruct_state<Mode: TransactionMode>(
     // Pre-load the state with the accounts we care about to ensure they will be present in the
     // final state.
     let mut catchup = NullStateCatchup::default();
-    if let Some(accounts) = fee_accounts {
-        let mut accounts = accounts.iter().copied().collect::<HashSet<_>>();
-        // Add in all the accounts we will need to replay any of the headers, to ensure that we don't
-        // need to do catchup recursively.
-        let dependencies =
-            fee_header_dependencies(&mut catchup, tx, instance, &parent, &leaves).await?;
-        accounts.extend(dependencies);
-        let accounts = accounts.into_iter().collect::<Vec<_>>();
-        state.fee_merkle_tree = load_accounts(tx, from_height, &accounts)
-            .await
-            .context("unable to reconstruct state because accounts are not available at origin")?
-            .0;
-        ensure!(
-            state.fee_merkle_tree.commitment() == parent.block_header().fee_merkle_tree_root(),
-            "loaded fee state does not match parent header"
-        );
-    }
 
-    if let Some(accounts) = reward_accounts {
-        tracing::info!(
-            "reconstructing reward accounts for from height {} to view {}",
-            from_height,
-            to_view
-        );
+    let mut fee_accounts = fee_accounts.iter().copied().collect::<HashSet<_>>();
+    // Add in all the accounts we will need to replay any of the headers, to ensure that we don't
+    // need to do catchup recursively.
 
-        let mut accounts = accounts.iter().copied().collect::<HashSet<_>>();
+    tracing::info!(
+        "reconstructing fee accounts state for from height {} to view {}",
+        from_height,
+        to_view
+    );
 
-        let dependencies = reward_header_dependencies(&mut catchup, tx, instance, &leaves).await?;
-        accounts.extend(dependencies);
-        let accounts = accounts.into_iter().collect::<Vec<_>>();
-        state.reward_merkle_tree = load_reward_accounts(tx, from_height, &accounts)
-            .await
-            .context(
-                "unable to reconstruct state because reward accounts are not available at origin",
-            )?
-            .0;
-        ensure!(
-            Some(state.reward_merkle_tree.commitment())
-                == parent.block_header().reward_merkle_tree_root(),
-            "loaded reward state does not match parent header"
-        );
-    }
+    let dependencies =
+        fee_header_dependencies(&mut catchup, tx, instance, &parent, &leaves).await?;
+    fee_accounts.extend(dependencies);
+    let fee_accounts = fee_accounts.into_iter().collect::<Vec<_>>();
+    state.fee_merkle_tree = load_accounts(tx, from_height, &fee_accounts)
+        .await
+        .context("unable to reconstruct state because accounts are not available at origin")?
+        .0;
+    ensure!(
+        state.fee_merkle_tree.commitment() == parent.block_header().fee_merkle_tree_root(),
+        "loaded fee state does not match parent header"
+    );
+
+    tracing::info!(
+        "reconstructing reward accounts for from height {} to view {}",
+        from_height,
+        to_view
+    );
+
+    let mut reward_accounts = reward_accounts.iter().copied().collect::<HashSet<_>>();
+
+    let dependencies = reward_header_dependencies(&mut catchup, tx, instance, &leaves).await?;
+    reward_accounts.extend(dependencies);
+    let reward_accounts = reward_accounts.into_iter().collect::<Vec<_>>();
+    state.reward_merkle_tree = load_reward_accounts(tx, from_height, &reward_accounts)
+        .await
+        .context("unable to reconstruct state because reward accounts are not available at origin")?
+        .0;
+    ensure!(
+        Some(state.reward_merkle_tree.commitment())
+            == parent.block_header().reward_merkle_tree_root(),
+        "loaded reward state does not match parent header"
+    );
 
     // We need the blocks frontier as well, to apply the STF.
     let frontier = load_frontier(tx, from_height)
