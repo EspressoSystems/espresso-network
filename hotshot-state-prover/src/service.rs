@@ -466,6 +466,7 @@ async fn generate_proof(
 /// and update the light client state in the contract to the `target_epoch`.
 /// In the end, both the locally stored stake table and the contract light client state will correspond
 /// to the `target_epoch`.
+/// It returns the final stake table state at the target epoch.
 async fn advance_epoch(
     state: &mut ProverServiceState,
     provider: &impl Provider,
@@ -474,7 +475,7 @@ async fn advance_epoch(
     proving_key: &ProvingKey,
     contract_epoch: Option<<SeqTypes as NodeType>::Epoch>,
     target_epoch: Option<<SeqTypes as NodeType>::Epoch>,
-) -> Result<(), ProverError> {
+) -> Result<StakeTableState, ProverError> {
     let Some(target_epoch) = target_epoch else {
         return Err(ProverError::Internal(
             "Shouldn't be called pre-epoch.".to_string(),
@@ -523,7 +524,7 @@ async fn advance_epoch(
             .map_err(ProverError::NetworkError)?;
         cur_st_state = state_cert.next_stake_table_state;
     }
-    Ok(())
+    Ok(cur_st_state)
 }
 
 /// Sync the light client state from the relay server and submit the proof to the L1 LightClient contract
@@ -547,7 +548,8 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let blocks_per_epoch = state.config.blocks_per_epoch;
     let epoch_start_block = state.config.epoch_start_block;
 
-    let (contract_state, st_state) = read_contract_state(&provider, light_client_address).await?;
+    let (contract_state, mut contract_st_state) =
+        read_contract_state(&provider, light_client_address).await?;
     tracing::info!(
         "Current HotShot block height on contract: {}",
         contract_state.block_height
@@ -572,8 +574,8 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         let (proof, public_input) = generate_proof(
             state,
             bundle.state,
-            st_state,
-            st_state,
+            contract_st_state,
+            contract_st_state,
             bundle.signatures,
             &proving_key,
         )
@@ -618,11 +620,11 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             tracing::info!(
                 "Catching up from epoch {contract_epoch:?} to epoch {bundle_epoch:?}..."
             );
-            advance_epoch(
+            contract_st_state = advance_epoch(
                 state,
                 &provider,
                 light_client_address,
-                st_state,
+                contract_st_state,
                 &proving_key,
                 contract_epoch,
                 bundle_epoch,
@@ -640,7 +642,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
                 state,
                 &provider,
                 light_client_address,
-                st_state,
+                contract_st_state,
                 &proving_key,
                 bundle_epoch,
                 bundle_next_epoch,
@@ -651,8 +653,8 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             let (proof, public_input) = generate_proof(
                 state,
                 bundle.state,
-                st_state,
-                st_state,
+                contract_st_state,
+                contract_st_state,
                 bundle.signatures,
                 &proving_key,
             )
