@@ -1816,7 +1816,7 @@ mod test {
     };
 
     use alloy::{
-        network::EthereumWallet,
+        network::{self, EthereumWallet},
         node_bindings::Anvil,
         primitives::U256,
         providers::{Provider, ProviderBuilder},
@@ -3137,6 +3137,132 @@ mod test {
             "Epochs are not progressing"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pos_rewards() -> anyhow::Result<()> {
+        setup_test();
+        let epoch_height = 35;
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+        let contracts = &mut Contracts::new();
+
+        let wallet = EthereumWallet::from(signer.clone());
+        let provider = ProviderBuilder::new()
+            .wallet(wallet.clone())
+            .on_http(l1_url.clone());
+        let admin = provider.get_accounts().await?[0];
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let blocks_per_epoch = epoch_height;
+        let epoch_start_block = network_config.hotshot_config().epoch_start_block;
+        let initial_stake_table = network_config.stake_table();
+        let (genesis_state, genesis_stake) =
+            light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        // deploy EspToken, proxy
+        let token_proxy_addr =
+            deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+
+        // deploy light client v1, proxy
+        let lc_proxy_addr = deployer::deploy_light_client_proxy(
+            &provider,
+            contracts,
+            true, // use mock
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            None, // no permissioned prover
+        )
+        .await?;
+        // upgrade to LightClientV2
+        deployer::upgrade_light_client_v2(
+            &provider,
+            contracts,
+            true, // use mock
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+
+        // deploy permissionless stake table
+        let exit_escrow_period = U256::from(300); // 300 sec
+        let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+            &provider,
+            contracts,
+            token_proxy_addr,
+            lc_proxy_addr,
+            exit_escrow_period,
+            admin,
+        )
+        .await?;
+
+        let staking_priv_keys = network_config.staking_priv_keys();
+
+        let stake_table_address = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("stake table deployed");
+
+        stake_in_contract_for_test(
+            network_config.l1_url(),
+            signer,
+            stake_table_address,
+            contracts
+                .address(Contract::EspTokenProxy)
+                .expect("ESP token deployed"),
+            staking_priv_keys,
+        )
+        .await?;
+
+        let chain_config = ChainConfig {
+            max_block_size: 300.into(),
+            base_fee: 0.into(),
+            stake_table_contract: Some(stake_table_address),
+            ..Default::default()
+        };
+
+        let state = ValidatedState {
+            chain_config: chain_config.into(),
+            ..Default::default()
+        };
+
+        const NUM_NODES: usize = 5;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .states(std::array::from_fn(|_| state.clone()))
+            .persistences(persistence.clone())
+            .network_config(network_config)
+            .build();
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("localhost:{api_port}").parse().unwrap());
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        sleep(Duration::from_secs(60 * 60 * 60)).await;
         Ok(())
     }
 }
