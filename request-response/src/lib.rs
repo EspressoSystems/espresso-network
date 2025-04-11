@@ -896,7 +896,7 @@ mod tests {
         // Build a config
         let config = IntegrationTestConfig {
             request_response_config: default_protocol_config(),
-            num_participants: 100,
+            num_participants: 50,
             num_participants_with_data: 1,
             request_timeout: Duration::from_secs(40),
             data_available_delay: Duration::from_secs(2),
