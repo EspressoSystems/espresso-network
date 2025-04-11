@@ -366,6 +366,13 @@ pub async fn submit_state_and_proof(
     let next_stake_table: StakeTableStateSol = public_input.next_st_state.into();
 
     let tx = contract.newFinalizedState_1(new_state.into(), next_stake_table.into(), proof.into());
+    tracing::debug!(
+        "Sending newFinalizedState tx: address={}, new_state={}, next_stake_table={}\n full tx={:?}",
+        address,
+        public_input.lc_state,
+        public_input.next_st_state,
+        tx
+    );
     // send the tx
     let (receipt, included_block) = sequencer_utils::contract_send(&tx)
         .await
