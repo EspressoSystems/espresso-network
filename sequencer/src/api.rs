@@ -3174,14 +3174,12 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pos_rewards_basic() -> anyhow::Result<()> {
-        // This is a basic rewards test
-        // It registers one validator and one delegator
-        // The delegator is the node itself
-        // The number of blocks in the epoch is set to 20
-        // Rewards should be applied from block 41 onwards for the delegator
-        // the validator gets all the rewards since it is also a delegator
-        // It checks that the reward from the reward merkle tree at height 60
-        // is equal to the expected reward amount
+        // Basic PoS rewards test:
+        // - Sets up a single validator and a single delegator (the node itself).
+        // - Sets the number of blocks in each epoch to 20.
+        // - Rewards begin applying from block 41 (i.e., the start of the 3rd epoch).
+        // - Since the validator is also the delegator, it receives the full reward.
+        // - Verifies that the reward at block height 60 matches the expected amount.
         setup_test();
         let epoch_height = 20;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
@@ -3313,8 +3311,7 @@ mod test {
         // first two epochs will be 1 and 2
         // rewards are distributed starting third epoch
         // third epoch starts from block 40 as epoch height is 20
-
-        // wait for atleast 50 blocks
+        // wait for atleast 65 blocks
         let _blocks = client
             .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
@@ -3330,6 +3327,7 @@ mod test {
 
         let block_height = 60;
 
+        // get the validator address balance at block height 60
         let amount = client
             .get::<Option<RewardAmount>>(&format!(
                 "reward-state/reward-balance/{block_height}/{address}"
@@ -3342,6 +3340,7 @@ mod test {
         tracing::info!("amount={amount:?}");
 
         let epoch_start_block = 40;
+        // The validator gets all the block reward so we can calculate the expected amount
         let expected_amount = block_reward().0 * (U256::from(block_height - epoch_start_block));
 
         assert_eq!(amount.0, expected_amount, "reward amount don't match");
@@ -3350,15 +3349,12 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_pos_rewards_5_validators_and_multiple_delegators() -> anyhow::Result<()> {
-        // This is a basic rewards test
-        // It registers one validator and one delegator
-        // The delegator is the node itself
-        // The number of blocks in the epoch is set to 20
-        // Rewards should be applied from block 41 onwards for the delegator
-        // the validator gets all the rewards since it is also a delegator
-        // It checks that the reward from the reward merkle tree at height 60
-        // is equal to the expected reward amount
+    async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
+        // This test registers 5 validators and multiple delegators for each validator.
+        // One of the delegators is also a validator.
+        // The test verifies that the cumulative reward at each block height equals the total block reward,
+        // which is a constant.
+
         setup_test();
         let epoch_height = 20;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
@@ -3432,6 +3428,7 @@ mod test {
             .address(Contract::StakeTableProxy)
             .expect("stake table deployed");
 
+        // Registers validators and delegators
         stake_in_contract_for_test(
             network_config.l1_url(),
             signer,
@@ -3440,7 +3437,7 @@ mod test {
                 .address(Contract::EspTokenProxy)
                 .expect("ESP token deployed"),
             staking_priv_keys.clone(),
-            true,
+            true, // registers multiple delegators
         )
         .await?;
 
@@ -3487,10 +3484,6 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        // first two epochs will be 1 and 2
-        // rewards are distributed starting third epoch
-        // third epoch starts from block 40 as epoch height is 20
-
         // wait for atleast 75 blocks
         let _blocks = client
             .socket("availability/stream/blocks/0")
@@ -3502,13 +3495,21 @@ mod test {
             .await
             .unwrap();
 
+        // We are going to check cumulative blocks from block height 40 to 59
+        // Basically epoch 3 as epoch height is 20
+
         let block = 59;
         let epoch = epoch_from_block_number(block, epoch_height);
+        // get all the validators
         let validators = client
             .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validator/{epoch}"))
             .send()
             .await
             .expect("failed to get validator");
+
+        // insert all the address in a map
+        // We will query the reward-balance at each block height for all the addresses
+        // We don't know which validator was the leader because we don't have access to Membership
         let mut addresses = HashSet::new();
         for v in validators.values() {
             addresses.insert(v.account.clone());
@@ -3516,7 +3517,9 @@ mod test {
         }
 
         let mut prev_cumulative_amount = U256::ZERO;
-        for block in 41..=59 {
+        // Check Cumulative rewards for epoch 3
+        // i.e block height 41 to 59
+        for block in 41..=60 {
             let mut cumulative_amount = U256::ZERO;
             for address in addresses.clone() {
                 let amount = client
@@ -3534,6 +3537,7 @@ mod test {
                 };
             }
 
+            // assert cumulative reward is equal to block reward
             assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward().0);
             tracing::info!("cumulative_amount is correct for block={block}");
             prev_cumulative_amount = cumulative_amount;
