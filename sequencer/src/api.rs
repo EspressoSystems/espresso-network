@@ -187,7 +187,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
         self.as_ref().get_stake_table_current().await
     }
 
-    /// Get the stake table for a given epoch
+    /// Get all the validators
     async fn get_validators(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
@@ -3495,14 +3495,11 @@ mod test {
             .await
             .unwrap();
 
-        // We are going to check cumulative blocks from block height 40 to 59
-        // Basically epoch 3 as epoch height is 20
-
-        let block = 59;
-        let epoch = epoch_from_block_number(block, epoch_height);
+        // We are going to check cumulative blocks from block height 40 to 67
+        // Basically epoch 3 and epoch 4 as epoch height is 20
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/{epoch}"))
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/3"))
             .send()
             .await
             .expect("failed to get validator");
@@ -3512,14 +3509,24 @@ mod test {
         // We don't know which validator was the leader because we don't have access to Membership
         let mut addresses = HashSet::new();
         for v in validators.values() {
-            addresses.insert(v.account.clone());
+            addresses.insert(v.account);
+            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        }
+        // get all the validators
+        let validators = client
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/4"))
+            .send()
+            .await
+            .expect("failed to get validator");
+        for v in validators.values() {
+            addresses.insert(v.account);
             addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
         }
 
         let mut prev_cumulative_amount = U256::ZERO;
         // Check Cumulative rewards for epoch 3
         // i.e block height 41 to 59
-        for block in 41..=60 {
+        for block in 41..=67 {
             let mut cumulative_amount = U256::ZERO;
             for address in addresses.clone() {
                 let amount = client
