@@ -1,5 +1,6 @@
 use std::{pin::Pin, sync::Arc};
 
+use alloy::primitives::Address;
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -12,6 +13,7 @@ use espresso_types::{
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleTree},
+    v0_3::Validator,
     v0_99::ChainConfig,
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2,
     NodeState, PubKey, Transaction, ValidatedState,
@@ -20,6 +22,7 @@ use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
+use hotshot::types::BLSPubKey;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -38,6 +41,7 @@ use hotshot_types::{
     vote::HasViewNumber,
     PeerConfig,
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -182,6 +186,14 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.as_ref().get_stake_table_current().await
     }
+
+    /// Get the stake table for a given epoch
+    async fn get_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        self.as_ref().get_validators(epoch).await
+    }
 }
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     StakeTableDataSource<SeqTypes> for ApiState<N, P, V>
@@ -210,6 +222,25 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         let epoch = self.consensus().await.read().await.cur_epoch().await;
 
         self.get_stake_table(epoch).await
+    }
+
+    /// Get the whole validators map
+    async fn get_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        let mem = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+            .context("membership not found")?;
+
+        let r = mem.coordinator.membership().read().await;
+        r.validators(&epoch)
     }
 }
 
@@ -1816,7 +1847,7 @@ mod test {
     };
 
     use alloy::{
-        network::{self, EthereumWallet},
+        network::EthereumWallet,
         node_bindings::Anvil,
         primitives::U256,
         providers::{Provider, ProviderBuilder},
@@ -1826,7 +1857,7 @@ mod test {
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
-        v0_1::{RewardAmount, UpgradeMode, ViewBasedUpgrade},
+        v0_1::{block_reward, RewardAmount, UpgradeMode, ViewBasedUpgrade},
         BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
         MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
         UpgradeType, ValidatedState, V0_1,
@@ -3066,6 +3097,7 @@ mod test {
                 .address(Contract::EspTokenProxy)
                 .expect("ESP token deployed"),
             staking_priv_keys,
+            false,
         )
         .await?;
 
@@ -3141,7 +3173,15 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_pos_rewards() -> anyhow::Result<()> {
+    async fn test_pos_rewards_basic() -> anyhow::Result<()> {
+        // This is a basic rewards test
+        // It registers one validator and one delegator
+        // The delegator is the node itself
+        // The number of blocks in the epoch is set to 20
+        // Rewards should be applied from block 41 onwards for the delegator
+        // the validator gets all the rewards since it is also a delegator
+        // It checks that the reward from the reward merkle tree at height 60
+        // is equal to the expected reward amount
         setup_test();
         let epoch_height = 20;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
@@ -3223,6 +3263,7 @@ mod test {
                 .address(Contract::EspTokenProxy)
                 .expect("ESP token deployed"),
             staking_priv_keys.clone(),
+            false,
         )
         .await?;
 
@@ -3265,7 +3306,7 @@ mod test {
             }))
             .build();
 
-        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3274,27 +3315,229 @@ mod test {
         // third epoch starts from block 40 as epoch height is 20
 
         // wait for atleast 50 blocks
-        let _leaves: Vec<BlockQueryData<SeqTypes>> = client
-            .socket("availability/stream/block/0")
-            .subscribe()
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
-            .take(50)
-            .try_collect()
+            .take(65)
+            .try_collect::<Vec<_>>()
             .await
             .unwrap();
 
         let account = staking_priv_keys[0].0.clone();
         let address = account.address();
 
+        let block_height = 60;
+
         let amount = client
-            .get::<Option<RewardAmount>>(&format!("reward-state/reward-balance/latest/{}", address))
+            .get::<Option<RewardAmount>>(&format!(
+                "reward-state/reward-balance/{block_height}/{address}"
+            ))
             .send()
             .await
             .unwrap()
             .unwrap();
 
-        tracing::error!("amount={amount:?}");
+        tracing::info!("amount={amount:?}");
+
+        let epoch_start_block = 40;
+        let expected_amount = block_reward().0 * (U256::from(block_height - epoch_start_block));
+
+        assert_eq!(amount.0, expected_amount, "reward amount don't match");
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pos_rewards_5_validators_and_multiple_delegators() -> anyhow::Result<()> {
+        // This is a basic rewards test
+        // It registers one validator and one delegator
+        // The delegator is the node itself
+        // The number of blocks in the epoch is set to 20
+        // Rewards should be applied from block 41 onwards for the delegator
+        // the validator gets all the rewards since it is also a delegator
+        // It checks that the reward from the reward merkle tree at height 60
+        // is equal to the expected reward amount
+        setup_test();
+        let epoch_height = 20;
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+        let contracts = &mut Contracts::new();
+
+        let wallet = EthereumWallet::from(signer.clone());
+        let provider = ProviderBuilder::new()
+            .wallet(wallet.clone())
+            .on_http(l1_url.clone());
+        let admin = provider.get_accounts().await?[0];
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let blocks_per_epoch = epoch_height;
+        let epoch_start_block = network_config.hotshot_config().epoch_start_block;
+        let initial_stake_table = network_config.stake_table();
+        let (genesis_state, genesis_stake) =
+            light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        // deploy EspToken, proxy
+        let token_proxy_addr =
+            deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+
+        // deploy light client v1, proxy
+        let lc_proxy_addr = deployer::deploy_light_client_proxy(
+            &provider,
+            contracts,
+            true, // use mock
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            None, // no permissioned prover
+        )
+        .await?;
+        // upgrade to LightClientV2
+        deployer::upgrade_light_client_v2(
+            &provider,
+            contracts,
+            true, // use mock
+            blocks_per_epoch,
+            epoch_start_block,
+        )
+        .await?;
+
+        // deploy permissionless stake table
+        let exit_escrow_period = U256::from(300); // 300 sec
+        let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+            &provider,
+            contracts,
+            token_proxy_addr,
+            lc_proxy_addr,
+            exit_escrow_period,
+            admin,
+        )
+        .await?;
+
+        let staking_priv_keys = network_config.staking_priv_keys();
+
+        let stake_table_address = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("stake table deployed");
+
+        stake_in_contract_for_test(
+            network_config.l1_url(),
+            signer,
+            stake_table_address,
+            contracts
+                .address(Contract::EspTokenProxy)
+                .expect("ESP token deployed"),
+            staking_priv_keys.clone(),
+            true,
+        )
+        .await?;
+
+        let chain_config = ChainConfig {
+            max_block_size: 300.into(),
+            base_fee: 0.into(),
+            stake_table_contract: Some(stake_table_address),
+            ..Default::default()
+        };
+
+        let state = ValidatedState {
+            chain_config: chain_config.into(),
+            ..Default::default()
+        };
+
+        const NUM_NODES: usize = 5;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .states(std::array::from_fn(|_| state.clone()))
+            .persistences(persistence.clone())
+            .network_config(network_config)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // first two epochs will be 1 and 2
+        // rewards are distributed starting third epoch
+        // third epoch starts from block 40 as epoch height is 20
+
+        // wait for atleast 75 blocks
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(75)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let block = 59;
+        let epoch = epoch_from_block_number(block, epoch_height);
+        let validators = client
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validator/{epoch}"))
+            .send()
+            .await
+            .expect("failed to get validator");
+        let mut addresses = HashSet::new();
+        for v in validators.values() {
+            addresses.insert(v.account.clone());
+            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        }
+
+        let mut prev_cumulative_amount = U256::ZERO;
+        for block in 41..=59 {
+            let mut cumulative_amount = U256::ZERO;
+            for address in addresses.clone() {
+                let amount = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state/reward-balance/{block}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .ok()
+                    .flatten();
+
+                if let Some(amount) = amount {
+                    tracing::info!("address={address}, amount= {amount}");
+                    cumulative_amount += amount.0;
+                };
+            }
+
+            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward().0);
+            tracing::info!("cumulative_amount is correct for block={block}");
+            prev_cumulative_amount = cumulative_amount;
+        }
 
         Ok(())
     }

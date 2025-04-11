@@ -117,8 +117,8 @@ impl CatchupStorage for SqlStorage {
                 &mut tx,
                 block_height - 1,
                 view,
-                None,
-                Some(accounts),
+               &[],
+                accounts
             )
             .await?;
             Ok((state.reward_merkle_tree, leaf))
@@ -156,8 +156,8 @@ impl CatchupStorage for SqlStorage {
                 &mut tx,
                 block_height - 1,
                 view,
-                Some(accounts),
-                None,
+             accounts
+             &[],
             )
             .await?;
             Ok((state.fee_merkle_tree, leaf))
@@ -449,8 +449,8 @@ async fn reconstruct_state<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     from_height: u64,
     to_view: ViewNumber,
-    fee_accounts: Option<&[FeeAccount]>,
-    reward_accounts: Option<&[RewardAccount]>,
+    fee_accounts: &[FeeAccount],
+    reward_accounts: &[RewardAccount],
 ) -> anyhow::Result<(ValidatedState, Leaf2)> {
     tracing::info!("attempting to reconstruct fee state");
     let from_leaf = tx
