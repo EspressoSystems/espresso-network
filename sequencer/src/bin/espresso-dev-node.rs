@@ -168,8 +168,12 @@ struct Args {
     )]
     max_block_size: u64,
 
-    /// The length of a hotshot epoch in hotshot blocks.
-    #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 40)]
+    /// The number of Espresso blocks per Espresso epoch.
+    ///
+    /// When using your own L1 this value needs to be set such that by the time the espresso node
+    /// reaches block epoch_height - 5 the _finalized_ stake table contract on L1 is initialized
+    /// with delegators.
+    #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 300)]
     epoch_height: u64,
 
     #[clap(flatten)]
