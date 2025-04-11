@@ -961,13 +961,6 @@ pub mod test_helpers {
             let mut cfg = cfg;
             let mut marketplace_builder_url = "http://example.com".parse().unwrap();
             let mut builder_tasks = Vec::new();
-            // Self::version_hooks(
-            //     &mut cfg,
-            //     &mut marketplace_builder_url,
-            //     &mut builder_tasks,
-            //     bind_version,
-            // )
-            // .await;
 
             if <V as Versions>::Base::VERSION < MarketplaceVersion::VERSION {
                 let chain_config = cfg.state[0].chain_config.resolve();
