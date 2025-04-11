@@ -1185,6 +1185,25 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         is_epoch_transition(block_height, self.epoch_height)
     }
 
+    /// Returns true if the high qc indicates we are in a transition
+    /// Note: if the high qc is for the last block in the epoch, that's the
+    /// Extended QC and we have completed the transition
+    pub fn is_high_qc_in_transition(&self) -> bool {
+        let high_qc = self.high_qc();
+        high_qc.data.block_number.is_some_and(|block_number| {
+            is_epoch_transition(block_number, self.epoch_height)
+                && !is_last_block(block_number, self.epoch_height)
+        })
+    }
+
+    /// Returns true if the high qc is an extended qc
+    pub fn is_high_qc_extended(&self) -> bool {
+        self.high_qc()
+            .data
+            .block_number
+            .is_some_and(|block_number| is_last_block(block_number, self.epoch_height))
+    }
+
     /// Returns true if our high QC is for the last block in the epoch
     pub fn is_high_qc_for_last_block(&self) -> bool {
         let Some(leaf) = self.saved_leaves.get(&self.high_qc().data.leaf_commit) else {

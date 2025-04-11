@@ -153,6 +153,7 @@ where
             *epoch != 0 && *epoch != 1,
             "We are trying to catchup to epoch 0! This means the initial stake table is missing!"
         );
+        tracing::error!("Catching up to epoch {:?}", epoch);
         let root_epoch = TYPES::Epoch::new(*epoch - 2);
 
         let root_membership = if self.membership.read().await.has_stake_table(root_epoch) {
