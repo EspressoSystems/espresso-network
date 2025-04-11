@@ -486,6 +486,15 @@ pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     }
 }
 
+/// Returns true if the given block number is strictly greater than the epoch root block
+pub fn is_gt_epoch_root(block_number: u64, epoch_height: u64) -> bool {
+    if block_number == 0 || epoch_height == 0 {
+        false
+    } else {
+        block_number % epoch_height > epoch_height - 5
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

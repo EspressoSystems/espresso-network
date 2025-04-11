@@ -695,7 +695,7 @@ pub mod test_helpers {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
-    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
+    use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -965,7 +965,7 @@ pub mod test_helpers {
 
         pub fn light_client_genesis(&self) -> (LightClientStateSol, StakeTableStateSol) {
             let st = self.cfg.stake_table();
-            light_client_genesis_from_stake_table(st).unwrap()
+            legacy_light_client_genesis_from_stake_table(st).unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {
@@ -1841,7 +1841,7 @@ mod test {
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         types::HeightIndexed,
     };
-    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
+    use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -2998,7 +2998,7 @@ mod test {
         let epoch_start_block = network_config.hotshot_config().epoch_start_block;
         let initial_stake_table = network_config.stake_table();
         let (genesis_state, genesis_stake) =
-            light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+            legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");

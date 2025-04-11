@@ -9,7 +9,6 @@ use async_lock::RwLock;
 use espresso_types::{traits::SequencerPersistence, PubKey};
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_types::{
-    data::EpochNumber,
     event::LeafInfo,
     light_client::{
         compute_stake_table_commitment, LightClientState, StakeTableState, StateSignKey,
@@ -18,10 +17,10 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
+        node_implementation::{NodeType, Versions},
         signature_key::StateSignatureKey,
     },
-    utils::{epoch_from_block_number, is_last_block},
+    utils::{is_ge_epoch_root, option_epoch_from_block_number},
 };
 use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
@@ -49,6 +48,9 @@ pub struct StateSigner<ApiVer: StaticVersionType> {
     /// Commitment for current fixed stake table
     voting_stake_table: StakeTableState,
 
+    /// epoch for the current stake table state
+    voting_stake_table_epoch: Option<<SeqTypes as NodeType>::Epoch>,
+
     /// Capacity of the stake table
     stake_table_capacity: u64,
 
@@ -61,12 +63,14 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         sign_key: StateSignKey,
         ver_key: StateVerKey,
         voting_stake_table: StakeTableState,
+        voting_stake_table_epoch: Option<<SeqTypes as NodeType>::Epoch>,
         stake_table_capacity: u64,
     ) -> Self {
         Self {
             sign_key,
             ver_key,
             voting_stake_table,
+            voting_stake_table_epoch,
             stake_table_capacity,
             signatures: Default::default(),
             relay_server_client: Default::default(),
@@ -105,33 +109,43 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = consensus.epoch_height;
 
-                let next_stake_table = if is_last_block(cur_block_height, blocks_per_epoch) {
-                    // during the last block of each epoch, we will use a new `next_stake_table`
-                    let cur_epoch = epoch_from_block_number(cur_block_height, blocks_per_epoch);
+                // The last few state updates are handled in the consensus, we do not sign them.
+                if leaf.with_epoch & is_ge_epoch_root(cur_block_height, blocks_per_epoch) {
+                    return;
+                }
+
+                let option_state_epoch = option_epoch_from_block_number::<SeqTypes>(
+                    leaf.with_epoch,
+                    cur_block_height,
+                    blocks_per_epoch,
+                );
+
+                if self.voting_stake_table_epoch != option_state_epoch {
                     let Ok(membership) = consensus
                         .membership_coordinator
-                        .membership_for_epoch(Some(EpochNumber::new(cur_epoch + 1)))
+                        .membership_for_epoch(option_state_epoch)
                         .await
                     else {
-                        tracing::error!("Fail to get membership for epoch: {}", cur_epoch + 1);
+                        tracing::error!(
+                            "Fail to get membership for epoch: {:?}",
+                            option_state_epoch
+                        );
                         return;
                     };
-                    compute_stake_table_commitment(
+                    self.voting_stake_table_epoch = option_state_epoch;
+                    self.voting_stake_table = compute_stake_table_commitment(
                         &membership.stake_table().await,
                         self.stake_table_capacity as usize,
-                    )
-                } else {
-                    // during non-last-block (most cases), the stake table used for the next block is exactly the same
-                    self.voting_stake_table
-                };
+                    );
+                }
 
-                let signature = self.sign_new_state(&state, next_stake_table).await;
+                let signature = self.sign_new_state(&state, self.voting_stake_table).await;
 
                 if let Some(client) = &self.relay_server_client {
                     let request_body = StateSignatureRequestBody {
                         key: self.ver_key.clone(),
                         state,
-                        next_stake: next_stake_table,
+                        next_stake: self.voting_stake_table,
                         signature,
                     };
                     if let Err(error) = client
@@ -144,9 +158,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         tracing::warn!("Error posting signature to the relay server: {:?}", error);
                     }
                 }
-
-                // update the voting stake table for future blocks
-                self.voting_stake_table = next_stake_table;
             },
             Err(err) => {
                 tracing::error!("Error generating light client state: {:?}", err)

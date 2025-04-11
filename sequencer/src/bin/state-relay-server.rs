@@ -43,7 +43,6 @@ async fn main() {
     run_relay_server(
         None,
         args.sequencer_url,
-        args.stake_table_capacity as u64,
         format!("http://0.0.0.0:{}", args.port).parse().unwrap(),
         SequencerApiVersion::instance(),
     )

@@ -21,7 +21,7 @@ use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt}
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
-    light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
+    legacy_light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
 };
 use hotshot_types::{
     light_client::StateVerKey,
@@ -168,8 +168,12 @@ struct Args {
     )]
     max_block_size: u64,
 
-    /// The length of a hotshot epoch in hotshot blocks.
-    #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 40)]
+    /// The number of Espresso blocks per Espresso epoch.
+    ///
+    /// When using your own L1 this value needs to be set such that by the time the espresso node
+    /// reaches block epoch_height - 5 the _finalized_ stake table contract on L1 is initialized
+    /// with delegators.
+    #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 300)]
     epoch_height: u64,
 
     #[clap(flatten)]
@@ -236,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
 
     let initial_stake_table = network_config.stake_table();
     let (genesis_state, genesis_stake) =
-        light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+        legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
     let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];
@@ -351,6 +355,7 @@ async fn main() -> anyhow::Result<()> {
             signer: signer.clone(),
             blocks_per_epoch,
             epoch_start_block,
+            max_retries: 0,
         };
 
         // spawn off prover service for this chain
@@ -457,6 +462,7 @@ async fn main() -> anyhow::Result<()> {
         max_connections: sequencer_api_max_connections,
     })
     .submit(Default::default())
+    .config(Default::default())
     .query_sql(Default::default(), sql);
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
@@ -494,7 +500,6 @@ async fn main() -> anyhow::Result<()> {
         // manually fill up the relay server state
         let state = StateRelayServerState::new(
             Url::parse(&format!("http://localhost:{}", sequencer_api_port)).unwrap(),
-            STAKE_TABLE_CAPACITY_FOR_TEST,
         )
         .with_blocks_per_epoch(blocks_per_epoch)
         .with_epoch_start_block(epoch_start_block)
