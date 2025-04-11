@@ -542,6 +542,26 @@ impl EpochCommittees {
             first_epoch: None,
         }
     }
+
+    pub async fn reload_stake(&mut self, limit: u64) {
+        // Load the 50 latest stored stake tables
+        let loaded_stake = match self.persistence.load_latest_stake(limit).await {
+            Ok(Some(loaded)) => loaded,
+            Ok(None) => {
+                tracing::warn!("No stake table history found in persistence!");
+                return;
+            },
+            Err(e) => {
+                tracing::error!("Failed to load stake table history from persistence: {}", e);
+                return;
+            },
+        };
+
+        for (epoch, stake_table) in loaded_stake {
+            self.update_stake_table(epoch, stake_table);
+        }
+    }
+
     fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<SeqTypes>>> {
         if let Some(epoch) = epoch {
             self.state

@@ -480,7 +480,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     )
     .await;
     // Create the HotShot membership
-    let membership = EpochCommittees::new_stake(
+    let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         l1_client.clone(),
@@ -488,6 +488,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         peers.clone(),
         persistence.clone(),
     );
+    membership.reload_stake(50).await;
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let coordinator =
@@ -1082,7 +1083,7 @@ pub mod testing {
                 L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
             let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
             // Create the HotShot membership
-            let membership = EpochCommittees::new_stake(
+            let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
@@ -1090,6 +1091,8 @@ pub mod testing {
                 peers.clone(),
                 persistence.clone(),
             );
+            membership.reload_stake(50).await;
+
             let membership = Arc::new(RwLock::new(membership));
 
             let coordinator = EpochMembershipCoordinator::new(membership, 100);
