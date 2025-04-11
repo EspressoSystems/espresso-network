@@ -3499,7 +3499,7 @@ mod test {
         // Basically epoch 3 and epoch 4 as epoch height is 20
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/3"))
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
             .send()
             .await
             .expect("failed to get validator");
@@ -3514,7 +3514,7 @@ mod test {
         }
         // get all the validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/4"))
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/4")
             .send()
             .await
             .expect("failed to get validator");
