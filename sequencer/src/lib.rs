@@ -1002,7 +1002,7 @@ pub mod testing {
                 peers.clone(),
                 persistence.clone(),
             );
-            member.reload_stake(50).await;
+            membership.reload_stake(50).await;
 
             let membership = Arc::new(RwLock::new(membership));
 
