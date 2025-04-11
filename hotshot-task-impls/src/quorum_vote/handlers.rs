@@ -445,7 +445,7 @@ pub(crate) async fn update_shared_state<
         .wrap()
         .context(warn!("Block header doesn't extend the proposal!"))?;
     let duration = now.elapsed();
-    tracing::info!("Validation time: {:?}", duration);
+    tracing::debug!("Validation time: {:?}", duration);
 
     let now = Instant::now();
     // Now that we've rounded everyone up, we need to update the shared state
@@ -461,7 +461,7 @@ pub(crate) async fn update_shared_state<
 
     drop(consensus_writer);
     let duration = now.elapsed();
-    tracing::info!("update_leaf time: {:?}", duration);
+    tracing::debug!("update_leaf time: {:?}", duration);
 
     Ok(())
 }
@@ -534,7 +534,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .wrap()
         .context(error!("Failed to store VID share"))?;
     let duration = now.elapsed();
-    tracing::info!("append_vid_general time: {:?}", duration);
+    tracing::debug!("append_vid_general time: {:?}", duration);
 
     // Make epoch root vote
 
