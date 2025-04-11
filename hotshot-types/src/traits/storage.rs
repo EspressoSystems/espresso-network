@@ -95,7 +95,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
         &self,
         proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     ) -> Result<()> {
-        self.append_proposal(&convert_proposal(proposal.clone()))
+        self.append_proposal2(&convert_proposal(proposal.clone()))
             .await
     }
     /// Record a HotShotAction taken.
