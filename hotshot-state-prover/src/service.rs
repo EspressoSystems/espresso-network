@@ -575,8 +575,8 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     tracing::debug!("Old state: {contract_state:?}");
     tracing::debug!("New state: {:?}", bundle.state);
 
-    tracing::debug!("Contract st state: {contract_st_state:?}");
-    tracing::debug!("Bundle st state: {:?}", bundle.next_stake);
+    tracing::debug!("Contract st state: {contract_st_state}");
+    tracing::debug!("Bundle st state: {}", bundle.next_stake);
 
     let contract_state_epoch_enabled = contract_state.block_height >= epoch_start_block;
     let epoch_enabled = bundle.state.block_height >= epoch_start_block;
