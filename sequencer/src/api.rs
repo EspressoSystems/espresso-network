@@ -3014,6 +3014,7 @@ mod test {
 
         let network_config = TestConfigBuilder::default()
             .l1_url(l1_url.clone())
+            .signer(signer.clone())
             .epoch_height(epoch_height)
             .build();
 

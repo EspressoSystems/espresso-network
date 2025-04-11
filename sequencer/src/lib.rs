@@ -583,7 +583,10 @@ pub mod testing {
 
     use alloy::{
         primitives::U256,
-        signers::{k256::ecdsa::SigningKey, local::PrivateKeySigner},
+        signers::{
+            k256::{ecdsa::SigningKey, Secp256k1},
+            local::{LocalSigner, PrivateKeySigner},
+        },
     };
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
@@ -807,6 +810,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        signer: Option<LocalSigner<SigningKey>>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         marketplace_builder_port: Option<u16>,
@@ -831,6 +835,11 @@ pub mod testing {
 
         pub fn l1_url(mut self, l1_url: Url) -> Self {
             self.l1_url = l1_url;
+            self
+        }
+
+        pub fn signer(mut self, signer: LocalSigner<SigningKey>) -> Self {
+            self.signer = Some(signer);
             self
         }
 
@@ -922,6 +931,7 @@ pub mod testing {
                 state_key_pairs,
                 master_map,
                 l1_url: "http://localhost:8545".parse().unwrap(),
+                signer: None,
                 state_relay_url: None,
                 builder_port: None,
                 marketplace_builder_port: None,
