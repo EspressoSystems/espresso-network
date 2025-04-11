@@ -80,6 +80,8 @@ pub struct StateProverConfig {
     pub blocks_per_epoch: u64,
     /// The epoch start block.
     pub epoch_start_block: u64,
+    /// Maximum number of retires for one-shot prover
+    pub max_retries: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -530,7 +532,7 @@ async fn advance_epoch(
 /// Sync the light client state from the relay server and submit the proof to the L1 LightClient contract
 pub async fn sync_state<ApiVer: StaticVersionType>(
     state: &mut ProverServiceState,
-    proving_key: Arc<ProvingKey>,
+    proving_key: &ProvingKey,
     relay_server_client: &Client<ServerError, ApiVer>,
 ) -> Result<(), ProverError> {
     let light_client_address = state.config.light_client_address;
@@ -577,7 +579,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             contract_st_state,
             contract_st_state,
             bundle.signatures,
-            &proving_key,
+            proving_key,
         )
         .await?;
 
@@ -625,7 +627,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
                 &provider,
                 light_client_address,
                 contract_st_state,
-                &proving_key,
+                proving_key,
                 contract_epoch,
                 bundle_epoch,
             )
@@ -643,7 +645,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
                 &provider,
                 light_client_address,
                 contract_st_state,
-                &proving_key,
+                proving_key,
                 bundle_epoch,
                 bundle_next_epoch,
             )
@@ -656,7 +658,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
                 contract_st_state,
                 contract_st_state,
                 bundle.signatures,
-                &proving_key,
+                proving_key,
             )
             .await?;
 
@@ -723,7 +725,7 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     let update_interval = state.config.update_interval;
     let retry_interval = state.config.retry_interval;
     loop {
-        if let Err(err) = sync_state(&mut state, proving_key.clone(), &relay_server_client).await {
+        if let Err(err) = sync_state(&mut state, &proving_key, &relay_server_client).await {
             tracing::error!("Cannot sync the light client state, will retry: {}", err);
             sleep(retry_interval).await;
         } else {
@@ -745,11 +747,16 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
         spawn_blocking(move || Arc::new(load_proving_key(stake_table_capacity))).await?;
     let relay_server_client = Client::<ServerError, ApiVer>::new(state.config.relay_server.clone());
 
-    sync_state(&mut state, proving_key, &relay_server_client)
-        .await
-        .expect("Error syncing the light client state.");
-
-    Ok(())
+    for _ in 0..state.config.max_retries {
+        match sync_state(&mut state, &proving_key, &relay_server_client).await {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                tracing::error!("Cannot sync the light client state, will retry: {}", err);
+                sleep(state.config.retry_interval).await;
+            },
+        }
+    }
+    Err(anyhow::anyhow!("State update failed"))
 }
 
 #[derive(Debug, Display)]

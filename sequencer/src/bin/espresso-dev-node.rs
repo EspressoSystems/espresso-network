@@ -355,6 +355,7 @@ async fn main() -> anyhow::Result<()> {
             signer: signer.clone(),
             blocks_per_epoch,
             epoch_start_block,
+            max_retries: 0,
         };
 
         // spawn off prover service for this chain
