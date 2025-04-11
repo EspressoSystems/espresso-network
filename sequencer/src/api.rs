@@ -197,7 +197,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .read()
             .await
             .membership_coordinator
-            .membership_for_epoch(epoch)
+            .stake_table_for_epoch(epoch)
             .await
         else {
             return vec![];
