@@ -3118,7 +3118,7 @@ mod test {
             .await
             .unwrap();
 
-        let wanted_views = epoch_height * wanted_epochs; // TODO not sure about this
+        let wanted_views = epoch_height * wanted_epochs;
 
         let mut views = HashSet::new();
         let mut epochs = HashSet::new();
