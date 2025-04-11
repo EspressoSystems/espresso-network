@@ -559,7 +559,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
 
     let bundle = fetch_latest_state(relay_server_client).await?;
     tracing::debug!("Bundle accumulated weight: {}", bundle.accumulated_weight);
-    tracing::debug!("Latest HotShot block height: {}", bundle.state.block_height);
+    tracing::info!("Latest HotShot block height: {}", bundle.state.block_height);
 
     if contract_state.block_height >= bundle.state.block_height {
         tracing::info!("No update needed.");
