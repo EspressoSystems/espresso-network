@@ -423,6 +423,7 @@ async fn main() -> anyhow::Result<()> {
                     .address(Contract::EspTokenProxy)
                     .expect("ESP token deployed"),
                 staking_priv_keys,
+                false,
             )
             .await?;
         }

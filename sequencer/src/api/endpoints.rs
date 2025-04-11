@@ -112,10 +112,26 @@ where
         { RewardMerkleTree::ARITY },
     >(&options)?;
 
-    api.get("getrewardbalance", move |req, state| {
+    api.get("get_latest_reward_balance", move |req, state| {
         async move {
             let address = req.string_param("address")?;
             let height = state.get_last_state_height().await?;
+            let snapshot = Snapshot::Index(height as u64);
+            let key = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: "failed to parse reward address".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+            let path = state.get_path(snapshot, key).await?;
+            Ok(path.elem().copied())
+        }
+        .boxed()
+    })?
+    .get("get_reward_balance", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let height: usize = req.integer_param("height")?;
             let snapshot = Snapshot::Index(height as u64);
             let key = address
                 .parse()
@@ -322,6 +338,25 @@ where
             Ok(state
                 .read(|state| state.get_stake_table_current().boxed())
                 .await)
+        }
+        .boxed()
+    })?
+    .at("get_validators", |req, state| {
+        async move {
+            let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
+            state
+                .read(|state| state.get_validators(EpochNumber::new(epoch)).boxed())
+                .await
+                .map_err(|err| hotshot_query_service::node::Error::Custom {
+                    message: format!("failed to get validators mapping: err: {err}"),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?;

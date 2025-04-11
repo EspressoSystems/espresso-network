@@ -1,4 +1,10 @@
-[route.getrewardbalance]
+[route.get_latest_reward_balance]
 PATH = ["reward-balance/latest/:address"]
 ":address" = "Literal"
 DOC = "Get current balance in reward state. Expected parameter is an Ethereum address in hex format."
+
+[route.get_reward_balance]
+PATH = ["reward-balance/:height/:address"]
+":address" = "Literal"
+":height" = "Integer"
+DOC = "Get balance in reward state at a specific height. Expected parameters are height which is an integer and an Ethereum address in hex format"
