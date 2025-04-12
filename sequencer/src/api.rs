@@ -681,13 +681,15 @@ pub mod test_helpers {
     use std::time::Duration;
 
     use alloy::{
+        network::EthereumWallet,
         node_bindings::Anvil,
         primitives::{Address, U256},
+        providers::{Provider, ProviderBuilder},
     };
     use committable::Committable;
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -703,7 +705,11 @@ pub mod test_helpers {
     use itertools::izip;
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
+    use sequencer_utils::{
+        deployer::{self, Contract, Contracts},
+        test_utils::setup_test,
+    };
+    use staking_cli::demo::stake_in_contract_for_test;
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -831,6 +837,113 @@ pub mod test_helpers {
             self
         }
 
+        /// Setup for POS testing. Deploys contracts and adds the
+        /// stake table address to state. Must be called before `build()`.
+        pub async fn pos_hook<V: Versions>(self) -> anyhow::Result<Self> {
+            if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
+                && <V as Versions>::Base::VERSION < EpochVersion::VERSION
+            {
+                panic!("given version does not require pos deployment");
+            };
+
+            let network_config = self
+                .network_config
+                .as_ref()
+                .expect("network_config is required");
+            let signer = network_config.signer();
+            let contracts = &mut Contracts::new();
+
+            let wallet = EthereumWallet::from(signer.clone());
+            let provider = ProviderBuilder::new()
+                .wallet(wallet.clone())
+                .on_http(network_config.l1_url());
+            let admin = provider.get_accounts().await?[0];
+
+            let blocks_per_epoch = network_config.hotshot_config().epoch_height;
+            let epoch_start_block = network_config.hotshot_config().epoch_start_block;
+            let initial_stake_table = network_config.stake_table();
+            let (genesis_state, genesis_stake) =
+                light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+
+            // deploy EspToken, proxy
+            let token_proxy_addr =
+                deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+
+            // deploy light client v1, proxy
+            let lc_proxy_addr = deployer::deploy_light_client_proxy(
+                &provider,
+                contracts,
+                true, // use mock
+                genesis_state.clone(),
+                genesis_stake.clone(),
+                admin,
+                None, // no permissioned prover
+            )
+            .await?;
+            // upgrade to LightClientV2
+            deployer::upgrade_light_client_v2(
+                &provider,
+                contracts,
+                true, // use mock
+                blocks_per_epoch,
+                epoch_start_block,
+            )
+            .await?;
+
+            // deploy permissionless stake table
+            let exit_escrow_period = U256::from(300); // 300 sec
+            let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+                &provider,
+                contracts,
+                token_proxy_addr,
+                lc_proxy_addr,
+                exit_escrow_period,
+                admin,
+            )
+            .await?;
+
+            let staking_priv_keys = network_config.staking_priv_keys();
+
+            let stake_table_address = contracts
+                .address(Contract::StakeTableProxy)
+                .expect("stake table deployed");
+
+            stake_in_contract_for_test(
+                network_config.l1_url(),
+                signer,
+                stake_table_address,
+                contracts
+                    .address(Contract::EspTokenProxy)
+                    .expect("ESP token deployed"),
+                staking_priv_keys,
+            )
+            .await?;
+
+            // Add stake table address to `ChainConfig` (held in state),
+            // avoiding overwrite other values. Base fee is set to `0` to avoid
+            // unnecessary catchup of `FeeState`.
+            let state = self.state[0].clone();
+            let chain_config = if let Some(cf) = state.chain_config.resolve() {
+                ChainConfig {
+                    base_fee: 0.into(),
+                    stake_table_contract: Some(stake_table_address),
+                    ..cf
+                }
+            } else {
+                ChainConfig {
+                    base_fee: 0.into(),
+                    stake_table_contract: Some(stake_table_address),
+                    ..Default::default()
+                }
+            };
+
+            let state = ValidatedState {
+                chain_config: chain_config.into(),
+                ..state
+            };
+            Ok(self.states(std::array::from_fn(|_| state.clone())))
+        }
+
         pub fn build(self) -> TestNetworkConfig<{ NUM_NODES }, P, C> {
             TestNetworkConfig {
                 state: self.state,
@@ -848,8 +961,8 @@ pub mod test_helpers {
             bind_version: V,
         ) -> Self {
             let mut cfg = cfg;
-            let mut builder_tasks = Vec::new();
             let mut marketplace_builder_url = "http://example.com".parse().unwrap();
+            let mut builder_tasks = Vec::new();
 
             if <V as Versions>::Base::VERSION < MarketplaceVersion::VERSION {
                 let chain_config = cfg.state[0].chain_config.resolve();
@@ -874,7 +987,7 @@ pub mod test_helpers {
                 .await;
                 builder_tasks.push(task);
                 marketplace_builder_url = url;
-            }
+            };
 
             // add default storage if none is provided as query module is now required
             let mut opt = cfg.api_config.clone();
@@ -1815,13 +1928,7 @@ mod test {
         time::Duration,
     };
 
-    use alloy::{
-        network::EthereumWallet,
-        node_bindings::Anvil,
-        primitives::U256,
-        providers::{Provider, ProviderBuilder},
-        signers::local::LocalSigner,
-    };
+    use alloy::{node_bindings::Anvil, primitives::U256, signers::local::LocalSigner};
     use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
@@ -1841,7 +1948,6 @@ mod test {
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
         types::HeightIndexed,
     };
-    use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -1850,12 +1956,7 @@ mod test {
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
-    use sequencer_utils::{
-        deployer::{self, Contract, Contracts},
-        ser::FromStringOrInteger,
-        test_utils::setup_test,
-    };
-    use staking_cli::demo::stake_in_contract_for_test;
+    use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, spawn_dishonest_peer_catchup_api, state_signature_test_helper,
@@ -2969,7 +3070,7 @@ mod test {
     // TODO when `EpochVersion` becomes base version we can merge this
     // w/ above test.
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_hotshot_event_streaming_epoch_progression() -> anyhow::Result<()> {
+    async fn test_hotshot_event_streaming_epoch_progression() {
         setup_test();
         let epoch_height = 35;
         let wanted_epochs = 4;
@@ -2981,24 +3082,12 @@ mod test {
         let secret_key = instance.keys()[0].clone();
 
         let signer = LocalSigner::from(secret_key);
-        let contracts = &mut Contracts::new();
-
-        let wallet = EthereumWallet::from(signer.clone());
-        let provider = ProviderBuilder::new()
-            .wallet(wallet.clone())
-            .on_http(l1_url.clone());
-        let admin = provider.get_accounts().await?[0];
 
         let network_config = TestConfigBuilder::default()
             .l1_url(l1_url.clone())
+            .signer(signer.clone())
             .epoch_height(epoch_height)
             .build();
-
-        let blocks_per_epoch = epoch_height;
-        let epoch_start_block = network_config.hotshot_config().epoch_start_block;
-        let initial_stake_table = network_config.stake_table();
-        let (genesis_state, genesis_stake) =
-            legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
@@ -3015,76 +3104,12 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
 
-        // deploy EspToken, proxy
-        let token_proxy_addr =
-            deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
-
-        // deploy light client v1, proxy
-        let lc_proxy_addr = deployer::deploy_light_client_proxy(
-            &provider,
-            contracts,
-            true, // use mock
-            genesis_state.clone(),
-            genesis_stake.clone(),
-            admin,
-            None, // no permissioned prover
-        )
-        .await?;
-        // upgrade to LightClientV2
-        deployer::upgrade_light_client_v2(
-            &provider,
-            contracts,
-            true, // use mock
-            blocks_per_epoch,
-            epoch_start_block,
-        )
-        .await?;
-
-        // deploy permissionless stake table
-        let exit_escrow_period = U256::from(300); // 300 sec
-        let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
-            &provider,
-            contracts,
-            token_proxy_addr,
-            lc_proxy_addr,
-            exit_escrow_period,
-            admin,
-        )
-        .await?;
-
-        let staking_priv_keys = network_config.staking_priv_keys();
-
-        let stake_table_address = contracts
-            .address(Contract::StakeTableProxy)
-            .expect("stake table deployed");
-
-        stake_in_contract_for_test(
-            network_config.l1_url(),
-            signer,
-            stake_table_address,
-            contracts
-                .address(Contract::EspTokenProxy)
-                .expect("ESP token deployed"),
-            staking_priv_keys,
-        )
-        .await?;
-
-        let chain_config = ChainConfig {
-            max_block_size: 300.into(),
-            base_fee: 0.into(),
-            stake_table_contract: Some(stake_table_address),
-            ..Default::default()
-        };
-
-        let state = ValidatedState {
-            chain_config: chain_config.into(),
-            ..Default::default()
-        };
-
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
-            .states(std::array::from_fn(|_| state.clone()))
             .network_config(network_config.clone())
+            .pos_hook::<PosVersion>()
+            .await
+            .expect("Pos Deployment")
             .build();
 
         let _network = TestNetwork::new(config, PosVersion::new()).await;
@@ -3095,7 +3120,7 @@ mod test {
             .await
             .unwrap();
 
-        let wanted_views = epoch_height * wanted_epochs; // TODO not sure about this
+        let wanted_views = epoch_height * wanted_epochs;
 
         let mut views = HashSet::new();
         let mut epochs = HashSet::new();
@@ -3136,7 +3161,5 @@ mod test {
             epochs.contains(&wanted_epochs),
             "Epochs are not progressing"
         );
-
-        Ok(())
     }
 }
