@@ -847,7 +847,9 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             return Ok(());
         }
 
-        tracing::warn!("migrating query service types storage");
+        tracing::warn!(
+            "migrating query service types storage. Offset={offset}, batch_size={limit}"
+        );
 
         loop {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
@@ -856,10 +858,12 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
             let rows = QueryBuilder::default()
                 .query(&format!(
-                    "SELECT leaf, qc, common as vid_common, share as vid_share 
+                    "SELECT leaf, qc, common as vid_common, share as vid_share
                     FROM leaf INNER JOIN vid on leaf.height = vid.height 
-                    WHERE leaf.height >= {offset} ORDER BY leaf.height LIMIT {limit}",
+                    WHERE leaf.height >= $1 AND leaf.height < $2",
                 ))
+                .bind(offset)
+                .bind(offset + limit as i64)
                 .fetch_all(tx.as_mut())
                 .await?;
 
@@ -954,11 +958,10 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 "types_migration",
                 ["id", "completed", "migrated_rows"],
                 ["id"],
-                [(0_i64, false, offset)],
+                [(1_i64, false, offset)],
             )
             .await?;
-            let total_rows = rows.len();
-            tracing::warn!("Leaf2: inserted {total_rows}");
+
             // migrate vid
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
@@ -973,7 +976,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
             tx.commit().await?;
 
-            tracing::warn!("VID2: inserted {total_rows}");
+            tracing::warn!("Migrated leaf and vid: offset={offset}");
 
             tracing::info!("offset={offset}");
             if rows.len() < limit {
@@ -991,7 +994,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             "types_migration",
             ["id", "completed", "migrated_rows"],
             ["id"],
-            [(0_i64, true, offset)],
+            [(1_i64, true, offset)],
         )
         .await?;
 
@@ -1719,7 +1722,7 @@ mod test {
     async fn test_types_migration() {
         setup_test();
 
-        let num_rows = 200;
+        let num_rows = 500;
         let db = TmpDb::init().await;
 
         let storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -1852,6 +1855,10 @@ mod test {
             .unwrap();
             tx.commit().await.unwrap();
         }
+
+        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage, 50)
+            .await
+            .expect("failed to migrate");
 
         <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage, 50)
             .await
