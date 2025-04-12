@@ -778,8 +778,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         block_header: Header,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
         if self.state.contains_key(&epoch) {
-          tracing::info!("We already have a the stake table for epoch {}. Skipping L1 fetching.", epoch);
-          return None;
+            tracing::info!(
+                "We already have a the stake table for epoch {}. Skipping L1 fetching.",
+                epoch
+            );
+            return None;
         }
 
         let chain_config = get_chain_config(self.chain_config, &self.peers, &block_header)
@@ -811,7 +814,6 @@ impl Membership<SeqTypes> for EpochCommittees {
         {
             tracing::error!(?e, "`add_epoch_root`, error storing stake table");
         }
-
 
         Some(Box::new(move |committee: &mut Self| {
             committee.update_stake_table(epoch, stake_tables);
