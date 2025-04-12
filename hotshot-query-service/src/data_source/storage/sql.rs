@@ -827,7 +827,6 @@ pub trait MigrateTypes<Types: NodeType> {
 #[async_trait]
 impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
     async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()> {
-        let mut offset = 0;
         let limit = batch_size;
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
@@ -976,7 +975,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             tracing::warn!("VID2: inserted {total_rows}");
 
             tracing::info!("offset={offset}");
-            if rows.len() < limit {
+            if rows.len() < limit  as usize{
                 break;
             }
         }
