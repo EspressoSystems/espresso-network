@@ -2939,6 +2939,8 @@ mod test {
             },
             "Wrong light client state update certificate in the storage",
         );
+
+        storage.migrate_consensus().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
