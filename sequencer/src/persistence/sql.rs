@@ -1363,12 +1363,13 @@ impl SequencerPersistence for Persistence {
         tracing::warn!("migrating decided leaves..");
         loop {
             let mut tx = self.db.read().await?;
-            let rows =
-                query("SELECT view, leaf, qc FROM anchor_leaf ORDER BY view LIMIT $1 OFFSET $2")
-                    .bind(batch_size)
-                    .bind(offset)
-                    .fetch_all(tx.as_mut())
-                    .await?;
+            let rows = query(
+                "SELECT view, leaf, qc FROM anchor_leaf WHERE view >= $1 ORDER BY view LIMIT $2",
+            )
+            .bind(offset)
+            .bind(batch_size)
+            .fetch_all(tx.as_mut())
+            .await?;
 
             drop(tx);
             if rows.is_empty() {
@@ -1395,6 +1396,8 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO anchor_leaf2 (view, leaf, qc) ");
 
+            offset = values.last().context("last row")?.0;
+
             query_builder.push_values(values.into_iter(), |mut b, (view, leaf, qc)| {
                 b.push_bind(view).push_bind(leaf).push_bind(qc);
             });
@@ -1407,8 +1410,6 @@ impl SequencerPersistence for Persistence {
 
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
-
-            offset += batch_size;
 
             tx.upsert(
                 "epoch_migration",
@@ -1467,10 +1468,10 @@ impl SequencerPersistence for Persistence {
         loop {
             let mut tx = self.db.read().await?;
             let rows = query(
-                "SELECT payload_hash, data FROM da_proposal ORDER BY view LIMIT $1 OFFSET $2",
+                "SELECT payload_hash, data FROM da_proposal WHERE view >= $1 ORDER BY view LIMIT $2",
             )
-            .bind(batch_size)
             .bind(offset)
+            .bind(batch_size)
             .fetch_all(tx.as_mut())
             .await?;
 
@@ -1498,6 +1499,7 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO da_proposal2 (view, payload_hash, data) ");
 
+            offset = values.last().context("last row")?.0;
             query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
@@ -1507,7 +1509,6 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
 
-            offset += batch_size;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1563,12 +1564,13 @@ impl SequencerPersistence for Persistence {
         tracing::warn!("migrating vid shares..");
         loop {
             let mut tx = self.db.read().await?;
-            let rows =
-                query("SELECT payload_hash, data FROM vid_share ORDER BY view LIMIT $1 OFFSET $2")
-                    .bind(batch_size)
-                    .bind(offset)
-                    .fetch_all(tx.as_mut())
-                    .await?;
+            let rows = query(
+                "SELECT payload_hash, data FROM vid_share WHERE view >= $1 ORDER BY view LIMIT $2",
+            )
+            .bind(offset)
+            .bind(batch_size)
+            .fetch_all(tx.as_mut())
+            .await?;
 
             drop(tx);
             if rows.is_empty() {
@@ -1594,6 +1596,8 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid_share2 (view, payload_hash, data) ");
 
+            offset = values.last().context("last row")?.0;
+
             query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
@@ -1603,7 +1607,6 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
 
-            offset += batch_size;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1660,9 +1663,9 @@ impl SequencerPersistence for Persistence {
         loop {
             let mut tx = self.db.read().await?;
             let rows =
-                query("SELECT view, leaf_hash, data FROM quorum_proposals ORDER BY view LIMIT $1 OFFSET $2")
+                query("SELECT view, leaf_hash, data FROM quorum_proposals WHERE view >= $1 ORDER BY view LIMIT $2")
+                .bind(offset)
                     .bind(batch_size)
-                    .bind(offset)
                     .fetch_all(tx.as_mut())
                     .await?;
 
@@ -1692,6 +1695,7 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO quorum_proposals2 (view, leaf_hash, data) ");
 
+            offset = values.last().context("last row")?.0;
             query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
@@ -1703,7 +1707,6 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
 
-            offset += batch_size;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
@@ -1760,9 +1763,9 @@ impl SequencerPersistence for Persistence {
         loop {
             let mut tx = self.db.read().await?;
             let rows =
-                query("SELECT view, leaf_hash, data FROM quorum_certificate ORDER BY view LIMIT $1 OFFSET $2")
+                query("SELECT view, leaf_hash, data FROM quorum_certificate WHERE view >= $1 ORDER BY view LIMIT $2")
+                .bind(offset)
                     .bind(batch_size)
-                    .bind(offset)
                     .fetch_all(tx.as_mut())
                     .await?;
 
@@ -1788,6 +1791,8 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO quorum_certificate2 (view, leaf_hash, data) ");
 
+            offset = values.last().context("last row")?.0;
+
             query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
@@ -1798,7 +1803,6 @@ impl SequencerPersistence for Persistence {
             let mut tx = self.db.write().await?;
             query.execute(tx.as_mut()).await?;
 
-            offset += batch_size;
             tx.upsert(
                 "epoch_migration",
                 ["table_name", "completed", "migrated_rows"],
