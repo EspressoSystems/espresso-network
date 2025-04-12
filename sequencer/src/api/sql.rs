@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     get_l1_deposits,
-    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
     v0_99::{ChainConfig, IterableFeeInfo},
-    BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
+    BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
 use hotshot::traits::ValidatedState as _;
 use hotshot_query_service::{
@@ -35,6 +35,7 @@ use jf_merkle_tree::{
     LookupResult, MerkleTreeScheme,
 };
 use sqlx::{Encode, Type};
+use vbs::version::StaticVersionType;
 
 use super::{
     data_source::{Provider, SequencerDataSource},
@@ -335,10 +336,14 @@ async fn load_reward_accounts<Mode: TransactionMode>(
         .context(format!("leaf {height} not available"))?;
     let header = leaf.header();
 
-    let Some(merkle_root) = header.reward_merkle_tree_root() else {
-        bail!("reward merkle tree root not available");
-    };
+    if header.version() < EpochVersion::version() {
+        return Ok((
+            RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT),
+            leaf.leaf().clone(),
+        ));
+    }
 
+    let merkle_root = header.reward_merkle_tree_root();
     let mut snapshot = RewardMerkleTree::from_commitment(merkle_root);
     for account in accounts {
         let proof = tx
@@ -510,16 +515,16 @@ async fn reconstruct_state<Mode: TransactionMode>(
 
     let mut reward_accounts = reward_accounts.iter().copied().collect::<HashSet<_>>();
 
-    let dependencies = reward_header_dependencies(&mut catchup, tx, instance, &leaves).await?;
+    let dependencies = reward_header_dependencies(instance, &leaves).await?;
     reward_accounts.extend(dependencies);
     let reward_accounts = reward_accounts.into_iter().collect::<Vec<_>>();
+
     state.reward_merkle_tree = load_reward_accounts(tx, from_height, &reward_accounts)
         .await
         .context("unable to reconstruct state because reward accounts are not available at origin")?
         .0;
     ensure!(
-        Some(state.reward_merkle_tree.commitment())
-            == parent.block_header().reward_merkle_tree_root(),
+        state.reward_merkle_tree.commitment() == parent.block_header().reward_merkle_tree_root(),
         "loaded reward state does not match parent header"
     );
 
@@ -619,9 +624,7 @@ async fn fee_header_dependencies<Mode: TransactionMode>(
     Ok(accounts)
 }
 
-async fn reward_header_dependencies<Mode: TransactionMode>(
-    catchup: &mut NullStateCatchup,
-    tx: &mut Transaction<Mode>,
+async fn reward_header_dependencies(
     instance: &NodeState,
     leaves: impl IntoIterator<Item = &Leaf2>,
 ) -> anyhow::Result<HashSet<RewardAccount>> {
@@ -629,35 +632,23 @@ async fn reward_header_dependencies<Mode: TransactionMode>(
     let epoch_height = instance.epoch_height;
 
     let Some(epoch_height) = epoch_height else {
-        bail!("epoch height not set");
+        tracing::info!("epoch height is not set. returning empty reward_header_dependencies");
+        return Ok(HashSet::new());
     };
 
     // add all the chain configs needed to apply STF to headers to the catchup
     for proposal in leaves {
         let header = proposal.block_header();
+
         let height = header.height();
         let view = proposal.view_number();
         tracing::debug!(height, ?view, "fetching dependencies for proposal");
 
-        let header_cf = header.chain_config();
-        if header_cf.commit() != instance.chain_config.commit() && header_cf.resolve().is_none() {
-            tracing::info!(
-                height,
-                ?view,
-                commit = %header_cf.commit(),
-                "chain config not available, attempting to load from storage",
-            );
-            let cf = load_chain_config(tx, header_cf.commit())
-                .await
-                .context(format!(
-                    "loading chain config {} for header {},{:?}",
-                    header_cf.commit(),
-                    header.height(),
-                    proposal.view_number()
-                ))?;
-
-            catchup.add_chain_config(cf);
-        };
+        let version = header.version();
+        // Skip if version is less than epoch version
+        if version < EpochVersion::version() {
+            continue;
+        }
 
         let epoch = epoch_from_block_number(height, epoch_height);
 

@@ -56,14 +56,12 @@ pub(crate) async fn compute_state_update(
         parent_header.fee_merkle_tree_root()
     );
 
-    if let Some(reward_root) = parent_header.reward_merkle_tree_root() {
-        ensure!(
-            state.reward_merkle_tree.commitment() == reward_root,
-            "internal error! in-memory reward tree {:?} does not match parent header {:?}",
-            state.reward_merkle_tree.commitment(),
-            reward_root
-        );
-    }
+    ensure!(
+        state.reward_merkle_tree.commitment() == parent_header.reward_merkle_tree_root(),
+        "internal error! in-memory reward tree {:?} does not match parent header {:?}",
+        state.reward_merkle_tree.commitment(),
+        parent_header.reward_merkle_tree_root()
+    );
 
     state
         .apply_header(
