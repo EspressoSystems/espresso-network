@@ -979,7 +979,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             tracing::warn!("Migrated leaf and vid: offset={offset}");
 
             tracing::info!("offset={offset}");
-            if rows.len() < limit {
+            if rows.len() < limit as usize {
                 break;
             }
         }
