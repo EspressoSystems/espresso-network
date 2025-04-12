@@ -975,7 +975,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             tracing::warn!("VID2: inserted {total_rows}");
 
             tracing::info!("offset={offset}");
-            if rows.len() < limit  as usize{
+            if rows.len() < limit as usize {
                 break;
             }
         }
