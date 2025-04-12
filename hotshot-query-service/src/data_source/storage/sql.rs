@@ -926,7 +926,11 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 "INSERT INTO leaf2 (height, view, hash, block_hash, leaf, qc) ",
             );
 
-            query_builder.push_values(leaf_rows.clone().into_iter(), |mut b, row| {
+            // Advance the `offset` to the highest `leaf.height` processed in this batch.
+            // This ensures the next iteration starts from the next unseen leaf
+            offset = leaf_rows.last().context("last leaf row")?.0.clone();
+
+            query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
                 b.push_bind(row.0)
                     .push_bind(row.1)
                     .push_bind(row.2)
@@ -937,10 +941,6 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
             query_builder.push(" ON CONFLICT DO NOTHING");
             let query = query_builder.build();
-
-            // Advance the `offset` to the highest `leaf.height` processed in this batch.
-            // This ensures the next iteration starts from the next unseen leaf
-            offset = leaf_rows.last().context("last leaf row")?.0;
 
             let mut tx = self.write().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
