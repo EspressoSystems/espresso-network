@@ -18,8 +18,8 @@ contract CallNewFinalizedState is Script {
         cmds[2] = vm.toString(numInitValidators);
 
         bytes memory result = vm.ffi(cmds);
-        (LC.LightClientState[] memory states, V.PlonkProof[] memory proofs,) =
-            abi.decode(result, (LC.LightClientState[], V.PlonkProof[], LC.StakeTableState[]));
+        (LC.LightClientState[] memory states,, V.PlonkProof[] memory proofs) =
+            abi.decode(result, (LC.LightClientState[], LC.StakeTableState[], V.PlonkProof[]));
 
         address admin;
         string memory seedPhrase = vm.envString("MNEMONIC");

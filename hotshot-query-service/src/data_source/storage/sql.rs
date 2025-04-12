@@ -821,13 +821,13 @@ impl VersionedDataSource for SqlStorage {
 
 #[async_trait]
 pub trait MigrateTypes<Types: NodeType> {
-    async fn migrate_types(&self) -> anyhow::Result<()>;
+    async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()>;
 }
 
 #[async_trait]
 impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
-    async fn migrate_types(&self) -> anyhow::Result<()> {
-        let limit = 10000;
+    async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()> {
+        let limit = batch_size;
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
@@ -886,15 +886,19 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                     serde_json::to_value(leaf2.clone()).context("failed to serialize leaf2")?;
                 let qc2_json = serde_json::to_value(qc2).context("failed to serialize QC2")?;
 
-                // TODO (abdul): revisit after V1 VID has common field
                 let vid_common_bytes: Vec<u8> = row.try_get("vid_common")?;
-                let vid_share_bytes: Vec<u8> = row.try_get("vid_share")?;
+                let vid_share_bytes: Option<Vec<u8>> = row.try_get("vid_share")?;
 
-                let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
-                    .context("failed to deserialize vid_share")?;
+                let mut new_vid_share_bytes = None;
 
-                let new_vid_share_bytes = bincode::serialize(&VidShare::V0(vid_share))
-                    .context("failed to serialize vid_share")?;
+                if let Some(vid_share_bytes) = vid_share_bytes {
+                    let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
+                        .context("failed to deserialize vid_share")?;
+                    new_vid_share_bytes = Some(
+                        bincode::serialize(&VidShare::V0(vid_share))
+                            .context("failed to serialize vid_share")?,
+                    );
+                }
 
                 let vid_common: ADVZCommon = bincode::deserialize(&vid_common_bytes)
                     .context("failed to deserialize vid_common")?;
@@ -950,6 +954,9 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             .await?;
 
             tracing::warn!("inserted {} rows into leaf2 table", offset);
+            tx.commit().await?;
+
+            offset += limit;
             // migrate vid
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
@@ -964,13 +971,11 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
             tx.commit().await?;
 
-            tracing::warn!("inserted {} rows into vid2 table", offset);
+            tracing::warn!("VID2: total rows inserted={}", offset);
 
-            if rows.len() < limit {
+            if rows.len() < limit as usize {
                 break;
             }
-
-            offset += limit as i64;
         }
 
         let mut tx = self.write().await.map_err(|err| QueryError::Error {
@@ -1824,10 +1829,15 @@ mod test {
             let mut vid = advz_scheme(2);
             let disperse = vid.disperse(payload.encode()).unwrap();
             let common = disperse.common;
-            let share = disperse.shares[0].clone();
 
             let common_bytes = bincode::serialize(&common).unwrap();
-            let share_bytes = bincode::serialize(&share).unwrap();
+            let share = disperse.shares[0].clone();
+            let mut share_bytes = Some(bincode::serialize(&share).unwrap());
+
+            // insert some nullable vid shares
+            if i % 10 == 0 {
+                share_bytes = None
+            }
 
             tx.upsert(
                 "vid",
@@ -1840,7 +1850,7 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage)
+        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage, 50)
             .await
             .expect("failed to migrate");
 

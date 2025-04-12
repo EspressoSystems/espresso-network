@@ -168,9 +168,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 };
                 let cert_epoch = epoch_from_block_number(cert_block_number, self.epoch_height);
                 tracing::error!(
-                    "Formed Extended QC for view {:?} and epoch {:?}.",
-                    cert_view,
-                    cert_epoch
+                    "Formed Extended QC for view {cert_view:?} and epoch {cert_epoch:?}."
                 );
                 // Transition to the new epoch by sending ViewChange
                 let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
@@ -200,7 +198,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 )
                 .await
                 {
-                    tracing::error!("Received invalid extended QC: {}", e);
+                    tracing::error!("Received invalid extended QC: {e}");
                     return Ok(());
                 }
 

@@ -12,6 +12,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
@@ -23,7 +24,6 @@ use bincode::{
 };
 use committable::{Commitment, Committable};
 use digest::OutputSizeUser;
-use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use tagged_base64::tagged;
@@ -483,6 +483,15 @@ pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
         false
     } else {
         block_number % epoch_height >= epoch_height - 5
+    }
+}
+
+/// Returns true if the given block number is strictly greater than the epoch root block
+pub fn is_gt_epoch_root(block_number: u64, epoch_height: u64) -> bool {
+    if block_number == 0 || epoch_height == 0 {
+        false
+    } else {
+        block_number % epoch_height > epoch_height - 5
     }
 }
 

@@ -101,8 +101,10 @@ impl PersistenceOptions for Options {
 
         let migration_path = path.join("migration");
         let migrated = if migration_path.is_file() {
-            let bytes = fs::read(&path)
-                .context(format!("unable to read migration from {}", path.display()))?;
+            let bytes = fs::read(&migration_path).context(format!(
+                "unable to read migration from {}",
+                migration_path.display()
+            ))?;
             bincode::deserialize(&bytes).context("malformed migration file")?
         } else {
             HashSet::new()
@@ -533,6 +535,7 @@ impl Inner {
                 bincode::deserialize(&bytes)?;
             let epoch = state_cert.epoch.u64();
             let finalized_dir_path = self.finalized_state_cert_dir_path();
+            fs::create_dir_all(&finalized_dir_path).context("creating finalized state cert dir")?;
             let finalized_file_path = finalized_dir_path
                 .join(epoch.to_string())
                 .with_extension("txt");
@@ -1763,6 +1766,7 @@ mod test {
                     block_height: i,
                     block_comm_root: Default::default(),
                 },
+                next_stake_table_state: Default::default(),
                 signatures: vec![], // filling arbitrary value
             };
             assert!(storage.add_state_cert(state_cert).await.is_ok());
@@ -1935,6 +1939,23 @@ mod test {
         assert_eq!(
             state_cert_count, rows as usize,
             "light client state update certificate count does not match",
+        );
+
+        // Reinitialize the file system persistence using the same path.
+        // re run the consensus migration.
+        // No changes will occur, as the migration has already been completed.
+        let storage = opt.create().await.unwrap();
+        storage.migrate_consensus().await.unwrap();
+
+        let inner = storage.inner.read().await;
+        let decided_leaves = fs::read_dir(inner.decided_leaf2_path()).unwrap();
+        let decided_leaves_count = decided_leaves
+            .filter_map(Result::ok)
+            .filter(|e| e.path().is_file())
+            .count();
+        assert_eq!(
+            decided_leaves_count, rows as usize,
+            "decided leaves count does not match",
         );
     }
 

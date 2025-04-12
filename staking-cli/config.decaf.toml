@@ -1,0 +1,7 @@
+# TODO, use ledger for singing?
+# Fill in your mnemonic
+mnemonic = "test test test test test test test test test test test junk"
+account_index = 0
+rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
+token_address = "0xb3e655a030e2e34a18b72757b40be086a8f43f3b"
+stake_table_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"

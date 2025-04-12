@@ -2,6 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
+use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
@@ -33,7 +34,6 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use primitive_types::U256;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
@@ -786,11 +786,11 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         };
         let validated_state = if leaf.block_header().height() == 0 {
             // If we are starting from genesis, we can provide the full state.
-            Some(Arc::new(genesis_validated_state))
+            genesis_validated_state
         } else {
             // Otherwise, we will have to construct a sparse state and fetch missing data during
             // catchup.
-            None
+            ValidatedState::from_header(leaf.block_header())
         };
 
         // If we are not starting from genesis, we start from the view following the maximum view
@@ -847,7 +847,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
                 epoch_height,
                 epoch_start_block,
                 anchor_leaf: leaf,
-                anchor_state: validated_state.unwrap_or_default(),
+                anchor_state: Arc::new(validated_state),
                 anchor_state_delta: None,
                 start_view: view,
                 start_epoch: epoch,

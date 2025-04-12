@@ -187,7 +187,7 @@
           nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.minimal.override {
             extensions = [ "rust-analyzer" "rustfmt" ];
           });
-          solc = pkgs.solc-bin."0.8.23";
+          solc = pkgs.solc-bin."0.8.28";
         in
         mkShell (rustEnvVars // {
           buildInputs = [

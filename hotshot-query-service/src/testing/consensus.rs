@@ -12,6 +12,7 @@
 
 use std::{fmt::Display, num::NonZeroUsize, str::FromStr, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{
@@ -43,7 +44,6 @@ use hotshot_types::{
     },
     HotShotConfig, PeerConfig,
 };
-use primitive_types::U256;
 use tokio::{
     runtime::Handle,
     task::{block_in_place, yield_now},

@@ -6,6 +6,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ec = { workspace = true }
@@ -14,21 +15,16 @@ ark-ff = { workspace = true }
 ark-poly = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
-contract-bindings-alloy = { workspace = true }
-contract-bindings-ethers = { path = "../../../contract-bindings-ethers" }
-diff-test-bn254 = { workspace = true }
-ethers = { version = "2.0.4" }
-ethers-conv = { workspace = true }
 hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
 jf-utils = { workspace = true }
 num-bigint = { version = "0.4", default-features = false }
 num-traits = { version = "0.2", default-features = false }
+rand = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
 
 [[bin]]
 name = "eval-domain"

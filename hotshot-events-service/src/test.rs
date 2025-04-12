@@ -2,6 +2,7 @@
 mod tests {
     use std::sync::Arc;
 
+    use alloy::primitives::U256;
     use async_lock::RwLock;
     use futures::stream::StreamExt;
     use hotshot_example_types::node_types::TestTypes;
@@ -16,7 +17,6 @@ mod tests {
         },
         PeerConfig,
     };
-    use primitive_types::U256;
     use surf_disco::Client;
     use tide_disco::{App, Url};
     use tokio::spawn;

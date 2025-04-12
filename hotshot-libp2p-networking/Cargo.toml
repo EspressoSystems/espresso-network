@@ -14,6 +14,7 @@ webui = []
 hotshot-example-types = { workspace = true }
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -30,7 +31,6 @@ libp2p = { workspace = true, features = ["tokio"] }
 libp2p-identity = { workspace = true }
 libp2p-swarm-derive = { workspace = true }
 pin-project = "1"
-primitive-types = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }

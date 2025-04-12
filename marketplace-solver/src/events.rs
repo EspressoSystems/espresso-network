@@ -71,6 +71,7 @@ pub async fn handle_events(
 pub mod mock {
     use std::{sync::Arc, time::Duration};
 
+    use alloy::primitives::U256;
     use async_lock::RwLock;
     use espresso_types::SeqTypes;
     use hotshot::rand::{self};
@@ -84,7 +85,6 @@ pub mod mock {
         PeerConfig,
     };
     use portpicker::pick_unused_port;
-    use primitive_types::U256;
     use rand::{rngs::OsRng, RngCore};
     use tide_disco::{App, Url};
     use tokio::{spawn, task::JoinHandle, time::sleep};

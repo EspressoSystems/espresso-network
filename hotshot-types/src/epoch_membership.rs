@@ -3,13 +3,13 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U256;
 use async_broadcast::{broadcast, InactiveReceiver};
 use async_lock::{Mutex, RwLock};
 use hotshot_utils::{
     anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
     ensure, line_info, log, warn,
 };
-use primitive_types::U256;
 
 use crate::{
     data::Leaf2,

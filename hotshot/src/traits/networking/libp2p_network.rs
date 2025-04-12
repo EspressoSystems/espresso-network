@@ -27,12 +27,14 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use bimap::BiHashMap;
 use futures::future::join_all;
+#[cfg(feature = "hotshot-testing")]
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 pub use hotshot_libp2p_networking::network::{GossipConfig, RequestResponseConfig};
 use hotshot_libp2p_networking::{
     network::{
         behaviours::dht::{
             record::{Namespace, RecordKey, RecordValue},
-            store::persistent::{DhtNoPersistence, DhtPersistentStorage},
+            store::persistent::DhtPersistentStorage,
         },
         spawn_network_node,
         transport::construct_auth_message,

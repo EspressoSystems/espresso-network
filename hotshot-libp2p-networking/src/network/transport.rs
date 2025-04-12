@@ -489,6 +489,7 @@ pub async fn write_length_delimited<S: AsyncWrite + Unpin>(
 mod test {
     use std::sync::Arc;
 
+    use alloy::primitives::U256;
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::{
         light_client::StateVerKey,
@@ -497,7 +498,6 @@ mod test {
         PeerConfig,
     };
     use libp2p::{core::transport::dummy::DummyTransport, quic::Connection};
-    use primitive_types::U256;
     use rand::Rng;
 
     use super::*;

@@ -254,33 +254,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
         {
             Ok(epoch_membership) => epoch_membership,
             Err(e) => {
-                tracing::warn!("{:?}", e);
+                tracing::warn!("{e:?}");
                 return;
             },
         };
 
-        let current_epoch = option_epoch_from_block_number::<TYPES>(
-            self.upgrade_lock.epochs_enabled(leaf.view_number()).await,
-            leaf.height(),
-            self.epoch_height,
-        );
-
         let is_vote_leaf_extended = is_last_block(leaf.height(), self.epoch_height);
         let is_vote_epoch_root = is_epoch_root(leaf.height(), self.epoch_height);
-        if current_epoch.is_none() || !is_vote_leaf_extended {
+        if cur_epoch.is_none() || !is_vote_leaf_extended {
             // We're voting for the proposal that will probably form the eQC. We don't want to change
             // the view here because we will probably change it when we form the eQC.
             // The main reason is to handle view change event only once in the transaction task.
             tracing::trace!(
                 "Sending ViewChange for view {} and epoch {:?}",
                 leaf.view_number() + 1,
-                current_epoch
+                cur_epoch
             );
             broadcast_event(
-                Arc::new(HotShotEvent::ViewChange(
-                    leaf.view_number() + 1,
-                    current_epoch,
-                )),
+                Arc::new(HotShotEvent::ViewChange(leaf.view_number() + 1, cur_epoch)),
                 &self.sender,
             )
             .await;
@@ -488,7 +479,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             for view in *self.latest_voted_view..(*new_view) {
                 if let Some(dependency) = self.vote_dependencies.remove(&TYPES::View::new(view)) {
                     dependency.abort();
-                    tracing::debug!("Vote dependency removed for view {:?}", view);
+                    tracing::debug!("Vote dependency removed for view {view:?}");
                 }
             }
 
@@ -498,7 +489,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     .last_voted_view
                     .set(last_voted_view_usize);
             } else {
-                tracing::warn!("Failed to convert last voted view to a usize: {}", new_view);
+                tracing::warn!("Failed to convert last voted view to a usize: {new_view}");
             }
 
             self.latest_voted_view = new_view;
@@ -545,7 +536,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::DaCertificateRecv(cert) => {
                 let view = cert.view_number;
 
-                tracing::trace!("Received DAC for view {}", *view);
+                tracing::trace!("Received DAC for view {view}");
                 // Do nothing if the DAC is old
                 ensure!(
                     view > self.latest_voted_view,
@@ -565,7 +556,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     &self.upgrade_lock,
                 )
                 .await
-                .context(|e| warn!("Invalid DAC: {}", e))?;
+                .context(|e| warn!("Invalid DAC: {e}"))?;
 
                 // Add to the storage.
                 self.consensus
@@ -588,7 +579,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::VidShareRecv(sender, share) => {
                 let view = share.data.view_number();
                 // Do nothing if the VID share is old
-                tracing::trace!("Received VID share for view {}", *view);
+                tracing::trace!("Received VID share for view {view}");
                 ensure!(
                     view > self.latest_voted_view,
                     "Received VID share for an older view."

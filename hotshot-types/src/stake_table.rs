@@ -6,7 +6,7 @@
 
 //! Types and structs related to the stake table
 
-use primitive_types::U256;
+use alloy::primitives::U256;
 use serde::{Deserialize, Serialize};
 
 use crate::traits::signature_key::{SignatureKey, StakeTableEntryType};

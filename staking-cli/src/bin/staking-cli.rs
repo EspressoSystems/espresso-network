@@ -1,20 +1,21 @@
 use std::path::PathBuf;
 
 use alloy::{
+    eips::BlockId,
     network::EthereumWallet,
-    providers::ProviderBuilder,
+    primitives::{utils::format_ether, Address},
+    providers::{Provider, ProviderBuilder},
     signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::Result;
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
-use contract_bindings_alloy::{
-    esptoken::EspToken::EspTokenInstance, staketable::StakeTable::StakeTableInstance,
-};
+use hotshot_contract_adapter::sol_types::EspToken;
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
+    info::{display_stake_table, stake_table_info},
     registration::{deregister_validator, register_validator},
     Commands, Config,
 };
@@ -63,7 +64,7 @@ impl Args {
                 // In the unlikely case that we can't find the config directory,
                 // create the config file in the current directory and issue a
                 // warning.
-                eprintln!("WARN: Unable to find config directory, using current directory");
+                tracing::warn!("Unable to find config directory, using current directory");
                 basename.into()
             }
         })
@@ -80,16 +81,17 @@ impl Args {
 }
 
 fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
-    eprintln!("{}: {err}", msg.as_ref());
+    tracing::error!("{}: {err}", msg.as_ref());
+    std::process::exit(1);
+}
+
+fn exit(msg: impl AsRef<str>) -> ! {
+    tracing::error!("Error: {}", msg.as_ref());
     std::process::exit(1);
 }
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let mut cli = Args::parse();
     let config_path = cli.config_path();
     // Get config file
@@ -107,12 +109,13 @@ pub async fn main() -> Result<()> {
         // If there is no config file return only config parsed from clap
         Config::from(&mut cli.config)
     };
+    config.logging.init();
 
     // Run the init command first because config values required by other
     // commands are not present.
     match config.commands {
         Commands::Init => {
-            let config = toml::from_str::<Config>(include_str!("../../config.demo.toml"))?;
+            let config = toml::from_str::<Config>(include_str!("../../config.decaf.toml"))?;
 
             // Create directory where config file will be saved
             std::fs::create_dir_all(cli.config_dir()).unwrap_or_else(|err| {
@@ -123,7 +126,11 @@ pub async fn main() -> Result<()> {
             std::fs::write(&config_path, toml::to_string(&config)?)
                 .unwrap_or_else(|err| exit_err("failed to write config file", err));
 
-            println!("Config file saved to {}", config_path.display());
+            println!("New config file saved to {}", config_path.display());
+            println!(
+                "Fill in your mnemonic in the config file at {}",
+                config_path.display()
+            );
             return Ok(());
         },
         Commands::Purge { force } => {
@@ -163,6 +170,15 @@ pub async fn main() -> Result<()> {
         _ => {}, // Other commands handled after shared setup.
     }
 
+    // When the staking CLI is used for our testnet, the env var names are different.
+    let config = config.apply_env_var_overrides()?;
+
+    // Clap serde will put default value if they aren't set. We check some
+    // common configuration mistakes.
+    if config.stake_table_address == Address::ZERO {
+        exit("Stake table address is not set")
+    };
+
     let signer = MnemonicBuilder::<English>::default()
         .phrase(config.mnemonic.as_str())
         .index(config.account_index)?
@@ -170,17 +186,30 @@ pub async fn main() -> Result<()> {
     let account = signer.address();
     let wallet = EthereumWallet::from(signer);
     let provider = ProviderBuilder::new()
-        .with_recommended_fillers()
         .wallet(wallet)
         .on_http(config.rpc_url.clone());
-    let stake_table = StakeTableInstance::new(config.stake_table_address, provider.clone());
-    let token = EspTokenInstance::new(config.token_address, provider.clone());
+    let stake_table_addr = config.stake_table_address;
+    let token_addr = config.token_address;
+    let token = EspToken::new(config.token_address, &provider);
 
     let result = match config.commands {
-        // TODO: The info command is not implemented yet. It's not very useful for local testing or
-        // the demo and requires code that is not yet merged into main, so it's left for later.
-        Commands::Info => {
-            tracing::info!("Sorry, Info command not implemented yet");
+        Commands::Info {
+            l1_block_number,
+            compact,
+        } => {
+            let query_block = l1_block_number.unwrap_or(BlockId::latest());
+            let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
+                exit_err("Failed to get block {query_block}", "Block not found");
+            });
+            let l1_block_resolved = l1_block.header.number;
+            tracing::info!("Getting stake table info at block {l1_block_resolved}");
+            let stake_table = stake_table_info(
+                config.rpc_url.clone(),
+                config.stake_table_address,
+                l1_block_resolved,
+            )
+            .await?;
+            display_stake_table(stake_table, compact)?;
             return Ok(());
         },
         Commands::RegisterValidator {
@@ -190,7 +219,8 @@ pub async fn main() -> Result<()> {
         } => {
             tracing::info!("Registering validator {account} with commission {commission}");
             register_validator(
-                stake_table,
+                &provider,
+                stake_table_addr,
                 commission,
                 account,
                 (consensus_private_key).into(),
@@ -200,44 +230,77 @@ pub async fn main() -> Result<()> {
         },
         Commands::DeregisterValidator {} => {
             tracing::info!("Deregistering validator {account}");
-            deregister_validator(stake_table).await
+            deregister_validator(&provider, stake_table_addr).await
         },
         Commands::Approve { amount } => {
             tracing::info!(
                 "Approving stake table {} to spend {amount}",
                 config.stake_table_address
             );
-            approve(token, config.stake_table_address, amount).await
+            approve(&provider, token_addr, stake_table_addr, amount).await
         },
         Commands::Delegate {
             validator_address,
             amount,
         } => {
             tracing::info!("Delegating {amount} to {validator_address}");
-            delegate(stake_table, validator_address, amount).await
+            delegate(&provider, stake_table_addr, validator_address, amount).await
         },
         Commands::Undelegate {
             validator_address,
             amount,
         } => {
             tracing::info!("Undelegating {amount} from {validator_address}");
-            undelegate(stake_table, validator_address, amount).await
+            undelegate(&provider, stake_table_addr, validator_address, amount).await
         },
         Commands::ClaimWithdrawal { validator_address } => {
             tracing::info!("Claiming withdrawal for {validator_address}");
-            claim_withdrawal(stake_table, validator_address).await
+            claim_withdrawal(&provider, stake_table_addr, validator_address).await
         },
         Commands::ClaimValidatorExit { validator_address } => {
             tracing::info!("Claiming validator exit for {validator_address}");
-            claim_validator_exit(stake_table, validator_address).await
+            claim_validator_exit(&provider, stake_table_addr, validator_address).await
         },
         Commands::StakeForDemo { num_validators } => {
             tracing::info!("Staking for demo with {num_validators} validators");
             stake_for_demo(&config, num_validators).await.unwrap();
             return Ok(());
         },
+        Commands::TokenBalance { address } => {
+            let address = address.unwrap_or(account);
+            let balance = format_ether(token.balanceOf(address).call().await?._0);
+            tracing::info!("Token balance for {address}: {balance} ESP");
+            return Ok(());
+        },
+        Commands::TokenAllowance { owner } => {
+            let owner = owner.unwrap_or(account);
+            let allowance = format_ether(
+                token
+                    .allowance(owner, config.stake_table_address)
+                    .call()
+                    .await?
+                    ._0,
+            );
+            tracing::info!("Stake table token allowance for {owner}: {allowance} ESP");
+            return Ok(());
+        },
+        Commands::Transfer { amount, to } => {
+            let amount_esp = format_ether(amount);
+            tracing::info!("Transferring {amount_esp} ESP to {to}");
+            Ok(token
+                .transfer(to, amount)
+                .send()
+                .await?
+                .get_receipt()
+                .await?)
+        },
         _ => unreachable!(),
     };
-    tracing::info!("Result: {:?}", result);
+
+    match result {
+        Ok(receipt) => tracing::info!("Success! transaction hash: {}", receipt.transaction_hash),
+        Err(err) => exit_err("Failed:", err),
+    };
+
     Ok(())
 }

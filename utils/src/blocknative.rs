@@ -2,11 +2,8 @@
 //! which is unmaintained and out-of-sync with the latest blocknative feed
 //!
 //! TODO: revisit this or remove this when switching to `alloy-rs`
+use alloy::primitives::U256;
 use async_trait::async_trait;
-use ethers::{
-    middleware::gas_oracle::{from_gwei_f64, GasCategory, GasOracle, GasOracleError, Result},
-    types::U256,
-};
 use reqwest::{header::AUTHORIZATION, Client};
 use serde::Deserialize;
 use url::Url;

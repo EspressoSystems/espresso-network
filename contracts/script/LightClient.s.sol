@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 import { Script } from "forge-std/Script.sol";
 import { Upgrades, Options } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 import { LightClient as LC } from "../src/LightClient.sol";
-import { LightClientV2 as LCV2 } from "../test/LightClientV2.sol";
+import { LightClientV2Fake as LCV2 } from "../test/mocks/LightClientV2Fake.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /// @notice Deploy the upgradeable light client contract using the OpenZeppelin Upgrades plugin.

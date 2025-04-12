@@ -8,9 +8,9 @@
 
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData};
 
+use alloy::primitives::U256;
 use hotshot_utils::anytrace::*;
 use jf_vid::{VidDisperse as JfVidDisperse, VidScheme};
-use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 
@@ -298,17 +298,17 @@ pub fn vid_total_weight<TYPES: NodeType>(
     if epoch.is_none() {
         stake_table
             .iter()
-            .fold(U256::zero(), |acc, entry| {
+            .fold(U256::ZERO, |acc, entry| {
                 acc + entry.stake_table_entry.stake()
             })
-            .as_usize()
+            .to::<usize>()
     } else {
         approximate_weights(stake_table).total_weight
     }
 }
 
 fn approximate_weights<TYPES: NodeType>(stake_table: Vec<PeerConfig<TYPES>>) -> Weights {
-    let total_stake = stake_table.iter().fold(U256::zero(), |acc, entry| {
+    let total_stake = stake_table.iter().fold(U256::ZERO, |acc, entry| {
         acc + entry.stake_table_entry.stake()
     });
 
@@ -318,11 +318,11 @@ fn approximate_weights<TYPES: NodeType>(stake_table: Vec<PeerConfig<TYPES>>) -> 
     if total_stake <= U256::from(VID_TARGET_TOTAL_STAKE) {
         let weights = stake_table
             .iter()
-            .map(|entry| entry.stake_table_entry.stake().as_u32())
+            .map(|entry| entry.stake_table_entry.stake().to::<u32>())
             .collect();
 
         // Note: this panics if `total_stake` exceeds `usize::MAX`, but this shouldn't happen.
-        total_weight = total_stake.as_usize();
+        total_weight = total_stake.to::<usize>();
 
         Weights {
             weights,
@@ -335,14 +335,14 @@ fn approximate_weights<TYPES: NodeType>(stake_table: Vec<PeerConfig<TYPES>>) -> 
                 let weight: U256 = ((entry.stake_table_entry.stake()
                     * U256::from(VID_TARGET_TOTAL_STAKE))
                     / total_stake)
-                    + 1;
+                    + U256::ONE;
 
                 // Note: this panics if `weight` exceeds `usize::MAX`, but this shouldn't happen.
-                total_weight += weight.as_usize();
+                total_weight += weight.to::<usize>();
 
                 // Note: this panics if `weight` exceeds `u32::MAX`, but this shouldn't happen
                 // and would likely cause a stack overflow in the VID calculation anyway
-                weight.as_u32()
+                weight.to::<u32>()
             })
             .collect();
 

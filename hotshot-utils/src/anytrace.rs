@@ -212,4 +212,54 @@ mod test {
         assert!(Level::Warn < Level::Error);
         assert!(max(Level::Trace, Level::Error) == Level::Error);
     }
+
+    #[test]
+    fn formatting() {
+        let num = 1234;
+
+        // Trace
+        let log = trace!("num: {num}");
+        assert_eq!(log.level, Level::Trace);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        let log = trace!("num: {}", num);
+        assert_eq!(log.level, Level::Trace);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        // Debug
+        let log = debug!("num: {num}");
+        assert_eq!(log.level, Level::Debug);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        let log = debug!("num: {}", num);
+        assert_eq!(log.level, Level::Debug);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        // Info
+        let log = info!("num: {num}");
+        assert_eq!(log.level, Level::Info);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        let log = info!("num: {}", num);
+        assert_eq!(log.level, Level::Info);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        // Warn
+        let log = warn!("num: {num}");
+        assert_eq!(log.level, Level::Warn);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        let log = warn!("num: {}", num);
+        assert_eq!(log.level, Level::Warn);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        // Error
+        let log = error!("num: {num}");
+        assert_eq!(log.level, Level::Error);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+
+        let log = error!("num: {}", num);
+        assert_eq!(log.level, Level::Error);
+        assert!(log.message.ends_with(": num: 1234"), "log: {log:?}");
+    }
 }

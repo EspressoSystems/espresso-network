@@ -6,10 +6,10 @@
 
 use std::{fs, ops::Range, path::Path, time::Duration, vec};
 
+use alloy::primitives::U256;
 use clap::ValueEnum;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use primitive_types::U256;
 use serde_inline_default::serde_inline_default;
 use thiserror::Error;
 use tracing::error;
@@ -71,7 +71,7 @@ pub enum BuilderType {
 }
 
 /// Node PeerConfig keys
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 #[serde(bound(deserialize = ""))]
 pub struct PeerConfigKeys<TYPES: NodeType> {
     /// The peer's public key

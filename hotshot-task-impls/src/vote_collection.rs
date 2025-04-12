@@ -130,7 +130,7 @@ impl<
         match accumulator.accumulate(vote, self.membership.clone()).await {
             None => Ok(None),
             Some(cert) => {
-                tracing::debug!("Certificate Formed! {:?}", cert);
+                tracing::debug!("Certificate Formed! {cert:?}");
 
                 broadcast_event(
                     Arc::new(VOTE::make_cert_event(cert.clone(), &self.public_key)),
@@ -657,9 +657,6 @@ pub type EpochRootVoteCollectorsMap<TYPES, V> =
     BTreeMap<<TYPES as NodeType>::View, EpochRootVoteCollectionTaskState<TYPES, V>>;
 
 pub struct EpochRootVoteCollectionTaskState<TYPES: NodeType, V: Versions> {
-    // pub vote_task_state:
-    //     VoteCollectionTaskState<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>,
-    // pub light_client_task_state: LightClientStateUpdateVoteCollectionTaskState<TYPES>,
     /// Public key for this node.
     pub public_key: TYPES::SignatureKey,
 

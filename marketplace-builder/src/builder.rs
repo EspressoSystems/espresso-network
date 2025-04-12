@@ -12,12 +12,6 @@ use espresso_types::{
     EpochCommittees, FeeAmount, L1Client, MarketplaceVersion, MockSequencerVersions, NamespaceId,
     NodeState, Payload, SeqTypes, SequencerVersions, ValidatedState, V0_1,
 };
-use ethers::{
-    core::k256::ecdsa::SigningKey,
-    signers::{coins_bip39::English, MnemonicBuilder, Signer as _, Wallet},
-    types::{Address, U256},
-};
-use ethers_conv::ToAlloy;
 use futures::FutureExt;
 use hotshot::traits::BlockPayload;
 use hotshot_builder_api::v0_99::builder::{
@@ -221,6 +215,7 @@ mod test {
         time::{Duration, Instant},
     };
 
+    use alloy::{node_bindings::Anvil, primitives::U256};
     use anyhow::Error;
     use async_lock::RwLock;
     use committable::{Commitment, Committable};
@@ -230,7 +225,6 @@ mod test {
         Event, FeeAccount, Leaf2, MarketplaceVersion, NamespaceId, PubKey, SeqTypes,
         SequencerVersions, Transaction,
     };
-    use ethers::{core::k256::elliptic_curve::rand_core::block, utils::Anvil};
     use futures::{Stream, StreamExt};
     use hooks::connect_to_solver;
     use hotshot::{
@@ -545,7 +539,7 @@ mod test {
 
         // Run the network.
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let tmpdir = TempDir::new().unwrap();
         let config = TestNetworkConfigBuilder::default()
@@ -640,9 +634,9 @@ mod test {
 
         let txn_commit = <[u8; 32]>::from(registered_transaction.commit()).to_vec();
         let signature = bundle.signature;
-        assert!(signature.verify(txn_commit, address).is_ok());
+        assert!(signature.recover_address_from_msg(txn_commit).unwrap() == address);
 
-        let fee = base_fee * registered_transaction.minimum_block_size();
+        let fee = base_fee * U256::from(registered_transaction.minimum_block_size());
 
         let fee_signature = <<SeqTypes  as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::sign_sequencing_fee_marketplace(
             &keypair,
@@ -667,7 +661,7 @@ mod test {
 
         // Run the network.
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let tmpdir = TempDir::new().unwrap();
         let config = TestNetworkConfigBuilder::default()
@@ -760,9 +754,9 @@ mod test {
 
         let txn_commit = <[u8; 32]>::from(unregistered_transaction.clone().commit()).to_vec();
         let signature = bundle.signature;
-        assert!(signature.verify(txn_commit, address).is_ok());
+        assert!(signature.recover_address_from_msg(txn_commit).unwrap() == address);
 
-        let fee = base_fee * unregistered_transaction.minimum_block_size();
+        let fee = base_fee * U256::from(unregistered_transaction.minimum_block_size());
 
         let fee_signature = <<SeqTypes  as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::sign_sequencing_fee_marketplace(
                     &keypair,
