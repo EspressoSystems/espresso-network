@@ -82,6 +82,10 @@ impl SequencerDataSource for DataSource {
             builder = builder.with_chunk_fetch_delay(delay);
         }
 
+        if let Some(batch_size) = opt.types_migration_batch_size {
+            builder = builder.with_types_migration_batch_size(batch_size);
+        }
+
         builder.build().await
     }
 }

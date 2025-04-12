@@ -821,13 +821,14 @@ impl VersionedDataSource for SqlStorage {
 
 #[async_trait]
 pub trait MigrateTypes<Types: NodeType> {
-    async fn migrate_types(&self) -> anyhow::Result<()>;
+    async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()>;
 }
 
 #[async_trait]
 impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
-    async fn migrate_types(&self) -> anyhow::Result<()> {
-        let limit = 10000;
+    async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()> {
+        let mut offset = 0;
+        let limit = batch_size;
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
@@ -1852,7 +1853,7 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage)
+        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage, 50)
             .await
             .expect("failed to migrate");
 
