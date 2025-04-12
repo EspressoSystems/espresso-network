@@ -1390,7 +1390,7 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO anchor_leaf2 (view, leaf, qc) ");
 
-            offset = values.last().context("last row")?.0.clone();
+            offset = values.last().context("last row")?.0;
 
             query_builder.push_values(values.into_iter(), |mut b, (view, leaf, qc)| {
                 b.push_bind(view).push_bind(leaf).push_bind(qc);
@@ -1493,7 +1493,7 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO da_proposal2 (view, payload_hash, data) ");
 
-            offset = values.last().context("last row")?.0.clone();
+            offset = values.last().context("last row")?.0;
             query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
             });
@@ -1590,7 +1590,7 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid_share2 (view, payload_hash, data) ");
 
-            offset = values.last().context("last row")?.0.clone();
+            offset = values.last().context("last row")?.0;
 
             query_builder.push_values(values.into_iter(), |mut b, (view, payload_hash, data)| {
                 b.push_bind(view).push_bind(payload_hash).push_bind(data);
@@ -1689,7 +1689,7 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO quorum_proposals2 (view, leaf_hash, data) ");
 
-            offset = values.last().context("last row")?.0.clone();
+            offset = values.last().context("last row")?.0;
             query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);
             });
@@ -1785,7 +1785,7 @@ impl SequencerPersistence for Persistence {
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO quorum_certificate2 (view, leaf_hash, data) ");
 
-            offset = values.last().context("last row")?.0.clone();
+            offset = values.last().context("last row")?.0;
 
             query_builder.push_values(values.into_iter(), |mut b, (view, leaf_hash, data)| {
                 b.push_bind(view).push_bind(leaf_hash).push_bind(data);

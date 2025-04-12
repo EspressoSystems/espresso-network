@@ -928,7 +928,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
             // Advance the `offset` to the highest `leaf.height` processed in this batch.
             // This ensures the next iteration starts from the next unseen leaf
-            offset = leaf_rows.last().context("last leaf row")?.0.clone();
+            offset = leaf_rows.last().context("last leaf row")?.0;
 
             query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
                 b.push_bind(row.0)
