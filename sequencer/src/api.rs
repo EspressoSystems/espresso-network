@@ -863,7 +863,7 @@ pub mod test_helpers {
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
             let initial_stake_table = network_config.stake_table();
             let (genesis_state, genesis_stake) =
-                light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+                legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
             // deploy EspToken, proxy
             let token_proxy_addr =
