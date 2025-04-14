@@ -23,3 +23,12 @@ number = 6758037 # Block where fee contract is deployed
 version = "0.3"
 start_proposing_view = 0
 stop_proposing_view = 4000000
+
+[upgrade.epoch]
+[upgrade.epoch.chain_config]
+chain_id = 0xdecaf
+base_fee = '1 wei'
+max_block_size = '1mb'
+fee_recipient = "0x0000000000000000000000000000000000000000"
+fee_contract = '0x42835083fd1d3fc5d799b5f6815ae4bf2623e6d0'
+stake_table_contract = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
