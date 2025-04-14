@@ -323,6 +323,57 @@ async fn test_cli_transfer() -> Result<()> {
     Ok(())
 }
 
+/// This test requires a ledger device to be connected and unlocked.
+#[ignore]
+#[tokio::test]
+async fn test_cli_transfer_ledger() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    let address: Address = system
+        .cmd()
+        .arg("--ledger-path")
+        .arg("0")
+        .arg("account")
+        .output()?
+        .assert_success()
+        .utf8()
+        .trim()
+        .parse()?;
+
+    let amount = parse_ether("0.123")?;
+    system.transfer_eth(address, amount).await?;
+    system.transfer(address, amount).await?;
+
+    system
+        .cmd()
+        .arg("transfer")
+        .arg("--to")
+        .arg(address.to_string())
+        .arg("--amount")
+        .arg(format_ether(amount))
+        .output()?
+        .assert_success();
+
+    // Make a token transfer with the ledger
+    println!("Sign the transaction in the ledger");
+    let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
+    system
+        .cmd()
+        .arg("--ledger-path")
+        .arg("0")
+        .arg("transfer")
+        .arg("--to")
+        .arg(addr.to_string())
+        .arg("--amount")
+        .arg(format_ether(amount))
+        .output()?
+        .assert_success();
+
+    assert_eq!(system.balance(addr).await?, amount);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_cli_info_full() -> Result<()> {
     let system = TestSystem::deploy().await?;

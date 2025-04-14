@@ -29,7 +29,6 @@ pub const DEV_MNEMONIC: &str = "test test test test test test test test test tes
 
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
-    // # TODO for mainnet we should support hardware wallets. Alloy has support for this.
     #[default(DEV_MNEMONIC.to_string())]
     #[clap(long, env = "MNEMONIC")]
     #[serde(alias = "mnemonic", alias = "MNEMONIC")]
@@ -37,6 +36,13 @@ pub struct Config {
 
     #[clap(long, env = "ACCOUNT_INDEX", default_value = "0")]
     pub account_index: u32,
+
+    /// The index of the ledger account to use.
+    ///
+    /// NOTE: for ledger signing to work "blind signing" must be enabled in the ledger Ethereum app
+    /// on the ledger device.
+    #[clap(long, env = "LEDGER_DERIVATION_PATH")]
+    pub ledger_path: Option<usize>,
 
     /// L1 Ethereum RPC.
     #[clap(long, env = "L1_PROVIDER")]
@@ -115,6 +121,8 @@ pub enum Commands {
         #[clap(long)]
         compact: bool,
     },
+    /// Print the signer account address.
+    Account,
     /// Register to become a validator.
     RegisterValidator {
         /// The consensus signing key. Used to sign a message to prove ownership of the key.

@@ -5,7 +5,10 @@ use alloy::{
     network::EthereumWallet,
     primitives::{utils::format_ether, Address},
     providers::{Provider, ProviderBuilder},
-    signers::local::{coins_bip39::English, MnemonicBuilder},
+    signers::{
+        ledger::{HDPath::LedgerLive, LedgerSigner},
+        local::{coins_bip39::English, MnemonicBuilder},
+    },
 };
 use anyhow::Result;
 use clap::Parser;
@@ -179,12 +182,24 @@ pub async fn main() -> Result<()> {
         exit("Stake table address is not set")
     };
 
-    let signer = MnemonicBuilder::<English>::default()
-        .phrase(config.mnemonic.as_str())
-        .index(config.account_index)?
-        .build()?;
-    let account = signer.address();
-    let wallet = EthereumWallet::from(signer);
+    let (wallet, account) = if let Some(path) = &config.ledger_path {
+        let signer = LedgerSigner::new(LedgerLive(*path), None)
+            .await
+            .map_err(|err| exit_err("Failed to create Ledger signer: is Ethereum app open?", err))
+            .unwrap();
+        let account = signer.get_address().await?;
+        let wallet = EthereumWallet::from(signer);
+        (wallet, account)
+    } else {
+        let signer = MnemonicBuilder::<English>::default()
+            .phrase(config.mnemonic.as_str())
+            .index(config.account_index)?
+            .build()?;
+        let account = signer.address();
+        let wallet = EthereumWallet::from(signer);
+        (wallet, account)
+    };
+
     let provider = ProviderBuilder::new()
         .wallet(wallet)
         .on_http(config.rpc_url.clone());
@@ -193,6 +208,10 @@ pub async fn main() -> Result<()> {
     let token = EspToken::new(config.token_address, &provider);
 
     let result = match config.commands {
+        Commands::Account => {
+            println!("{account}");
+            return Ok(());
+        },
         Commands::Info {
             l1_block_number,
             compact,

@@ -1,15 +1,16 @@
 use std::{process::Command, time::Duration};
 
 use alloy::{
-    network::{Ethereum, EthereumWallet},
+    network::{Ethereum, EthereumWallet, TransactionBuilder as _},
     primitives::{utils::parse_ether, Address, U256},
     providers::{
         ext::AnvilApi as _,
         fillers::{FillProvider, JoinFill, WalletFiller},
         layers::AnvilProvider,
         utils::JoinedRecommendedFillers,
-        ProviderBuilder, RootProvider, WalletProvider,
+        Provider as _, ProviderBuilder, RootProvider, WalletProvider,
     },
+    rpc::types::TransactionRequest,
 };
 use anyhow::Result;
 use hotshot_contract_adapter::sol_types::{ERC1967Proxy, EspToken, StakeTable};
@@ -147,6 +148,18 @@ impl TestSystem {
         let receipt = stake_table
             .undelegate(self.deployer_address, amount)
             .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+        Ok(())
+    }
+
+    pub async fn transfer_eth(&self, to: Address, amount: U256) -> Result<()> {
+        let tx = TransactionRequest::default().with_to(to).with_value(amount);
+        let receipt = self
+            .provider
+            .send_transaction(tx)
             .await?
             .get_receipt()
             .await?;
