@@ -2823,6 +2823,9 @@ mod test {
                     .upgrades::<MockSeqVersions>(upgrades)
                     .build(),
             )
+            .pos_hook::<MockSeqVersions>()
+            .await
+            .expect("pos version")
             .build();
 
         let mut network = TestNetwork::new(config, bind_version).await;
