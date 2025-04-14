@@ -726,7 +726,8 @@ pub mod test_helpers {
     use committable::Committable;
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, Upgrade, UpgradeMode,
+        UpgradeType, ValidatedState, ViewBasedUpgrade,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -978,11 +979,39 @@ pub mod test_helpers {
                 }
             };
 
-            let state = ValidatedState {
-                chain_config: chain_config.into(),
-                ..state
-            };
-            Ok(self.states(std::array::from_fn(|_| state.clone())))
+            if <V as Versions>::Base::VERSION >= EpochVersion::VERSION {
+                let state = ValidatedState {
+                    chain_config: chain_config.into(),
+                    ..state
+                };
+                return Ok(self.states(std::array::from_fn(|_| state.clone())));
+            }
+
+            if <V as Versions>::Upgrade::VERSION >= EpochVersion::VERSION {
+                let mut network_config = self.network_config.clone().unwrap();
+
+                let mode = UpgradeMode::View(ViewBasedUpgrade {
+                    start_voting_view: None,
+                    stop_voting_view: None,
+                    start_proposing_view: 1,
+                    stop_proposing_view: 10,
+                });
+
+                let upgrade_type = UpgradeType::Epoch { chain_config };
+
+                let mut upgrades = std::collections::BTreeMap::new();
+                upgrades.insert(
+                    <V as Versions>::Upgrade::VERSION,
+                    Upgrade { mode, upgrade_type },
+                );
+
+                network_config.with_upgrades(upgrades);
+                // network_config.upgrades(upgrades);
+                // self.network_config = Some(network_config);
+                // return Ok(self.upgrades(upgrades));
+                return Ok(self.network_config(network_config));
+            }
+            Ok(self)
         }
 
         pub fn build(self) -> TestNetworkConfig<{ NUM_NODES }, P, C> {
@@ -2706,6 +2735,16 @@ mod test {
         test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pos_upgrade_view_based() {
+        setup_test();
+
+        let mut upgrades = std::collections::BTreeMap::new();
+        type MySequencerVersions = SequencerVersions<FeeVersion, EpochVersion>;
+
+        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
+    }
+
     #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_marketplace_upgrade_view_based() {
@@ -2714,26 +2753,6 @@ mod test {
         let mut upgrades = std::collections::BTreeMap::new();
         type MySequencerVersions = SequencerVersions<EpochVersion, MarketplaceVersion>;
 
-        let mode = UpgradeMode::View(ViewBasedUpgrade {
-            start_voting_view: None,
-            stop_voting_view: None,
-            start_proposing_view: 1,
-            stop_proposing_view: 10,
-        });
-
-        let upgrade_type = UpgradeType::Marketplace {
-            chain_config: ChainConfig {
-                max_block_size: 400.into(),
-                base_fee: 2.into(),
-                bid_recipient: Some(Default::default()),
-                ..Default::default()
-            },
-        };
-
-        upgrades.insert(
-            <MySequencerVersions as Versions>::Upgrade::VERSION,
-            Upgrade { mode, upgrade_type },
-        );
         test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
     }
 

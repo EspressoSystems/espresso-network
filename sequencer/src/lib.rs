@@ -989,6 +989,10 @@ pub mod testing {
             self.upgrades.clone()
         }
 
+        pub fn with_upgrades(&mut self, upgrades: BTreeMap<Version, Upgrade>) {
+            self.upgrades = upgrades;
+        }
+
         pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
             let seed = [42u8; 32];
             let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
