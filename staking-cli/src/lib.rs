@@ -64,6 +64,7 @@ impl Default for Commands {
     fn default() -> Self {
         Commands::Info {
             l1_block_number: None,
+            compact: false,
         }
     }
 }
@@ -109,6 +110,10 @@ pub enum Commands {
         /// Defaults to the latest block for convenience.
         #[clap(long)]
         l1_block_number: Option<BlockId>,
+
+        /// Abbreviate the very long BLS public keys.
+        #[clap(long)]
+        compact: bool,
     },
     /// Register to become a validator.
     RegisterValidator {

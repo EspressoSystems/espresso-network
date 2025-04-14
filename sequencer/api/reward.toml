@@ -1,0 +1,4 @@
+[route.getrewardbalance]
+PATH = ["reward-balance/latest/:address"]
+":address" = "Literal"
+DOC = "Get current balance in reward state. Expected parameter is an Ethereum address in hex format."

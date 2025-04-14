@@ -46,15 +46,8 @@ use crate::{EpochVersion, SequencerVersions};
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 
-/// Create the consensus and DA stake tables from L1 events
-///
-/// This is a pure function, to make it easily testable.
-///
-/// We expect have at most a few hundred EVM events in the
-/// PermissionedStakeTable contract over the liftetime of the contract so it
-/// should not significantly affect performance to fetch all events and
-/// perform the computation in this functions once per epoch.
-pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+/// Extract all validators from L1 stake table events.
+pub(crate) fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
     let mut validators = IndexMap::new();
@@ -176,12 +169,13 @@ pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
         }
     }
 
-    select_validators(&mut validators)?;
-
     Ok(validators)
 }
 
-fn select_validators(
+/// Select active validators
+///
+/// Removes the validators without stake and selects the top 100 staked validators.
+pub(crate) fn select_active_validator_set(
     validators: &mut IndexMap<Address, Validator<BLSPubKey>>,
 ) -> anyhow::Result<()> {
     // Remove invalid validators first
@@ -234,6 +228,15 @@ fn select_validators(
     validators.retain(|address, _| selected_addresses.contains(address));
 
     Ok(())
+}
+
+/// Extract the active validator set from the L1 stake table events.
+pub(crate) fn active_validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+    events: I,
+) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    let mut validators = validators_from_l1_events(events)?;
+    select_active_validator_set(&mut validators)?;
+    Ok(validators)
 }
 
 #[derive(Clone, derive_more::From)]
@@ -321,27 +324,20 @@ impl StakeTableEvent {
 pub struct EpochCommittees {
     /// Committee used when we're in pre-epoch state
     non_epoch_committee: NonEpochCommittee,
-
     /// Holds Stake table and da stake
     state: HashMap<Epoch, EpochCommittee>,
-
     /// L1 provider
     l1_client: L1Client,
-
     /// Verifiable `ChainConfig` holding contract address
     chain_config: ChainConfig,
-
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
-
     /// Peers for catching up the stake table
     #[debug(skip)]
     peers: Arc<dyn StateCatchup>,
-
     /// Methods for stake table persistence.
     #[debug(skip)]
     persistence: Arc<dyn MembershipPersistence>,
-
     first_epoch: Option<Epoch>,
 }
 
@@ -458,7 +454,10 @@ impl EpochCommittees {
     ) -> anyhow::Result<Validator<BLSPubKey>> {
         let address = self.address(epoch, key)?;
         let validators = self.validators(epoch)?;
-        Ok(validators.get(&address).unwrap().clone())
+        validators
+            .get(&address)
+            .context("validator not found")
+            .cloned()
     }
 
     // We need a constructor to match our concrete type.
@@ -543,6 +542,26 @@ impl EpochCommittees {
             first_epoch: None,
         }
     }
+
+    pub async fn reload_stake(&mut self, limit: u64) {
+        // Load the 50 latest stored stake tables
+        let loaded_stake = match self.persistence.load_latest_stake(limit).await {
+            Ok(Some(loaded)) => loaded,
+            Ok(None) => {
+                tracing::warn!("No stake table history found in persistence!");
+                return;
+            },
+            Err(e) => {
+                tracing::error!("Failed to load stake table history from persistence: {}", e);
+                return;
+            },
+        };
+
+        for (epoch, stake_table) in loaded_stake {
+            self.update_stake_table(epoch, stake_table);
+        }
+    }
+
     fn get_stake_table(&self, epoch: &Option<Epoch>) -> Option<Vec<PeerConfig<SeqTypes>>> {
         if let Some(epoch) = epoch {
             self.state
@@ -561,7 +580,7 @@ impl EpochCommittees {
     ) -> Result<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>, GetStakeTablesError>
     {
         self.l1_client
-            .get_stake_table(contract_address, l1_block)
+            .fetch_stake_table(contract_address, l1_block)
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
     }
@@ -761,6 +780,14 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
+        if self.state.contains_key(&epoch) {
+            tracing::info!(
+                "We already have a the stake table for epoch {}. Skipping L1 fetching.",
+                epoch
+            );
+            return None;
+        }
+
         let chain_config = get_chain_config(self.chain_config, &self.peers, &block_header)
             .await
             .ok()?;
@@ -1064,7 +1091,7 @@ mod tests {
         ]
         .to_vec();
 
-        let st = from_l1_events(events.iter().cloned())?;
+        let st = active_validator_set_from_l1_events(events.iter().cloned())?;
         let st_val = st.get(&val.account).unwrap();
         // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
         assert_eq!(st_val.stake, U256::from(8));
@@ -1081,7 +1108,7 @@ mod tests {
         );
 
         // This should fail because the validator has exited and no longer exists in the stake table.
-        assert!(from_l1_events(events.iter().cloned()).is_err());
+        assert!(active_validator_set_from_l1_events(events.iter().cloned()).is_err());
 
         Ok(())
     }
@@ -1132,7 +1159,7 @@ mod tests {
         ];
 
         for events in cases.iter() {
-            let res = from_l1_events(events.iter().cloned());
+            let res = active_validator_set_from_l1_events(events.iter().cloned());
             assert!(
                 res.is_err(),
                 "events {:?}, not a valid sequencer of events",
@@ -1158,7 +1185,7 @@ mod tests {
 
         let minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
 
-        select_validators(&mut validators).expect("Failed to select validators");
+        select_active_validator_set(&mut validators).expect("Failed to select validators");
         assert!(
             validators.len() <= 100,
             "validators len is {}, expected at most 100",

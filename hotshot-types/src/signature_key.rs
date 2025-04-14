@@ -222,7 +222,7 @@ impl StateSignatureKey for SchnorrPubKey {
         next_stake_table_state: &StakeTableState,
     ) -> Result<Self::StateSignature, Self::SignError> {
         let mut msg = Vec::with_capacity(7);
-        let state_msg: [_; 3] = light_client_state.clone().into();
+        let state_msg: [_; 3] = light_client_state.into();
         msg.extend_from_slice(&state_msg);
         let adv_st_state_msg: [_; 4] = (*next_stake_table_state).into();
         msg.extend_from_slice(&adv_st_state_msg);
@@ -236,7 +236,7 @@ impl StateSignatureKey for SchnorrPubKey {
         next_stake_table_state: &StakeTableState,
     ) -> bool {
         let mut msg = Vec::with_capacity(7);
-        let state_msg: [_; 3] = light_client_state.clone().into();
+        let state_msg: [_; 3] = light_client_state.into();
         msg.extend_from_slice(&state_msg);
         let adv_st_state_msg: [_; 4] = (*next_stake_table_state).into();
         msg.extend_from_slice(&adv_st_state_msg);

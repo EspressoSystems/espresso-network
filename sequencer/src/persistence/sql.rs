@@ -239,6 +239,13 @@ pub struct Options {
     )]
     pub(crate) max_connections: u32,
 
+    /// Sets the batch size for the types migration.
+    /// Determines how many `(leaf, vid)` rows are selected from the old types table
+    /// and migrated at once.
+    /// Default is `10000`` if not set
+    #[clap(long, env = "ESPRESSO_SEQUENCER_DATABASE_TYPES_MIGRATION_BATCH_SIZE")]
+    pub(crate) types_migration_batch_size: Option<u64>,
+
     // Keep the database connection pool when persistence is created,
     // allowing it to be reused across multiple instances instead of creating
     // a new pool each time such as for API, consensus storage etc

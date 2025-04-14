@@ -480,7 +480,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     )
     .await;
     // Create the HotShot membership
-    let membership = EpochCommittees::new_stake(
+    let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
         l1_client.clone(),
@@ -488,6 +488,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         peers.clone(),
         persistence.clone(),
     );
+    membership.reload_stake(50).await;
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let coordinator =
@@ -583,7 +584,10 @@ pub mod testing {
 
     use alloy::{
         primitives::U256,
-        signers::{k256::ecdsa::SigningKey, local::PrivateKeySigner},
+        signers::{
+            k256::ecdsa::SigningKey,
+            local::{LocalSigner, PrivateKeySigner},
+        },
     };
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
@@ -807,6 +811,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         marketplace_builder_port: Option<u16>,
@@ -834,6 +839,11 @@ pub mod testing {
             self
         }
 
+        pub fn signer(mut self, signer: LocalSigner<SigningKey>) -> Self {
+            self.signer = signer;
+            self
+        }
+
         pub fn upgrades<V: Versions>(mut self, upgrades: BTreeMap<Version, Upgrade>) -> Self {
             let upgrade = upgrades.get(&<V as Versions>::Upgrade::VERSION).unwrap();
             upgrade.set_hotshot_config_parameters(&mut self.config);
@@ -853,6 +863,7 @@ pub mod testing {
                 state_key_pairs: self.state_key_pairs,
                 master_map: self.master_map,
                 l1_url: self.l1_url,
+                signer: self.signer,
                 state_relay_url: self.state_relay_url,
                 marketplace_builder_port: self.marketplace_builder_port,
                 builder_port: self.builder_port,
@@ -913,7 +924,7 @@ pub mod testing {
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
                 epoch_height: 300,
-                epoch_start_block: 0,
+                epoch_start_block: 1,
             };
 
             Self {
@@ -922,6 +933,7 @@ pub mod testing {
                 state_key_pairs,
                 master_map,
                 l1_url: "http://localhost:8545".parse().unwrap(),
+                signer: LocalSigner::random(),
                 state_relay_url: None,
                 builder_port: None,
                 marketplace_builder_port: None,
@@ -937,6 +949,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         marketplace_builder_port: Option<u16>,
@@ -962,6 +975,10 @@ pub mod testing {
 
         pub fn builder_port(&self) -> Option<u16> {
             self.builder_port
+        }
+
+        pub fn signer(&self) -> LocalSigner<SigningKey> {
+            self.signer.clone()
         }
 
         pub fn l1_url(&self) -> Url {
@@ -1082,7 +1099,7 @@ pub mod testing {
                 L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
             let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
             // Create the HotShot membership
-            let membership = EpochCommittees::new_stake(
+            let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
                 l1_client.clone(),
@@ -1090,6 +1107,8 @@ pub mod testing {
                 peers.clone(),
                 persistence.clone(),
             );
+            membership.reload_stake(50).await;
+
             let membership = Arc::new(RwLock::new(membership));
 
             let coordinator = EpochMembershipCoordinator::new(membership, 100);

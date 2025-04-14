@@ -156,6 +156,16 @@ gen-bindings:
     cargo fmt --all
     cargo sort -g -w
 
+    just export-contract-abis
+
+# export select ABIs, to let downstream projects can use them without solc compilation
+export-contract-abis:
+    rm -rv contracts/artifacts/abi
+    mkdir -p contracts/artifacts/abi
+    for contract in LightClient{,Mock,V2{,Mock}}; do \
+        cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
+    done
+
 # Lint solidity files
 sol-lint:
     forge fmt

@@ -92,6 +92,7 @@ pub struct StateSignaturesBundle {
     PartialOrd,
     Ord,
     Hash,
+    Copy,
 )]
 pub struct GenericLightClientState<F: PrimeField> {
     /// Current view number
