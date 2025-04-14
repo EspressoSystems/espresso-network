@@ -857,11 +857,11 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             })?;
 
             let rows = QueryBuilder::default()
-                .query(&format!(
+                .query(
                     "SELECT leaf, qc, common as vid_common, share as vid_share
                     FROM leaf INNER JOIN vid on leaf.height = vid.height 
                     WHERE leaf.height >= $1 AND leaf.height < $2",
-                ))
+                )
                 .bind(offset)
                 .bind(offset + limit as i64)
                 .fetch_all(tx.as_mut())
