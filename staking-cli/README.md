@@ -153,8 +153,8 @@ This CLI helps users interact with the Espresso staking contract, either as a de
 
 ### Recovering funds after a validator exit
 
-1.  Wait for the exit escrow period to elapse after the Validaotr deregistered itself (currently 1 week), then withdraw
-    to your wallet by running
+1.  Wait for the exit escrow period to elapse after the validator deregistered itself (currently 1
+    week), then withdraw to your wallet by running
 
          staking-cli claim-validator-exit --validator-address 0x12...34
 
