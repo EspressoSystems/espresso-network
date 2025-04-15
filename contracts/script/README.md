@@ -9,6 +9,7 @@
   - [The Light Client Contract](#2-upgrade-the-lightclient-contract)
 - [Deploying Upgradeable Contracts without a Multisig Admin](#deploying-upgradable-contracts-without-a-safe-multisig-wallet-admin)
 - [Deploying the Plonk Verifier](#deploy-the-plonk-verifier-library)
+- [Arbitrum Specific Deploys](#arbitrum-deploys)
 - [Solutions to Known Errors](#known-errors)
 
 # Deploying Upgradeable Smart Contracts
@@ -52,8 +53,9 @@ source .env.contracts && forge clean && forge script contracts/script/PlonkVerif
 
 #### Deploy LightClient V1
 
-````bash
-source .env.contracts &&    forge clean &&  forge script contracts/script/LightClientStaging.s.sol:DeployLightClientContractScript --sig "run(uint32,uint32)" $NUM_INIT_VALIDATORS $STATE_HISTORY_RETENTION_PERIOD --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast```
+```bash
+source .env.contracts &&    forge clean &&  forge script contracts/script/LightClientStaging.s.sol:DeployLightClientContractScript --sig "run(uint32,uint32)" $NUM_INIT_VALIDATORS $STATE_HISTORY_RETENTION_PERIOD --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
+```
 
 #### Upgrade to LightClientV2
 
@@ -69,7 +71,7 @@ In `.env` or `.env.contracts` set the following:
 
 ```bash
 source .env.contracts &&    forge clean &&  forge script contracts/script/LightClientStaging.s.sol:UpgradeLightClientWithoutMultisigAdminScript --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
-````
+```
 
 ## Deployments (Multisig)
 
@@ -345,6 +347,48 @@ forge script contracts/script/PlonkVerifier.s.sol:DeployPlonkVerifierScript \
 --legacy \
 --ledger \
 --broadcast
+```
+
+# Arbitrum Deploys
+
+## Deploy LightClientArbitrum (no multisig admin)
+
+1. Ensure the following are in an env file named, `.env.contracts.arbSepolia`
+
+```bash
+export RPC_URL=
+export MNEMONIC=
+export ACCOUNT_INDEX=
+export MNEMONIC_OFFSET=
+export PLONK_VERIFIER_ADDRESS=
+export BLOCKS_PER_EPOCH=
+export EPOCH_START_BLOCK=
+export STATE_HISTORY_RETENTION_PERIOD=
+export NUM_INIT_VALIDATORS=
+export USE_HARDWARE_WALLET=
+```
+
+2. Then in a terminal, run the following:
+
+```bash
+source .env.contracts.arbSepolia && forge clean &&  forge script contracts/script/LightClientArbitrumStaging.s.sol:DeployLightClientArbitrumContractScript --sig "run(uint32,uint32)" $NUM_INIT_VALIDATORS $STATE_HISTORY_RETENTION_PERIOD --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --broadcast
+```
+
+## Upgrade to LightClientArbitrumV2 (no multisig admin)
+
+1. Ensure that you've deployed [`PlonkVerifierV2`](#deploy-plonkverifierv2)
+
+2. In the `.env.contracts.arbSepolia` file, add/update the following:
+
+```bash
+export LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS=
+export PLONK_VERIFIER_V2_ADDRESS=
+```
+
+3. Then in a terminal, run the following:
+
+```bash
+source .env.contracts.arbSepolia && forge clean && forge script contracts/script/LightClientStaging.s.sol:UpgradeLightClientWithoutMultisigAdminScript --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
 ```
 
 # Known Errors

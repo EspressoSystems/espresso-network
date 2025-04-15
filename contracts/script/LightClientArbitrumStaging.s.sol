@@ -1,8 +1,9 @@
 pragma solidity ^0.8.0;
 
 import { Script } from "forge-std/Script.sol";
-import { LightClientV2 } from "../src/LightClientV2.sol";
-import { LightClient as LC } from "../src/LightClient.sol";
+import { LightClientArbitrumV2 } from "../src/LightClientArbitrumV2.sol";
+import { LightClientArbitrum } from "../src/LightClientArbitrum.sol";
+import { LightClient } from "../src/LightClient.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 /// @notice Deploys the upgradable light client contract
 /// the admin is not a multisig wallet but is the same as the associated mnemonic
@@ -10,14 +11,14 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 
 /// TODO we made these scripts in a rush for deployment and they are not very well tested
 /// we plan to consolidate everything in the rust deployment scripts
-contract DeployLightClientContractScript is Script {
+contract DeployLightClientArbitrumContractScript is Script {
     function run(uint32 numInitValidators, uint32 stateHistoryRetentionPeriod)
         external
         returns (
             address payable proxyAddress,
             address admin,
-            LC.LightClientState memory,
-            LC.StakeTableState memory
+            LightClient.LightClientState memory,
+            LightClient.StakeTableState memory
         )
     {
         // TODO for a production deployment provide the right genesis state and value
@@ -28,8 +29,8 @@ contract DeployLightClientContractScript is Script {
         cmds[2] = vm.toString(uint256(numInitValidators));
 
         bytes memory result = vm.ffi(cmds);
-        (LC.LightClientState memory state, LC.StakeTableState memory stakeState) =
-            abi.decode(result, (LC.LightClientState, LC.StakeTableState));
+        (LightClient.LightClientState memory state, LightClient.StakeTableState memory stakeState) =
+            abi.decode(result, (LightClient.LightClientState, LightClient.StakeTableState));
 
         return deployContract(state, stakeState, stateHistoryRetentionPeriod);
     }
@@ -39,16 +40,16 @@ contract DeployLightClientContractScript is Script {
     /// @return admin The address of the admin
 
     function deployContract(
-        LC.LightClientState memory state,
-        LC.StakeTableState memory stakeState,
+        LightClient.LightClientState memory state,
+        LightClient.StakeTableState memory stakeState,
         uint32 stateHistoryRetentionPeriod
     )
         private
         returns (
             address payable proxyAddress,
             address admin,
-            LC.LightClientState memory,
-            LC.StakeTableState memory
+            LightClient.LightClientState memory,
+            LightClient.StakeTableState memory
         )
     {
         // get the deployer info from the environment and start broadcast as the deployer
@@ -57,7 +58,7 @@ contract DeployLightClientContractScript is Script {
         (admin,) = deriveRememberKey(seedPhrase, seedPhraseOffset);
         vm.startBroadcast(admin);
 
-        LC lightClientContract = new LC();
+        LightClientArbitrum lightClientArbitrumContract = new LightClientArbitrum();
 
         // Encode the initializer function call
         bytes memory data = abi.encodeWithSignature(
@@ -69,7 +70,7 @@ contract DeployLightClientContractScript is Script {
         );
 
         // our proxy
-        ERC1967Proxy proxy = new ERC1967Proxy(address(lightClientContract), data);
+        ERC1967Proxy proxy = new ERC1967Proxy(address(lightClientArbitrumContract), data);
         vm.stopBroadcast();
 
         proxyAddress = payable(address(proxy));
@@ -82,7 +83,7 @@ contract DeployLightClientContractScript is Script {
 /// and then calling the upgradeToAndCall method of the proxy
 /// @dev This is used when the admin is not a multisig wallet
 /// used in staging deployments only
-contract UpgradeLightClientWithoutMultisigAdminScript is Script {
+contract UpgradeLightClientArbitrumWithoutMultisigAdminScript is Script {
     /// @notice runs the upgrade
     /// @param mostRecentlyDeployedProxy address of deployed proxy
     /// @return address of the proxy
@@ -107,8 +108,9 @@ contract UpgradeLightClientWithoutMultisigAdminScript is Script {
             vm.envUint("EPOCH_START_BLOCK")
         );
 
-        address proxy =
-            upgradeLightClient(mostRecentlyDeployedProxy, address(new LightClientV2()), data);
+        address proxy = upgradeLightClient(
+            mostRecentlyDeployedProxy, address(new LightClientArbitrumV2()), data
+        );
         return proxy;
     }
 
@@ -123,7 +125,8 @@ contract UpgradeLightClientWithoutMultisigAdminScript is Script {
         public
         returns (address)
     {
-        LC proxy = LC(proxyAddress); //make the function call on the previous implementation
+        LightClientArbitrum proxy = LightClientArbitrum(proxyAddress); //make the function call on
+            // the previous implementation
         proxy.upgradeToAndCall(newLightClient, data); //proxy address now points to the new
             // implementation
         vm.stopBroadcast();

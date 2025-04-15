@@ -6,6 +6,8 @@ import { Options, Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 /// @notice Deploys an upgradeable Plonk Verifier Contract using the OpenZeppelin Upgrades plugin.
 /// @dev The Upgrades library has a deployImplementation function which is used here
 
+/// TODO we made these scripts in a rush for deployment and they are not very well tested
+/// we plan to consolidate everything in the rust deployment scripts
 contract DeployPlonkVerifierV2Script is Script {
     string public contractName = "PlonkVerifierV2.sol";
 
