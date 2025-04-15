@@ -118,7 +118,7 @@ pub async fn main() -> Result<()> {
     // commands are not present.
     match config.commands {
         Commands::Init => {
-            let config = toml::from_str::<Config>(include_str!("../../config.decaf.toml"))?;
+            let config = toml::from_str::<Config>(include_str!("../config.decaf.toml"))?;
 
             // Create directory where config file will be saved
             std::fs::create_dir_all(cli.config_dir()).unwrap_or_else(|err| {

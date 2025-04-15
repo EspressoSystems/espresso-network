@@ -1,11 +1,11 @@
-use std::process::Output;
+use std::process::{Command, Output};
 
 use alloy::primitives::{
     utils::{format_ether, parse_ether},
     Address, U256,
 };
 use anyhow::Result;
-use staking_cli::{deploy::cmd, *};
+use staking_cli::*;
 
 use crate::deploy::TestSystem;
 
@@ -34,9 +34,38 @@ impl Utf8 for Output {
     }
 }
 
+pub fn base_cmd() -> Command {
+    // On the CI (CI=true) assume that the binary is built because we run the tests via nextest
+    // archive.
+    let ci = match std::env::var("CI").unwrap_or_default().parse::<bool>() {
+        Ok(ci) => ci,
+        Err(_) => false,
+    };
+    if ci {
+        // From nextest docs:
+        //
+        // To obtain the path to a crate's executables, Cargo provides the [CARGO_BIN_EXE_<name>]
+        // option to integration tests at build time. To handle target directory remapping, use the
+        // value of NEXTEST_BIN_EXE_<name> at runtime. To retain compatibility with cargo test, you
+        // can fall back to the value of CARGO_BIN_EXE_<name> at build time.
+        let path = std::env::var("NEXTEST_BIN_EXE_staking-cli")
+            .unwrap_or_else(|_| env!("CARGO_BIN_EXE_staking-cli").to_string());
+        tracing::warn!("Running in CI mode, assuming the staking-cli binary at {path} exists");
+        let cmd = Command::new(path);
+        cmd
+    } else {
+        escargot::CargoBuild::new()
+            .bin("staking-cli")
+            .current_release()
+            .run()
+            .unwrap()
+            .command()
+    }
+}
+
 #[test]
 fn test_cli_version() -> Result<()> {
-    cmd().arg("version").output()?.assert_success();
+    base_cmd().arg("version").output()?.assert_success();
     Ok(())
 }
 
@@ -47,7 +76,7 @@ fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
 
     assert!(!config_path.exists());
 
-    cmd()
+    base_cmd()
         .arg("-c")
         .arg(&config_path)
         .arg("init")
@@ -56,7 +85,7 @@ fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
 
     assert!(config_path.exists());
 
-    cmd()
+    base_cmd()
         .arg("-c")
         .arg(&config_path)
         .arg("purge")
@@ -72,9 +101,9 @@ fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_cli_register_validator() -> Result<()> {
     let system = TestSystem::deploy().await?;
-    system
-        .cmd()
-        .arg("register-validator")
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("register-validator")
         .arg("--consensus-private-key")
         .arg(
             system
@@ -103,9 +132,9 @@ async fn test_cli_delegate() -> Result<()> {
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
-    system
-        .cmd()
-        .arg("delegate")
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("delegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
@@ -120,11 +149,9 @@ async fn test_cli_deregister_validator() -> Result<()> {
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
-    system
-        .cmd()
-        .arg("deregister-validator")
-        .output()?
-        .assert_success();
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("deregister-validator").output()?.assert_success();
     Ok(())
 }
 
@@ -135,9 +162,9 @@ async fn test_cli_undelegate() -> Result<()> {
     let amount = "123";
     system.delegate(parse_ether(amount)?).await?;
 
-    system
-        .cmd()
-        .arg("undelegate")
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("undelegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
@@ -156,9 +183,9 @@ async fn test_cli_claim_withdrawal() -> Result<()> {
     system.undelegate(amount).await?;
     system.warp_to_unlock_time().await?;
 
-    system
-        .cmd()
-        .arg("claim-withdrawal")
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("claim-withdrawal")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .output()?
@@ -175,9 +202,9 @@ async fn test_cli_claim_validator_exit() -> Result<()> {
     system.deregister_validator().await?;
     system.warp_to_unlock_time().await?;
 
-    system
-        .cmd()
-        .arg("claim-validator-exit")
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("claim-validator-exit")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .output()?
@@ -189,11 +216,9 @@ async fn test_cli_claim_validator_exit() -> Result<()> {
 async fn test_cli_stake_for_demo_default_num_validators() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
-    system
-        .cmd()
-        .arg("stake-for-demo")
-        .output()?
-        .assert_success();
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("stake-for-demo").output()?.assert_success();
     Ok(())
 }
 
@@ -201,9 +226,9 @@ async fn test_cli_stake_for_demo_default_num_validators() -> Result<()> {
 async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
-    system
-        .cmd()
-        .arg("stake-for-demo")
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("stake-for-demo")
         .arg("--num-validators")
         .arg("3")
         .output()?
@@ -216,9 +241,9 @@ async fn test_cli_approve() -> Result<()> {
     let system = TestSystem::deploy().await?;
     let amount = "123";
 
-    system
-        .cmd()
-        .arg("approve")
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("approve")
         .arg("--amount")
         .arg(amount)
         .output()?
@@ -234,20 +259,18 @@ async fn test_cli_balance() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
     // Check balance of account owner
-    let s = system
-        .cmd()
-        .arg("token-balance")
-        .output()?
-        .assert_success()
-        .utf8();
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    let s = cmd.arg("token-balance").output()?.assert_success().utf8();
 
     assert!(s.contains(&system.deployer_address.to_string()));
     assert!(s.contains(" 10000000000.0"));
 
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";
-    let s = system
-        .cmd()
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    let s = cmd
         .arg("token-balance")
         .arg("--address")
         .arg(addr)
@@ -266,20 +289,18 @@ async fn test_cli_allowance() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
     // Check allowance of account owner
-    let out = system
-        .cmd()
-        .arg("token-allowance")
-        .output()?
-        .assert_success()
-        .utf8();
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    let out = cmd.arg("token-allowance").output()?.assert_success().utf8();
 
     assert!(out.contains(&system.deployer_address.to_string()));
     assert!(out.contains(&format_ether(system.approval_amount)));
 
     // Check allowance of other address
     let addr = "0x1111111111111111111111111111111111111111".to_string();
-    let out = system
-        .cmd()
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    let out = cmd
         .arg("token-allowance")
         .arg("--owner")
         .arg(&addr)
@@ -298,9 +319,9 @@ async fn test_cli_transfer() -> Result<()> {
     let system = TestSystem::deploy().await?;
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
     let amount = parse_ether("0.123")?;
-    system
-        .cmd()
-        .arg("transfer")
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    cmd.arg("transfer")
         .arg("--to")
         .arg(addr.to_string())
         .arg("--amount")
@@ -321,7 +342,9 @@ async fn test_cli_info_full() -> Result<()> {
     let amount = parse_ether("0.123")?;
     system.delegate(amount).await?;
 
-    let out = system.cmd().arg("info").output()?.assert_success().utf8();
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    let out = cmd.arg("info").output()?.assert_success().utf8();
 
     // Print output to fix test more easily.
     println!("{}", out);
@@ -341,8 +364,9 @@ async fn test_cli_info_compact() -> Result<()> {
     let amount = parse_ether("0.123")?;
     system.delegate(amount).await?;
 
-    let out = system
-        .cmd()
+    let mut cmd = base_cmd();
+    system.cmd(&mut cmd);
+    let out = cmd
         .arg("info")
         .arg("--compact")
         .output()?

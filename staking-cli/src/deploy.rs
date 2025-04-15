@@ -194,8 +194,7 @@ impl TestSystem {
         Ok(())
     }
 
-    pub fn cmd(&self) -> Command {
-        let mut cmd = cmd();
+    pub fn cmd(&self, cmd: &mut Command) {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
             .arg("--mnemonic")
@@ -204,37 +203,6 @@ impl TestSystem {
             .arg(self.token.to_string())
             .arg("--stake-table-address")
             .arg(self.stake_table.to_string());
-        cmd
-    }
-}
-
-pub fn cmd() -> Command {
-    // On the CI (CI=true) assume that the binary is built because we run
-    // the tests via nextest archive.
-    let ci = match std::env::var("CI").unwrap_or_default().parse::<bool>() {
-        Ok(ci) => ci,
-        Err(_) => false,
-    };
-    if ci {
-        // Use CARGO_TARGET_DIR if, it set
-        let target_dir =
-            PathBuf::from(std::env::var("CARGO_TARGET_DIR").unwrap_or("target".to_string()));
-        let path = PathBuf::from("../")
-            .join(target_dir)
-            .join("debug/staking-cli");
-        tracing::warn!(
-            "Running in CI mode, assuming the staking-cli binary at {} exists",
-            path.display()
-        );
-        let cmd = Command::new(path);
-        cmd
-    } else {
-        escargot::CargoBuild::new()
-            .bin("staking-cli")
-            .current_release()
-            .run()
-            .unwrap()
-            .command()
     }
 }
 
