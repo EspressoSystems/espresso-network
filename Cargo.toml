@@ -158,7 +158,7 @@ jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plo
     "test-apis",
 ] }
 jf-crhf = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5" }
-jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
+jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", rev = "bd6098da2c4a53bf7f4042c96630e2d3cb1d844b", features = [
     "std",
 ] }
 jf-signature = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-signature-v0.2.0", features = [

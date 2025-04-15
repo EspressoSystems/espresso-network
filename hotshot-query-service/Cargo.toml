@@ -71,9 +71,7 @@ hotshot = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 itertools = "0.12.1"
-jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
-    "std",
-] }
+jf-merkle-tree = { workspace = true }
 jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
     "std",
     "parallel",
