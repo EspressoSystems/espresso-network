@@ -195,7 +195,7 @@ pub enum Commands {
         #[clap(long)]
         force: bool,
     },
-    /// Show information about delegation, withdrawals, etc.
+    /// Show the stake table in the Epresso stake table contract.
     Info {
         /// The block numberto use for the stake table.
         ///

@@ -74,7 +74,7 @@ fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
     let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert_eq!(config.signer.mnemonic, Some(TEST_MNEMONIC.to_string()));
     assert_eq!(config.signer.account_index, Some(123));
-    assert_eq!(config.signer.ledger, false);
+    assert!(!config.signer.ledger);
 
     cmd()
         .arg("-c")
@@ -108,7 +108,7 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
     assert!(config_path.exists());
 
     let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
-    assert_eq!(config.signer.ledger, true);
+    assert!(config.signer.ledger);
     assert_eq!(config.signer.account_index, Some(42));
 
     Ok(())
