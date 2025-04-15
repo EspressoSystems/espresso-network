@@ -27,7 +27,10 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    instance_state::NodeState, state::ValidatedState, v0_1::RewardMerkleCommitment, v0_3::Validator,
+    instance_state::NodeState,
+    state::ValidatedState,
+    v0_1::{RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
+    v0_3::Validator,
 };
 use crate::{
     eth_signature_key::BuilderSignature,
@@ -488,7 +491,13 @@ impl Header {
         {
             if version < MarketplaceVersion::version() {
                 ensure!(
-                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table,),
+                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table)
+                        || fee_account.validate_fee_signature_with_vid_commitment(
+                            fee_signature,
+                            *fee_amount,
+                            &ns_table,
+                            &payload_commitment
+                        ),
                     "invalid builder signature"
                 );
             } else {
@@ -758,13 +767,14 @@ impl Header {
     }
 
     /// Fee paid by the block builder
-    pub fn reward_merkle_tree_root(&self) -> Option<RewardMerkleCommitment> {
+    pub fn reward_merkle_tree_root(&self) -> RewardMerkleCommitment {
+        let empty_reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
         match self {
-            Self::V1(_) => None,
-            Self::V2(_) => None,
-            Self::V3(fields) => Some(fields.reward_merkle_tree_root),
+            Self::V1(_) => empty_reward_merkle_tree.commitment(),
+            Self::V2(_) => empty_reward_merkle_tree.commitment(),
+            Self::V3(fields) => fields.reward_merkle_tree_root,
             // TODO: add reward commitment to v99
-            Self::V99(_) => None,
+            Self::V99(_) => empty_reward_merkle_tree.commitment(),
         }
     }
 

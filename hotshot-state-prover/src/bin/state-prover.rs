@@ -40,6 +40,14 @@ struct Args {
     #[clap(long = "retry-freq", value_parser = parse_duration, default_value = "2s", env = "ESPRESSO_STATE_PROVER_RETRY_INTERVAL")]
     retry_interval: Duration,
 
+    /// Interval between retries if a state update fails
+    #[clap(
+        long = "retries",
+        default_value = "10",
+        env = "ESPRESSO_STATE_PROVER_ONESHOT_RETRIES"
+    )]
+    max_retries: u64,
+
     /// URL of layer 1 Ethereum JSON-RPC provider.
     #[clap(
         long,
@@ -138,6 +146,7 @@ async fn main() {
         stake_table_capacity: args.stake_table_capacity,
         blocks_per_epoch,
         epoch_start_block,
+        max_retries: args.max_retries,
     };
 
     // validate that the light client contract is a proxy, panics otherwise

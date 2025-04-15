@@ -780,6 +780,14 @@ impl Membership<SeqTypes> for EpochCommittees {
         epoch: Epoch,
         block_header: Header,
     ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
+        if self.state.contains_key(&epoch) {
+            tracing::info!(
+                "We already have a the stake table for epoch {}. Skipping L1 fetching.",
+                epoch
+            );
+            return None;
+        }
+
         let chain_config = get_chain_config(self.chain_config, &self.peers, &block_header)
             .await
             .ok()?;

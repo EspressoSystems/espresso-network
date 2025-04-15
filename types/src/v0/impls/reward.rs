@@ -409,7 +409,7 @@ pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow
         .first_epoch()
         .context("The first epoch was not set.")?;
 
-    Ok(epoch == first_epoch || epoch == first_epoch + 1 || epoch == EpochNumber::new(0))
+    Ok(epoch <= first_epoch + 1)
 }
 
 pub async fn find_validator_info(

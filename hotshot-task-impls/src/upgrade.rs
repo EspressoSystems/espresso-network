@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use committable::Committable;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
+    consensus::OuterConsensus,
     data::UpgradeProposal,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
@@ -18,10 +19,11 @@ use hotshot_types::{
     simple_certificate::UpgradeCertificate,
     simple_vote::{UpgradeProposalData, UpgradeVote},
     traits::{
+        block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
-    utils::EpochTransitionIndicator,
+    utils::{epoch_from_block_number, EpochTransitionIndicator},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -60,6 +62,9 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
     /// This state's ID
     pub id: u64,
 
+    /// Target block for the epoch upgrade
+    pub epoch_start_block: u64,
+
     /// View to start proposing an upgrade
     pub start_proposing_view: u64,
 
@@ -86,6 +91,12 @@ pub struct UpgradeTaskState<TYPES: NodeType, V: Versions> {
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
+
+    /// Reference to consensus. The replica will require a write lock on this.
+    pub consensus: OuterConsensus<TYPES>,
+
+    /// Number of blocks in an epoch, zero means there are no epochs
+    pub epoch_height: u64,
 }
 
 impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
@@ -275,27 +286,49 @@ impl<TYPES: NodeType, V: Versions> UpgradeTaskState<TYPES, V> {
                     ))
                     .await?;
 
+                let old_version_last_view = view + TYPES::UPGRADE_CONSTANTS.begin_offset;
+                let new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
+                let decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
+
+                let epoch_upgrade_checks = if V::Upgrade::VERSION == V::Epochs::VERSION {
+                    let consensus_reader = self.consensus.read().await;
+
+                    let (_, last_proposal) = consensus_reader.last_proposals().last_key_value().context(info!("No recent quorum proposals in consensus state -- skipping upgrade proposal."))?;
+
+                    // let last_proposal_view: u64 = *last_proposal.data.view_number();
+                    let last_proposal_block: u64 = last_proposal.data.block_header().block_number();
+
+                    drop(consensus_reader);
+
+                    let target_start_epoch =
+                        epoch_from_block_number(self.epoch_start_block, self.epoch_height);
+                    let last_proposal_epoch =
+                        epoch_from_block_number(last_proposal_block, self.epoch_height);
+                    let upgrade_finish_epoch =
+                        epoch_from_block_number(new_version_first_view + 10, self.epoch_height);
+
+                    target_start_epoch == last_proposal_epoch
+                        && last_proposal_epoch == upgrade_finish_epoch
+                } else {
+                    true
+                };
+
                 // We try to form a certificate 5 views before we're leader.
                 if view >= self.start_proposing_view
                     && view < self.stop_proposing_view
                     && time >= self.start_proposing_time
                     && time < self.stop_proposing_time
                     && !self.upgraded().await
+                    && epoch_upgrade_checks
                     && leader == self.public_key
                 {
                     let upgrade_proposal_data = UpgradeProposalData {
                         old_version: V::Base::VERSION,
                         new_version: V::Upgrade::VERSION,
                         new_version_hash: V::UPGRADE_HASH.to_vec(),
-                        old_version_last_view: TYPES::View::new(
-                            view + TYPES::UPGRADE_CONSTANTS.begin_offset,
-                        ),
-                        new_version_first_view: TYPES::View::new(
-                            view + TYPES::UPGRADE_CONSTANTS.finish_offset,
-                        ),
-                        decide_by: TYPES::View::new(
-                            view + TYPES::UPGRADE_CONSTANTS.decide_by_offset,
-                        ),
+                        old_version_last_view: TYPES::View::new(old_version_last_view),
+                        new_version_first_view: TYPES::View::new(new_version_first_view),
+                        decide_by: TYPES::View::new(decide_by),
                     };
 
                     let upgrade_proposal = UpgradeProposal {

@@ -263,7 +263,7 @@ impl<S, Types: NodeType> MigrateTypes<Types> for FailStorage<S>
 where
     S: MigrateTypes<Types> + Sync,
 {
-    async fn migrate_types(&self) -> anyhow::Result<()> {
+    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
         Ok(())
     }
 }

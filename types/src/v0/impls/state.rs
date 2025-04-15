@@ -651,13 +651,11 @@ impl<'a> ValidatedTransition<'a> {
     /// against that stored in [`ValidatedState`].
     fn validate_reward_merkle_tree(&self) -> Result<(), ProposalValidationError> {
         let reward_merkle_tree_root = self.state.reward_merkle_tree.commitment();
-        if let Some(root) = self.proposal.header.reward_merkle_tree_root() {
-            if root != reward_merkle_tree_root {
-                return Err(ProposalValidationError::InvalidRewardRoot {
-                    expected_root: reward_merkle_tree_root,
-                    proposal_root: root,
-                });
-            }
+        if self.proposal.header.reward_merkle_tree_root() != reward_merkle_tree_root {
+            return Err(ProposalValidationError::InvalidRewardRoot {
+                expected_root: reward_merkle_tree_root,
+                proposal_root: self.proposal.header.reward_merkle_tree_root(),
+            });
         }
 
         Ok(())
@@ -747,7 +745,8 @@ fn validate_builder_fee(
         // TODO Marketplace signatures are placeholders for now. In
         // finished Marketplace signatures will cover the full
         // transaction.
-        if version.minor >= MarketplaceVersion::MINOR {
+        if version >= MarketplaceVersion::VERSION {
+            tracing::debug!("Validating (Marketplace) sequencing fee signature.");
             fee_info
                 .account()
                 .validate_sequencing_fee_signature_marketplace(
@@ -757,16 +756,20 @@ fn validate_builder_fee(
                 )
                 .then_some(())
                 .ok_or(BuilderValidationError::InvalidBuilderSignature)?;
-        } else {
-            fee_info
-                .account()
-                .validate_fee_signature(
-                    &signature,
-                    fee_info.amount().as_u64().unwrap(),
-                    proposed_header.metadata(),
-                )
-                .then_some(())
-                .ok_or(BuilderValidationError::InvalidBuilderSignature)?;
+        } else if !fee_info.account().validate_fee_signature(
+            &signature,
+            fee_info.amount().as_u64().unwrap(),
+            proposed_header.metadata(),
+        ) && !fee_info
+            .account()
+            .validate_fee_signature_with_vid_commitment(
+                &signature,
+                fee_info.amount().as_u64().unwrap(),
+                proposed_header.metadata(),
+                &proposed_header.payload_commitment(),
+            )
+        {
+            return Err(BuilderValidationError::InvalidBuilderSignature);
         }
     }
 
@@ -1052,10 +1055,11 @@ impl HotShotState<SeqTypes> for ValidatedState {
             BlockMerkleTree::from_commitment(block_header.block_merkle_tree_root())
         };
 
-        let mut reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
-        if let Some(root) = block_header.reward_merkle_tree_root() {
-            reward_merkle_tree = RewardMerkleTree::from_commitment(root);
-        }
+        let reward_merkle_tree = if block_header.reward_merkle_tree_root().size() == 0 {
+            RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT)
+        } else {
+            RewardMerkleTree::from_commitment(block_header.reward_merkle_tree_root())
+        };
 
         Self {
             fee_merkle_tree,

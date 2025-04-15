@@ -151,7 +151,7 @@ impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
 where
     Payload<Types>: QueryablePayload<Types>,
 {
-    async fn migrate_types(&self) -> anyhow::Result<()> {
+    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
         Ok(())
     }
 }

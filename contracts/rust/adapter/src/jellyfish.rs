@@ -26,21 +26,6 @@ use num_traits::Num;
 
 use crate::{field_to_u256, sol_types::*, u256_to_field};
 
-// this is convention from BN256 precompile
-impl Default for G1PointSol {
-    fn default() -> Self {
-        Self {
-            x: U256::from(0),
-            y: U256::from(0),
-        }
-    }
-}
-impl PartialEq for G1PointSol {
-    fn eq(&self, other: &Self) -> bool {
-        self.x == other.x && self.y == other.y
-    }
-}
-
 impl<P: SWCurveConfig> From<Affine<P>> for G1PointSol
 where
     P::BaseField: PrimeField,
