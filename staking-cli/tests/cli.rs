@@ -38,7 +38,6 @@ fn cmd() -> Command {
     escargot::CargoBuild::new()
         .bin("staking-cli")
         .current_release()
-        .current_target()
         .run()
         .unwrap()
         .command()

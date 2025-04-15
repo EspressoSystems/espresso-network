@@ -1,4 +1,4 @@
-use std::{process::Command, time::Duration};
+use std::{path::PathBuf, process::Command, time::Duration};
 
 use alloy::{
     network::{Ethereum, EthereumWallet},
@@ -195,12 +195,33 @@ impl TestSystem {
     }
 
     pub fn cmd(&self) -> Command {
-        let mut cmd = escargot::CargoBuild::new()
-            .bin("staking-cli")
-            .current_release()
-            .run()
-            .unwrap()
-            .command();
+        // On the CI (CI=true) assume that the binary is built because we run
+        // the tests via nextest archive.
+        let ci = match std::env::var("CI").unwrap_or_default().parse::<bool>() {
+            Ok(ci) => ci,
+            Err(_) => false,
+        };
+        let mut cmd = if ci {
+            // Use CARGO_TARGET_DIR if, it set
+            let target_dir =
+                PathBuf::from(std::env::var("CARGO_TARGET_DIR").unwrap_or("target".to_string()));
+            let path = PathBuf::from("../")
+                .join(target_dir)
+                .join("debug/staking-cli");
+            tracing::warn!(
+                "Running in CI mode, assuming the staking-cli binary at {} exists",
+                path.display()
+            );
+            let cmd = Command::new(path);
+            cmd
+        } else {
+            escargot::CargoBuild::new()
+                .bin("staking-cli")
+                .current_release()
+                .run()
+                .unwrap()
+                .command()
+        };
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
             .arg("--mnemonic")
