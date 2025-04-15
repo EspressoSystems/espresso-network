@@ -1,11 +1,11 @@
-use std::process::{Command, Output};
+use std::process::Output;
 
 use alloy::primitives::{
     utils::{format_ether, parse_ether},
     Address, U256,
 };
 use anyhow::Result;
-use staking_cli::*;
+use staking_cli::{deploy::cmd, *};
 
 use crate::deploy::TestSystem;
 
@@ -32,15 +32,6 @@ impl Utf8 for Output {
     fn utf8(&self) -> String {
         String::from_utf8(self.stdout.clone()).expect("stdout is utf8")
     }
-}
-
-fn cmd() -> Command {
-    escargot::CargoBuild::new()
-        .bin("staking-cli")
-        .current_release()
-        .run()
-        .unwrap()
-        .command()
 }
 
 #[test]
