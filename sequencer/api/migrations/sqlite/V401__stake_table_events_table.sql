@@ -1,0 +1,5 @@
+CREATE TABLE stake_table_events (
+  id INTEGER DEFAULT 0 PRIMARY KEY,
+  l1_block INTEGER NOT NULL UNIQUE,
+  data JSONB NOT NULL
+);

@@ -49,8 +49,7 @@ mod persistence_tests {
     use async_lock::RwLock;
     use committable::{Commitment, Committable};
     use espresso_types::{
-        traits::{EventConsumer, NullEventConsumer, PersistenceOptions},
-        Event, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        traits::{EventConsumer, NullEventConsumer, PersistenceOptions}, v0_3::Validator, Event, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState
     };
     use hotshot::{
         types::{BLSPubKey, SignatureKey},
@@ -79,6 +78,7 @@ mod persistence_tests {
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
     };
+    use indexmap::IndexMap;
     use sequencer_utils::test_utils::setup_test;
     use testing::TestablePersistence;
     use vbs::version::{StaticVersionType, Version};
@@ -1096,4 +1096,40 @@ mod persistence_tests {
             .await
             .is_err());
     }
+
+
+    // #[tokio::test(flavor = "multi_thread")]
+    // pub async fn test_stake_table_fetching_from_persistence<P : TestablePersistence>() -> anyhow::Result<()> {
+    //     setup_test();
+
+    //     let tmp = P::tmp_storage().await;
+    //     let mut opt = P::options(&tmp);
+
+    //     let storage = opt.create().await.unwrap();
+
+    //     let validator = Validator::mock();
+    //     let mut st = IndexMap::new();
+    //     st.insert(validator.account, validator);
+    //     storage
+    //         .store_stake(EpochNumber::new(10), st.clone())
+    //         .await?;
+
+    //     let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+    //     assert_eq!(st, table);
+
+    //     let val2 = Validator::mock();
+    //     let mut st2 = IndexMap::new();
+    //     st2.insert(val2.account, val2);
+    //     storage
+    //         .store_stake(EpochNumber::new(11), st2.clone())
+    //         .await?;
+
+    //     let tables = storage.load_latest_stake(4).await?.unwrap();
+    //     let mut iter = tables.iter();
+    //     assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+    //     assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
+    //     assert_eq!(None, iter.next());
+
+    //     Ok(())
+    // }
 }
