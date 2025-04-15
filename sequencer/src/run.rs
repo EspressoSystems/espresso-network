@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use clap::Parser;
+use espresso_types::traits::SequencerPersistence;
 #[allow(unused_imports)]
 use espresso_types::{
     traits::NullEventConsumer, FeeVersion, MarketplaceVersion, SequencerVersions,
@@ -202,6 +204,10 @@ where
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
     let persistence = storage_opt.create().await?;
+    persistence
+        .migrate_consensus()
+        .await
+        .context("failed to migrate consensus data")?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
