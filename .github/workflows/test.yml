@@ -170,6 +170,7 @@ jobs:
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
+          --target-dir-remap $PWD/target \
           --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 20
 
@@ -205,6 +206,7 @@ jobs:
         run: |
           cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
           --workspace-remap $PWD \
+          --target-dir-remap $PWD/target \
           --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 20
 
