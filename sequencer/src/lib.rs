@@ -582,7 +582,13 @@ pub mod testing {
         time::Duration,
     };
 
-    use alloy::primitives::U256;
+    use alloy::{
+        primitives::U256,
+        signers::{
+            k256::ecdsa::SigningKey,
+            local::{LocalSigner, PrivateKeySigner},
+        },
+    };
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;

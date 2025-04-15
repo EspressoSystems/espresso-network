@@ -681,8 +681,10 @@ pub mod test_helpers {
     use std::time::Duration;
 
     use alloy::{
+        network::EthereumWallet,
         node_bindings::Anvil,
         primitives::{Address, U256},
+        providers::{Provider, ProviderBuilder},
     };
     use committable::Committable;
     use espresso_types::{
@@ -1926,11 +1928,13 @@ mod test {
         time::Duration,
     };
 
-    use alloy::{node_bindings::Anvil, primitives::U256};
+    use alloy::{node_bindings::Anvil, primitives::U256, signers::local::LocalSigner};
     use committable::{Commitment, Committable};
     use espresso_types::{
-        traits::NullEventConsumer,
-        UpgradeType, ValidatedState, V0_1,
+        config::PublicHotShotConfig, traits::NullEventConsumer, BackoffParams, EpochVersion,
+        FeeAmount, FeeVersion, Header, MarketplaceVersion, MockSequencerVersions,
+        SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade, UpgradeMode, UpgradeType,
+        ValidatedState, ViewBasedUpgrade, V0_1,
     };
     use futures::{
         future::{self, join_all},

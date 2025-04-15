@@ -950,16 +950,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 message: err.to_string(),
             })?;
 
-            let _ = query.execute(tx.as_mut()).await;
-
-            // update migrated_rows column with the offset
-            tx.upsert(
-                "types_migration",
-                ["id", "completed", "migrated_rows"],
-                ["id"],
-                [(0_i64, false, offset)],
-            )
-            .await?;
+            query.execute(tx.as_mut()).await?;
 
             // update migrated_rows column with the offset
             tx.upsert(

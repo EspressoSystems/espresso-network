@@ -16,7 +16,7 @@ use hotshot_state_prover::service::{
 use hotshot_types::{
     light_client::{StateSignaturesBundle, StateVerKey},
     traits::signature_key::{StakeTableEntryType, StateSignatureKey},
-    utils::{epoch_from_block_number},
+    utils::epoch_from_block_number,
     PeerConfig,
 };
 use tide_disco::{
