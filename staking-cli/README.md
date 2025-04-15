@@ -25,6 +25,8 @@ This CLI helps users interact with the Espresso staking contract, either as a de
          staking-cli --help
 
     ```
+        A CLI to interact with the Espresso stake table contract
+
     Usage: staking-cli [OPTIONS] [COMMAND]
 
     Commands:
@@ -32,7 +34,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     config                 Display the current configuration
     init                   Initialize the config file with deployment and wallet info
     purge                  Remove the config file
-    info                   Show information about delegation, withdrawals, etc
+    stake-table            Show the stake table in the Espresso stake table contract
     account                Print the signer account address
     register-validator     Register to become a validator
     update-consensus-keys  Update a validators Espresso consensus signing keys
@@ -61,8 +63,8 @@ This CLI helps users interact with the Espresso staking contract, either as a de
             The mnemonic to use when deriving the key [env: MNEMONIC=]
         --account-index <ACCOUNT_INDEX>
             The mnemonic account index to use when deriving the key [env: ACCOUNT_INDEX=]
-        --ledger <LEDGER>
-            The ledger account index to use when deriving the key [env: LEDGER_INDEX=] [possible values: true, false]
+        --ledger
+            The ledger account index to use when deriving the key [env: LEDGER_INDEX=]
         --backtrace-mode <BACKTRACE_MODE>
             [env: RUST_LOG_FORMAT=] [possible values: full, compact, json]
     -h, --help
@@ -80,11 +82,14 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     First, determine if you would like to use a Mnemonic phrase or ledger hardware wallet.
 
     If you don't know which account index to use, you can find it by running:
-
-         staking-cli --mnemonic MNEMONIC --account-index N account
-         # or
-         staking-cli --ledger-index N account
-
+    ```bash
+    staking-cli --mnemonic MNEMONIC --account-index 0 account
+    staking-cli --mnemonic MNEMONIC --account-index 1 account
+    # etc, or
+    staking-cli --ledger-index 0 account
+    staking-cli --ledger-index 1 account
+    # etc
+    ```
     Repeat with different indices until you find the address you want to use.
 
     Note that for ledger signing to work
@@ -126,7 +131,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
 1.  Obtain ESP tokens for staking.
 1.  Find the Ethereum address of a validator to delegate to.
 
-        staking-cli info
+        staking-cli stake-table
 
 1.  Use the `approve` command to allow the stake table to spend your tokens.
 

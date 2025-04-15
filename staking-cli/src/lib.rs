@@ -139,7 +139,7 @@ impl ValidSignerConfig {
 
 impl Default for Commands {
     fn default() -> Self {
-        Commands::Info {
+        Commands::StakeTable {
             l1_block_number: None,
             compact: false,
         }
@@ -195,8 +195,8 @@ pub enum Commands {
         #[clap(long)]
         force: bool,
     },
-    /// Show the stake table in the Epresso stake table contract.
-    Info {
+    /// Show the stake table in the Espresso stake table contract.
+    StakeTable {
         /// The block numberto use for the stake table.
         ///
         /// Defaults to the latest block for convenience.
