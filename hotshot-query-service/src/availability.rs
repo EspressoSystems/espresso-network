@@ -1005,6 +1005,9 @@ mod test {
         // Start the web server.
         let port = pick_unused_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+        let mut options = Options::default();
+        options.small_object_range_limit = 300;
+        options.large_object_range_limit = 200;
         app.register_module(
             "availability",
             define_api(
