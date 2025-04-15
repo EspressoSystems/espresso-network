@@ -95,7 +95,7 @@ type Signature<TYPES> =
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequestState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
-    #[instrument(skip_all, target = "NetworkRequestState", fields(id = self.id))]
+    #[instrument(skip_all, fields(id = self.id), name = "NetworkRequestState")]
     async fn handle_event(
         &mut self,
         event: Arc<Self::Event>,
@@ -293,6 +293,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
                 &public_key,
                 &view,
                 &shutdown_flag,
+                my_id,
             )
             .await
             {
@@ -338,6 +339,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         public_key: &<TYPES as NodeType>::SignatureKey,
         view: &TYPES::View,
         shutdown_flag: &Arc<AtomicBool>,
+        id: u64,
     ) -> bool {
         let consensus_reader = consensus.read().await;
 
@@ -351,8 +353,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         if cancel {
             if let Some(vid_shares) = maybe_vid_shares {
                 tracing::debug!(
-                    "Canceling vid request but first send own vid share: {:?}",
-                    vid_shares
+                    "Canceling vid request but first send own vid share: {:?}, my id {:?}",
+                    vid_shares,
+                    id,
                 );
                 for vid_share in vid_shares.values() {
                     broadcast_event(
@@ -366,9 +369,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
                 }
             }
             tracing::debug!(
-                "Canceling vid request for view {:?}, cur view is {:?}",
+                "Canceling vid request for view {:?}, cur view is {:?}, my id {:?}",
                 view,
-                consensus_reader.cur_view()
+                consensus_reader.cur_view(),
+                id,
             );
         }
         cancel

@@ -72,6 +72,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
     }
 
     /// Process request events or loop until a `HotShotEvent::Shutdown` is received.
+    #[instrument(skip_all, fields(id = self.id), name = "NetworkResponseState")]
     async fn run_response_loop(
         self,
         mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -89,6 +90,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                             }
                             for vid_share in self.get_or_calc_vid_share(request.view, sender).await
                             {
+                                tracing::debug!("Sending VID response {:?}", vid_share);
                                 broadcast_event(
                                     HotShotEvent::VidResponseSend(
                                         self.pub_key.clone(),
@@ -143,7 +145,6 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
     /// Get the VID share from consensus storage, or calculate it from the payload for
     /// the view, if we have the payload.  Stores all the shares calculated from the payload
     /// if the calculation was done
-    #[instrument(skip_all, target = "NetworkResponseState", fields(id = self.id))]
     async fn get_or_calc_vid_share(
         &self,
         view: TYPES::View,
