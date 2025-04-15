@@ -468,7 +468,6 @@ where
 {
     async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
         let height = leaf.height();
-        let view = leaf.leaf().view_number().u64();
 
         // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
@@ -518,11 +517,10 @@ where
         let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
         self.upsert(
             "leaf2",
-            ["height", "view", "hash", "block_hash", "leaf", "qc"],
-            ["height", "view"],
+            ["height", "hash", "block_hash", "leaf", "qc"],
+            ["height"],
             [(
                 height as i64,
-                view as i64,
                 leaf.hash().to_string(),
                 leaf.block_hash().to_string(),
                 leaf_json,
