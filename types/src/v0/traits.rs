@@ -735,14 +735,6 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         &self,
         state: NodeState,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
-        #[allow(clippy::panic)]
-        match self.migrate_consensus().await {
-            Ok(()) => {},
-            Err(e) => {
-                panic!("Failed to migrate consensus storage: {e}");
-            },
-        }
-
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match self
             .load_latest_acted_view()
