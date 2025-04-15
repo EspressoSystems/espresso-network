@@ -749,10 +749,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         }
         results
             .into_iter()
-            .filter_map(|result| match result {
-                Ok(value) => Some(value),
-                Err(_) => None,
-            })
+            .filter_map(|result| result.ok())
             .flatten()
             .collect::<Vec<_>>()
     }
