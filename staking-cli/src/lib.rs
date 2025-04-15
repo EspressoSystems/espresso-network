@@ -1,9 +1,14 @@
 use alloy::{
     eips::BlockId,
+    network::EthereumWallet,
     primitives::{utils::parse_ether, Address, U256},
+    signers::{
+        ledger::{HDPath, LedgerSigner},
+        local::{coins_bip39::English, MnemonicBuilder},
+    },
 };
-use anyhow::Result;
-use clap::Subcommand;
+use anyhow::{bail, Context as _, Result};
+use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 pub(crate) use hotshot_types::{
     light_client::{StateSignKey, StateVerKey},
@@ -27,23 +32,10 @@ pub mod deploy;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
+/// CLI to interact with the Espresso stake table contract
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
+#[command(version, about, long_about = None)]
 pub struct Config {
-    #[default(DEV_MNEMONIC.to_string())]
-    #[clap(long, env = "MNEMONIC")]
-    #[serde(alias = "mnemonic", alias = "MNEMONIC")]
-    pub mnemonic: String,
-
-    #[clap(long, env = "ACCOUNT_INDEX", default_value = "0")]
-    pub account_index: u32,
-
-    /// The index of the ledger account to use.
-    ///
-    /// NOTE: for ledger signing to work "blind signing" must be enabled in the ledger Ethereum app
-    /// on the ledger device.
-    #[clap(long, env = "LEDGER_DERIVATION_PATH")]
-    pub ledger_path: Option<usize>,
-
     /// L1 Ethereum RPC.
     #[clap(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
@@ -58,12 +50,91 @@ pub struct Config {
     pub stake_table_address: Address,
 
     #[clap(flatten)]
+    pub signer: SignerConfig,
+
+    #[clap(flatten)]
     #[serde(skip)]
     pub logging: logging::Config,
 
     #[command(subcommand)]
     #[serde(skip)]
     pub commands: Commands,
+}
+
+#[derive(ClapSerde, Parser, Clone, Debug, Deserialize, Serialize)]
+pub struct SignerConfig {
+    /// The mnemonic to use when deriving the key.
+    #[clap(long, env = "MNEMONIC")]
+    pub mnemonic: Option<String>,
+
+    /// The mnemonic account index to use when deriving the key.
+    #[clap(long, env = "ACCOUNT_INDEX")]
+    #[default(Some(0))]
+    pub account_index: Option<u32>,
+
+    /// The ledger account index to use when deriving the key.
+    #[clap(long, env = "LEDGER_INDEX")]
+    pub ledger: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum ValidSignerConfig {
+    Mnemonic {
+        mnemonic: String,
+        account_index: u32,
+    },
+    Ledger {
+        account_index: usize,
+    },
+}
+
+impl TryFrom<SignerConfig> for ValidSignerConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(config: SignerConfig) -> Result<Self> {
+        let account_index = config
+            .account_index
+            .ok_or_else(|| anyhow::anyhow!("Account index must be provided"))?;
+        if let Some(mnemonic) = config.mnemonic {
+            Ok(ValidSignerConfig::Mnemonic {
+                mnemonic,
+                account_index,
+            })
+        } else if config.ledger {
+            Ok(ValidSignerConfig::Ledger {
+                account_index: account_index as usize,
+            })
+        } else {
+            bail!("Either mnemonic or ledger index must be provided")
+        }
+    }
+}
+
+impl ValidSignerConfig {
+    pub async fn wallet(&self) -> Result<(EthereumWallet, Address)> {
+        match self {
+            ValidSignerConfig::Mnemonic {
+                mnemonic,
+                account_index,
+            } => {
+                let signer = MnemonicBuilder::<English>::default()
+                    .phrase(mnemonic)
+                    .index(*account_index)?
+                    .build()?;
+                let account = signer.address();
+                let wallet = EthereumWallet::from(signer);
+                Ok((wallet, account))
+            },
+            ValidSignerConfig::Ledger { account_index } => {
+                let signer = LedgerSigner::new(HDPath::LedgerLive(*account_index), None)
+                    .await
+                    .context("Failed to create Ledger signer: is Ethereum app open?")?;
+                let account = signer.get_address().await?;
+                let wallet = EthereumWallet::from(signer);
+                Ok((wallet, account))
+            },
+        }
+    }
 }
 
 impl Default for Commands {
@@ -100,9 +171,24 @@ impl Config {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
+    /// Display version information of the staking-cli.
     Version,
-    /// Initialize the config file with a new mnemonic.
-    Init,
+    /// Display the current configuration
+    Config,
+    /// Initialize the config file with deployment and wallet info.
+    Init {
+        /// The mnemonic to use when deriving the key.
+        #[clap(long, env = "MNEMONIC", required_unless_present = "ledger")]
+        mnemonic: Option<String>,
+
+        /// The mnemonic account index to use when deriving the key.
+        #[clap(long, env = "ACCOUNT_INDEX", default_value_t = 0)]
+        account_index: u32,
+
+        /// The ledger account index to use when deriving the key.
+        #[clap(long, env = "LEDGER_INDEX", required_unless_present = "mnemonic")]
+        ledger: bool,
+    },
     /// Remove the config file.
     Purge {
         /// Don't ask for confirmation.
@@ -139,14 +225,26 @@ pub enum Commands {
         #[clap(long, value_parser = parse::parse_commission, env = "COMMISSION")]
         commission: Commission,
     },
+    /// Update a validators Espresso consensus signing keys.
+    UpdateConsensusKeys {
+        /// The consensus signing key. Used to sign a message to prove ownership of the key.
+        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
+        consensus_private_key: BLSPrivKey,
+
+        /// The state signing key.
+        ///
+        /// TODO: Used to sign a message to prove ownership of the key.
+        #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
+        state_private_key: StateSignKey,
+    },
     /// Deregister a validator.
     DeregisterValidator {},
-    /// Delegate funds to a validator.
     /// Approve stake table contract to move tokens
     Approve {
         #[clap(long, value_parser = parse_ether)]
         amount: U256,
     },
+    /// Delegate funds to a validator.
     Delegate {
         #[clap(long)]
         validator_address: Address,

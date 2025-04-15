@@ -14,7 +14,7 @@ use alloy::{
 };
 use anyhow::Result;
 use hotshot_contract_adapter::sol_types::{ERC1967Proxy, EspToken, StakeTable};
-use rand::{rngs::StdRng, SeedableRng as _};
+use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng as _};
 use url::Url;
 
 use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
@@ -89,8 +89,8 @@ impl TestSystem {
         assert!(receipt.status());
 
         let mut rng = StdRng::from_seed([42u8; 32]);
-        let bls_key_pair = BLSKeyPair::generate(&mut rng);
-        let schnorr_key_pair = SchnorrKeyPair::generate(&mut rng);
+        let (bls_key_pair, schnorr_key_pair) = Self::gen_consensus_keys(&mut rng);
+
         Ok(Self {
             provider,
             deployer_address,
@@ -103,6 +103,12 @@ impl TestSystem {
             commission: Commission::try_from("12.34")?,
             approval_amount,
         })
+    }
+
+    pub fn gen_consensus_keys(
+        rng: &mut (impl RngCore + CryptoRng),
+    ) -> (BLSKeyPair, SchnorrKeyPair) {
+        (BLSKeyPair::generate(rng), SchnorrKeyPair::generate(rng))
     }
 
     pub async fn register_validator(&self) -> Result<()> {
@@ -207,7 +213,7 @@ impl TestSystem {
         Ok(())
     }
 
-    pub fn cmd(&self) -> Command {
+    fn base_cmd(&self) -> Command {
         let mut cmd = escargot::CargoBuild::new()
             .bin("staking-cli")
             .current_release()
@@ -217,12 +223,24 @@ impl TestSystem {
             .command();
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
-            .arg("--mnemonic")
-            .arg(DEV_MNEMONIC)
             .arg("--token-address")
             .arg(self.token.to_string())
             .arg("--stake-table-address")
-            .arg(self.stake_table.to_string());
+            .arg(self.stake_table.to_string())
+            .arg("--account-index")
+            .arg("0");
+        cmd
+    }
+
+    pub fn cmd_mnemonic(&self) -> Command {
+        let mut cmd = self.base_cmd();
+        cmd.arg("--mnemonic").arg(DEV_MNEMONIC);
+        cmd
+    }
+
+    pub fn cmd_ledger(&self) -> Command {
+        let mut cmd = self.base_cmd();
+        cmd.arg("--ledger");
         cmd
     }
 }
