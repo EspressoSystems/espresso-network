@@ -19,6 +19,7 @@ pub mod BN254 {
     use alloy::sol_types as alloy_sol_types;
 
     use super::*;
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct BaseField(alloy::sol_types::private::primitives::aliases::U256);
@@ -135,6 +136,7 @@ pub mod BN254 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ScalarField(alloy::sol_types::private::primitives::aliases::U256);
@@ -251,6 +253,7 @@ pub mod BN254 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
     struct G1Point { BaseField x; BaseField y; }
     ```*/
@@ -567,6 +570,7 @@ pub mod IPlonkVerifier {
     use alloy::sol_types as alloy_sol_types;
 
     use super::*;
+    #[derive()]
     /**```solidity
     struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire2; BN254.G1Point wire3; BN254.G1Point wire4; BN254.G1Point prodPerm; BN254.G1Point split0; BN254.G1Point split1; BN254.G1Point split2; BN254.G1Point split3; BN254.G1Point split4; BN254.G1Point zeta; BN254.G1Point zetaOmega; BN254.ScalarField wireEval0; BN254.ScalarField wireEval1; BN254.ScalarField wireEval2; BN254.ScalarField wireEval3; BN254.ScalarField wireEval4; BN254.ScalarField sigmaEval0; BN254.ScalarField sigmaEval1; BN254.ScalarField sigmaEval2; BN254.ScalarField sigmaEval3; BN254.ScalarField prodPermZetaOmegaEval; }
     ```*/
@@ -1137,6 +1141,7 @@ pub mod IPlonkVerifier {
             }
         }
     };
+    #[derive()]
     /**```solidity
     struct VerifyingKey { uint256 domainSize; uint256 numInputs; BN254.G1Point sigma0; BN254.G1Point sigma1; BN254.G1Point sigma2; BN254.G1Point sigma3; BN254.G1Point sigma4; BN254.G1Point q1; BN254.G1Point q2; BN254.G1Point q3; BN254.G1Point q4; BN254.G1Point qM12; BN254.G1Point qM34; BN254.G1Point qO; BN254.G1Point qC; BN254.G1Point qH1; BN254.G1Point qH2; BN254.G1Point qH3; BN254.G1Point qH4; BN254.G1Point qEcc; bytes32 g2LSB; bytes32 g2MSB; }
     ```*/
@@ -1897,6 +1902,7 @@ pub mod LightClient {
     use alloy::sol_types as alloy_sol_types;
 
     use super::*;
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
     struct LightClientState { uint64 viewNum; uint64 blockHeight; BN254.ScalarField blockCommRoot; }
     ```*/
@@ -2115,6 +2121,7 @@ pub mod LightClient {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
     struct StakeTableState { uint256 threshold; BN254.ScalarField blsKeyComm; BN254.ScalarField schnorrKeyComm; BN254.ScalarField amountComm; }
     ```*/
@@ -4500,6 +4507,7 @@ pub mod LightClientV2 {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R`\x046\x10a\x01\xFCW_5`\xE0\x1C\x80cqP\x18\xA6\x11a\x01\x13W\x80c\x9F\xDBT\xA7\x11a\0\x9DW\x80c\xD2M\x93=\x11a\0mW\x80c\xD2M\x93=\x14a\x06\xCFW\x80c\xE003\x01\x14a\x06\xFEW\x80c\xF0h T\x14a\x07\x1DW\x80c\xF2\xFD\xE3\x8B\x14a\x07<W\x80c\xF9\xE5\r\x19\x14a\x07[W__\xFD[\x80c\x9F\xDBT\xA7\x14a\x05\xE6W\x80c\xAD<\xB1\xCC\x14a\x06;W\x80c\xB3;\xC4\x91\x14a\x06xW\x80c\xC2;\x9E\x9E\x14a\x06\x97W__\xFD[\x80c\x85\x84\xD2?\x11a\0\xE3W\x80c\x85\x84\xD2?\x14a\x05\x11W\x80c\x8D\xA5\xCB[\x14a\x05MW\x80c\x90\xC1C\x90\x14a\x05\x89W\x80c\x96\xC1\xCAa\x14a\x05\xA8W\x80c\x9B\xAA<\xC9\x14a\x05\xC7W__\xFD[\x80cqP\x18\xA6\x14a\x04\xABW\x80cu|7\xAD\x14a\x04\xBFW\x80cvg\x18\x08\x14a\x04\xDEW\x80c\x82nA\xFC\x14a\x04\xF2W__\xFD[\x80c0\x0C\x89\xDD\x11a\x01\x94W\x80cBm1\x94\x11a\x01dW\x80cBm1\x94\x14a\x040W\x80cC=\xBA\x9F\x14a\x04QW\x80cO\x1E\xF2\x86\x14a\x04pW\x80cR\xD1\x90-\x14a\x04\x83W\x80ci\xCCj\x04\x14a\x04\x97W__\xFD[\x80c0\x0C\x89\xDD\x14a\x03\x98W\x80c1=\xF7\xB1\x14a\x03\xB7W\x80c7\x8E\xC2;\x14a\x03\xEEW\x80c>\xD5[{\x14a\x04\nW__\xFD[\x80c\x12\x17<,\x11a\x01\xCFW\x80c\x12\x17<,\x14a\x02\xEBW\x80c c\xD4\xF7\x14a\x03\x0CW\x80c%)t'\x14a\x03+W\x80c/y\x88\x9D\x14a\x03ZW__\xFD[\x80c\x01?\xA5\xFC\x14a\x02\0W\x80c\x02\xB5\x92\xF3\x14a\x02!W\x80c\x06%\xE1\x9B\x14a\x02~W\x80c\r\x8En,\x14a\x02\xC0W[__\xFD[4\x80\x15a\x02\x0BW__\xFD[Pa\x02\x1Fa\x02\x1A6`\x04a&\x8AV[a\x07oV[\0[4\x80\x15a\x02,W__\xFD[Pa\x02@a\x02;6`\x04a&\xA3V[a\x08\"V[`@Qa\x02u\x94\x93\x92\x91\x90`\x01`\x01`@\x1B\x03\x94\x85\x16\x81R\x92\x84\x16` \x84\x01R\x92\x16`@\x82\x01R``\x81\x01\x91\x90\x91R`\x80\x01\x90V[`@Q\x80\x91\x03\x90\xF3[4\x80\x15a\x02\x89W__\xFD[P`\x0BT`\x0CT`\rT`\x0ETa\x02\xA0\x93\x92\x91\x90\x84V[`@\x80Q\x94\x85R` \x85\x01\x93\x90\x93R\x91\x83\x01R``\x82\x01R`\x80\x01a\x02uV[4\x80\x15a\x02\xCBW__\xFD[P`@\x80Q`\x02\x81R_` \x82\x01\x81\x90R\x91\x81\x01\x91\x90\x91R``\x01a\x02uV[4\x80\x15a\x02\xF6W__\xFD[Pa\x02\xFFa\x08kV[`@Qa\x02u\x91\x90a&\xBAV[4\x80\x15a\x03\x17W__\xFD[Pa\x02\x1Fa\x03&6`\x04a+zV[a\x08\x80V[4\x80\x15a\x036W__\xFD[Pa\x03Ja\x03E6`\x04a+\xAEV[a\x08\x99V[`@Q\x90\x15\x15\x81R` \x01a\x02uV[4\x80\x15a\x03eW__\xFD[P`\x08Ta\x03\x80\x90`\x01`\xC0\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x81V[`@Q`\x01`\x01`@\x1B\x03\x90\x91\x16\x81R` \x01a\x02uV[4\x80\x15a\x03\xA3W__\xFD[Pa\x03Ja\x03\xB26`\x04a+\xAEV[a\x08\xFBV[4\x80\x15a\x03\xC2W__\xFD[P`\x08Ta\x03\xD6\x90`\x01`\x01`\xA0\x1B\x03\x16\x81V[`@Q`\x01`\x01`\xA0\x1B\x03\x90\x91\x16\x81R` \x01a\x02uV[4\x80\x15a\x03\xF9W__\xFD[PC[`@Q\x90\x81R` \x01a\x02uV[4\x80\x15a\x04\x15W__\xFD[P`\nTa\x03\x80\x90`\x01`@\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x81V[4\x80\x15a\x04;W__\xFD[P_T`\x01T`\x02T`\x03Ta\x02\xA0\x93\x92\x91\x90\x84V[4\x80\x15a\x04\\W__\xFD[Pa\x02\x1Fa\x04k6`\x04a+\xDAV[a\tiV[a\x02\x1Fa\x04~6`\x04a+\xF3V[a\t}V[4\x80\x15a\x04\x8EW__\xFD[Pa\x03\xFCa\t\x9CV[4\x80\x15a\x04\xA2W__\xFD[Pa\x02\x1Fa\t\xB7V[4\x80\x15a\x04\xB6W__\xFD[Pa\x02\x1Fa\n%V[4\x80\x15a\x04\xCAW__\xFD[Pa\x02\x1Fa\x04\xD96`\x04a,\xF6V[a\n6V[4\x80\x15a\x04\xE9W__\xFD[Pa\x03\x80a\riV[4\x80\x15a\x04\xFDW__\xFD[P`\x08T`\x01`\x01`\xA0\x1B\x03\x16\x15\x15a\x03JV[4\x80\x15a\x05\x1CW__\xFD[Pa\x050a\x05+6`\x04a&\xA3V[a\r\x8EV[`@\x80Q\x92\x83R`\x01`\x01`@\x1B\x03\x90\x91\x16` \x83\x01R\x01a\x02uV[4\x80\x15a\x05XW__\xFD[P\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0T`\x01`\x01`\xA0\x1B\x03\x16a\x03\xD6V[4\x80\x15a\x05\x94W__\xFD[Pa\x03\x80a\x05\xA36`\x04a-:V[a\x0E\xB9V[4\x80\x15a\x05\xB3W__\xFD[Pa\x02\x1Fa\x05\xC26`\x04a+\xDAV[a\x0F.V[4\x80\x15a\x05\xD2W__\xFD[Pa\x02\x1Fa\x05\xE16`\x04a-bV[a\x0F\xB7V[4\x80\x15a\x05\xF1W__\xFD[P`\x06T`\x07Ta\x06\x15\x91`\x01`\x01`@\x1B\x03\x80\x82\x16\x92`\x01`@\x1B\x90\x92\x04\x16\x90\x83V[`@\x80Q`\x01`\x01`@\x1B\x03\x94\x85\x16\x81R\x93\x90\x92\x16` \x84\x01R\x90\x82\x01R``\x01a\x02uV[4\x80\x15a\x06FW__\xFD[Pa\x06k`@Q\x80`@\x01`@R\x80`\x05\x81R` \x01d\x03R\xE3\x02\xE3`\xDC\x1B\x81RP\x81V[`@Qa\x02u\x91\x90a-\xB7V[4\x80\x15a\x06\x83W__\xFD[Pa\x02\x1Fa\x06\x926`\x04a-:V[a\x10\xD9V[4\x80\x15a\x06\xA2W__\xFD[P`\x08Ta\x06\xBA\x90`\x01`\xA0\x1B\x90\x04c\xFF\xFF\xFF\xFF\x16\x81V[`@Qc\xFF\xFF\xFF\xFF\x90\x91\x16\x81R` \x01a\x02uV[4\x80\x15a\x06\xDAW__\xFD[P`\x04T`\x05Ta\x06\x15\x91`\x01`\x01`@\x1B\x03\x80\x82\x16\x92`\x01`@\x1B\x90\x92\x04\x16\x90\x83V[4\x80\x15a\x07\tW__\xFD[Pa\x03Ja\x07\x186`\x04a-\xECV[a\x12=V[4\x80\x15a\x07(W__\xFD[P`\nTa\x03\x80\x90`\x01`\x01`@\x1B\x03\x16\x81V[4\x80\x15a\x07GW__\xFD[Pa\x02\x1Fa\x07V6`\x04a&\x8AV[a\x13\x95V[4\x80\x15a\x07fW__\xFD[P`\tTa\x03\xFCV[a\x07wa\x13\xD4V[`\x01`\x01`\xA0\x1B\x03\x81\x16a\x07\x9EW`@Qc\xE6\xC4${`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x08T`\x01`\x01`\xA0\x1B\x03\x90\x81\x16\x90\x82\x16\x03a\x07\xCDW`@Qc\xA8c\xAE\xC9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x08\x80T`\x01`\x01`\xA0\x1B\x03\x19\x16`\x01`\x01`\xA0\x1B\x03\x83\x16\x90\x81\x17\x90\x91U`@Q\x90\x81R\x7F\x80\x17\xBB\x88\x7F\xDF\x8F\xCAC\x14\xA9\xD4\x0Fns\xB3\xB8\x10\x02\xD6~\\\xFA\x85\xD8\x81s\xAFj\xA4`r\x90` \x01[`@Q\x80\x91\x03\x90\xA1PV[`\t\x81\x81T\x81\x10a\x081W_\x80\xFD[_\x91\x82R` \x90\x91 `\x02\x90\x91\x02\x01\x80T`\x01\x90\x91\x01T`\x01`\x01`@\x1B\x03\x80\x83\x16\x93P`\x01`@\x1B\x83\x04\x81\x16\x92`\x01`\x80\x1B\x90\x04\x16\x90\x84V[a\x08sa#\xF0V[a\x08{a\x14/V[\x90P\x90V[`@QcN@\\\x8D`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_`\x01`\x01`@\x1B\x03\x82\x16\x15\x80a\x08\xB9WP`\nT`\x01`\x01`@\x1B\x03\x16\x15[\x15a\x08\xC5WP_\x91\x90PV[`\nT`\x01`\x01`@\x1B\x03\x16a\x08\xDC\x83`\x05a. V[a\x08\xE6\x91\x90a.SV[`\x01`\x01`@\x1B\x03\x16\x15\x92\x91PPV[\x91\x90PV[_`\x01`\x01`@\x1B\x03\x82\x16\x15\x80a\t\x1BWP`\nT`\x01`\x01`@\x1B\x03\x16\x15[\x15a\t'WP_\x91\x90PV[`\nTa\t?\x90`\x05\x90`\x01`\x01`@\x1B\x03\x16a.\x80V[`\nT`\x01`\x01`@\x1B\x03\x91\x82\x16\x91a\tY\x91\x16\x84a.SV[`\x01`\x01`@\x1B\x03\x16\x11\x92\x91PPV[a\tqa\x13\xD4V[a\tz\x81a\x0F.V[PV[a\t\x85a\x1AZV[a\t\x8E\x82a\x1A\xFEV[a\t\x98\x82\x82a\x1B?V[PPV[_a\t\xA5a\x1C\0V[P_Q` a3\x81_9_Q\x90_R\x90V[a\t\xBFa\x13\xD4V[`\x08T`\x01`\x01`\xA0\x1B\x03\x16\x15a\n\nW`\x08\x80T`\x01`\x01`\xA0\x1B\x03\x19\x16\x90U`@Q\x7F\x9A_W\xDE\x85m\xD6h\xC5M\xD9^\\U\xDF\x93C!q\xCB\xCAI\xA8wmV \xEAY\xC0$P\x90_\x90\xA1V[`@Qc\xA8c\xAE\xC9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[V[a\n-a\x13\xD4V[a\n#_a\x1CIV[`\x08T`\x01`\x01`\xA0\x1B\x03\x16\x15\x15\x80\x15a\n[WP`\x08T`\x01`\x01`\xA0\x1B\x03\x163\x14\x15[\x15a\nyW`@Qc\x01GL\x8F`\xE7\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x06T\x83Q`\x01`\x01`@\x1B\x03\x91\x82\x16\x91\x16\x11\x15\x80a\n\xB2WP`\x06T` \x84\x01Q`\x01`\x01`@\x1B\x03`\x01`@\x1B\x90\x92\x04\x82\x16\x91\x16\x11\x15[\x15a\n\xD0W`@Qc\x05\x1CF\xEF`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\n\xDD\x83`@\x01Qa\x1C\xB9V[a\n\xEA\x82` \x01Qa\x1C\xB9V[a\n\xF7\x82`@\x01Qa\x1C\xB9V[a\x0B\x04\x82``\x01Qa\x1C\xB9V[_a\x0B\ra\riV[` \x85\x01Q`\nT\x91\x92P_\x91a\x0B-\x91\x90`\x01`\x01`@\x1B\x03\x16a\x0E\xB9V[`\nT\x90\x91P`\x01`\x01`@\x1B\x03`\x01`\x80\x1B\x90\x91\x04\x81\x16\x90\x82\x16\x10a\x0BxWa\x0BZ\x85` \x01Qa\x08\xFBV[\x15a\x0BxW`@Qc\x08\n\xE8\xD9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\nT`\x01`\x01`@\x1B\x03`\x01`\x80\x1B\x90\x91\x04\x81\x16\x90\x82\x16\x11\x15a\x0C+W`\x02a\x0B\xA2\x83\x83a.\x80V[`\x01`\x01`@\x1B\x03\x16\x10a\x0B\xC9W`@Qc\x08\n\xE8\xD9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x0B\xD4\x82`\x01a. V[`\x01`\x01`@\x1B\x03\x16\x81`\x01`\x01`@\x1B\x03\x16\x14\x80\x15a\x0C\rWP`\x06Ta\x0C\x0B\x90`\x01`@\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16a\x08\x99V[\x15[\x15a\x0C+W`@Qc\x08\n\xE8\xD9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x0C6\x85\x85\x85a\x1D)V[\x84Q`\x06\x80T` \x88\x01Q`\x01`\x01`@\x1B\x03\x90\x81\x16`\x01`@\x1B\x02`\x01`\x01`\x80\x1B\x03\x19\x90\x92\x16\x93\x81\x16\x93\x90\x93\x17\x17\x90U`@\x86\x01Q`\x07U`\nT`\x01`\x80\x1B\x90\x04\x81\x16\x90\x82\x16\x10\x80\x15\x90a\x0C\x95WPa\x0C\x95\x85` \x01Qa\x08\x99V[\x15a\x0C\xFFW\x83Q`\x0BU` \x84\x01Q`\x0CU`@\x84\x01Q`\rU``\x84\x01Q`\x0EU\x7F1\xEA\xBD\x90\x99\xFD\xB2]\xAC\xDD\xD2\x06\xAB\xFF\x871\x1EU4A\xFC\x9D\x0F\xCD\xEF \x10b\xD7\xE7\x07\x1Ba\x0C\xE3\x82`\x01a. V[`@Q`\x01`\x01`@\x1B\x03\x90\x91\x16\x81R` \x01`@Q\x80\x91\x03\x90\xA1[a\r\nCB\x87a\x1E\xA0V[\x84` \x01Q`\x01`\x01`@\x1B\x03\x16\x85_\x01Q`\x01`\x01`@\x1B\x03\x16\x7F\xA0Jw9$PZA\x85d67%\xF5h2\xF5w.k\x8D\r\xBDn\xFC\xE7$\xDF\xE8\x03\xDA\xE6\x87`@\x01Q`@Qa\rZ\x91\x81R` \x01\x90V[`@Q\x80\x91\x03\x90\xA3PPPPPV[`\x06T`\nT_\x91a\x08{\x91`\x01`\x01`@\x1B\x03`\x01`@\x1B\x90\x92\x04\x82\x16\x91\x16a\x0E\xB9V[`\t\x80T_\x91\x82\x91\x90a\r\xA2`\x01\x83a.\x9FV[\x81T\x81\x10a\r\xB2Wa\r\xB2a.\xB2V[_\x91\x82R` \x90\x91 `\x02\x90\x91\x02\x01T`\x01`\x80\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x84\x10a\r\xF1W`@Qc\x18V\xA4\x99`\xE2\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x08T`\x01`\xC0\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16[\x81\x81\x10\x15a\x0E\xB2W\x84`\t\x82\x81T\x81\x10a\x0E!Wa\x0E!a.\xB2V[_\x91\x82R` \x90\x91 `\x02\x90\x91\x02\x01T`\x01`\x80\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x11\x15a\x0E\xAAW`\t\x81\x81T\x81\x10a\x0EZWa\x0EZa.\xB2V[\x90_R` _ \x90`\x02\x02\x01`\x01\x01T`\t\x82\x81T\x81\x10a\x0E}Wa\x0E}a.\xB2V[\x90_R` _ \x90`\x02\x02\x01_\x01`\x10\x90T\x90a\x01\0\n\x90\x04`\x01`\x01`@\x1B\x03\x16\x93P\x93PPP\x91P\x91V[`\x01\x01a\x0E\x05V[PP\x91P\x91V[_\x81`\x01`\x01`@\x1B\x03\x16_\x03a\x0E\xD1WP_a\x0F(V[\x82`\x01`\x01`@\x1B\x03\x16_\x03a\x0E\xE9WP`\x01a\x0F(V[a\x0E\xF3\x82\x84a.SV[`\x01`\x01`@\x1B\x03\x16_\x03a\x0F\x13Wa\x0F\x0C\x82\x84a.\xC6V[\x90Pa\x0F(V[a\x0F\x1D\x82\x84a.\xC6V[a\x0F\x0C\x90`\x01a. V[\x92\x91PPV[a\x0F6a\x13\xD4V[a\x0E\x10\x81c\xFF\xFF\xFF\xFF\x16\x10\x80a\x0FUWPc\x01\xE13\x80\x81c\xFF\xFF\xFF\xFF\x16\x11[\x80a\x0FsWP`\x08Tc\xFF\xFF\xFF\xFF`\x01`\xA0\x1B\x90\x91\x04\x81\x16\x90\x82\x16\x11\x15[\x15a\x0F\x91W`@Qc\x07\xA5\x07w`\xE5\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x08\x80Tc\xFF\xFF\xFF\xFF\x90\x92\x16`\x01`\xA0\x1B\x02c\xFF\xFF\xFF\xFF`\xA0\x1B\x19\x90\x92\x16\x91\x90\x91\x17\x90UV[\x7F\xF0\xC5~\x16\x84\r\xF0@\xF1P\x88\xDC/\x81\xFE9\x1C9#\xBE\xC7>#\xA9f.\xFC\x9C\"\x9Cj\0\x80T`\x01`@\x1B\x81\x04`\xFF\x16\x15\x90`\x01`\x01`@\x1B\x03\x16_\x81\x15\x80\x15a\x0F\xFBWP\x82[\x90P_\x82`\x01`\x01`@\x1B\x03\x16`\x01\x14\x80\x15a\x10\x16WP0;\x15[\x90P\x81\x15\x80\x15a\x10$WP\x80\x15[\x15a\x10BW`@Qc\xF9.\xE8\xA9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x84Tg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x19\x16`\x01\x17\x85U\x83\x15a\x10lW\x84T`\xFF`@\x1B\x19\x16`\x01`@\x1B\x17\x85U[a\x10u\x86a \x89V[a\x10}a \x9AV[a\x10\x88\x89\x89\x89a \xA2V[\x83\x15a\x10\xCEW\x84T`\xFF`@\x1B\x19\x16\x85U`@Q`\x01\x81R\x7F\xC7\xF5\x05\xB2\xF3q\xAE!u\xEEI\x13\xF4I\x9E\x1F&3\xA7\xB5\x93c!\xEE\xD1\xCD\xAE\xB6\x11Q\x81\xD2\x90` \x01`@Q\x80\x91\x03\x90\xA1[PPPPPPPPPV[\x7F\xF0\xC5~\x16\x84\r\xF0@\xF1P\x88\xDC/\x81\xFE9\x1C9#\xBE\xC7>#\xA9f.\xFC\x9C\"\x9Cj\0\x80T`\x02\x91\x90`\x01`@\x1B\x90\x04`\xFF\x16\x80a\x11\"WP\x80T`\x01`\x01`@\x1B\x03\x80\x84\x16\x91\x16\x10\x15[\x15a\x11@W`@Qc\xF9.\xE8\xA9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x80Th\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x19\x16`\x01`\x01`@\x1B\x03\x80\x84\x16\x91\x90\x91\x17`\x01`@\x1B\x17\x82U`\x05\x90\x85\x16\x11a\x11\x88W`@QcP\xDD\x03\xF7`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_T`\x0BU`\x01T`\x0CU`\x02T`\rU`\x03T`\x0EU`\n\x80T`\x01`\x01`@\x1B\x03\x85\x81\x16`\x01`@\x1B\x02`\x01`\x01`\x80\x1B\x03\x19\x90\x92\x16\x90\x87\x16\x17\x17\x90Ua\x11\xD1\x83\x85a\x0E\xB9V[`\n\x80Tg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF`\x80\x1B\x19\x16`\x01`\x80\x1B`\x01`\x01`@\x1B\x03\x93\x84\x16\x02\x17\x90U\x81T`\xFF`@\x1B\x19\x16\x82U`@Q\x90\x83\x16\x81R\x7F\xC7\xF5\x05\xB2\xF3q\xAE!u\xEEI\x13\xF4I\x9E\x1F&3\xA7\xB5\x93c!\xEE\xD1\xCD\xAE\xB6\x11Q\x81\xD2\x90` \x01`@Q\x80\x91\x03\x90\xA1PPPPV[`\tT_\x90C\x84\x11\x80a\x12NWP\x80\x15[\x80a\x12\x98WP`\x08T`\t\x80T\x90\x91`\x01`\xC0\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x90\x81\x10a\x12|Wa\x12|a.\xB2V[_\x91\x82R` \x90\x91 `\x02\x90\x91\x02\x01T`\x01`\x01`@\x1B\x03\x16\x84\x10[\x15a\x12\xB6W`@Qc\xB0\xB48w`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_\x80\x80a\x12\xC4`\x01\x85a.\x9FV[\x90P[\x81a\x13`W`\x08T`\x01`\xC0\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x81\x10a\x13`W\x86`\t\x82\x81T\x81\x10a\x12\xF9Wa\x12\xF9a.\xB2V[_\x91\x82R` \x90\x91 `\x02\x90\x91\x02\x01T`\x01`\x01`@\x1B\x03\x16\x11a\x13NW`\x01\x91P`\t\x81\x81T\x81\x10a\x13.Wa\x13.a.\xB2V[_\x91\x82R` \x90\x91 `\x02\x90\x91\x02\x01T`\x01`\x01`@\x1B\x03\x16\x92Pa\x13`V[\x80a\x13X\x81a.\xF3V[\x91PPa\x12\xC7V[\x81a\x13~W`@Qc\xB0\xB48w`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x85a\x13\x89\x84\x89a.\x9FV[\x11\x97\x96PPPPPPPV[a\x13\x9Da\x13\xD4V[`\x01`\x01`\xA0\x1B\x03\x81\x16a\x13\xCBW`@Qc\x1EO\xBD\xF7`\xE0\x1B\x81R_`\x04\x82\x01R`$\x01[`@Q\x80\x91\x03\x90\xFD[a\tz\x81a\x1CIV[3a\x14\x06\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0T`\x01`\x01`\xA0\x1B\x03\x16\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x14a\n#W`@Qc\x11\x8C\xDA\xA7`\xE0\x1B\x81R3`\x04\x82\x01R`$\x01a\x13\xC2V[a\x147a#\xF0V[b\x10\0\0\x81R`\x0B` \x82\x01R\x7F&\x86~\xE5\x8A\xAF\x86\x0F\xC9\xE0\xE3\xA7\x86f\xFF\xC5\x1F;\xA1\xAD\x8A\xE0\x01\xC1\x96\x83\x0CU\xB5\xAF\x0B\x8C`@\x82\x01QR\x7F\t\x120\xAD\xB7S\xF8(\x15\x15\x12w\x06\x0C\xC5kTk\xB2\xE9P\xA0\xDE\x19\xED\x06\x1E\xC6\x8C\x07\x1A\x90` `@\x83\x01Q\x01R\x7F\x02\xA5\t\xA0m\x8CV\xF8? F\x88\xFFnB\xEA\xC6\xE3\xCB\xDD\x06;\tq\xA3\xAF\x95>\x81\xBA\xDB\xB6``\x82\x01QR\x7F\x06\xF4>\xD2\xB9\xCE\xCE5\xD1 \x1A\xBC\x13\xFF\xDA\xEA5V\x0C\xF0\xF1Dbw\x13\x8C\xE8\x12\xB9\xAD\x9F9` ``\x83\x01Q\x01R\x7F\x1AX\x8C\x99\xAD\x88\xF7\x89\xC8w\"\xB0a\xBBU5\xDA\xA0\xAB\xCC\x1D\xC6\xD1v\xD7\xFE\xA5\x1E]\x80\xB9&`\x80\x82\x01QR\x7F b\xB9\x95\xE6\x1Aj\xB8\xAA\xB6\xCDnu \xB8y\xD8O\x96Z\xB1\xF0\x94\xC1\x04\xF0\xC1!;(\x03\x8B` `\x80\x83\x01Q\x01R\x7F!\xA2\xFDvj\x0C\xEB\xEC\xFD\xBF\xDF\xE5a9\xA1\xBB\xD9\xAE\xC1^.5\xBE\x8E\xF0\x194\xA0\xECC\x86\x85`\xA0\x82\x01QR\x7F \xFEP\n\xC7\xD1\xAAx \xDB\x8Co\x7F\x9DP\x9E;.\x88s\x1E:\x12\xDDe\xF0oC\xCA\x93\r\xA0` `\xA0\x83\x01Q\x01R\x7F\n\xB5=\x12\x85\xC7\xF4\x81\x9B?\xF6\xE1\xDD\xAD\xA6\xBF%\x15\xD3K\xBA\xF6\x11\x86\xC6\xA0K\xE4}\xFDe\xA3`\xC0\x82\x01QR\x7F\x0B\x80\xA9\x87\x80\x82\xCD\xFD\xD9\xFC\xC1k\xB3?\xA4$\xC0\xADf\xB8\x19I\xBFd!S\xD3\xC7\xAD\x08/\"` `\xC0\x83\x01Q\x01R\x7F\x1B\x90\x0F\x8E_\x8E\x80d\xA5\x88\x8A\x1B\xD7\x96\xB5J&R\xFC\x02\x03O\xE4\xB6\xE6\xFC\x8DfP\xF7E;`\xE0\x82\x01QR~\xCC\xA2X\xA8\x83,d\xD1\xF8\xE1r\x1Ax\xFC%\xB1=)\xAD\xBB\x81\xE3Zy\xFC/I\xF8\x90'\x86` `\xE0\x83\x01Q\x01R\x7F\r\x1D3H\xD6B\xE6\xF2\xE9s\x9Ds]\x8Cr6v\xDB\xAE\xFD\xCB\xB4\xE9fA\xDE\xFA5=&\xEB\xB3a\x01\0\x82\x01QR\x7F\x14\xFE\x9Dj3Q\x04\xE7I\x1C\xA6\xD5\x08a\x13\xE6\xB0\xF5)F\x96\rrfdf{\xD5\x859\xD4\x1E` a\x01\0\x83\x01Q\x01R\x7F\x1D\xA9CdD\x0CN?\xB8\xAF-6<\xDE\xFAN\xDD\xA47W\x9E\x1B\x05j\x16\xA5\xE9\xA1\x1D\xFF\xA2\xABa\x01 \x82\x01QR\x7F\n\x07{\xD3\x07\xED1\"-\xB5\\\xB0\x12\x8B\xAF\xCE^\"U{W\xF5\xAC\x91SY\xC5\x02\x96\xCB\\w` a\x01 \x83\x01Q\x01R\x7F(\xFF\x80\xB13\xD9\x89#\\q)\xDE\xA5Di\xB7\x80\xACG\x17D\x92\x90\x06~|\x9A}[\xE7\xDB\xD5a\x01@\x82\x01QR\x7F\x1C\x0F\xC2.\xEF#\xB5\n-\xDCU?\x9F\xC1\xB6\x1F\xD8\xC5zX\xCA2\x1A\x82\x9C~\xC2U\xF7W\xB3\xA6` a\x01@\x83\x01Q\x01R~<N!\xE5\xDF\xBAb\xA5\xB1p/\xB0\xEF#K\xFE\x95\xA7w\x01\xA4V\x88#PRm\x14\x02C\xF5a\x01`\x82\x01QR\x7F\x06\x01-\xB8(v\xBA3\xE6\xE8\xF8\nQ\x016b\xE5lJ\xBC\x86\xA7\xD8\\'.\x19\xA6\xD7\xF5}\x0B` a\x01`\x83\x01Q\x01R\x7F\x16\xD5$}\xBD\xEA\xE1\xDFp\t>^\xE7rr\x95\x96a\xE0\xFB\xAB\xDAC\x17w\xFAr\x9F[S/Da\x01\x80\x82\x01QR~\x8D\x9E\xE0\x0Fy\x9C\xF0\x06\x08\xB0\x82\xD0;\x9D\xE5\xA4+\x81&\xC3_\xBF\xBD\x1E`!\x08\xDF\x10\xE0\xE3` a\x01\x80\x83\x01Q\x01R\x7F/Rli\x81d?\xF6\xF6\xE9\xD2\xB5\xA9!\xE0l\xF9_'F)\xB5\xA1E\xBDU+\x7F\xDAj\x87\0a\x01\xA0\x82\x01QR\x7F/\xE7\x10\x8F\xD4\xE2B1\xF3\xDA\xDBn\t\x07.\x10o\xCA\x06\x94\xFE9\xDF\xF9eW\xA8\x82!\xA8\x9AP` a\x01\xA0\x83\x01Q\x01R\x7F&\xA3V\x85\x98\xA6\x98\x1Ec%\xF4\x81g6\xE3\x81\x08{[\x0EK'\xEF6M\x8A\xE1\xE2\x9F\xE9\xDF\x99a\x01\xC0\x82\x01QR\x7F\x1D\xB8\x1C\xDF\x82\xA9\xEC\x99\xF3\xC9qm\xF2-81~k\xB8O\xC5}/\x0E{+\xC8\xA0V\x9F|\xC4` a\x01\xC0\x83\x01Q\x01R~\x99\x88\x80\x88\xE1\x1D\xE6\xED\x08l\x99\xB9\xBB\xA9\x86\xD9\x08\xDF[\x0CP\x07h\r\x97V}HW\x19\x94a\x01\xE0\x82\x01QR\x7F\x1F\x91Wn\xAD\xFF\xFF\x93+nT\xBA\xB0\"\xF9?o\xEC>[vt\xD0\0k\xC5\xF2\"5'\xA3H` a\x01\xE0\x83\x01Q\x01R~h\xB3\xC1\x17\xEE~\x84\xD6\xB6p\xB6\xAF \x19wY\xEC\x80\xD3O<YC(f01\xE9\xCD~\x02a\x02\0\x82\x01QR\x7F\x1C82\xE2Hw4f\x80\xE7\x04{\xAE,\xFC\xD5\x1F\xAF\xE3\xE7\xCA\xF1\x99\xE9\xDF\xC8\xE8\xF1\x0C+iC` a\x02\0\x83\x01Q\x01R\x7F\x16L\xDD\x9A\xD5\xD4\xE9n\x10\x90s\xE8\xE75\xCDJ\xC6J\xBAm\xDA\xA2D\xDAg\x016\x9C\x8C\xBA]\xAFa\x02 \x82\x01QR\x7F\x16\xC4\x1Ed\x7F\x1A\xB0\xD4\\\x89\x15D)\x9EN\xF9\xC0\x04\xD8\xBC\n;\xF0\x96\xDC8\xCE\x8E\xD9\x0C\rg` a\x02 \x83\x01Q\x01R\x7F\x13K\xA7\xA9V{\xA2\x0E\x1F5\x95\x9E\xE8\xC2\xCDh\x8D:\x96+\xB1y~\x8A\xB8\xE5\x11v\x8D\xE0\xCE\x83a\x02@\x82\x01QR\x7F\x02\xE4\xD2\x86\xC9C_{\xD9L\x1A,x\xB9\x99f\xD0o\xAC\xA1\xAEE\xDEx\x14\x99P\xA4\xFE\xFC\xD6\xE7` a\x02@\x83\x01Q\x01R\x7F\x03\x9A\x0B-\x92\x0F)\xE3\\\xB2\xA9\xE1\xECl\xC2*\xC1\xD4\x82\xAFE\xE4s\x99rJ\x07E\xD5B\xE89a\x02`\x82\x01QR\x7F\x15\xAC&X\xBF\xDD\"'\xAE\xBF\x8E \x93Y5\xA6H\x81\x9E\x1D\xCE\xA8\x07\xDA\x1C\x83\x8A\xBF\xA7\x89lc` a\x02`\x83\x01Q\x01R\x7F\xB0\x83\x88\x93\xEC\x1F#~\x8B\x072;\x07DY\x9FN\x97\xB5\x98\xB3\xB5\x89\xBC\xC2\xBC7\xB8\xD5\xC4\x18\x01a\x02\x80\x82\x01R\x7F\xC1\x83\x93\xC0\xFA0\xFEN\x8B\x03\x8E5z\xD8Q\xEA\xE8\xDE\x91\x07XN\xFF\xE7\xC7\xF1\xF6Q\xB2\x01\x0E&a\x02\xA0\x82\x01R\x90V[0`\x01`\x01`\xA0\x1B\x03\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x16\x14\x80a\x1A\xE0WP\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0`\x01`\x01`\xA0\x1B\x03\x16a\x1A\xD4_Q` a3\x81_9_Q\x90_RT`\x01`\x01`\xA0\x1B\x03\x16\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x14\x15[\x15a\n#W`@Qcp>F\xDD`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x1B\x06a\x13\xD4V[`@Q`\x01`\x01`\xA0\x1B\x03\x82\x16\x81R\x7F\xF7\x87!\"n\xFE\x9A\x1B\xB6x\x18\x9A\x16\xD1UI(\xB9\xF2\x19.,\xB9>\xED\xA8;y\xFA@\0}\x90` \x01a\x08\x17V[\x81`\x01`\x01`\xA0\x1B\x03\x16cR\xD1\x90-`@Q\x81c\xFF\xFF\xFF\xFF\x16`\xE0\x1B\x81R`\x04\x01` `@Q\x80\x83\x03\x81\x86Z\xFA\x92PPP\x80\x15a\x1B\x99WP`@\x80Q`\x1F=\x90\x81\x01`\x1F\x19\x16\x82\x01\x90\x92Ra\x1B\x96\x91\x81\x01\x90a/\x08V[`\x01[a\x1B\xC1W`@QcL\x9C\x8C\xE3`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x83\x16`\x04\x82\x01R`$\x01a\x13\xC2V[_Q` a3\x81_9_Q\x90_R\x81\x14a\x1B\xF1W`@Qc*\x87Ri`\xE2\x1B\x81R`\x04\x81\x01\x82\x90R`$\x01a\x13\xC2V[a\x1B\xFB\x83\x83a!\xCEV[PPPV[0`\x01`\x01`\xA0\x1B\x03\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x16\x14a\n#W`@Qcp>F\xDD`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0\x80T`\x01`\x01`\xA0\x1B\x03\x19\x81\x16`\x01`\x01`\xA0\x1B\x03\x84\x81\x16\x91\x82\x17\x84U`@Q\x92\x16\x91\x82\x90\x7F\x8B\xE0\x07\x9CS\x16Y\x14\x13D\xCD\x1F\xD0\xA4\xF2\x84\x19I\x7F\x97\"\xA3\xDA\xAF\xE3\xB4\x18okdW\xE0\x90_\x90\xA3PPPV[\x7F0dNr\xE11\xA0)\xB8PE\xB6\x81\x81X](3\xE8Hy\xB9p\x91C\xE1\xF5\x93\xF0\0\0\x01\x81\x10\x80a\t\x98W`@QbF\x1B\xCD`\xE5\x1B\x81R` `\x04\x82\x01R`\x1B`$\x82\x01R\x7FBn254: invalid scalar field\0\0\0\0\0`D\x82\x01R`d\x01a\x13\xC2V[_a\x1D2a\x08kV[\x90Pa\x1D<a&UV[\x84Q`\x01`\x01`@\x1B\x03\x90\x81\x16\x82R` \x80\x87\x01\x80Q\x83\x16\x91\x84\x01\x91\x90\x91R`@\x80\x88\x01Q\x90\x84\x01R`\x0CT``\x84\x01R`\rT`\x80\x84\x01R`\x0ET`\xA0\x84\x01R`\x0BT`\xC0\x84\x01R`\nT\x90Q`\x01`@\x1B\x90\x91\x04\x82\x16\x91\x16\x10\x80\x15\x90a\x1D\xACWPa\x1D\xAC\x85` \x01Qa\x08\x99V[\x15a\x1D\xDEW` \x84\x01Q`\xE0\x82\x01R`@\x84\x01Qa\x01\0\x82\x01R``\x84\x01Qa\x01 \x82\x01R\x83Qa\x01@\x82\x01Ra\x1E\x02V[`\x0CT`\xE0\x82\x01R`\rTa\x01\0\x82\x01R`\x0ETa\x01 \x82\x01R`\x0BTa\x01@\x82\x01R[`@Qc\xFC\x86`\xC7`\xE0\x1B\x81Rs\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x90c\xFC\x86`\xC7\x90a\x1E=\x90\x85\x90\x85\x90\x88\x90`\x04\x01a1\x01V[` `@Q\x80\x83\x03\x81\x86Z\xF4\x15\x80\x15a\x1EXW=__>=_\xFD[PPPP`@Q=`\x1F\x19`\x1F\x82\x01\x16\x82\x01\x80`@RP\x81\x01\x90a\x1E|\x91\x90a3!V[a\x1E\x99W`@Qc\t\xBD\xE39`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[PPPPPV[`\tT\x15\x80\x15\x90a\x1F\x15WP`\x08T`\t\x80T`\x01`\xA0\x1B\x83\x04c\xFF\xFF\xFF\xFF\x16\x92`\x01`\xC0\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x90\x81\x10a\x1E\xE0Wa\x1E\xE0a.\xB2V[_\x91\x82R` \x90\x91 `\x02\x90\x91\x02\x01Ta\x1F\n\x90`\x01`@\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x84a.\x80V[`\x01`\x01`@\x1B\x03\x16\x11[\x15a\x1F\xA8W`\x08T`\t\x80T\x90\x91`\x01`\xC0\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x90\x81\x10a\x1FBWa\x1FBa.\xB2V[_\x91\x82R` \x82 `\x02\x90\x91\x02\x01\x80T`\x01`\x01`\xC0\x1B\x03\x19\x16\x81U`\x01\x01U`\x08\x80T`\x01`\xC0\x1B\x90\x04`\x01`\x01`@\x1B\x03\x16\x90`\x18a\x1F\x82\x83a3@V[\x91\x90a\x01\0\n\x81T\x81`\x01`\x01`@\x1B\x03\x02\x19\x16\x90\x83`\x01`\x01`@\x1B\x03\x16\x02\x17\x90UPP[`@\x80Q`\x80\x81\x01\x82R`\x01`\x01`@\x1B\x03\x94\x85\x16\x81R\x92\x84\x16` \x80\x85\x01\x91\x82R\x83\x01Q\x85\x16\x84\x83\x01\x90\x81R\x92\x90\x91\x01Q``\x84\x01\x90\x81R`\t\x80T`\x01\x81\x01\x82U_\x91\x90\x91R\x93Q`\x02\x90\x94\x02\x7Fn\x15@\x17\x1Bl\x0C\x96\x0Bq\xA7\x02\r\x9F`\x07\x7Fj\xF91\xA8\xBB\xF5\x90\xDA\x02#\xDA\xCFu\xC7\xAF\x81\x01\x80T\x93Q\x94Q\x87\x16`\x01`\x80\x1B\x02g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF`\x80\x1B\x19\x95\x88\x16`\x01`@\x1B\x02`\x01`\x01`\x80\x1B\x03\x19\x90\x95\x16\x96\x90\x97\x16\x95\x90\x95\x17\x92\x90\x92\x17\x92\x90\x92\x16\x93\x90\x93\x17\x90\x91UQ\x7Fn\x15@\x17\x1Bl\x0C\x96\x0Bq\xA7\x02\r\x9F`\x07\x7Fj\xF91\xA8\xBB\xF5\x90\xDA\x02#\xDA\xCFu\xC7\xB0\x90\x91\x01UV[a \x91a\"#V[a\tz\x81a\"lV[a\n#a\"#V[\x82Q`\x01`\x01`@\x1B\x03\x16\x15\x15\x80a \xC6WP` \x83\x01Q`\x01`\x01`@\x1B\x03\x16\x15\x15[\x80a \xD3WP` \x82\x01Q\x15[\x80a \xE0WP`@\x82\x01Q\x15[\x80a \xEDWP``\x82\x01Q\x15[\x80a \xF7WP\x81Q\x15[\x80a!\tWPa\x0E\x10\x81c\xFF\xFF\xFF\xFF\x16\x10[\x80a!\x1DWPc\x01\xE13\x80\x81c\xFF\xFF\xFF\xFF\x16\x11[\x15a!;W`@QcP\xDD\x03\xF7`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x82Q`\x04\x80T` \x80\x87\x01Q`\x01`\x01`@\x1B\x03\x90\x81\x16`\x01`@\x1B\x02`\x01`\x01`\x80\x1B\x03\x19\x93\x84\x16\x91\x90\x95\x16\x90\x81\x17\x85\x17\x90\x93U`@\x96\x87\x01Q`\x05\x81\x90U\x86Q_U\x90\x86\x01Q`\x01U\x95\x85\x01Q`\x02U``\x90\x94\x01Q`\x03U`\x06\x80T\x90\x94\x16\x17\x17\x90\x91U`\x07\x91\x90\x91U`\x08\x80Tc\xFF\xFF\xFF\xFF\x90\x92\x16`\x01`\xA0\x1B\x02c\xFF\xFF\xFF\xFF`\xA0\x1B\x19\x90\x92\x16\x91\x90\x91\x17\x90UV[a!\xD7\x82a\"tV[`@Q`\x01`\x01`\xA0\x1B\x03\x83\x16\x90\x7F\xBC|\xD7Z \xEE'\xFD\x9A\xDE\xBA\xB3 A\xF7U!M\xBCk\xFF\xA9\x0C\xC0\"[9\xDA.\\-;\x90_\x90\xA2\x80Q\x15a\"\x1BWa\x1B\xFB\x82\x82a\"\xD7V[a\t\x98a#IV[\x7F\xF0\xC5~\x16\x84\r\xF0@\xF1P\x88\xDC/\x81\xFE9\x1C9#\xBE\xC7>#\xA9f.\xFC\x9C\"\x9Cj\0T`\x01`@\x1B\x90\x04`\xFF\x16a\n#W`@Qc\x1A\xFC\xD7\x9F`\xE3\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x13\x9Da\"#V[\x80`\x01`\x01`\xA0\x1B\x03\x16;_\x03a\"\xA9W`@QcL\x9C\x8C\xE3`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x82\x16`\x04\x82\x01R`$\x01a\x13\xC2V[_Q` a3\x81_9_Q\x90_R\x80T`\x01`\x01`\xA0\x1B\x03\x19\x16`\x01`\x01`\xA0\x1B\x03\x92\x90\x92\x16\x91\x90\x91\x17\x90UV[``__\x84`\x01`\x01`\xA0\x1B\x03\x16\x84`@Qa\"\xF3\x91\x90a3jV[_`@Q\x80\x83\x03\x81\x85Z\xF4\x91PP=\x80_\x81\x14a#+W`@Q\x91P`\x1F\x19`?=\x01\x16\x82\x01`@R=\x82R=_` \x84\x01>a#0V[``\x91P[P\x91P\x91Pa#@\x85\x83\x83a#hV[\x95\x94PPPPPV[4\x15a\n#W`@Qc\xB3\x98\x97\x9F`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[``\x82a#}Wa#x\x82a#\xC7V[a#\xC0V[\x81Q\x15\x80\x15a#\x94WP`\x01`\x01`\xA0\x1B\x03\x84\x16;\x15[\x15a#\xBDW`@Qc\x99\x96\xB3\x15`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x85\x16`\x04\x82\x01R`$\x01a\x13\xC2V[P\x80[\x93\x92PPPV[\x80Q\x15a#\xD7W\x80Q\x80\x82` \x01\xFD[`@Qc\n\x12\xF5!`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`@Q\x80a\x02\xC0\x01`@R\x80_\x81R` \x01_\x81R` \x01a$#`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a$C`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a$c`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a$\x83`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a$\xA3`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a$\xC3`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a$\xE3`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a%\x03`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a%#`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a%C`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a%c`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a%\x83`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a%\xA3`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a%\xC3`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a%\xE3`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a&\x03`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a&#`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01a&C`@Q\x80`@\x01`@R\x80_\x81R` \x01_\x81RP\x90V[\x81R` \x01_\x81R` \x01_\x81RP\x90V[`@Q\x80a\x01`\x01`@R\x80`\x0B\x90` \x82\x02\x806\x837P\x91\x92\x91PPV[\x805`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x08\xF6W__\xFD[_` \x82\x84\x03\x12\x15a&\x9AW__\xFD[a#\xC0\x82a&tV[_` \x82\x84\x03\x12\x15a&\xB3W__\xFD[P5\x91\x90PV[_a\x05\0\x82\x01\x90P\x82Q\x82R` \x83\x01Q` \x83\x01R`@\x83\x01Qa&\xEC`@\x84\x01\x82\x80Q\x82R` \x90\x81\x01Q\x91\x01RV[P``\x83\x01Q\x80Q`\x80\x84\x01R` \x81\x01Q`\xA0\x84\x01RP`\x80\x83\x01Q\x80Q`\xC0\x84\x01R` \x81\x01Q`\xE0\x84\x01RP`\xA0\x83\x01Q\x80Qa\x01\0\x84\x01R` \x81\x01Qa\x01 \x84\x01RP`\xC0\x83\x01Q\x80Qa\x01@\x84\x01R` \x81\x01Qa\x01`\x84\x01RP`\xE0\x83\x01Q\x80Qa\x01\x80\x84\x01R` \x81\x01Qa\x01\xA0\x84\x01RPa\x01\0\x83\x01Q\x80Qa\x01\xC0\x84\x01R` \x81\x01Qa\x01\xE0\x84\x01RPa\x01 \x83\x01Q\x80Qa\x02\0\x84\x01R` \x81\x01Qa\x02 \x84\x01RPa\x01@\x83\x01Q\x80Qa\x02@\x84\x01R` \x81\x01Qa\x02`\x84\x01RPa\x01`\x83\x01Q\x80Qa\x02\x80\x84\x01R` \x81\x01Qa\x02\xA0\x84\x01RPa\x01\x80\x83\x01Q\x80Qa\x02\xC0\x84\x01R` \x81\x01Qa\x02\xE0\x84\x01RPa\x01\xA0\x83\x01Q\x80Qa\x03\0\x84\x01R` \x81\x01Qa\x03 \x84\x01RPa\x01\xC0\x83\x01Q\x80Qa\x03@\x84\x01R` \x81\x01Qa\x03`\x84\x01RPa\x01\xE0\x83\x01Q\x80Qa\x03\x80\x84\x01R` \x81\x01Qa\x03\xA0\x84\x01RPa\x02\0\x83\x01Q\x80Qa\x03\xC0\x84\x01R` \x81\x01Qa\x03\xE0\x84\x01RPa\x02 \x83\x01Q\x80Qa\x04\0\x84\x01R` \x81\x01Qa\x04 \x84\x01RPa\x02@\x83\x01Q\x80Qa\x04@\x84\x01R` \x81\x01Qa\x04`\x84\x01RPa\x02`\x83\x01Q\x80Qa\x04\x80\x84\x01R` \x81\x01Qa\x04\xA0\x84\x01RPa\x02\x80\x83\x01Qa\x04\xC0\x83\x01Ra\x02\xA0\x90\x92\x01Qa\x04\xE0\x90\x91\x01R\x90V[cNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[`@Qa\x02\xE0\x81\x01`\x01`\x01`@\x1B\x03\x81\x11\x82\x82\x10\x17\x15a(\xF2Wa(\xF2a(\xBBV[`@R\x90V[`@Q`\x1F\x82\x01`\x1F\x19\x16\x81\x01`\x01`\x01`@\x1B\x03\x81\x11\x82\x82\x10\x17\x15a) Wa) a(\xBBV[`@R\x91\x90PV[\x805`\x01`\x01`@\x1B\x03\x81\x16\x81\x14a\x08\xF6W__\xFD[_``\x82\x84\x03\x12\x15a)NW__\xFD[`@Q``\x81\x01`\x01`\x01`@\x1B\x03\x81\x11\x82\x82\x10\x17\x15a)pWa)pa(\xBBV[`@R\x90P\x80a)\x7F\x83a)(V[\x81Ra)\x8D` \x84\x01a)(V[` \x82\x01R`@\x92\x83\x015\x92\x01\x91\x90\x91R\x91\x90PV[_`@\x82\x84\x03\x12\x15a)\xB3W__\xFD[`@\x80Q\x90\x81\x01`\x01`\x01`@\x1B\x03\x81\x11\x82\x82\x10\x17\x15a)\xD5Wa)\xD5a(\xBBV[`@R\x825\x81R` \x92\x83\x015\x92\x81\x01\x92\x90\x92RP\x91\x90PV[_a\x04\x80\x82\x84\x03\x12\x15a*\0W__\xFD[a*\x08a(\xCFV[\x90Pa*\x14\x83\x83a)\xA3V[\x81Ra*#\x83`@\x84\x01a)\xA3V[` \x82\x01Ra*5\x83`\x80\x84\x01a)\xA3V[`@\x82\x01Ra*G\x83`\xC0\x84\x01a)\xA3V[``\x82\x01Ra*Z\x83a\x01\0\x84\x01a)\xA3V[`\x80\x82\x01Ra*m\x83a\x01@\x84\x01a)\xA3V[`\xA0\x82\x01Ra*\x80\x83a\x01\x80\x84\x01a)\xA3V[`\xC0\x82\x01Ra*\x93\x83a\x01\xC0\x84\x01a)\xA3V[`\xE0\x82\x01Ra*\xA6\x83a\x02\0\x84\x01a)\xA3V[a\x01\0\x82\x01Ra*\xBA\x83a\x02@\x84\x01a)\xA3V[a\x01 \x82\x01Ra*\xCE\x83a\x02\x80\x84\x01a)\xA3V[a\x01@\x82\x01Ra*\xE2\x83a\x02\xC0\x84\x01a)\xA3V[a\x01`\x82\x01Ra*\xF6\x83a\x03\0\x84\x01a)\xA3V[a\x01\x80\x82\x01Ra\x03@\x82\x015a\x01\xA0\x82\x01Ra\x03`\x82\x015a\x01\xC0\x82\x01Ra\x03\x80\x82\x015a\x01\xE0\x82\x01Ra\x03\xA0\x82\x015a\x02\0\x82\x01Ra\x03\xC0\x82\x015a\x02 \x82\x01Ra\x03\xE0\x82\x015a\x02@\x82\x01Ra\x04\0\x82\x015a\x02`\x82\x01Ra\x04 \x82\x015a\x02\x80\x82\x01Ra\x04@\x82\x015a\x02\xA0\x82\x01Ra\x04`\x90\x91\x015a\x02\xC0\x82\x01R\x91\x90PV[__a\x04\xE0\x83\x85\x03\x12\x15a+\x8CW__\xFD[a+\x96\x84\x84a)>V[\x91Pa+\xA5\x84``\x85\x01a)\xEFV[\x90P\x92P\x92\x90PV[_` \x82\x84\x03\x12\x15a+\xBEW__\xFD[a#\xC0\x82a)(V[\x805c\xFF\xFF\xFF\xFF\x81\x16\x81\x14a\x08\xF6W__\xFD[_` \x82\x84\x03\x12\x15a+\xEAW__\xFD[a#\xC0\x82a+\xC7V[__`@\x83\x85\x03\x12\x15a,\x04W__\xFD[a,\r\x83a&tV[\x91P` \x83\x015`\x01`\x01`@\x1B\x03\x81\x11\x15a,'W__\xFD[\x83\x01`\x1F\x81\x01\x85\x13a,7W__\xFD[\x805`\x01`\x01`@\x1B\x03\x81\x11\x15a,PWa,Pa(\xBBV[a,c`\x1F\x82\x01`\x1F\x19\x16` \x01a(\xF8V[\x81\x81R\x86` \x83\x85\x01\x01\x11\x15a,wW__\xFD[\x81` \x84\x01` \x83\x017_` \x83\x83\x01\x01R\x80\x93PPPP\x92P\x92\x90PV[_`\x80\x82\x84\x03\x12\x15a,\xA6W__\xFD[`@Q`\x80\x81\x01`\x01`\x01`@\x1B\x03\x81\x11\x82\x82\x10\x17\x15a,\xC8Wa,\xC8a(\xBBV[`@\x90\x81R\x835\x82R` \x80\x85\x015\x90\x83\x01R\x83\x81\x015\x90\x82\x01R``\x92\x83\x015\x92\x81\x01\x92\x90\x92RP\x91\x90PV[___a\x05`\x84\x86\x03\x12\x15a-\tW__\xFD[a-\x13\x85\x85a)>V[\x92Pa-\"\x85``\x86\x01a,\x96V[\x91Pa-1\x85`\xE0\x86\x01a)\xEFV[\x90P\x92P\x92P\x92V[__`@\x83\x85\x03\x12\x15a-KW__\xFD[a-T\x83a)(V[\x91Pa+\xA5` \x84\x01a)(V[____a\x01 \x85\x87\x03\x12\x15a-vW__\xFD[a-\x80\x86\x86a)>V[\x93Pa-\x8F\x86``\x87\x01a,\x96V[\x92Pa-\x9D`\xE0\x86\x01a+\xC7V[\x91Pa-\xACa\x01\0\x86\x01a&tV[\x90P\x92\x95\x91\x94P\x92PV[` \x81R_\x82Q\x80` \x84\x01R\x80` \x85\x01`@\x85\x01^_`@\x82\x85\x01\x01R`@`\x1F\x19`\x1F\x83\x01\x16\x84\x01\x01\x91PP\x92\x91PPV[__`@\x83\x85\x03\x12\x15a-\xFDW__\xFD[PP\x805\x92` \x90\x91\x015\x91PV[cNH{q`\xE0\x1B_R`\x11`\x04R`$_\xFD[`\x01`\x01`@\x1B\x03\x81\x81\x16\x83\x82\x16\x01\x90\x81\x11\x15a\x0F(Wa\x0F(a.\x0CV[cNH{q`\xE0\x1B_R`\x12`\x04R`$_\xFD[_`\x01`\x01`@\x1B\x03\x83\x16\x80a.kWa.ka.?V[\x80`\x01`\x01`@\x1B\x03\x84\x16\x06\x91PP\x92\x91PPV[`\x01`\x01`@\x1B\x03\x82\x81\x16\x82\x82\x16\x03\x90\x81\x11\x15a\x0F(Wa\x0F(a.\x0CV[\x81\x81\x03\x81\x81\x11\x15a\x0F(Wa\x0F(a.\x0CV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD[_`\x01`\x01`@\x1B\x03\x83\x16\x80a.\xDEWa.\xDEa.?V[\x80`\x01`\x01`@\x1B\x03\x84\x16\x04\x91PP\x92\x91PPV[_\x81a/\x01Wa/\x01a.\x0CV[P_\x19\x01\x90V[_` \x82\x84\x03\x12\x15a/\x18W__\xFD[PQ\x91\x90PV[\x80_[`\x0B\x81\x10\x15a/AW\x81Q\x84R` \x93\x84\x01\x93\x90\x91\x01\x90`\x01\x01a/\"V[PPPPV[a/\\\x82\x82Q\x80Q\x82R` \x90\x81\x01Q\x91\x01RV[` \x81\x81\x01Q\x80Q`@\x85\x01R\x90\x81\x01Q``\x84\x01RP`@\x81\x01Q\x80Q`\x80\x84\x01R` \x81\x01Q`\xA0\x84\x01RP``\x81\x01Q\x80Q`\xC0\x84\x01R` \x81\x01Q`\xE0\x84\x01RP`\x80\x81\x01Q\x80Qa\x01\0\x84\x01R` \x81\x01Qa\x01 \x84\x01RP`\xA0\x81\x01Q\x80Qa\x01@\x84\x01R` \x81\x01Qa\x01`\x84\x01RP`\xC0\x81\x01Q\x80Qa\x01\x80\x84\x01R` \x81\x01Qa\x01\xA0\x84\x01RP`\xE0\x81\x01Q\x80Qa\x01\xC0\x84\x01R` \x81\x01Qa\x01\xE0\x84\x01RPa\x01\0\x81\x01Q\x80Qa\x02\0\x84\x01R` \x81\x01Qa\x02 \x84\x01RPa\x01 \x81\x01Q\x80Qa\x02@\x84\x01R` \x81\x01Qa\x02`\x84\x01RPa\x01@\x81\x01Q\x80Qa\x02\x80\x84\x01R` \x81\x01Qa\x02\xA0\x84\x01RPa\x01`\x81\x01Q\x80Qa\x02\xC0\x84\x01R` \x81\x01Qa\x02\xE0\x84\x01RPa\x01\x80\x81\x01Q\x80Qa\x03\0\x84\x01R` \x81\x01Qa\x03 \x84\x01RPa\x01\xA0\x81\x01Qa\x03@\x83\x01Ra\x01\xC0\x81\x01Qa\x03`\x83\x01Ra\x01\xE0\x81\x01Qa\x03\x80\x83\x01Ra\x02\0\x81\x01Qa\x03\xA0\x83\x01Ra\x02 \x81\x01Qa\x03\xC0\x83\x01Ra\x02@\x81\x01Qa\x03\xE0\x83\x01Ra\x02`\x81\x01Qa\x04\0\x83\x01Ra\x02\x80\x81\x01Qa\x04 \x83\x01Ra\x02\xA0\x81\x01Qa\x04@\x83\x01Ra\x02\xC0\x01Qa\x04`\x90\x91\x01RV[_a\n\xE0\x82\x01\x90P\x84Q\x82R` \x85\x01Q` \x83\x01R`@\x85\x01Qa13`@\x84\x01\x82\x80Q\x82R` \x90\x81\x01Q\x91\x01RV[P``\x85\x01Q\x80Q`\x80\x84\x01R` \x81\x01Q`\xA0\x84\x01RP`\x80\x85\x01Q\x80Q`\xC0\x84\x01R` \x81\x01Q`\xE0\x84\x01RP`\xA0\x85\x01Q\x80Qa\x01\0\x84\x01R` \x81\x01Qa\x01 \x84\x01RP`\xC0\x85\x01Q\x80Qa\x01@\x84\x01R` \x81\x01Qa\x01`\x84\x01RP`\xE0\x85\x01Q\x80Qa\x01\x80\x84\x01R` \x81\x01Qa\x01\xA0\x84\x01RPa\x01\0\x85\x01Q\x80Qa\x01\xC0\x84\x01R` \x81\x01Qa\x01\xE0\x84\x01RPa\x01 \x85\x01Q\x80Qa\x02\0\x84\x01R` \x81\x01Qa\x02 \x84\x01RPa\x01@\x85\x01Q\x80Qa\x02@\x84\x01R` \x81\x01Qa\x02`\x84\x01RPa\x01`\x85\x01Q\x80Qa\x02\x80\x84\x01R` \x81\x01Qa\x02\xA0\x84\x01RPa\x01\x80\x85\x01Q\x80Qa\x02\xC0\x84\x01R` \x81\x01Qa\x02\xE0\x84\x01RPa\x01\xA0\x85\x01Q\x80Qa\x03\0\x84\x01R` \x81\x01Qa\x03 \x84\x01RPa\x01\xC0\x85\x01Q\x80Qa\x03@\x84\x01R` \x81\x01Qa\x03`\x84\x01RPa\x01\xE0\x85\x01Q\x80Qa\x03\x80\x84\x01R` \x81\x01Qa\x03\xA0\x84\x01RPa\x02\0\x85\x01Q\x80Qa\x03\xC0\x84\x01R` \x81\x01Qa\x03\xE0\x84\x01RPa\x02 \x85\x01Q\x80Qa\x04\0\x84\x01R` \x81\x01Qa\x04 \x84\x01RPa\x02@\x85\x01Q\x80Qa\x04@\x84\x01R` \x81\x01Qa\x04`\x84\x01RPa\x02`\x85\x01Q\x80Qa\x04\x80\x84\x01R` \x81\x01Qa\x04\xA0\x84\x01RPa\x02\x80\x85\x01Qa\x04\xC0\x83\x01Ra\x02\xA0\x85\x01Qa\x04\xE0\x83\x01Ra3\x0Ba\x05\0\x83\x01\x85a/\x1FV[a3\x19a\x06`\x83\x01\x84a/GV[\x94\x93PPPPV[_` \x82\x84\x03\x12\x15a31W__\xFD[\x81Q\x80\x15\x15\x81\x14a#\xC0W__\xFD[_`\x01`\x01`@\x1B\x03\x82\x16`\x01`\x01`@\x1B\x03\x81\x03a3aWa3aa.\x0CV[`\x01\x01\x92\x91PPV[_\x82Q\x80` \x85\x01\x84^_\x92\x01\x91\x82RP\x91\x90PV\xFE6\x08\x94\xA1;\xA1\xA3!\x06g\xC8(I-\xB9\x8D\xCA> v\xCC75\xA9 \xA3\xCAP]8+\xBC\xA1dsolcC\0\x08\x1C\0\n",
     );
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `AddressEmptyCode(address)` and selector `0x9996b315`.
     ```solidity
     error AddressEmptyCode(address target);
@@ -4567,6 +4575,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `DeprecatedApi()` and selector `0x4e405c8d`.
     ```solidity
     error DeprecatedApi();
@@ -4627,6 +4636,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967InvalidImplementation(address)` and selector `0x4c9c8ce3`.
     ```solidity
     error ERC1967InvalidImplementation(address implementation);
@@ -4696,6 +4706,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967NonPayable()` and selector `0xb398979f`.
     ```solidity
     error ERC1967NonPayable();
@@ -4756,6 +4767,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `FailedInnerCall()` and selector `0x1425ea42`.
     ```solidity
     error FailedInnerCall();
@@ -4816,6 +4828,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InsufficientSnapshotHistory()` and selector `0xb0b43877`.
     ```solidity
     error InsufficientSnapshotHistory();
@@ -4876,6 +4889,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidAddress()` and selector `0xe6c4247b`.
     ```solidity
     error InvalidAddress();
@@ -4936,6 +4950,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidArgs()` and selector `0xa1ba07ee`.
     ```solidity
     error InvalidArgs();
@@ -4996,6 +5011,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidHotShotBlockForCommitmentCheck()` and selector `0x615a9264`.
     ```solidity
     error InvalidHotShotBlockForCommitmentCheck();
@@ -5056,6 +5072,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidInitialization()` and selector `0xf92ee8a9`.
     ```solidity
     error InvalidInitialization();
@@ -5116,6 +5133,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidMaxStateHistory()` and selector `0xf4a0eee0`.
     ```solidity
     error InvalidMaxStateHistory();
@@ -5176,6 +5194,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidProof()` and selector `0x09bde339`.
     ```solidity
     error InvalidProof();
@@ -5236,6 +5255,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `MissingEpochRootUpdate()` and selector `0x080ae8d9`.
     ```solidity
     error MissingEpochRootUpdate();
@@ -5296,6 +5316,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `NoChangeRequired()` and selector `0xa863aec9`.
     ```solidity
     error NoChangeRequired();
@@ -5356,6 +5377,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `NotInitializing()` and selector `0xd7e6bcf8`.
     ```solidity
     error NotInitializing();
@@ -5416,6 +5438,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OutdatedState()` and selector `0x051c46ef`.
     ```solidity
     error OutdatedState();
@@ -5476,6 +5499,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableInvalidOwner(address)` and selector `0x1e4fbdf7`.
     ```solidity
     error OwnableInvalidOwner(address owner);
@@ -5543,6 +5567,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableUnauthorizedAccount(address)` and selector `0x118cdaa7`.
     ```solidity
     error OwnableUnauthorizedAccount(address account);
@@ -5610,6 +5635,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ProverNotPermissioned()` and selector `0xa3a64780`.
     ```solidity
     error ProverNotPermissioned();
@@ -5670,6 +5696,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UUPSUnauthorizedCallContext()` and selector `0xe07c8dba`.
     ```solidity
     error UUPSUnauthorizedCallContext();
@@ -5730,6 +5757,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UUPSUnsupportedProxiableUUID(bytes32)` and selector `0xaa1d49a4`.
     ```solidity
     error UUPSUnsupportedProxiableUUID(bytes32 slot);
@@ -5797,6 +5825,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `WrongStakeTableUsed()` and selector `0x51618089`.
     ```solidity
     error WrongStakeTableUsed();
@@ -5857,6 +5886,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Initialized(uint64)` and selector `0xc7f505b2f371ae2175ee4913f4499e1f2633a7b5936321eed1cdaeb6115181d2`.
     ```solidity
     event Initialized(uint64 version);
@@ -5955,6 +5985,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `NewEpoch(uint64)` and selector `0x31eabd9099fdb25dacddd206abff87311e553441fc9d0fcdef201062d7e7071b`.
     ```solidity
     event NewEpoch(uint64 epoch);
@@ -6053,6 +6084,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `NewState(uint64,uint64,uint256)` and selector `0xa04a773924505a418564363725f56832f5772e6b8d0dbd6efce724dfe803dae6`.
     ```solidity
     event NewState(uint64 indexed viewNum, uint64 indexed blockHeight, BN254.ScalarField blockCommRoot);
@@ -6171,6 +6203,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `OwnershipTransferred(address,address)` and selector `0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0`.
     ```solidity
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -6284,6 +6317,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `PermissionedProverNotRequired()` and selector `0x9a5f57de856dd668c54dd95e5c55df93432171cbca49a8776d5620ea59c02450`.
     ```solidity
     event PermissionedProverNotRequired();
@@ -6375,6 +6409,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `PermissionedProverRequired(address)` and selector `0x8017bb887fdf8fca4314a9d40f6e73b3b81002d67e5cfa85d88173af6aa46072`.
     ```solidity
     event PermissionedProverRequired(address permissionedProver);
@@ -6475,6 +6510,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Upgrade(address)` and selector `0xf78721226efe9a1bb678189a16d1554928b9f2192e2cb93eeda83b79fa40007d`.
     ```solidity
     event Upgrade(address implementation);
@@ -6575,6 +6611,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Upgraded(address)` and selector `0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b`.
     ```solidity
     event Upgraded(address indexed implementation);
@@ -6677,6 +6714,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `UPGRADE_INTERFACE_VERSION()` and selector `0xad3cb1cc`.
     ```solidity
     function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
@@ -6684,6 +6722,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct UPGRADE_INTERFACE_VERSIONCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`UPGRADE_INTERFACE_VERSION()`](UPGRADE_INTERFACE_VERSIONCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -6788,6 +6827,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `_getVk()` and selector `0x12173c2c`.
     ```solidity
     function _getVk() external pure returns (IPlonkVerifier.VerifyingKey memory vk);
@@ -6795,6 +6835,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct _getVkCall {}
+    #[derive()]
     ///Container type for the return parameters of the [`_getVk()`](_getVkCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -6900,6 +6941,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `blocksPerEpoch()` and selector `0xf0682054`.
     ```solidity
     function blocksPerEpoch() external view returns (uint64);
@@ -6907,6 +6949,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct blocksPerEpochCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`blocksPerEpoch()`](blocksPerEpochCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7011,6 +7054,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `currentBlockNumber()` and selector `0x378ec23b`.
     ```solidity
     function currentBlockNumber() external view returns (uint256);
@@ -7018,6 +7062,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct currentBlockNumberCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`currentBlockNumber()`](currentBlockNumberCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7122,6 +7167,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `currentEpoch()` and selector `0x76671808`.
     ```solidity
     function currentEpoch() external view returns (uint64);
@@ -7129,6 +7175,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct currentEpochCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`currentEpoch()`](currentEpochCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7233,6 +7280,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `disablePermissionedProverMode()` and selector `0x69cc6a04`.
     ```solidity
     function disablePermissionedProverMode() external;
@@ -7341,6 +7389,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `epochFromBlockNumber(uint64,uint64)` and selector `0x90c14390`.
     ```solidity
     function epochFromBlockNumber(uint64 _blockNum, uint64 _blocksPerEpoch) external pure returns (uint64);
@@ -7353,6 +7402,7 @@ pub mod LightClientV2 {
         #[allow(missing_docs)]
         pub _blocksPerEpoch: u64,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`epochFromBlockNumber(uint64,uint64)`](epochFromBlockNumberCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7473,6 +7523,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `epochStartBlock()` and selector `0x3ed55b7b`.
     ```solidity
     function epochStartBlock() external view returns (uint64);
@@ -7480,6 +7531,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct epochStartBlockCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`epochStartBlock()`](epochStartBlockCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7584,6 +7636,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `finalizedState()` and selector `0x9fdb54a7`.
     ```solidity
     function finalizedState() external view returns (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot);
@@ -7591,6 +7644,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct finalizedStateCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`finalizedState()`](finalizedStateCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7715,6 +7769,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `genesisStakeTableState()` and selector `0x426d3194`.
     ```solidity
     function genesisStakeTableState() external view returns (uint256 threshold, BN254.ScalarField blsKeyComm, BN254.ScalarField schnorrKeyComm, BN254.ScalarField amountComm);
@@ -7722,6 +7777,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct genesisStakeTableStateCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`genesisStakeTableState()`](genesisStakeTableStateCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7857,6 +7913,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `genesisState()` and selector `0xd24d933d`.
     ```solidity
     function genesisState() external view returns (uint64 viewNum, uint64 blockHeight, BN254.ScalarField blockCommRoot);
@@ -7864,6 +7921,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct genesisStateCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`genesisState()`](genesisStateCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -7988,6 +8046,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `getHotShotCommitment(uint256)` and selector `0x8584d23f`.
     ```solidity
     function getHotShotCommitment(uint256 hotShotBlockHeight) external view returns (BN254.ScalarField hotShotBlockCommRoot, uint64 hotshotBlockHeight);
@@ -7998,6 +8057,7 @@ pub mod LightClientV2 {
         #[allow(missing_docs)]
         pub hotShotBlockHeight: alloy::sol_types::private::primitives::aliases::U256,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`getHotShotCommitment(uint256)`](getHotShotCommitmentCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8117,6 +8177,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `getStateHistoryCount()` and selector `0xf9e50d19`.
     ```solidity
     function getStateHistoryCount() external view returns (uint256);
@@ -8124,6 +8185,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct getStateHistoryCountCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`getStateHistoryCount()`](getStateHistoryCountCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8228,6 +8290,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `getVersion()` and selector `0x0d8e6e2c`.
     ```solidity
     function getVersion() external pure returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
@@ -8235,6 +8298,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct getVersionCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`getVersion()`](getVersionCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8355,6 +8419,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initialize((uint64,uint64,uint256),(uint256,uint256,uint256,uint256),uint32,address)` and selector `0x9baa3cc9`.
     ```solidity
     function initialize(LightClient.LightClientState memory _genesis, LightClient.StakeTableState memory _genesisStakeTableState, uint32 _stateHistoryRetentionPeriod, address owner) external;
@@ -8511,6 +8576,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initializeV2(uint64,uint64)` and selector `0xb33bc491`.
     ```solidity
     function initializeV2(uint64 _blocksPerEpoch, uint64 _epochStartBlock) external;
@@ -8640,6 +8706,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `isEpochRoot(uint64)` and selector `0x25297427`.
     ```solidity
     function isEpochRoot(uint64 blockHeight) external view returns (bool);
@@ -8650,6 +8717,7 @@ pub mod LightClientV2 {
         #[allow(missing_docs)]
         pub blockHeight: u64,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`isEpochRoot(uint64)`](isEpochRootCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8760,6 +8828,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `isGtEpochRoot(uint64)` and selector `0x300c89dd`.
     ```solidity
     function isGtEpochRoot(uint64 blockHeight) external view returns (bool);
@@ -8770,6 +8839,7 @@ pub mod LightClientV2 {
         #[allow(missing_docs)]
         pub blockHeight: u64,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`isGtEpochRoot(uint64)`](isGtEpochRootCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8880,6 +8950,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `isPermissionedProverEnabled()` and selector `0x826e41fc`.
     ```solidity
     function isPermissionedProverEnabled() external view returns (bool);
@@ -8887,6 +8958,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct isPermissionedProverEnabledCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`isPermissionedProverEnabled()`](isPermissionedProverEnabledCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -8991,6 +9063,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `lagOverEscapeHatchThreshold(uint256,uint256)` and selector `0xe0303301`.
     ```solidity
     function lagOverEscapeHatchThreshold(uint256 blockNumber, uint256 blockThreshold) external view returns (bool);
@@ -9003,6 +9076,7 @@ pub mod LightClientV2 {
         #[allow(missing_docs)]
         pub blockThreshold: alloy::sol_types::private::primitives::aliases::U256,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`lagOverEscapeHatchThreshold(uint256,uint256)`](lagOverEscapeHatchThresholdCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -9126,6 +9200,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive()]
     /**Function with signature `newFinalizedState((uint64,uint64,uint256),((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))` and selector `0x2063d4f7`.
     ```solidity
     function newFinalizedState(LightClient.LightClientState memory, IPlonkVerifier.PlonkProof memory) external pure;
@@ -9249,6 +9324,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive()]
     /**Function with signature `newFinalizedState((uint64,uint64,uint256),(uint256,uint256,uint256,uint256),((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))` and selector `0x757c37ad`.
     ```solidity
     function newFinalizedState(LightClient.LightClientState memory newState, LightClient.StakeTableState memory nextStakeTable, IPlonkVerifier.PlonkProof memory proof) external;
@@ -9388,6 +9464,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `owner()` and selector `0x8da5cb5b`.
     ```solidity
     function owner() external view returns (address);
@@ -9395,6 +9472,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ownerCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`owner()`](ownerCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -9499,6 +9577,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `permissionedProver()` and selector `0x313df7b1`.
     ```solidity
     function permissionedProver() external view returns (address);
@@ -9506,6 +9585,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct permissionedProverCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`permissionedProver()`](permissionedProverCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -9610,6 +9690,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `proxiableUUID()` and selector `0x52d1902d`.
     ```solidity
     function proxiableUUID() external view returns (bytes32);
@@ -9617,6 +9698,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct proxiableUUIDCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`proxiableUUID()`](proxiableUUIDCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -9721,6 +9803,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `renounceOwnership()` and selector `0x715018a6`.
     ```solidity
     function renounceOwnership() external;
@@ -9829,6 +9912,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `setPermissionedProver(address)` and selector `0x013fa5fc`.
     ```solidity
     function setPermissionedProver(address prover) external;
@@ -9944,6 +10028,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `setStateHistoryRetentionPeriod(uint32)` and selector `0x433dba9f`.
     ```solidity
     function setStateHistoryRetentionPeriod(uint32 historySeconds) external;
@@ -10061,6 +10146,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `setstateHistoryRetentionPeriod(uint32)` and selector `0x96c1ca61`.
     ```solidity
     function setstateHistoryRetentionPeriod(uint32 historySeconds) external;
@@ -10178,6 +10264,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `stateHistoryCommitments(uint256)` and selector `0x02b592f3`.
     ```solidity
     function stateHistoryCommitments(uint256) external view returns (uint64 l1BlockHeight, uint64 l1BlockTimestamp, uint64 hotShotBlockHeight, BN254.ScalarField hotShotBlockCommRoot);
@@ -10188,6 +10275,7 @@ pub mod LightClientV2 {
         #[allow(missing_docs)]
         pub _0: alloy::sol_types::private::primitives::aliases::U256,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`stateHistoryCommitments(uint256)`](stateHistoryCommitmentsCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -10327,6 +10415,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `stateHistoryFirstIndex()` and selector `0x2f79889d`.
     ```solidity
     function stateHistoryFirstIndex() external view returns (uint64);
@@ -10334,6 +10423,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct stateHistoryFirstIndexCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`stateHistoryFirstIndex()`](stateHistoryFirstIndexCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -10438,6 +10528,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `stateHistoryRetentionPeriod()` and selector `0xc23b9e9e`.
     ```solidity
     function stateHistoryRetentionPeriod() external view returns (uint32);
@@ -10445,6 +10536,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct stateHistoryRetentionPeriodCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`stateHistoryRetentionPeriod()`](stateHistoryRetentionPeriodCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -10549,6 +10641,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `transferOwnership(address)` and selector `0xf2fde38b`.
     ```solidity
     function transferOwnership(address newOwner) external;
@@ -10664,6 +10757,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `upgradeToAndCall(address,bytes)` and selector `0x4f1ef286`.
     ```solidity
     function upgradeToAndCall(address newImplementation, bytes memory data) external payable;
@@ -10796,6 +10890,7 @@ pub mod LightClientV2 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `votingStakeTableState()` and selector `0x0625e19b`.
     ```solidity
     function votingStakeTableState() external view returns (uint256 threshold, BN254.ScalarField blsKeyComm, BN254.ScalarField schnorrKeyComm, BN254.ScalarField amountComm);
@@ -10803,6 +10898,7 @@ pub mod LightClientV2 {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct votingStakeTableStateCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`votingStakeTableState()`](votingStakeTableStateCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -10939,6 +11035,7 @@ pub mod LightClientV2 {
         }
     };
     ///Container for all the [`LightClientV2`](self) function calls.
+    #[derive()]
     pub enum LightClientV2Calls {
         #[allow(missing_docs)]
         UPGRADE_INTERFACE_VERSION(UPGRADE_INTERFACE_VERSIONCall),
@@ -11917,6 +12014,7 @@ pub mod LightClientV2 {
         }
     }
     ///Container for all the [`LightClientV2`](self) custom errors.
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum LightClientV2Errors {
         #[allow(missing_docs)]
         AddressEmptyCode(AddressEmptyCode),
@@ -12596,6 +12694,7 @@ pub mod LightClientV2 {
         }
     }
     ///Container for all the [`LightClientV2`](self) events.
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum LightClientV2Events {
         #[allow(missing_docs)]
         Initialized(Initialized),

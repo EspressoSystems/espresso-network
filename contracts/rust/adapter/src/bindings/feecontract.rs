@@ -468,6 +468,7 @@ pub mod FeeContract {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R`\x046\x10a\0\xAAW_5`\xE0\x1C\x80c\x8D\xA5\xCB[\x11a\0cW\x80c\x8D\xA5\xCB[\x14a\x01\x9CW\x80c\x8E\xD82q\x14a\x01\xE2W\x80c\xAD<\xB1\xCC\x14a\x01\xF6W\x80c\xC4\xD6m\xE8\x14a\x023W\x80c\xF2\xFD\xE3\x8B\x14a\x02RW\x80c\xF3@\xFA\x01\x14a\x02qWa\0\xC8V[\x80c\r\x8En,\x14a\0\xE1W\x80c'\xE25\xE3\x14a\x01\x11W\x80cO\x1E\xF2\x86\x14a\x01JW\x80cR\xD1\x90-\x14a\x01_W\x80cdP\x06\xCA\x14a\x01sW\x80cqP\x18\xA6\x14a\x01\x88Wa\0\xC8V[6a\0\xC8W`@Qc\xBC\x8E\xCA\x1B`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`@Qc\x155\xAC_`\xE3\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[4\x80\x15a\0\xECW__\xFD[P`@\x80Q`\x01\x81R_` \x82\x01\x81\x90R\x91\x81\x01\x91\x90\x91R``\x01[`@Q\x80\x91\x03\x90\xF3[4\x80\x15a\x01\x1CW__\xFD[Pa\x01<a\x01+6`\x04a\n0V[`\x02` R_\x90\x81R`@\x90 T\x81V[`@Q\x90\x81R` \x01a\x01\x08V[a\x01]a\x01X6`\x04a\n]V[a\x02\x84V[\0[4\x80\x15a\x01jW__\xFD[Pa\x01<a\x02\xA3V[4\x80\x15a\x01~W__\xFD[Pa\x01<`\x01T\x81V[4\x80\x15a\x01\x93W__\xFD[Pa\x01]a\x02\xBEV[4\x80\x15a\x01\xA7W__\xFD[P\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0T`@Q`\x01`\x01`\xA0\x1B\x03\x90\x91\x16\x81R` \x01a\x01\x08V[4\x80\x15a\x01\xEDW__\xFD[Pa\x01<_T\x81V[4\x80\x15a\x02\x01W__\xFD[Pa\x02&`@Q\x80`@\x01`@R\x80`\x05\x81R` \x01d\x03R\xE3\x02\xE3`\xDC\x1B\x81RP\x81V[`@Qa\x01\x08\x91\x90a\x0B!V[4\x80\x15a\x02>W__\xFD[Pa\x01]a\x02M6`\x04a\n0V[a\x02\xD1V[4\x80\x15a\x02]W__\xFD[Pa\x01]a\x02l6`\x04a\n0V[a\x03\xFDV[a\x01]a\x02\x7F6`\x04a\n0V[a\x04?V[a\x02\x8Ca\x05\x18V[a\x02\x95\x82a\x05\xBCV[a\x02\x9F\x82\x82a\x06\x03V[PPV[_a\x02\xACa\x06\xC4V[P_Q` a\x0B\xA3_9_Q\x90_R\x90V[a\x02\xC6a\x07\rV[a\x02\xCF_a\x07hV[V[\x7F\xF0\xC5~\x16\x84\r\xF0@\xF1P\x88\xDC/\x81\xFE9\x1C9#\xBE\xC7>#\xA9f.\xFC\x9C\"\x9Cj\0\x80T`\x01`@\x1B\x81\x04`\xFF\x16\x15\x90g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x16_\x81\x15\x80\x15a\x03\x16WP\x82[\x90P_\x82g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x16`\x01\x14\x80\x15a\x032WP0;\x15[\x90P\x81\x15\x80\x15a\x03@WP\x80\x15[\x15a\x03^W`@Qc\xF9.\xE8\xA9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x84Tg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x19\x16`\x01\x17\x85U\x83\x15a\x03\x88W\x84T`\xFF`@\x1B\x19\x16`\x01`@\x1B\x17\x85U[a\x03\x91\x86a\x07\xD8V[a\x03\x99a\x07\xE9V[g\r\xE0\xB6\xB3\xA7d\0\0_Uf\x03\x8D~\xA4\xC6\x80\0`\x01U\x83\x15a\x03\xF5W\x84T`\xFF`@\x1B\x19\x16\x85U`@Q`\x01\x81R\x7F\xC7\xF5\x05\xB2\xF3q\xAE!u\xEEI\x13\xF4I\x9E\x1F&3\xA7\xB5\x93c!\xEE\xD1\xCD\xAE\xB6\x11Q\x81\xD2\x90` \x01`@Q\x80\x91\x03\x90\xA1[PPPPPPV[a\x04\x05a\x07\rV[`\x01`\x01`\xA0\x1B\x03\x81\x16a\x043W`@Qc\x1EO\xBD\xF7`\xE0\x1B\x81R_`\x04\x82\x01R`$\x01[`@Q\x80\x91\x03\x90\xFD[a\x04<\x81a\x07hV[PV[`\x01T4\x10\x15a\x04bW`@Qck\xA4\xA1\xC7`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[_T4\x11\x15a\x04\x84W`@Qc\xC5mF\xD3`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x81\x16a\x04\xABW`@Qc\x07\x02\xB3\xD9`\xE4\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[`\x01`\x01`\xA0\x1B\x03\x81\x16_\x90\x81R`\x02` R`@\x81 \x80T4\x92\x90a\x04\xD2\x90\x84\x90a\x0BVV[\x90\x91UPP`@Q4\x81R`\x01`\x01`\xA0\x1B\x03\x82\x16\x90\x7F\xE1\xFF\xFC\xC4\x92=\x04\xB5Y\xF4\xD2\x9A\x8B\xFCl\xDA\x04\xEB[\r<F\x07Q\xC2@,\\\\\xC9\x10\x9C\x90` \x01`@Q\x80\x91\x03\x90\xA2PV[0`\x01`\x01`\xA0\x1B\x03\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x16\x14\x80a\x05\x9EWP\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0`\x01`\x01`\xA0\x1B\x03\x16a\x05\x92_Q` a\x0B\xA3_9_Q\x90_RT`\x01`\x01`\xA0\x1B\x03\x16\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x14\x15[\x15a\x02\xCFW`@Qcp>F\xDD`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x05\xC4a\x07\rV[`@Q`\x01`\x01`\xA0\x1B\x03\x82\x16\x81R\x7F\xF7\x87!\"n\xFE\x9A\x1B\xB6x\x18\x9A\x16\xD1UI(\xB9\xF2\x19.,\xB9>\xED\xA8;y\xFA@\0}\x90` \x01`@Q\x80\x91\x03\x90\xA1PV[\x81`\x01`\x01`\xA0\x1B\x03\x16cR\xD1\x90-`@Q\x81c\xFF\xFF\xFF\xFF\x16`\xE0\x1B\x81R`\x04\x01` `@Q\x80\x83\x03\x81\x86Z\xFA\x92PPP\x80\x15a\x06]WP`@\x80Q`\x1F=\x90\x81\x01`\x1F\x19\x16\x82\x01\x90\x92Ra\x06Z\x91\x81\x01\x90a\x0BuV[`\x01[a\x06\x85W`@QcL\x9C\x8C\xE3`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x83\x16`\x04\x82\x01R`$\x01a\x04*V[_Q` a\x0B\xA3_9_Q\x90_R\x81\x14a\x06\xB5W`@Qc*\x87Ri`\xE2\x1B\x81R`\x04\x81\x01\x82\x90R`$\x01a\x04*V[a\x06\xBF\x83\x83a\x07\xF1V[PPPV[0`\x01`\x01`\xA0\x1B\x03\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x16\x14a\x02\xCFW`@Qcp>F\xDD`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[3a\x07?\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0T`\x01`\x01`\xA0\x1B\x03\x16\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x14a\x02\xCFW`@Qc\x11\x8C\xDA\xA7`\xE0\x1B\x81R3`\x04\x82\x01R`$\x01a\x04*V[\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0\x80T`\x01`\x01`\xA0\x1B\x03\x19\x81\x16`\x01`\x01`\xA0\x1B\x03\x84\x81\x16\x91\x82\x17\x84U`@Q\x92\x16\x91\x82\x90\x7F\x8B\xE0\x07\x9CS\x16Y\x14\x13D\xCD\x1F\xD0\xA4\xF2\x84\x19I\x7F\x97\"\xA3\xDA\xAF\xE3\xB4\x18okdW\xE0\x90_\x90\xA3PPPV[a\x07\xE0a\x08FV[a\x04<\x81a\x08\x8FV[a\x02\xCFa\x08FV[a\x07\xFA\x82a\x08\x97V[`@Q`\x01`\x01`\xA0\x1B\x03\x83\x16\x90\x7F\xBC|\xD7Z \xEE'\xFD\x9A\xDE\xBA\xB3 A\xF7U!M\xBCk\xFF\xA9\x0C\xC0\"[9\xDA.\\-;\x90_\x90\xA2\x80Q\x15a\x08>Wa\x06\xBF\x82\x82a\x08\xFAV[a\x02\x9Fa\tnV[\x7F\xF0\xC5~\x16\x84\r\xF0@\xF1P\x88\xDC/\x81\xFE9\x1C9#\xBE\xC7>#\xA9f.\xFC\x9C\"\x9Cj\0T`\x01`@\x1B\x90\x04`\xFF\x16a\x02\xCFW`@Qc\x1A\xFC\xD7\x9F`\xE3\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x04\x05a\x08FV[\x80`\x01`\x01`\xA0\x1B\x03\x16;_\x03a\x08\xCCW`@QcL\x9C\x8C\xE3`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x82\x16`\x04\x82\x01R`$\x01a\x04*V[_Q` a\x0B\xA3_9_Q\x90_R\x80T`\x01`\x01`\xA0\x1B\x03\x19\x16`\x01`\x01`\xA0\x1B\x03\x92\x90\x92\x16\x91\x90\x91\x17\x90UV[``__\x84`\x01`\x01`\xA0\x1B\x03\x16\x84`@Qa\t\x16\x91\x90a\x0B\x8CV[_`@Q\x80\x83\x03\x81\x85Z\xF4\x91PP=\x80_\x81\x14a\tNW`@Q\x91P`\x1F\x19`?=\x01\x16\x82\x01`@R=\x82R=_` \x84\x01>a\tSV[``\x91P[P\x91P\x91Pa\tc\x85\x83\x83a\t\x8DV[\x92PPP[\x92\x91PPV[4\x15a\x02\xCFW`@Qc\xB3\x98\x97\x9F`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[``\x82a\t\xA2Wa\t\x9D\x82a\t\xECV[a\t\xE5V[\x81Q\x15\x80\x15a\t\xB9WP`\x01`\x01`\xA0\x1B\x03\x84\x16;\x15[\x15a\t\xE2W`@Qc\x99\x96\xB3\x15`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x85\x16`\x04\x82\x01R`$\x01a\x04*V[P\x80[\x93\x92PPPV[\x80Q\x15a\t\xFCW\x80Q\x80\x82` \x01\xFD[`@Qc\n\x12\xF5!`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x805`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\n+W__\xFD[\x91\x90PV[_` \x82\x84\x03\x12\x15a\n@W__\xFD[a\t\xE5\x82a\n\x15V[cNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[__`@\x83\x85\x03\x12\x15a\nnW__\xFD[a\nw\x83a\n\x15V[\x91P` \x83\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\n\x92W__\xFD[\x83\x01`\x1F\x81\x01\x85\x13a\n\xA2W__\xFD[\x805g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\n\xBCWa\n\xBCa\nIV[`@Q`\x1F\x82\x01`\x1F\x19\x90\x81\x16`?\x01\x16\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\n\xEBWa\n\xEBa\nIV[`@R\x81\x81R\x82\x82\x01` \x01\x87\x10\x15a\x0B\x02W__\xFD[\x81` \x84\x01` \x83\x017_` \x83\x83\x01\x01R\x80\x93PPPP\x92P\x92\x90PV[` \x81R_\x82Q\x80` \x84\x01R\x80` \x85\x01`@\x85\x01^_`@\x82\x85\x01\x01R`@`\x1F\x19`\x1F\x83\x01\x16\x84\x01\x01\x91PP\x92\x91PPV[\x80\x82\x01\x80\x82\x11\x15a\thWcNH{q`\xE0\x1B_R`\x11`\x04R`$_\xFD[_` \x82\x84\x03\x12\x15a\x0B\x85W__\xFD[PQ\x91\x90PV[_\x82Q\x80` \x85\x01\x84^_\x92\x01\x91\x82RP\x91\x90PV\xFE6\x08\x94\xA1;\xA1\xA3!\x06g\xC8(I-\xB9\x8D\xCA> v\xCC75\xA9 \xA3\xCAP]8+\xBC\xA1dsolcC\0\x08\x1C\0\n",
     );
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `AddressEmptyCode(address)` and selector `0x9996b315`.
     ```solidity
     error AddressEmptyCode(address target);
@@ -535,6 +536,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `DepositTooLarge()` and selector `0xc56d46d3`.
     ```solidity
     error DepositTooLarge();
@@ -595,6 +597,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `DepositTooSmall()` and selector `0x6ba4a1c7`.
     ```solidity
     error DepositTooSmall();
@@ -655,6 +658,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967InvalidImplementation(address)` and selector `0x4c9c8ce3`.
     ```solidity
     error ERC1967InvalidImplementation(address implementation);
@@ -724,6 +728,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967NonPayable()` and selector `0xb398979f`.
     ```solidity
     error ERC1967NonPayable();
@@ -784,6 +789,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `FailedInnerCall()` and selector `0x1425ea42`.
     ```solidity
     error FailedInnerCall();
@@ -844,6 +850,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `FunctionDoesNotExist()` and selector `0xa9ad62f8`.
     ```solidity
     error FunctionDoesNotExist();
@@ -904,6 +911,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidInitialization()` and selector `0xf92ee8a9`.
     ```solidity
     error InvalidInitialization();
@@ -964,6 +972,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidUserAddress()` and selector `0x702b3d90`.
     ```solidity
     error InvalidUserAddress();
@@ -1024,6 +1033,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `NoFunctionCalled()` and selector `0xbc8eca1b`.
     ```solidity
     error NoFunctionCalled();
@@ -1084,6 +1094,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `NotInitializing()` and selector `0xd7e6bcf8`.
     ```solidity
     error NotInitializing();
@@ -1144,6 +1155,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableInvalidOwner(address)` and selector `0x1e4fbdf7`.
     ```solidity
     error OwnableInvalidOwner(address owner);
@@ -1211,6 +1223,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableUnauthorizedAccount(address)` and selector `0x118cdaa7`.
     ```solidity
     error OwnableUnauthorizedAccount(address account);
@@ -1278,6 +1291,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UUPSUnauthorizedCallContext()` and selector `0xe07c8dba`.
     ```solidity
     error UUPSUnauthorizedCallContext();
@@ -1338,6 +1352,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UUPSUnsupportedProxiableUUID(bytes32)` and selector `0xaa1d49a4`.
     ```solidity
     error UUPSUnsupportedProxiableUUID(bytes32 slot);
@@ -1405,6 +1420,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Deposit(address,uint256)` and selector `0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c`.
     ```solidity
     event Deposit(address indexed user, uint256 amount);
@@ -1514,6 +1530,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Initialized(uint64)` and selector `0xc7f505b2f371ae2175ee4913f4499e1f2633a7b5936321eed1cdaeb6115181d2`.
     ```solidity
     event Initialized(uint64 version);
@@ -1612,6 +1629,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Log(string,uint256)` and selector `0xdd970dd9b5bfe707922155b058a407655cb18288b807e2216442bca8ad83d6b5`.
     ```solidity
     event Log(string func, uint256 gas);
@@ -1721,6 +1739,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `OwnershipTransferred(address,address)` and selector `0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0`.
     ```solidity
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -1834,6 +1853,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Upgrade(address)` and selector `0xf78721226efe9a1bb678189a16d1554928b9f2192e2cb93eeda83b79fa40007d`.
     ```solidity
     event Upgrade(address implementation);
@@ -1934,6 +1954,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Upgraded(address)` and selector `0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b`.
     ```solidity
     event Upgraded(address indexed implementation);
@@ -2090,6 +2111,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `UPGRADE_INTERFACE_VERSION()` and selector `0xad3cb1cc`.
     ```solidity
     function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
@@ -2097,6 +2119,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct UPGRADE_INTERFACE_VERSIONCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`UPGRADE_INTERFACE_VERSION()`](UPGRADE_INTERFACE_VERSIONCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2201,6 +2224,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `balances(address)` and selector `0x27e235e3`.
     ```solidity
     function balances(address user) external view returns (uint256 amount);
@@ -2211,6 +2235,7 @@ pub mod FeeContract {
         #[allow(missing_docs)]
         pub user: alloy::sol_types::private::Address,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`balances(address)`](balancesCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2319,6 +2344,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `deposit(address)` and selector `0xf340fa01`.
     ```solidity
     function deposit(address user) external payable;
@@ -2434,6 +2460,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `getVersion()` and selector `0x0d8e6e2c`.
     ```solidity
     function getVersion() external pure returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
@@ -2441,6 +2468,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct getVersionCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`getVersion()`](getVersionCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2561,6 +2589,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initialize(address)` and selector `0xc4d66de8`.
     ```solidity
     function initialize(address multisig) external;
@@ -2676,6 +2705,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `maxDepositAmount()` and selector `0x8ed83271`.
     ```solidity
     function maxDepositAmount() external view returns (uint256);
@@ -2683,6 +2713,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct maxDepositAmountCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`maxDepositAmount()`](maxDepositAmountCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2787,6 +2818,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `minDepositAmount()` and selector `0x645006ca`.
     ```solidity
     function minDepositAmount() external view returns (uint256);
@@ -2794,6 +2826,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct minDepositAmountCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`minDepositAmount()`](minDepositAmountCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2898,6 +2931,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `owner()` and selector `0x8da5cb5b`.
     ```solidity
     function owner() external view returns (address);
@@ -2905,6 +2939,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ownerCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`owner()`](ownerCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3009,6 +3044,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `proxiableUUID()` and selector `0x52d1902d`.
     ```solidity
     function proxiableUUID() external view returns (bytes32);
@@ -3016,6 +3052,7 @@ pub mod FeeContract {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct proxiableUUIDCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`proxiableUUID()`](proxiableUUIDCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3120,6 +3157,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `renounceOwnership()` and selector `0x715018a6`.
     ```solidity
     function renounceOwnership() external;
@@ -3228,6 +3266,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `transferOwnership(address)` and selector `0xf2fde38b`.
     ```solidity
     function transferOwnership(address newOwner) external;
@@ -3343,6 +3382,7 @@ pub mod FeeContract {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `upgradeToAndCall(address,bytes)` and selector `0x4f1ef286`.
     ```solidity
     function upgradeToAndCall(address newImplementation, bytes memory data) external payable;
@@ -3476,6 +3516,7 @@ pub mod FeeContract {
         }
     };
     ///Container for all the [`FeeContract`](self) function calls.
+    #[derive()]
     pub enum FeeContractCalls {
         #[allow(missing_docs)]
         UPGRADE_INTERFACE_VERSION(UPGRADE_INTERFACE_VERSIONCall),
@@ -3816,6 +3857,7 @@ pub mod FeeContract {
         }
     }
     ///Container for all the [`FeeContract`](self) custom errors.
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum FeeContractErrors {
         #[allow(missing_docs)]
         AddressEmptyCode(AddressEmptyCode),
@@ -4256,6 +4298,7 @@ pub mod FeeContract {
         }
     }
     ///Container for all the [`FeeContract`](self) events.
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum FeeContractEvents {
         #[allow(missing_docs)]
         Deposit(Deposit),
