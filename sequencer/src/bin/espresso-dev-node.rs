@@ -14,19 +14,19 @@ use alloy::{
 };
 use async_trait::async_trait;
 use clap::Parser;
-<<<<<<< HEAD
-use espresso_types::{parse_duration, MarketplaceVersion, SequencerVersions, V0_1};
+use espresso_types::{
+    parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
+};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
-use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
     legacy_light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
 };
->>>>>>> origin/main
 use hotshot_types::{
     light_client::StateVerKey,
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
+    utils::epoch_from_block_number,
 };
 use portpicker::pick_unused_port;
 use sequencer::{
@@ -246,6 +246,18 @@ async fn main() -> anyhow::Result<()> {
     let mut light_client_addresses = vec![];
     let mut prover_ports = Vec::new();
     let mut client_states = ApiState::default();
+    let mut handles = FuturesUnordered::new();
+
+    // deploy light client contract for L1 and each alt chain,
+    // deploy fee contract, EspToken, stake table contracts on L1 only.
+    for (url, mnemonic, account_index, multisig_address, retry_interval) in once((
+        l1_url.clone(),
+        mnemonic.clone(),
+        account_index,
+        multisig_address,
+        retry_interval,
+    ))
+    .chain(
         alt_chain_providers
             .iter()
             .zip(
@@ -269,8 +281,8 @@ async fn main() -> anyhow::Result<()> {
                     .into_iter()
                     .chain(std::iter::repeat(retry_interval)),
             )
-            .map(|((((url, mnc), idx), mlts), retry)| (url.clone(), mnc, idx, mlts, retry))
-     {
+            .map(|((((url, mnc), idx), mlts), retry)| (url.clone(), mnc, idx, mlts, retry)),
+    ) {
         tracing::info!("deploying the contract for provider: {url}");
 
         let signer = MnemonicBuilder::<English>::default()
