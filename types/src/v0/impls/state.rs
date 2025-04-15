@@ -746,7 +746,7 @@ fn validate_builder_fee(
         // finished Marketplace signatures will cover the full
         // transaction.
         if version >= MarketplaceVersion::VERSION {
-            tracing::debug!("Validating sequencing fee signature.");
+            tracing::debug!("Validating (Marketplace) sequencing fee signature.");
             fee_info
                 .account()
                 .validate_sequencing_fee_signature_marketplace(
