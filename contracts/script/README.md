@@ -388,7 +388,7 @@ export PLONK_VERIFIER_V2_ADDRESS=
 3. Then in a terminal, run the following:
 
 ```bash
-source .env.contracts.arbSepolia && forge clean && forge script contracts/script/LightClientStaging.s.sol:UpgradeLightClientWithoutMultisigAdminScript --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
+source .env.contracts.arbSepolia && forge clean && forge script contracts/script/LightClientArbitrumStaging.s.sol:UpgradeLightClientArbitrumV2Script --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
 ```
 
 # Known Errors

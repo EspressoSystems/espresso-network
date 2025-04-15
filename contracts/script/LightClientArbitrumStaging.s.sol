@@ -83,7 +83,7 @@ contract DeployLightClientArbitrumContractScript is Script {
 /// and then calling the upgradeToAndCall method of the proxy
 /// @dev This is used when the admin is not a multisig wallet
 /// used in staging deployments only
-contract UpgradeLightClientArbitrumWithoutMultisigAdminScript is Script {
+contract UpgradeLightClientArbitrumV2Script is Script {
     /// @notice runs the upgrade
     /// @param mostRecentlyDeployedProxy address of deployed proxy
     /// @return address of the proxy
@@ -108,9 +108,10 @@ contract UpgradeLightClientArbitrumWithoutMultisigAdminScript is Script {
             vm.envUint("EPOCH_START_BLOCK")
         );
 
-        address proxy = upgradeLightClient(
-            mostRecentlyDeployedProxy, address(new LightClientArbitrumV2()), data
-        );
+        LightClientArbitrumV2 lightClientArbitrumV2 = new LightClientArbitrumV2();
+
+        address proxy =
+            upgradeLightClient(mostRecentlyDeployedProxy, address(lightClientArbitrumV2), data);
         return proxy;
     }
 
