@@ -16,7 +16,7 @@ use hotshot_state_prover::service::{
 use hotshot_types::{
     light_client::{StateSignaturesBundle, StateVerKey},
     traits::signature_key::{StakeTableEntryType, StateSignatureKey},
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, is_gt_epoch_root},
     PeerConfig,
 };
 use tide_disco::{
@@ -308,6 +308,14 @@ impl StateRelayServerDataSource for StateRelayServerState {
             },
         };
         let epoch = epoch_from_block_number(block_height, blocks_per_epoch);
+
+        // if epoch is activated and block_height is greater than epoch root, ignore and drop
+        if block_height > self.epoch_start_block.expect("init_genesis wrong")
+            && is_gt_epoch_root(block_height, blocks_per_epoch)
+        {
+            return Ok(());
+        }
+
         if !self.known_nodes.contains_key(&epoch) {
             self.sync_stake_table(block_height).await.map_err(|e| {
                 ServerError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}"))
