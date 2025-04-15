@@ -156,6 +156,8 @@ pub async fn stake_in_contract_for_test(
         if multiple_delegators {
             tracing::info!("adding multiple delegators for validator  {val_index} ");
 
+            let num_delegators = rng.gen_range(2..=5);
+
             add_multiple_delegators(
                 &rpc_url,
                 validator_address,
@@ -164,6 +166,7 @@ pub async fn stake_in_contract_for_test(
                 stake_table_address,
                 token_address,
                 &mut rng,
+                num_delegators,
             )
             .await?;
         }
@@ -180,10 +183,10 @@ async fn add_multiple_delegators<F: TxFiller<Ethereum>, P: Provider<Ethereum>>(
     stake_table_address: Address,
     token_address: Address,
     rng: &mut ChaCha20Rng,
+    num_delegators: u64,
 ) -> Result<()> {
     let fund_amount_esp = parse_ether("1000")?;
     let fund_amount_eth = parse_ether("10")?;
-    let num_delegators = rng.gen_range(2..=5);
 
     for delegator_index in 0..num_delegators {
         let delegator_wallet: LocalSigner<SigningKey> = SigningKey::random(rng).into();
