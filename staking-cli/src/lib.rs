@@ -64,6 +64,7 @@ impl Default for Commands {
     fn default() -> Self {
         Commands::Info {
             l1_block_number: None,
+            compact: false,
         }
     }
 }
@@ -109,21 +110,25 @@ pub enum Commands {
         /// Defaults to the latest block for convenience.
         #[clap(long)]
         l1_block_number: Option<BlockId>,
+
+        /// Abbreviate the very long BLS public keys.
+        #[clap(long)]
+        compact: bool,
     },
     /// Register to become a validator.
     RegisterValidator {
         /// The consensus signing key. Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_bls_priv_key)]
+        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
         consensus_private_key: BLSPrivKey,
 
         /// The state signing key.
         ///
         /// TODO: Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_state_priv_key)]
+        #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
         state_private_key: StateSignKey,
 
         /// The commission to charge delegators
-        #[clap(long, value_parser = parse::parse_commission)]
+        #[clap(long, value_parser = parse::parse_commission, env = "COMMISSION")]
         commission: Commission,
     },
     /// Deregister a validator.

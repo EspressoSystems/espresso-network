@@ -130,7 +130,7 @@ impl<
         match accumulator.accumulate(vote, self.membership.clone()).await {
             None => Ok(None),
             Some(cert) => {
-                tracing::debug!("Certificate Formed! {:?}", cert);
+                tracing::debug!("Certificate Formed! {cert:?}");
 
                 broadcast_event(
                     Arc::new(VOTE::make_cert_event(cert.clone(), &self.public_key)),

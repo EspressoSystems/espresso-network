@@ -107,7 +107,7 @@ async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Ver
             .membership
             .stake_table_for_epoch(epoch)
             .await
-            .context(warn!("No stake table for epoch"))?
+            .context(warn!("No stake table for epoch {epoch_val}"))?
             .has_stake(&task_state.public_key)
             .await;
 
@@ -419,10 +419,7 @@ pub(crate) async fn update_shared_state<
     ))?;
 
     let Some(validated_view) = maybe_validated_view else {
-        bail!(
-            "Failed to fetch view for parent, parent view {:?}",
-            parent_view_number
-        );
+        bail!("Failed to fetch view for parent, parent view {parent_view_number:?}");
     };
 
     let (Some(parent_state), _) = validated_view.state_and_delta() else {
@@ -497,10 +494,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     ensure!(
         committee_member_in_current_epoch || committee_member_in_next_epoch,
-        info!(
-            "We were not chosen for quorum committee on {:?}",
-            view_number
-        )
+        info!("We were not chosen for quorum committee on {view_number:?}")
     );
 
     let height = if membership.epoch().is_some() {

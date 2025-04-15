@@ -44,6 +44,19 @@ impl TryFrom<u16> for Commission {
     }
 }
 
+impl TryFrom<u64> for Commission {
+    type Error = ParseCommissionError;
+
+    fn try_from(s: u64) -> Result<Self, Self::Error> {
+        if s > 10000 {
+            return Err("Commission must be between 0 (0.00%) and 100 (100.00%)"
+                .to_string()
+                .into());
+        }
+        Ok(Commission(s as u16))
+    }
+}
+
 impl Display for Commission {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:.2} %", Decimal::from(self.0) / Decimal::new(100, 0))

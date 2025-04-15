@@ -400,7 +400,7 @@ pub(crate) async fn handle_view_change<
     let _ = send_high_qc(new_view_number, sender, receiver, task_state)
         .await
         .inspect_err(|e| {
-            tracing::debug!("High QC sending failed with error: {:?}", e);
+            tracing::debug!("High QC sending failed with error: {e:?}");
         });
 
     // Move this node to the next view
@@ -420,10 +420,7 @@ pub(crate) async fn handle_view_change<
         .clone();
     if let Some(cert) = decided_upgrade_certificate_read {
         if new_view_number == cert.data.new_version_first_view {
-            tracing::error!(
-                "Version upgraded based on a decided upgrade cert: {:?}",
-                cert
-            );
+            tracing::error!("Version upgraded based on a decided upgrade cert: {cert:?}");
         }
     }
 
@@ -519,10 +516,7 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
             .context(warn!("No stake table for epoch"))?
             .has_stake(&task_state.public_key)
             .await,
-        debug!(
-            "We were not chosen for the consensus committee for view {:?}",
-            view_number
-        )
+        debug!("We were not chosen for the consensus committee for view {view_number:?}",)
     );
 
     let vote = TimeoutVote2::create_signed_vote(
@@ -549,10 +543,7 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     )
     .await;
 
-    tracing::error!(
-        "We did not receive evidence for view {} in time, sending timeout vote for that view!",
-        *view_number
-    );
+    tracing::error!("We did not receive evidence for view {view_number} in time, sending timeout vote for that view!");
 
     broadcast_event(
         Event {

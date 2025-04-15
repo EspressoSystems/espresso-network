@@ -170,6 +170,7 @@ pub struct Builder<Types, S, P> {
     proactive_fetching: bool,
     aggregator: bool,
     aggregator_chunk_size: Option<usize>,
+    types_migration_batch_size: u64,
     leaf_only: bool,
     _types: PhantomData<Types>,
 }
@@ -207,6 +208,7 @@ impl<Types, S, P> Builder<Types, S, P> {
             proactive_fetching: true,
             aggregator: true,
             aggregator_chunk_size: None,
+            types_migration_batch_size: 10000,
             leaf_only: false,
             _types: Default::default(),
         }
@@ -369,6 +371,14 @@ impl<Types, S, P> Builder<Types, S, P> {
         self
     }
 
+    /// Sets the batch size for the types migration.
+    /// Determines how many `(leaf, vid)` rows are selected from the old types table
+    /// and migrated at once.
+    pub fn with_types_migration_batch_size(mut self, batch: u64) -> Self {
+        self.types_migration_batch_size = batch;
+        self
+    }
+
     pub fn is_leaf_only(&self) -> bool {
         self.leaf_only
     }
@@ -516,6 +526,7 @@ where
         let proactive_range_chunk_size = builder
             .proactive_range_chunk_size
             .unwrap_or(builder.range_chunk_size);
+        let migration_batch_size = builder.types_migration_batch_size;
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
@@ -525,7 +536,7 @@ where
         // This is a one-time operation that should be done before starting the data source
         // It migrates leaf1 storage to leaf2
         // and vid to vid2
-        fetcher.storage.migrate_types().await?;
+        fetcher.storage.migrate_types(migration_batch_size).await?;
 
         let scanner = if proactive_fetching && !leaf_only {
             Some(BackgroundTask::spawn(

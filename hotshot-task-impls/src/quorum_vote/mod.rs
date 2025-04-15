@@ -254,7 +254,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
         {
             Ok(epoch_membership) => epoch_membership,
             Err(e) => {
-                tracing::warn!("{:?}", e);
+                tracing::warn!("{e:?}");
                 return;
             },
         };
@@ -475,7 +475,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             for view in *self.latest_voted_view..(*new_view) {
                 if let Some(dependency) = self.vote_dependencies.remove(&TYPES::View::new(view)) {
                     dependency.abort();
-                    tracing::debug!("Vote dependency removed for view {:?}", view);
+                    tracing::debug!("Vote dependency removed for view {view:?}");
                 }
             }
 
@@ -485,7 +485,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     .last_voted_view
                     .set(last_voted_view_usize);
             } else {
-                tracing::warn!("Failed to convert last voted view to a usize: {}", new_view);
+                tracing::warn!("Failed to convert last voted view to a usize: {new_view}");
             }
 
             self.latest_voted_view = new_view;
@@ -534,7 +534,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::DaCertificateRecv(cert) => {
                 let view = cert.view_number;
 
-                tracing::trace!("Received DAC for view {}", *view);
+                tracing::trace!("Received DAC for view {view}");
                 // Do nothing if the DAC is old
                 ensure!(
                     view > self.latest_voted_view,
@@ -554,7 +554,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     &self.upgrade_lock,
                 )
                 .await
-                .context(|e| warn!("Invalid DAC: {}", e))?;
+                .context(|e| warn!("Invalid DAC: {e}"))?;
 
                 // Add to the storage.
                 self.consensus
@@ -577,7 +577,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
             HotShotEvent::VidShareRecv(sender, share) => {
                 let view = share.data.view_number();
                 // Do nothing if the VID share is old
-                tracing::trace!("Received VID share for view {}", *view);
+                tracing::trace!("Received VID share for view {view}");
                 ensure!(
                     view > self.latest_voted_view,
                     "Received VID share for an older view."
