@@ -1456,7 +1456,7 @@ impl MembershipPersistence for Persistence {
 
         fs::create_dir_all(events_dir.clone()).context("failed to create events dir")?;
 
-        let file_path = dir_path.with_extension("txt");
+        let file_path = events_dir.with_extension("txt");
 
         inner.replace(
             &file_path,
