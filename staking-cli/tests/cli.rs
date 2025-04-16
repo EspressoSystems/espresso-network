@@ -1,4 +1,4 @@
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use alloy::primitives::{
     utils::{format_ether, parse_ether},
@@ -443,27 +443,41 @@ async fn test_cli_stake_table_compact() -> Result<()> {
     Ok(())
 }
 
+async fn address_from_cli(system: &TestSystem) -> Result<Address> {
+    println!("Unlock the ledger");
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Ledger);
+    // spawn the command first to show stderr output with errors/instructions
+    let child = cmd.arg("account").stdout(Stdio::piped()).spawn()?;
+
+    // wait for command to exit
+    let output = child.wait_with_output()?.assert_success().utf8();
+
+    // dump output for debugging purposes
+    println!("staking-cli account output: {output}");
+
+    Ok(output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap()
+        .parse()?)
+}
+
 /// This test requires a ledger device to be connected and unlocked.
 /// cargo test -p staking-cli -- --ignored --nocapture transfer_ledger
 #[ignore]
 #[tokio::test]
 async fn test_cli_transfer_ledger() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
-
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Ledger);
-    let address: Address = cmd
-        .arg("account")
-        .output()?
-        .assert_success()
-        .utf8()
-        .trim()
-        .parse()?;
+    let address = address_from_cli(&system).await?;
 
     let amount = parse_ether("0.123")?;
     system.transfer_eth(address, amount).await?;
     system.transfer(address, amount).await?;
 
+    // Assume the ledger is unlocked and the Ethereum app remains open
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("transfer")
@@ -497,23 +511,16 @@ async fn test_cli_transfer_ledger() -> Result<()> {
 #[ignore]
 #[tokio::test]
 async fn test_cli_delegate_ledger() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
-
-    let mut cmd = base_cmd();
-    system.args(&mut cmd, Signer::Ledger);
-    let address: Address = cmd
-        .arg("account")
-        .output()?
-        .assert_success()
-        .utf8()
-        .trim()
-        .parse()?;
+    let address = address_from_cli(&system).await?;
 
     let amount = parse_ether("0.123")?;
     system.transfer_eth(address, amount).await?;
     system.transfer(address, amount).await?;
 
+    // Assume the ledger is unlocked and the Ethereum app remains open
     println!("Sign the transaction in the ledger");
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Ledger);

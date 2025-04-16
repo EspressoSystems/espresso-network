@@ -3,7 +3,7 @@ use alloy::{
     network::EthereumWallet,
     primitives::{utils::parse_ether, Address, U256},
     signers::{
-        ledger::{HDPath, LedgerSigner},
+        ledger::{HDPath, LedgerError, LedgerSigner},
         local::{coins_bip39::English, MnemonicBuilder},
     },
 };
@@ -72,8 +72,11 @@ pub struct SignerConfig {
     #[default(Some(0))]
     pub account_index: Option<u32>,
 
-    /// The ledger account index to use when deriving the key.
-    #[clap(long, env = "LEDGER_INDEX")]
+    /// Use a ledger device to sign transactions.
+    ///
+    /// NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the
+    /// Ethereum app setings.
+    #[clap(long, env = "USE_LEDGER")]
     pub ledger: bool,
 }
 
@@ -126,9 +129,37 @@ impl ValidSignerConfig {
                 Ok((wallet, account))
             },
             ValidSignerConfig::Ledger { account_index } => {
-                let signer = LedgerSigner::new(HDPath::LedgerLive(*account_index), None)
-                    .await
-                    .context("Failed to create Ledger signer: is Ethereum app open?")?;
+                let mut attempt = 1;
+                let max_attempts = 20;
+                let signer = loop {
+                    match LedgerSigner::new(HDPath::LedgerLive(*account_index), None).await {
+                        Ok(signer) => break signer,
+                        Err(err) => {
+                            match err {
+                                // Sadly, at this point, if we keep the app running unlocking the
+                                // ledger does not make it show up.
+                                LedgerError::LedgerError(ref ledger_error) => {
+                                    bail!("Error: {ledger_error:#}. Please unlock ledger and try again")
+                                },
+                                LedgerError::UnexpectedNullResponse => {
+                                    eprintln!(
+                                        "Failed to create Ledger signer {attempt}/{max_attempts}: {err:#}, please open the Ethereum app"
+                                    );
+                                },
+                                _ => {
+                                    bail!("Unexpected error accessing the ledger device: {err:#}")
+                                },
+                            };
+                            if attempt >= max_attempts {
+                                bail!(
+                                    "Failed to create Ledger signer after {max_attempts} attempts"
+                                );
+                            }
+                            attempt += 1;
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        },
+                    };
+                };
                 let account = signer.get_address().await?;
                 let wallet = EthereumWallet::from(signer);
                 Ok((wallet, account))

@@ -2,34 +2,56 @@
 
 WARNING: This CLI is intended for use in testnet purposes only.
 
-A CLI to interact with the stake table contract.
+This CLI helps users interact with the Espresso staking contract, either as a delegator or a node
+operator.
 
-To build and run
+<!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
+**Table of Contents**
+
+- [Espresso staking CLI](#espresso-staking-cli)
+  - [Getting Started](#getting-started)
+    - [Getting Help](#getting-help)
+    - [Choose your type of wallet (mnemonic based or Ledger)](#choose-your-type-of-wallet-mnemonic-based-or-ledger)
+    - [Initialize the configuration file](#initialize-the-configuration-file)
+    - [Inspect the configuration](#inspect-the-configuration)
+    - [View the stake table](#view-the-stake-table)
+  - [Delegators (or stakers)](#delegators-or-stakers)
+    - [Delegating](#delegating)
+    - [Undelegating](#undelegating)
+    - [Recovering funds after a validator exit](#recovering-funds-after-a-validator-exit)
+  - [Node operators](#node-operators)
+    - [Registering a validator](#registering-a-validator)
+    - [De-registering your validator](#de-registering-your-validator)
+    - [Rotating your consensus keys](#rotating-your-consensus-keys)
+
+<!-- markdown-toc end -->
+
+TODO: provide prebuilt binaries
+
+To build and run the staking-cli
 
     cargo run --bin staking-cli -p staking-cli -- --help
 
-Which will show all available commands.
-
-For brevity the following commands assume `staking-cli` is in the `PATH`.
+For brevity what follows assumes the `staking-cli` binary is in the `PATH`.
 
 To show help for a command run `staking-cli COMMAND --help`, for example `staking-cli delegate --help`.
 
-# Espresso Staking CLI
-
-This CLI helps users interact with the Espresso staking contract, either as a delegator or a node operator.
+If you run into any problems please open an issue on https://github.com/EspressoSystems/espresso-network.
 
 ## Getting Started
+### Overview
 
-1.  **Getting Help**: You can get help for the CLI by running:
+You can get help for the CLI by running:
 
-         staking-cli --help
+    staking-cli --help
+    
+Which will show all the available commands and options shared by commands:
+```
+    A CLI to interact with the Espresso stake table contract
 
-    ```
-        A CLI to interact with the Espresso stake table contract
+Usage: staking-cli [OPTIONS] [COMMAND]
 
-    Usage: staking-cli [OPTIONS] [COMMAND]
-
-    Commands:
+Commands:
     version                Display version information of the staking-cli
     config                 Display the current configuration
     init                   Initialize the config file with deployment and wallet info
@@ -50,81 +72,111 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     stake-for-demo         Register the validators and delegates for the local demo
     help                   Print this message or the help of the given subcommand(s)
 
-    Options:
+Options:
     -c, --config <CONFIG_PATH>
             Config file
+
         --rpc-url <RPC_URL>
-            L1 Ethereum RPC [env: L1_PROVIDER=]
+            L1 Ethereum RPC
+
+            [env: L1_PROVIDER=]
+
         --token-address <TOKEN_ADDRESS>
-            Deployed ESP token contract address [env: ESP_TOKEN_ADDRESS=]
+            Deployed ESP token contract address
+
+            [env: ESP_TOKEN_ADDRESS=]
+
         --stake-table-address <STAKE_TABLE_ADDRESS>
-            Deployed stake table contract address [env: STAKE_TABLE_ADDRESS=]
+            Deployed stake table contract address
+
+            [env: STAKE_TABLE_ADDRESS=]
+
         --mnemonic <MNEMONIC>
-            The mnemonic to use when deriving the key [env: MNEMONIC=]
+            The mnemonic to use when deriving the key
+
+            [env: MNEMONIC=]
+
         --account-index <ACCOUNT_INDEX>
-            The mnemonic account index to use when deriving the key [env: ACCOUNT_INDEX=]
+            The mnemonic account index to use when deriving the key
+
+            [env: ACCOUNT_INDEX=]
+
         --ledger
-            The ledger account index to use when deriving the key [env: LEDGER_INDEX=]
-        --backtrace-mode <BACKTRACE_MODE>
-            [env: RUST_LOG_FORMAT=] [possible values: full, compact, json]
-    -h, --help
-            Print help
-    -V, --version
-            Print version
-    ```
+            Use a ledger device to sign transactions.
 
-    or by passing a command, for example
+            NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app setings.
 
-         staking-cli delegate --help
+            [env: USE_LEDGER=]
 
-1.  **Choose your type of wallet**:
+``` 
 
-    First, determine if you would like to use a Mnemonic phrase or ledger hardware wallet.
+or by passing `--help` to a command, for example `delegate`:
 
-    If you don't know which account index to use, you can find it by running:
-    ```bash
-    staking-cli --mnemonic MNEMONIC --account-index 0 account
-    staking-cli --mnemonic MNEMONIC --account-index 1 account
-    # etc, or
-    staking-cli --ledger-index 0 account
-    staking-cli --ledger-index 1 account
-    # etc
-    ```
-    Repeat with different indices until you find the address you want to use.
+        staking-cli delegate --help
 
-    Note that for ledger signing to work
+which will show the options specific to the command:
 
-    1. the ledger needs to be unlocked,
-    1. the Ethereum app needs to be open,
-    1. blind signing needs to be enabled in the Ethereum app settings on the ledger.
+```
+Delegate funds to a validator
 
-    To avoid passing the mnemonic on the command line, the MNEMONIC env var can be set instead.
+Usage: staking-cli delegate --validator-address <VALIDATOR_ADDRESS> --amount <AMOUNT>
 
-1.  **Initialize the configuration**: Once you've identified your desired account index (here 2), initialize a
-    configuration file:
+Options:
+    --validator-address <VALIDATOR_ADDRESS>
+    --amount <AMOUNT>
+-h, --help                                   Print help
+```
 
-         staking-cli init --mnemonic MNEMONIC --account-index 2
-         # or
-         staking-cli init --ledger-index 2
+### Choose your type of wallet (mnemonic based or Ledger)
 
-    This creates a TOML config file with the contracts of our decaf Testnet, deployed on Sepolia. With the config file
-    you don't need to provide the configuration values every time you run the CLI.
+First, determine if you would like to use a Mnemonic phrase or ledger hardware wallet.
 
-    Note that only for this command the `--mnemonic` and `--ledger-index` flags are specified _after_ the command.
+If you don't know which account index to use, you can find it by running:
+```bash
+staking-cli --mnemonic MNEMONIC --account-index 0 account
+staking-cli --mnemonic MNEMONIC --account-index 1 account
+# etc, or
+staking-cli --ledger-index 0 account
+staking-cli --ledger-index 1 account
+# etc
+```
+Repeat with different indices until you find the address you want to use.
 
-1.  **Inspect the configuration**: You can inspect the configuration file by running:
+Note that for ledger signing to work
+
+1. the ledger needs to be unlocked,
+1. the Ethereum app needs to be open,
+1. blind signing needs to be enabled in the Ethereum app settings on the ledger.
+
+To avoid passing the mnemonic on the command line, the MNEMONIC env var can be set instead.
+
+### Initialize the configuration file
+
+Once you've identified your desired account index (here 2), initialize a configuration file:
+
+    staking-cli init --mnemonic MNEMONIC --account-index 2
+    # or
+    staking-cli init --ledger-index 2
+
+This creates a TOML config file with the contracts of our decaf Testnet, deployed on Sepolia. With
+the config file you don't need to provide the configuration values every time you run the CLI.
+
+NOTE: only for this `init` command the `--mnemonic` and `--ledger-index` flags are specified _after_ the
+command.
+
+### Inspect the configuration
+
+You can inspect the configuration file by running:
 
          staking-cli config
 
-1.  **View staking info**: You can use the following command to display the current L1 stake table:
+### View the stake table
+You can use the following command to display the current L1 stake table:
 
-         staking-cli info
+    staking-cli stake-table
 
-1.  **Next steps**:
-    - **Node operators** can register a validator using `register-validator`.
-    - **Delegators** can delegate stake using `delegate` or undelegate using `undelegate`.
-
-## Delegators
+## Delegators (or stakers)
+This section covers commands for stakers/delegators.
 
 ### Delegating
 
@@ -159,6 +211,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
          staking-cli claim-validator-exit --validator-address 0x12...34
 
 ## Node operators
+This section covers commands for node operators.
 
 ### Registering a validator
 
@@ -176,8 +229,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
 
 ### De-registering your validator
 
-WARNING: running this command will remove your validator from the stake table and undelegate all the funds delegated to
-it.
+WARNING: running this command will remove your validator from the stake table and undelegate all the funds delegated to it.
 
     staking-cli deregister-validator
 
