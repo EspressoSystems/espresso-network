@@ -207,7 +207,7 @@ pub mod election {
             U512::from_le_bytes(raw_breakpoint) % U512::from(cdf.last().unwrap().1);
 
         // and drop the top 32 bytes, downcasting to a U256
-        let breakpoint: U256 = U256::from_le_slice(&remainder.to_le_bytes_vec()[32..]);
+        let breakpoint: U256 = U256::from_le_slice(&remainder.to_le_bytes_vec()[0..32]);
 
         // now find the first index where the breakpoint is strictly smaller than the cdf
         //

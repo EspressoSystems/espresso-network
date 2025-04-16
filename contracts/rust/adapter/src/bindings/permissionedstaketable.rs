@@ -18,6 +18,7 @@ pub mod BN254 {
     use alloy::sol_types as alloy_sol_types;
 
     use super::*;
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct BaseField(alloy::sol_types::private::primitives::aliases::U256);
@@ -134,6 +135,7 @@ pub mod BN254 {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
     struct G2Point { BaseField x0; BaseField x1; BaseField y0; BaseField y1; }
     ```*/
@@ -467,6 +469,7 @@ pub mod EdOnBN254 {
     use alloy::sol_types as alloy_sol_types;
 
     use super::*;
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
     struct EdOnBN254Point { uint256 x; uint256 y; }
     ```*/
@@ -1376,6 +1379,7 @@ pub mod PermissionedStakeTable {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R4\x80\x15a\0\x0FW__\xFD[P`\x046\x10a\0zW_5`\xE0\x1C\x80c\x8D\xA5\xCB[\x11a\0XW\x80c\x8D\xA5\xCB[\x14a\0\xC7W\x80c\x9B0\xA5\xE6\x14a\0\xE1W\x80c\xCB\xBA|x\x14a\0\xF4W\x80c\xF2\xFD\xE3\x8B\x14a\x01\x07W__\xFD[\x80c>\x9D\xF9\xB5\x14a\0~W\x80cqP\x18\xA6\x14a\0\x9AW\x80cu\xD7\x05\xE9\x14a\0\xA4W[__\xFD[a\0\x87`\x01T\x81V[`@Q\x90\x81R` \x01[`@Q\x80\x91\x03\x90\xF3[a\0\xA2a\x01\x1AV[\0[a\0\xB7a\0\xB26`\x04a\x050V[a\x01-V[`@Q\x90\x15\x15\x81R` \x01a\0\x91V[_T`@Q`\x01`\x01`\xA0\x1B\x03\x90\x91\x16\x81R` \x01a\0\x91V[a\0\x87a\0\xEF6`\x04a\x050V[a\x01SV[a\0\xA2a\x01\x026`\x04a\x06OV[a\x01\xADV[a\0\xA2a\x01\x156`\x04a\x07\x15V[a\x02\x04V[a\x01\"a\x02FV[a\x01+_a\x02rV[V[_`\x02_a\x01:\x84a\x01SV[\x81R` \x81\x01\x91\x90\x91R`@\x01_ T`\xFF\x16\x92\x91PPV[_\x81_\x01Q\x82` \x01Q\x83`@\x01Q\x84``\x01Q`@Q` \x01a\x01\x90\x94\x93\x92\x91\x90\x93\x84R` \x84\x01\x92\x90\x92R`@\x83\x01R``\x82\x01R`\x80\x01\x90V[`@Q` \x81\x83\x03\x03\x81R\x90`@R\x80Q\x90` \x01 \x90P\x91\x90PV[a\x01\xB5a\x02FV[a\x01\xBE\x82a\x02\xC1V[a\x01\xC7\x81a\x03}V[\x7FK\xB3\x1C\xD9\xAE\x87\xA3\xF8(\x95X\xC7\x9B\xE5#%\x06\xCE6\xDEBi\xC8\xBAE4\xA6\xFB\xE9\xE2\x96]\x82\x82`@Qa\x01\xF8\x92\x91\x90a\x07;V[`@Q\x80\x91\x03\x90\xA1PPV[a\x02\x0Ca\x02FV[`\x01`\x01`\xA0\x1B\x03\x81\x16a\x02:W`@Qc\x1EO\xBD\xF7`\xE0\x1B\x81R_`\x04\x82\x01R`$\x01[`@Q\x80\x91\x03\x90\xFD[a\x02C\x81a\x02rV[PV[_T`\x01`\x01`\xA0\x1B\x03\x163\x14a\x01+W`@Qc\x11\x8C\xDA\xA7`\xE0\x1B\x81R3`\x04\x82\x01R`$\x01a\x021V[_\x80T`\x01`\x01`\xA0\x1B\x03\x83\x81\x16`\x01`\x01`\xA0\x1B\x03\x19\x83\x16\x81\x17\x84U`@Q\x91\x90\x92\x16\x92\x83\x91\x7F\x8B\xE0\x07\x9CS\x16Y\x14\x13D\xCD\x1F\xD0\xA4\xF2\x84\x19I\x7F\x97\"\xA3\xDA\xAF\xE3\xB4\x18okdW\xE0\x91\x90\xA3PPV[_[\x81Q\x81\x10\x15a\x03yW_a\x02\xEF\x83\x83\x81Q\x81\x10a\x02\xE2Wa\x02\xE2a\x084V[` \x02` \x01\x01Qa\x01SV[_\x81\x81R`\x02` R`@\x90 T\x90\x91P`\xFF\x16a\x03\\W\x82\x82\x81Q\x81\x10a\x03\x19Wa\x03\x19a\x084V[` \x90\x81\x02\x91\x90\x91\x01\x81\x01Q`@\x80Qc4\xA7V\x1F`\xE0\x1B\x81R\x82Q`\x04\x82\x01R\x92\x82\x01Q`$\x84\x01R\x81\x01Q`D\x83\x01R``\x01Q`d\x82\x01R`\x84\x01a\x021V[_\x90\x81R`\x02` R`@\x90 \x80T`\xFF\x19\x16\x90U`\x01\x01a\x02\xC3V[PPV[_[\x81Q\x81\x10\x15a\x03yW_a\x03\xAE\x83\x83\x81Q\x81\x10a\x03\x9EWa\x03\x9Ea\x084V[` \x02` \x01\x01Q_\x01Qa\x01SV[_\x81\x81R`\x02` R`@\x90 T\x90\x91P`\xFF\x16\x15a\x04\x1DW\x82\x82\x81Q\x81\x10a\x03\xD9Wa\x03\xD9a\x084V[` \x90\x81\x02\x91\x90\x91\x01\x81\x01QQ`@\x80Qc\x1B\x06\xE1A`\xE1\x1B\x81R\x82Q`\x04\x82\x01R\x92\x82\x01Q`$\x84\x01R\x81\x01Q`D\x83\x01R``\x01Q`d\x82\x01R`\x84\x01a\x021V[_\x90\x81R`\x02` R`@\x90 \x80T`\xFF\x19\x16`\x01\x90\x81\x17\x90\x91U\x01a\x03\x7FV[cNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[`@Q``\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x04uWa\x04ua\x04>V[`@R\x90V[`@\x80Q\x90\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x04uWa\x04ua\x04>V[`@Q`\x1F\x82\x01`\x1F\x19\x16\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x04\xC7Wa\x04\xC7a\x04>V[`@R\x91\x90PV[_`\x80\x82\x84\x03\x12\x15a\x04\xDFW__\xFD[`@Q`\x80\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x05\x02Wa\x05\x02a\x04>V[`@\x90\x81R\x835\x82R` \x80\x85\x015\x90\x83\x01R\x83\x81\x015\x90\x82\x01R``\x92\x83\x015\x92\x81\x01\x92\x90\x92RP\x91\x90PV[_`\x80\x82\x84\x03\x12\x15a\x05@W__\xFD[a\x05J\x83\x83a\x04\xCFV[\x93\x92PPPV[_g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x82\x11\x15a\x05jWa\x05ja\x04>V[P`\x05\x1B` \x01\x90V[_\x82`\x1F\x83\x01\x12a\x05\x83W__\xFD[\x815a\x05\x96a\x05\x91\x82a\x05QV[a\x04\x9EV[\x80\x82\x82R` \x82\x01\x91P` `\xE0\x84\x02\x86\x01\x01\x92P\x85\x83\x11\x15a\x05\xB7W__\xFD[` \x85\x01[\x83\x81\x10\x15a\x06EW\x80\x87\x03`\xE0\x81\x12\x15a\x05\xD4W__\xFD[a\x05\xDCa\x04RV[a\x05\xE6\x89\x84a\x04\xCFV[\x81R`@`\x7F\x19\x83\x01\x12\x15a\x05\xF9W__\xFD[a\x06\x01a\x04{V[`\x80\x84\x015\x81R`\xA0\x84\x015` \x80\x83\x01\x91\x90\x91R\x82\x01R`\xC0\x83\x015\x91P\x81\x15\x15\x82\x14a\x06-W__\xFD[`@\x81\x01\x91\x90\x91R\x83R` \x90\x92\x01\x91`\xE0\x01a\x05\xBCV[P\x95\x94PPPPPV[__`@\x83\x85\x03\x12\x15a\x06`W__\xFD[\x825g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x06vW__\xFD[\x83\x01`\x1F\x81\x01\x85\x13a\x06\x86W__\xFD[\x805a\x06\x94a\x05\x91\x82a\x05QV[\x80\x82\x82R` \x82\x01\x91P` \x83`\x07\x1B\x85\x01\x01\x92P\x87\x83\x11\x15a\x06\xB5W__\xFD[` \x84\x01\x93P[\x82\x84\x10\x15a\x06\xE1Wa\x06\xCE\x88\x85a\x04\xCFV[\x82R` \x82\x01\x91P`\x80\x84\x01\x93Pa\x06\xBCV[\x94PPPP` \x83\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x06\xFFW__\xFD[a\x07\x0B\x85\x82\x86\x01a\x05tV[\x91PP\x92P\x92\x90PV[_` \x82\x84\x03\x12\x15a\x07%W__\xFD[\x815`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x05JW__\xFD[`@\x80\x82R\x83Q\x90\x82\x01\x81\x90R_\x90` \x85\x01\x90``\x84\x01\x90\x83[\x81\x81\x10\x15a\x07\xA0Wa\x07\x8A\x83\x85Q\x80Q\x82R` \x81\x01Q` \x83\x01R`@\x81\x01Q`@\x83\x01R``\x81\x01Q``\x83\x01RPPV[` \x93\x90\x93\x01\x92`\x80\x92\x90\x92\x01\x91`\x01\x01a\x07VV[PP\x83\x81\x03` \x80\x86\x01\x91\x90\x91R\x85Q\x80\x83R\x91\x81\x01\x92P\x85\x01\x90_[\x81\x81\x10\x15a\x08(W\x82Qa\x07\xF3\x85\x82Q\x80Q\x82R` \x81\x01Q` \x83\x01R`@\x81\x01Q`@\x83\x01R``\x81\x01Q``\x83\x01RPPV[` \x81\x81\x01Q\x80Q`\x80\x88\x01R\x81\x01Q`\xA0\x87\x01R`@\x90\x91\x01Q\x15\x15`\xC0\x86\x01R`\xE0\x90\x94\x01\x93\x92\x90\x92\x01\x91`\x01\x01a\x07\xBDV[P\x91\x96\x95PPPPPPV[cNH{q`\xE0\x1B_R`2`\x04R`$_\xFD\xFE\xA1dsolcC\0\x08\x1C\0\n",
     );
+    #[derive()]
     /**```solidity
     struct NodeInfo { BN254.G2Point blsVK; EdOnBN254.EdOnBN254Point schnorrVK; bool isDA; }
     ```*/
@@ -1592,6 +1596,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidInitialization()` and selector `0xf92ee8a9`.
     ```solidity
     error InvalidInitialization();
@@ -1652,6 +1657,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `NotInitializing()` and selector `0xd7e6bcf8`.
     ```solidity
     error NotInitializing();
@@ -1712,6 +1718,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableInvalidOwner(address)` and selector `0x1e4fbdf7`.
     ```solidity
     error OwnableInvalidOwner(address owner);
@@ -1779,6 +1786,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableUnauthorizedAccount(address)` and selector `0x118cdaa7`.
     ```solidity
     error OwnableUnauthorizedAccount(address account);
@@ -1846,6 +1854,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive()]
     /**Custom error with signature `StakerAlreadyExists((uint256,uint256,uint256,uint256))` and selector `0x360dc282`.
     ```solidity
     error StakerAlreadyExists(BN254.G2Point);
@@ -1912,6 +1921,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive()]
     /**Custom error with signature `StakerNotFound((uint256,uint256,uint256,uint256))` and selector `0x34a7561f`.
     ```solidity
     error StakerNotFound(BN254.G2Point);
@@ -1977,6 +1987,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Initialized(uint64)` and selector `0xc7f505b2f371ae2175ee4913f4499e1f2633a7b5936321eed1cdaeb6115181d2`.
     ```solidity
     event Initialized(uint64 version);
@@ -2075,6 +2086,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `OwnershipTransferred(address,address)` and selector `0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0`.
     ```solidity
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -2188,6 +2200,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive()]
     /**Event with signature `StakersUpdated((uint256,uint256,uint256,uint256)[],((uint256,uint256,uint256,uint256),(uint256,uint256),bool)[])` and selector `0x4bb31cd9ae87a3f8289558c79be5232506ce36de4269c8ba4534a6fbe9e2965d`.
     ```solidity
     event StakersUpdated(BN254.G2Point[] removed, NodeInfo[] added);
@@ -2365,6 +2378,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive()]
     /**Function with signature `_hashBlsKey((uint256,uint256,uint256,uint256))` and selector `0x9b30a5e6`.
     ```solidity
     function _hashBlsKey(BN254.G2Point memory blsVK) external pure returns (bytes32);
@@ -2375,6 +2389,7 @@ pub mod PermissionedStakeTable {
         #[allow(missing_docs)]
         pub blsVK: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`_hashBlsKey((uint256,uint256,uint256,uint256))`](_hashBlsKeyCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2482,6 +2497,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initializedAtBlock()` and selector `0x3e9df9b5`.
     ```solidity
     function initializedAtBlock() external view returns (uint256);
@@ -2489,6 +2505,7 @@ pub mod PermissionedStakeTable {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct initializedAtBlockCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`initializedAtBlock()`](initializedAtBlockCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2593,6 +2610,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive()]
     /**Function with signature `isStaker((uint256,uint256,uint256,uint256))` and selector `0x75d705e9`.
     ```solidity
     function isStaker(BN254.G2Point memory staker) external view returns (bool);
@@ -2603,6 +2621,7 @@ pub mod PermissionedStakeTable {
         #[allow(missing_docs)]
         pub staker: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`isStaker((uint256,uint256,uint256,uint256))`](isStakerCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2710,6 +2729,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `owner()` and selector `0x8da5cb5b`.
     ```solidity
     function owner() external view returns (address);
@@ -2717,6 +2737,7 @@ pub mod PermissionedStakeTable {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ownerCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`owner()`](ownerCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2821,6 +2842,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `renounceOwnership()` and selector `0x715018a6`.
     ```solidity
     function renounceOwnership() external;
@@ -2929,6 +2951,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `transferOwnership(address)` and selector `0xf2fde38b`.
     ```solidity
     function transferOwnership(address newOwner) external;
@@ -3044,6 +3067,7 @@ pub mod PermissionedStakeTable {
             }
         }
     };
+    #[derive()]
     /**Function with signature `update((uint256,uint256,uint256,uint256)[],((uint256,uint256,uint256,uint256),(uint256,uint256),bool)[])` and selector `0xcbba7c78`.
     ```solidity
     function update(BN254.G2Point[] memory stakersToRemove, NodeInfo[] memory newStakers) external;
@@ -3181,6 +3205,7 @@ pub mod PermissionedStakeTable {
         }
     };
     ///Container for all the [`PermissionedStakeTable`](self) function calls.
+    #[derive()]
     pub enum PermissionedStakeTableCalls {
         #[allow(missing_docs)]
         _hashBlsKey(_hashBlsKeyCall),
@@ -3399,6 +3424,7 @@ pub mod PermissionedStakeTable {
         }
     }
     ///Container for all the [`PermissionedStakeTable`](self) custom errors.
+    #[derive()]
     pub enum PermissionedStakeTableErrors {
         #[allow(missing_docs)]
         InvalidInitialization(InvalidInitialization),
@@ -3609,6 +3635,7 @@ pub mod PermissionedStakeTable {
         }
     }
     ///Container for all the [`PermissionedStakeTable`](self) events.
+    #[derive()]
     pub enum PermissionedStakeTableEvents {
         #[allow(missing_docs)]
         Initialized(Initialized),

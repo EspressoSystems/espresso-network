@@ -235,7 +235,7 @@ impl MockLedger {
         let next_st_state = self.next_stake_table_state();
 
         let mut msg = Vec::with_capacity(7);
-        let state_msg: [F; 3] = self.state.clone().into();
+        let state_msg: [F; 3] = self.state.into();
         msg.extend_from_slice(&state_msg);
         let next_stake_msg: [F; 4] = next_st_state.into();
         msg.extend_from_slice(&next_stake_msg);
@@ -322,7 +322,7 @@ impl MockLedger {
     pub fn gen_state_proof_with_fake_stakers(
         &mut self,
     ) -> (GenericPublicInput<F>, Proof, GenericStakeTableState<F>) {
-        let new_state = self.state.clone();
+        let new_state = self.state;
 
         let (adv_qc_keys, adv_state_keys) =
             key_pairs_for_testing(STAKE_TABLE_CAPACITY_FOR_TEST, &mut self.rng);
@@ -331,7 +331,7 @@ impl MockLedger {
 
         // replace new state with adversarial stake table commitment
         let mut msg = Vec::with_capacity(7);
-        let state_msg: [F; 3] = new_state.clone().into();
+        let state_msg: [F; 3] = new_state.into();
         msg.extend_from_slice(&state_msg);
         let adv_st_state_msg: [F; 4] = adv_st_state.into();
         msg.extend_from_slice(&adv_st_state_msg);
@@ -399,7 +399,7 @@ impl MockLedger {
 
     /// Returns the light client state
     pub fn light_client_state(&self) -> GenericLightClientState<F> {
-        self.state.clone()
+        self.state
     }
 
     // return a dummy commitment value

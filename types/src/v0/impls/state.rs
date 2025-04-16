@@ -651,13 +651,11 @@ impl<'a> ValidatedTransition<'a> {
     /// against that stored in [`ValidatedState`].
     fn validate_reward_merkle_tree(&self) -> Result<(), ProposalValidationError> {
         let reward_merkle_tree_root = self.state.reward_merkle_tree.commitment();
-        if let Some(root) = self.proposal.header.reward_merkle_tree_root() {
-            if root != reward_merkle_tree_root {
-                return Err(ProposalValidationError::InvalidRewardRoot {
-                    expected_root: reward_merkle_tree_root,
-                    proposal_root: root,
-                });
-            }
+        if self.proposal.header.reward_merkle_tree_root() != reward_merkle_tree_root {
+            return Err(ProposalValidationError::InvalidRewardRoot {
+                expected_root: reward_merkle_tree_root,
+                proposal_root: self.proposal.header.reward_merkle_tree_root(),
+            });
         }
 
         Ok(())
@@ -1056,10 +1054,11 @@ impl HotShotState<SeqTypes> for ValidatedState {
             BlockMerkleTree::from_commitment(block_header.block_merkle_tree_root())
         };
 
-        let mut reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
-        if let Some(root) = block_header.reward_merkle_tree_root() {
-            reward_merkle_tree = RewardMerkleTree::from_commitment(root);
-        }
+        let reward_merkle_tree = if block_header.reward_merkle_tree_root().size() == 0 {
+            RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT)
+        } else {
+            RewardMerkleTree::from_commitment(block_header.reward_merkle_tree_root())
+        };
 
         Self {
             fee_merkle_tree,

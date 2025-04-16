@@ -821,29 +821,35 @@ impl VersionedDataSource for SqlStorage {
 
 #[async_trait]
 pub trait MigrateTypes<Types: NodeType> {
-    async fn migrate_types(&self) -> anyhow::Result<()>;
+    async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()>;
 }
 
 #[async_trait]
 impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
-    async fn migrate_types(&self) -> anyhow::Result<()> {
-        let mut offset = 0;
-        let limit = 10000;
+    async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()> {
+        let limit = batch_size;
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
 
-        let (is_migration_completed,) =
-            query_as::<(bool,)>("SELECT completed from types_migration LIMIT 1 ")
-                .fetch_one(tx.as_mut())
-                .await?;
+        // The table `types_migration` is populated in the SQL migration with `completed = false` and `migrated_rows = 0`
+        // so fetch_one() would always return a row.
+        // After each batch insert, it is updated with the number of rows migrated.
+        // This is necessary to resume from the same point in case of a restart.
+        let (is_migration_completed, mut offset) = query_as::<(bool, i64)>(
+            "SELECT completed, migrated_rows from types_migration LIMIT 1 ",
+        )
+        .fetch_one(tx.as_mut())
+        .await?;
 
         if is_migration_completed {
             tracing::info!("types migration already completed");
             return Ok(());
         }
 
-        tracing::warn!("migrating query service types storage");
+        tracing::warn!(
+            "migrating query service types storage. Offset={offset}, batch_size={limit}"
+        );
 
         loop {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
@@ -851,10 +857,13 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             })?;
 
             let rows = QueryBuilder::default()
-                .query(&format!(
-                    "SELECT leaf, qc, common as vid_common, share as vid_share FROM leaf INNER JOIN vid on leaf.height = vid.height ORDER BY leaf.height LIMIT {} OFFSET {}",
-                    limit, offset
-                ))
+                .query(
+                    "SELECT leaf, qc, common as vid_common, share as vid_share
+                    FROM leaf INNER JOIN vid on leaf.height = vid.height 
+                    WHERE leaf.height >= $1 AND leaf.height < $2",
+                )
+                .bind(offset)
+                .bind(offset + limit as i64)
                 .fetch_all(tx.as_mut())
                 .await?;
 
@@ -882,7 +891,6 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                     serde_json::to_value(leaf2.clone()).context("failed to serialize leaf2")?;
                 let qc2_json = serde_json::to_value(qc2).context("failed to serialize QC2")?;
 
-                // TODO (abdul): revisit after V1 VID has common field
                 let vid_common_bytes: Vec<u8> = row.try_get("vid_common")?;
                 let vid_share_bytes: Option<Vec<u8>> = row.try_get("vid_share")?;
 
@@ -923,6 +931,10 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 "INSERT INTO leaf2 (height, view, hash, block_hash, leaf, qc) ",
             );
 
+            // Advance the `offset` to the highest `leaf.height` processed in this batch.
+            // This ensures the next iteration starts from the next unseen leaf
+            offset += limit as i64;
+
             query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
                 b.push_bind(row.0)
                     .push_bind(row.1)
@@ -932,6 +944,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                     .push_bind(row.5);
             });
 
+            query_builder.push(" ON CONFLICT DO NOTHING");
             let query = query_builder.build();
 
             let mut tx = self.write().await.map_err(|err| QueryError::Error {
@@ -940,8 +953,15 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
             query.execute(tx.as_mut()).await?;
 
-            tx.commit().await?;
-            tracing::warn!("inserted {} rows into leaf2 table", offset);
+            // update migrated_rows column with the offset
+            tx.upsert(
+                "types_migration",
+                ["id", "completed", "migrated_rows"],
+                ["id"],
+                [(1_i64, false, offset)],
+            )
+            .await?;
+
             // migrate vid
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
@@ -949,24 +969,19 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             query_builder.push_values(vid_rows.into_iter(), |mut b, row| {
                 b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
             });
-
+            query_builder.push(" ON CONFLICT DO NOTHING");
             let query = query_builder.build();
-
-            let mut tx = self.write().await.map_err(|err| QueryError::Error {
-                message: err.to_string(),
-            })?;
 
             query.execute(tx.as_mut()).await?;
 
             tx.commit().await?;
 
-            tracing::warn!("inserted {} rows into vid2 table", offset);
+            tracing::warn!("Migrated leaf and vid: offset={offset}");
 
-            if rows.len() < limit {
+            tracing::info!("offset={offset}");
+            if rows.len() < limit as usize {
                 break;
             }
-
-            offset += limit;
         }
 
         let mut tx = self.write().await.map_err(|err| QueryError::Error {
@@ -977,9 +992,9 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
         tx.upsert(
             "types_migration",
-            ["id", "completed"],
+            ["id", "completed", "migrated_rows"],
             ["id"],
-            [(0_i64, true)],
+            [(1_i64, true, offset)],
         )
         .await?;
 
@@ -1707,7 +1722,7 @@ mod test {
     async fn test_types_migration() {
         setup_test();
 
-        let num_rows = 200;
+        let num_rows = 500;
         let db = TmpDb::init().await;
 
         let storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -1841,7 +1856,11 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage)
+        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage, 50)
+            .await
+            .expect("failed to migrate");
+
+        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage, 50)
             .await
             .expect("failed to migrate");
 

@@ -251,13 +251,12 @@ async fn main() -> anyhow::Result<()> {
 
         if opt.upgrade_light_client_v2 {
             // fetch epoch length from HotShot config
-            let config_url = opt.sequencer_url.join("/config/hotshot")?;
             // Request the configuration until it is successful
             let (mut blocks_per_epoch, epoch_start_block) = loop {
                 match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                    config_url.clone(),
+                    opt.sequencer_url.clone(),
                 )
-                .get::<PublicNetworkConfig>(config_url.as_str())
+                .get::<PublicNetworkConfig>("config/hotshot")
                 .send()
                 .await
                 {
