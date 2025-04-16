@@ -147,6 +147,8 @@ pub enum HotShotEvent<TYPES: NodeType> {
     DacSend(DaCertificate2<TYPES>, TYPES::SignatureKey),
     /// The current view has changed; emitted by the replica in the consensus task or replica in the view sync task; received by almost all other tasks
     ViewChange(TYPES::View, Option<TYPES::Epoch>),
+    /// The view and epoch number of the first epoch
+    SetFirstEpoch(TYPES::View, TYPES::Epoch),
     /// Timeout for the view sync protocol; emitted by a replica in the view sync task
     ViewSyncTimeout(TYPES::View, u64, ViewSyncPhase),
 
@@ -388,6 +390,7 @@ impl<TYPES: NodeType> HotShotEvent<TYPES> {
             HotShotEvent::EpochRootQcSend(cert, ..) | HotShotEvent::EpochRootQcRecv(cert, _) => {
                 Some(cert.view_number())
             },
+            HotShotEvent::SetFirstEpoch(..) => None,
         }
     }
 }
@@ -701,6 +704,13 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             },
             HotShotEvent::EpochRootQcRecv(cert, ..) => {
                 write!(f, "EpochRootQcRecv(view_number={:?}", cert.view_number())
+            },
+            HotShotEvent::SetFirstEpoch(view, epoch) => {
+                write!(
+                    f,
+                    "SetFirstEpoch(view_number={:?}, epoch={:?})",
+                    view, epoch
+                )
             },
         }
     }

@@ -482,6 +482,7 @@ impl Inner {
     }
 
     fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+        tracing::info!("Checking `Leaf2` to load the anchor leaf.");
         if self.decided_leaf2_path().is_dir() {
             let mut anchor: Option<(Leaf2, QuorumCertificate2<SeqTypes>)> = None;
 
@@ -504,6 +505,7 @@ impl Inner {
             return Ok(anchor);
         }
 
+        tracing::warn!("Failed to find an anchor leaf in `Leaf2` storage. Checking legacy `Leaf` storage. This is very likely to fail.");
         if self.legacy_anchor_leaf_path().is_file() {
             // We may have an old version of storage, where there is just a single file for the
             // anchor leaf. Read it and return the contents.
@@ -683,7 +685,7 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let view_number = proposal.data.view_number().u64();
-        let dir_path = inner.vid_dir_path();
+        let dir_path = inner.vid2_dir_path();
 
         fs::create_dir_all(dir_path.clone()).context("failed to create vid dir")?;
 
@@ -697,6 +699,8 @@ impl SequencerPersistence for Persistence {
                 Ok(false)
             },
             |mut file| {
+                let proposal: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
+                    convert_proposal(proposal.clone());
                 let proposal_bytes = bincode::serialize(&proposal).context("serialize proposal")?;
                 file.write_all(&proposal_bytes)?;
                 Ok(())

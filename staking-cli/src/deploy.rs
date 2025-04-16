@@ -213,14 +213,8 @@ impl TestSystem {
         Ok(())
     }
 
-    fn base_cmd(&self) -> Command {
-        let mut cmd = escargot::CargoBuild::new()
-            .bin("staking-cli")
-            .current_release()
-            .current_target()
-            .run()
-            .unwrap()
-            .command();
+    /// Inject test system config into CLI command via arguments
+    pub fn args(&self, cmd: &mut Command, signer: Signer) {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
             .arg("--token-address")
@@ -229,20 +223,18 @@ impl TestSystem {
             .arg(self.stake_table.to_string())
             .arg("--account-index")
             .arg("0");
-        cmd
-    }
 
-    pub fn cmd_mnemonic(&self) -> Command {
-        let mut cmd = self.base_cmd();
-        cmd.arg("--mnemonic").arg(DEV_MNEMONIC);
-        cmd
+        match signer {
+            Signer::Mnemonic => cmd.arg("--mnemonic").arg(DEV_MNEMONIC),
+            Signer::Ledger => cmd.arg("--ledger"),
+        };
     }
+}
 
-    pub fn cmd_ledger(&self) -> Command {
-        let mut cmd = self.base_cmd();
-        cmd.arg("--ledger");
-        cmd
-    }
+#[derive(Clone, Copy)]
+pub enum Signer {
+    Ledger,
+    Mnemonic,
 }
 
 #[cfg(test)]

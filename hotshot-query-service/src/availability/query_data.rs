@@ -29,9 +29,12 @@ use jf_vid::VidScheme;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use snafu::{ensure, Snafu};
 
-use crate::{types::HeightIndexed, Header, Metadata, Payload, Transaction, VidCommon};
+use crate::{
+    types::HeightIndexed, Header, Metadata, Payload, QuorumCertificate, Transaction, VidCommon,
+};
 
 pub type LeafHash<Types> = Commitment<Leaf2<Types>>;
+pub type LeafHashLegacy<Types> = Commitment<Leaf<Types>>;
 pub type QcHash<Types> = Commitment<QuorumCertificate2<Types>>;
 
 /// A block hash is the hash of the block header.
@@ -199,11 +202,103 @@ pub struct LeafQueryData<Types: NodeType> {
     pub(crate) qc: QuorumCertificate2<Types>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(bound = "")]
+pub struct LeafQueryDataLegacy<Types: NodeType> {
+    pub(crate) leaf: Leaf<Types>,
+    pub(crate) qc: QuorumCertificate<Types>,
+}
+
+impl<Types: NodeType> From<LeafQueryDataLegacy<Types>> for LeafQueryData<Types> {
+    fn from(legacy: LeafQueryDataLegacy<Types>) -> Self {
+        Self {
+            leaf: legacy.leaf.into(),
+            qc: legacy.qc.to_qc2(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Snafu)]
 #[snafu(display("QC references leaf {qc_leaf}, but expected {leaf}"))]
 pub struct InconsistentLeafError<Types: NodeType> {
     pub leaf: LeafHash<Types>,
     pub qc_leaf: LeafHash<Types>,
+}
+
+#[derive(Clone, Debug, Snafu)]
+#[snafu(display("QC references leaf {qc_leaf}, but expected {leaf}"))]
+pub struct InconsistentLeafLegacyError<Types: NodeType> {
+    pub leaf: LeafHashLegacy<Types>,
+    pub qc_leaf: LeafHashLegacy<Types>,
+}
+
+impl<Types: NodeType> LeafQueryDataLegacy<Types> {
+    /// Collect information about a [`Leaf`].
+    ///
+    /// Returns a new [`LeafQueryData`] object populated from `leaf` and `qc`.
+    ///
+    /// # Errors
+    ///
+    /// Fails with an [`InconsistentLeafError`] if `qc` does not reference `leaf`.
+    pub fn new(
+        mut leaf: Leaf<Types>,
+        qc: QuorumCertificate<Types>,
+    ) -> Result<Self, InconsistentLeafLegacyError<Types>> {
+        // TODO: Replace with the new `commit` function in HotShot. Add an `upgrade_lock` parameter
+        // and a `HsVer: Versions` bound, then call `leaf.commit(upgrade_lock).await`. This will
+        // require updates in callers and relevant types as well.
+        let leaf_commit = <Leaf<Types> as Committable>::commit(&leaf);
+        ensure!(
+            qc.data.leaf_commit == leaf_commit,
+            InconsistentLeafLegacySnafu {
+                leaf: leaf_commit,
+                qc_leaf: qc.data.leaf_commit
+            }
+        );
+
+        // We only want the leaf for the block header and consensus metadata. The payload will be
+        // stored separately.
+        leaf.unfill_block_payload();
+
+        Ok(Self { leaf, qc })
+    }
+
+    pub async fn genesis<HsVer: Versions>(
+        validated_state: &Types::ValidatedState,
+        instance_state: &Types::InstanceState,
+    ) -> Self {
+        Self {
+            leaf: Leaf::genesis::<HsVer>(validated_state, instance_state).await,
+            qc: QuorumCertificate::genesis::<HsVer>(validated_state, instance_state).await,
+        }
+    }
+
+    pub fn leaf(&self) -> &Leaf<Types> {
+        &self.leaf
+    }
+
+    pub fn qc(&self) -> &QuorumCertificate<Types> {
+        &self.qc
+    }
+
+    pub fn header(&self) -> &Header<Types> {
+        self.leaf.block_header()
+    }
+
+    pub fn hash(&self) -> LeafHashLegacy<Types> {
+        // TODO: Replace with the new `commit` function in HotShot. Add an `upgrade_lock` parameter
+        // and a `HsVer: Versions` bound, then call `leaf.commit(upgrade_lock).await`. This will
+        // require updates in callers and relevant types as well.
+        <Leaf<Types> as Committable>::commit(&self.leaf)
+    }
+
+    pub fn block_hash(&self) -> BlockHash<Types> {
+        self.header().commit()
+    }
+
+    pub fn payload_hash(&self) -> VidCommitment {
+        self.header().payload_commitment()
+    }
 }
 
 impl<Types: NodeType> LeafQueryData<Types> {
@@ -276,6 +371,12 @@ impl<Types: NodeType> LeafQueryData<Types> {
 }
 
 impl<Types: NodeType> HeightIndexed for LeafQueryData<Types> {
+    fn height(&self) -> u64 {
+        self.header().block_number()
+    }
+}
+
+impl<Types: NodeType> HeightIndexed for LeafQueryDataLegacy<Types> {
     fn height(&self) -> u64 {
         self.header().block_number()
     }
@@ -399,6 +500,16 @@ impl<Types: NodeType> HeightIndexed for BlockQueryData<Types> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(bound = "")]
+pub struct ADVZPayloadQueryData<Types: NodeType> {
+    pub(crate) height: u64,
+    pub(crate) block_hash: BlockHash<Types>,
+    pub(crate) hash: ADVZCommitment,
+    pub(crate) size: u64,
+    pub(crate) data: Payload<Types>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(bound = "")]
 pub struct PayloadQueryData<Types: NodeType> {
     pub(crate) height: u64,
     pub(crate) block_hash: BlockHash<Types>,
@@ -420,6 +531,20 @@ impl<Types: NodeType> From<BlockQueryData<Types>> for PayloadQueryData<Types> {
 }
 
 impl<Types: NodeType> PayloadQueryData<Types> {
+    pub fn to_legacy(&self) -> Option<ADVZPayloadQueryData<Types>> {
+        let VidCommitment::V0(advz_commit) = self.hash else {
+            return None;
+        };
+
+        Some(ADVZPayloadQueryData {
+            height: self.height,
+            block_hash: self.block_hash,
+            hash: advz_commit,
+            size: self.size,
+            data: self.data.clone(),
+        })
+    }
+
     pub async fn genesis<HsVer: Versions>(
         validated_state: &Types::ValidatedState,
         instance_state: &Types::InstanceState,
