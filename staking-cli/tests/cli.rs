@@ -94,7 +94,7 @@ async fn test_cli_register_validator() -> Result<()> {
     setup_test();
     let system = TestSystem::deploy().await?;
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("register-validator")
         .arg("--consensus-private-key")
         .arg(
@@ -126,7 +126,7 @@ async fn test_cli_delegate() -> Result<()> {
     system.register_validator().await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("delegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -144,7 +144,7 @@ async fn test_cli_deregister_validator() -> Result<()> {
     system.register_validator().await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("deregister-validator").output()?.assert_success();
     Ok(())
 }
@@ -158,7 +158,7 @@ async fn test_cli_undelegate() -> Result<()> {
     system.delegate(parse_ether(amount)?).await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("undelegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -180,7 +180,7 @@ async fn test_cli_claim_withdrawal() -> Result<()> {
     system.warp_to_unlock_time().await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("claim-withdrawal")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -200,7 +200,7 @@ async fn test_cli_claim_validator_exit() -> Result<()> {
     system.warp_to_unlock_time().await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("claim-validator-exit")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -215,7 +215,7 @@ async fn test_cli_stake_for_demo_default_num_validators() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("stake-for-demo").output()?.assert_success();
     Ok(())
 }
@@ -226,7 +226,7 @@ async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("stake-for-demo")
         .arg("--num-validators")
         .arg("3")
@@ -242,7 +242,7 @@ async fn test_cli_approve() -> Result<()> {
     let amount = "123";
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("approve")
         .arg("--amount")
         .arg(amount)
@@ -261,7 +261,7 @@ async fn test_cli_balance() -> Result<()> {
 
     // Check balance of account owner
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     let s = cmd.arg("token-balance").output()?.assert_success().utf8();
 
     assert!(s.contains(&system.deployer_address.to_string()));
@@ -270,7 +270,7 @@ async fn test_cli_balance() -> Result<()> {
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     let s = cmd
         .arg("token-balance")
         .arg("--address")
@@ -292,7 +292,7 @@ async fn test_cli_allowance() -> Result<()> {
 
     // Check allowance of account owner
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     let out = cmd.arg("token-allowance").output()?.assert_success().utf8();
 
     assert!(out.contains(&system.deployer_address.to_string()));
@@ -301,7 +301,7 @@ async fn test_cli_allowance() -> Result<()> {
     // Check allowance of other address
     let addr = "0x1111111111111111111111111111111111111111".to_string();
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     let out = cmd
         .arg("token-allowance")
         .arg("--owner")
@@ -323,7 +323,7 @@ async fn test_cli_transfer() -> Result<()> {
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
     let amount = parse_ether("0.123")?;
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     cmd.arg("transfer")
         .arg("--to")
         .arg(addr.to_string())
@@ -347,7 +347,7 @@ async fn test_cli_info_full() -> Result<()> {
     system.delegate(amount).await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     let out = cmd.arg("info").output()?.assert_success().utf8();
 
     // Print output to fix test more easily.
@@ -370,7 +370,7 @@ async fn test_cli_info_compact() -> Result<()> {
     system.delegate(amount).await?;
 
     let mut cmd = base_cmd();
-    system.cmd(&mut cmd);
+    system.args(&mut cmd);
     let out = cmd
         .arg("info")
         .arg("--compact")

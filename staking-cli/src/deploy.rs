@@ -194,7 +194,8 @@ impl TestSystem {
         Ok(())
     }
 
-    pub fn cmd(&self, cmd: &mut Command) {
+    /// Inject test system config into CLI command via arguments
+    pub fn args(&self, cmd: &mut Command) {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
             .arg("--mnemonic")
