@@ -93,6 +93,10 @@ fn exit(msg: impl AsRef<str>) -> ! {
 #[tokio::main]
 pub async fn main() -> Result<()> {
     let mut cli = Args::parse();
+
+    // initialize the logging ASAP so we don't accidentally hide any messages.
+    cli.config.logging.clone().unwrap_or_default().init();
+
     let config_path = cli.config_path();
     // Get config file
     let config = if let Ok(f) = std::fs::read_to_string(&config_path) {
@@ -109,13 +113,12 @@ pub async fn main() -> Result<()> {
         // If there is no config file return only config parsed from clap
         Config::from(&mut cli.config)
     };
-    config.logging.init();
 
     // Run the init command first because config values required by other
     // commands are not present.
     match config.commands {
         Commands::Init => {
-            let config = toml::from_str::<Config>(include_str!("../../config.decaf.toml"))?;
+            let config = toml::from_str::<Config>(include_str!("../config.decaf.toml"))?;
 
             // Create directory where config file will be saved
             std::fs::create_dir_all(cli.config_dir()).unwrap_or_else(|err| {
