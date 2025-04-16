@@ -63,6 +63,7 @@ alloy = { version = "0.12.5", default-features = false, features = [
     "rpc-types",
     "signer-local",
     "signer-mnemonic",
+    "signer-ledger",
     "signers",
     "sol-types",
     "transports",

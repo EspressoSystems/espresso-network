@@ -1,14 +1,17 @@
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use alloy::primitives::{
     utils::{format_ether, parse_ether},
     Address, U256,
 };
 use anyhow::Result;
+use rand::{rngs::StdRng, SeedableRng as _};
 use sequencer_utils::test_utils::setup_test;
-use staking_cli::*;
+use staking_cli::{deploy::Signer, *};
 
 use crate::deploy::TestSystem;
+
+const TEST_MNEMONIC: &str = "wool upset allow cheap purity craft hat cute below useful reject door";
 
 trait AssertSuccess {
     fn assert_success(&self) -> &Self;
@@ -60,7 +63,7 @@ fn test_cli_version() -> Result<()> {
 }
 
 #[test]
-fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
+fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
     setup_test();
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
@@ -71,10 +74,17 @@ fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
         .arg("-c")
         .arg(&config_path)
         .arg("init")
+        .args(["--mnemonic", TEST_MNEMONIC])
+        .args(["--account-index", "123"])
         .output()?
         .assert_success();
 
     assert!(config_path.exists());
+
+    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(config.signer.mnemonic, Some(TEST_MNEMONIC.to_string()));
+    assert_eq!(config.signer.account_index, Some(123));
+    assert!(!config.signer.ledger);
 
     base_cmd()
         .arg("-c")
@@ -89,12 +99,37 @@ fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_cli_create_file_ledger() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+
+    assert!(!config_path.exists());
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("init")
+        .arg("--ledger")
+        .args(["--account-index", "42"])
+        .output()?
+        .assert_success();
+
+    assert!(config_path.exists());
+
+    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert!(config.signer.ledger);
+    assert_eq!(config.signer.account_index, Some(42));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_cli_register_validator() -> Result<()> {
     setup_test();
     let system = TestSystem::deploy().await?;
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("register-validator")
         .arg("--consensus-private-key")
         .arg(
@@ -120,13 +155,33 @@ async fn test_cli_register_validator() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_cli_update_consensus_keys() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    let mut rng = StdRng::from_seed([43u8; 32]);
+    let (new_bls, new_schnorr) = TestSystem::gen_consensus_keys(&mut rng);
+
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Mnemonic);
+    cmd.arg("update-consensus-keys")
+        .arg("--consensus-private-key")
+        .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
+        .arg("--state-private-key")
+        .arg(new_schnorr.sign_key().to_tagged_base64()?.to_string())
+        .output()?
+        .assert_success();
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_cli_delegate() -> Result<()> {
     setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("delegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -144,7 +199,7 @@ async fn test_cli_deregister_validator() -> Result<()> {
     system.register_validator().await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("deregister-validator").output()?.assert_success();
     Ok(())
 }
@@ -158,7 +213,7 @@ async fn test_cli_undelegate() -> Result<()> {
     system.delegate(parse_ether(amount)?).await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("undelegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -180,7 +235,7 @@ async fn test_cli_claim_withdrawal() -> Result<()> {
     system.warp_to_unlock_time().await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("claim-withdrawal")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -200,7 +255,7 @@ async fn test_cli_claim_validator_exit() -> Result<()> {
     system.warp_to_unlock_time().await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("claim-validator-exit")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
@@ -215,7 +270,7 @@ async fn test_cli_stake_for_demo_default_num_validators() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("stake-for-demo").output()?.assert_success();
     Ok(())
 }
@@ -226,7 +281,7 @@ async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("stake-for-demo")
         .arg("--num-validators")
         .arg("3")
@@ -242,7 +297,7 @@ async fn test_cli_approve() -> Result<()> {
     let amount = "123";
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("approve")
         .arg("--amount")
         .arg(amount)
@@ -261,7 +316,7 @@ async fn test_cli_balance() -> Result<()> {
 
     // Check balance of account owner
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     let s = cmd.arg("token-balance").output()?.assert_success().utf8();
 
     assert!(s.contains(&system.deployer_address.to_string()));
@@ -270,7 +325,7 @@ async fn test_cli_balance() -> Result<()> {
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     let s = cmd
         .arg("token-balance")
         .arg("--address")
@@ -292,7 +347,7 @@ async fn test_cli_allowance() -> Result<()> {
 
     // Check allowance of account owner
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     let out = cmd.arg("token-allowance").output()?.assert_success().utf8();
 
     assert!(out.contains(&system.deployer_address.to_string()));
@@ -301,7 +356,7 @@ async fn test_cli_allowance() -> Result<()> {
     // Check allowance of other address
     let addr = "0x1111111111111111111111111111111111111111".to_string();
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     let out = cmd
         .arg("token-allowance")
         .arg("--owner")
@@ -323,7 +378,7 @@ async fn test_cli_transfer() -> Result<()> {
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
     let amount = parse_ether("0.123")?;
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     cmd.arg("transfer")
         .arg("--to")
         .arg(addr.to_string())
@@ -338,7 +393,7 @@ async fn test_cli_transfer() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_cli_info_full() -> Result<()> {
+async fn test_cli_stake_table_full() -> Result<()> {
     setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
@@ -347,8 +402,8 @@ async fn test_cli_info_full() -> Result<()> {
     system.delegate(amount).await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
-    let out = cmd.arg("info").output()?.assert_success().utf8();
+    system.args(&mut cmd, Signer::Mnemonic);
+    let out = cmd.arg("stake-table").output()?.assert_success().utf8();
 
     // Print output to fix test more easily.
     println!("{}", out);
@@ -361,7 +416,7 @@ async fn test_cli_info_full() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_cli_info_compact() -> Result<()> {
+async fn test_cli_stake_table_compact() -> Result<()> {
     setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
@@ -370,9 +425,9 @@ async fn test_cli_info_compact() -> Result<()> {
     system.delegate(amount).await?;
 
     let mut cmd = base_cmd();
-    system.args(&mut cmd);
+    system.args(&mut cmd, Signer::Mnemonic);
     let out = cmd
-        .arg("info")
+        .arg("stake-table")
         .arg("--compact")
         .output()?
         .assert_success()
@@ -384,6 +439,107 @@ async fn test_cli_info_compact() -> Result<()> {
     out.contains(
         " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=0.123000000000000000 ESP",
     );
+
+    Ok(())
+}
+
+async fn address_from_cli(system: &TestSystem) -> Result<Address> {
+    println!("Unlock the ledger");
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Ledger);
+    // spawn the command first to show stderr output with errors/instructions
+    let child = cmd.arg("account").stdout(Stdio::piped()).spawn()?;
+
+    // wait for command to exit
+    let output = child.wait_with_output()?.assert_success().utf8();
+
+    // dump output for debugging purposes
+    println!("staking-cli account output: {output}");
+
+    Ok(output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap()
+        .parse()?)
+}
+
+/// This test requires a ledger device to be connected and unlocked.
+/// cargo test -p staking-cli -- --ignored --nocapture transfer_ledger
+#[ignore]
+#[tokio::test]
+async fn test_cli_transfer_ledger() -> Result<()> {
+    setup_test();
+    let system = TestSystem::deploy().await?;
+    let address = address_from_cli(&system).await?;
+
+    let amount = parse_ether("0.123")?;
+    system.transfer_eth(address, amount).await?;
+    system.transfer(address, amount).await?;
+
+    // Assume the ledger is unlocked and the Ethereum app remains open
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Mnemonic);
+    cmd.arg("transfer")
+        .arg("--to")
+        .arg(address.to_string())
+        .arg("--amount")
+        .arg(format_ether(amount))
+        .output()?
+        .assert_success();
+
+    // Make a token transfer with the ledger
+    println!("Sign the transaction in the ledger");
+    let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Ledger);
+    cmd.arg("transfer")
+        .arg("--to")
+        .arg(addr.to_string())
+        .arg("--amount")
+        .arg(format_ether(amount))
+        .output()?
+        .assert_success();
+
+    assert_eq!(system.balance(addr).await?, amount);
+
+    Ok(())
+}
+
+/// This test requires a ledger device to be connected and unlocked.
+/// cargo test -p staking-cli -- --ignored --nocapture delegate_ledger
+#[ignore]
+#[tokio::test]
+async fn test_cli_delegate_ledger() -> Result<()> {
+    setup_test();
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+    let address = address_from_cli(&system).await?;
+
+    let amount = parse_ether("0.123")?;
+    system.transfer_eth(address, amount).await?;
+    system.transfer(address, amount).await?;
+
+    // Assume the ledger is unlocked and the Ethereum app remains open
+    println!("Sign the transaction in the ledger");
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Ledger);
+    cmd.arg("approve")
+        .arg("--amount")
+        .arg(format_ether(amount))
+        .output()?
+        .assert_success();
+
+    println!("Sign the transaction in the ledger (again)");
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Ledger);
+    cmd.arg("delegate")
+        .arg("--validator-address")
+        .arg(system.deployer_address.to_string())
+        .arg("--amount")
+        .arg(format_ether(amount))
+        .output()?
+        .assert_success();
 
     Ok(())
 }

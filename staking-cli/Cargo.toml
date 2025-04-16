@@ -3,6 +3,7 @@ name = "staking-cli"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
+description = "A CLI to interact with the Espresso stake table contract"
 
 [dependencies]
 alloy = { workspace = true }
