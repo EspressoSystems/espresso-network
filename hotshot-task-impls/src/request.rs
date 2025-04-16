@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -114,19 +114,27 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                     .membership_coordinator
                     .stake_table_for_epoch(prop_epoch)
                     .await?;
-                if !membership.has_stake(&self.public_key).await
-                    && (!membership
-                        .next_epoch_stake_table()
-                        .await?
-                        .has_stake(&self.public_key)
-                        .await
-                        || !is_epoch_transition(
-                            proposal.data.block_header().block_number(),
-                            self.epoch_height,
-                        ))
-                {
-                    return Ok(());
+                let mut target_epochs = BTreeSet::new();
+                if membership.has_stake(&self.public_key).await {
+                    target_epochs.insert(prop_epoch);
                 }
+                if is_epoch_transition(
+                    proposal.data.block_header().block_number(),
+                    self.epoch_height,
+                ) && membership
+                    .next_epoch_stake_table()
+                    .await?
+                    .has_stake(&self.public_key)
+                    .await
+                {
+                    target_epochs.insert(prop_epoch.map(|e| e + 1));
+                }
+
+                ensure!(
+                    !target_epochs.is_empty(),
+                    "We don't belong to the current epoch and \
+                we don't belong to the next epoch. Do not request VID share."
+                );
 
                 let consensus_reader = self.consensus.read().await;
                 let maybe_vid_share = consensus_reader
@@ -134,9 +142,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                     .get(&prop_view)
                     .and_then(|shares| shares.get(&self.public_key));
                 // If we already have the VID shares for the next view, do nothing.
-                if prop_view >= self.view && maybe_vid_share.is_none() {
+                if prop_view >= self.view
+                    && (maybe_vid_share.is_none()
+                        || !target_epochs
+                            .iter()
+                            .all(|e| maybe_vid_share.unwrap().contains_key(e)))
+                {
                     drop(consensus_reader);
-                    self.spawn_requests(prop_view, prop_epoch, sender).await;
+                    self.spawn_requests(prop_view, prop_epoch, sender, target_epochs)
+                        .await;
                 }
                 Ok(())
             },
@@ -221,15 +235,23 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
     async fn spawn_requests(
         &mut self,
         view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        prop_epoch: Option<TYPES::Epoch>,
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+        target_epochs: BTreeSet<Option<TYPES::Epoch>>,
     ) {
         let request = RequestKind::Vid(view, self.public_key.clone());
 
         // First sign the request for the VID shares.
         if let Some(signature) = self.serialize_and_sign(&request) {
-            self.create_vid_request_task(request, signature, sender.clone(), view, epoch)
-                .await;
+            self.create_vid_request_task(
+                request,
+                signature,
+                sender.clone(),
+                view,
+                prop_epoch,
+                target_epochs,
+            )
+            .await;
         }
     }
 
@@ -241,7 +263,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         signature: Signature<TYPES>,
         sender: Sender<Arc<HotShotEvent<TYPES>>>,
         view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        prop_epoch: Option<TYPES::Epoch>,
+        mut target_epochs: BTreeSet<Option<TYPES::Epoch>>,
     ) {
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
         let network = Arc::clone(&self.network);
@@ -252,7 +275,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         // Get the committee members for the view and the leader, if applicable
         let membership_reader = match self
             .membership_coordinator
-            .membership_for_epoch(epoch)
+            .membership_for_epoch(prop_epoch)
             .await
         {
             Ok(m) => m,
@@ -294,6 +317,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
                 &view,
                 &shutdown_flag,
                 my_id,
+                &mut target_epochs,
             )
             .await
             {
@@ -340,6 +364,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         view: &TYPES::View,
         shutdown_flag: &Arc<AtomicBool>,
         id: u64,
+        target_epochs: &mut BTreeSet<Option<TYPES::Epoch>>,
     ) -> bool {
         let consensus_reader = consensus.read().await;
 
@@ -347,27 +372,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
             .vid_shares()
             .get(view)
             .and_then(|key_map| key_map.get(public_key));
-        let cancel = shutdown_flag.load(Ordering::Relaxed)
-            || maybe_vid_shares.is_some()
-            || consensus_reader.cur_view() > *view;
-        if cancel {
-            if let Some(vid_shares) = maybe_vid_shares {
-                tracing::debug!(
-                    "Canceling vid request but first send own vid share: {:?}, my id {:?}",
-                    vid_shares,
-                    id,
-                );
-                for vid_share in vid_shares.values() {
-                    broadcast_event(
-                        Arc::new(HotShotEvent::VidShareRecv(
-                            public_key.clone(),
-                            vid_share.clone(),
-                        )),
-                        sender,
-                    )
-                    .await;
-                }
+        if let Some(vid_shares) = maybe_vid_shares {
+            tracing::debug!("Send own vid share: {:?}, my id {:?}", vid_shares, id,);
+            for vid_share in vid_shares.values() {
+                broadcast_event(
+                    Arc::new(HotShotEvent::VidShareRecv(
+                        public_key.clone(),
+                        vid_share.clone(),
+                    )),
+                    sender,
+                )
+                .await;
+                target_epochs.remove(&vid_share.data.target_epoch());
             }
+        }
+        let cancel = shutdown_flag.load(Ordering::Relaxed)
+            || consensus_reader.cur_view() > *view
+            || target_epochs.is_empty();
+        if cancel {
             tracing::debug!(
                 "Canceling vid request for view {:?}, cur view is {:?}, my id {:?}",
                 view,
