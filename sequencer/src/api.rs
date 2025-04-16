@@ -979,36 +979,11 @@ pub mod test_helpers {
                 }
             };
 
-            if <V as Versions>::Base::VERSION >= EpochVersion::VERSION {
-                let state = ValidatedState {
-                    chain_config: chain_config.into(),
-                    ..state
-                };
-                return Ok(self.states(std::array::from_fn(|_| state.clone())));
-            }
-
-            if <V as Versions>::Upgrade::VERSION >= EpochVersion::VERSION {
-                let mut network_config = self.network_config.clone().unwrap();
-
-                let mode = UpgradeMode::View(ViewBasedUpgrade {
-                    start_voting_view: None,
-                    stop_voting_view: None,
-                    start_proposing_view: 1,
-                    stop_proposing_view: 10,
-                });
-
-                let upgrade_type = UpgradeType::Epoch { chain_config };
-
-                let mut upgrades = std::collections::BTreeMap::new();
-                upgrades.insert(
-                    <V as Versions>::Upgrade::VERSION,
-                    Upgrade { mode, upgrade_type },
-                );
-
-                network_config.with_upgrades(upgrades);
-                return Ok(self.network_config(network_config));
-            }
-            Ok(self)
+            let state = ValidatedState {
+                chain_config: chain_config.into(),
+                ..state
+            };
+            Ok(self.states(std::array::from_fn(|_| state.clone())))
         }
 
         pub fn build(self) -> TestNetworkConfig<{ NUM_NODES }, P, C> {
