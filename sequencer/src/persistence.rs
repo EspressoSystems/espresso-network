@@ -1151,7 +1151,7 @@ mod persistence_tests {
 
         // Build the config with PoS hook
 
-        let testnet_config = TestNetworkConfigBuilder::default()
+        let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())

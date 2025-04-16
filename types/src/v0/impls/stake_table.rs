@@ -375,14 +375,15 @@ impl StakeTableFetcher {
         tracing::info!("loading events from contract");
 
         let contract_events = contract_events.sort_events()?;
-        if let Some((_, persistence_events)) = res {
-            Ok(persistence_events
+      let events =   if let Some((_, persistence_events)) = res {
+            persistence_events
                 .into_iter()
                 .chain(contract_events)
-                .collect())
+                .collect()
         } else {
-            Ok(contract_events)
-        }
+            contract_events
+        };
+        Ok(events)
     }
 
     /// Fetch all stake table events from L1
