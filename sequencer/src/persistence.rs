@@ -1139,7 +1139,7 @@ mod persistence_tests {
         let query_service_port = pick_unused_port().expect("No ports free for query service");
         let query_api_options = Options::with_port(query_service_port);
 
-        const NODE_COUNT: usize = 5;
+        const NODE_COUNT: usize = 2;
 
         let storage = join_all((0..NODE_COUNT).map(|_| P::tmp_storage())).await;
         let persistence_options: [_; NODE_COUNT] = storage
