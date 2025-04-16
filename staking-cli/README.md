@@ -224,7 +224,7 @@ This section covers commands for node operators.
 1.  Obtain your validator's BLS and state private keys and choose your commission in percent, with 2 decimals.
 1.  Use the `register-validator` command to register your validator.
 
-        staking-cli register-validator --consensus-private-key BLS_KEY --state-private-key STATE_KEY --commission 4.99
+        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99
 
     To avoid specifying the the keys on the command line they can be set via env vars
 
@@ -232,6 +232,14 @@ This section covers commands for node operators.
     CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
     ```
+
+- Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
+  register transaction consumes about 300k gas.
+- Each BLS (Espresso) and key can be registered only once.
+- The commission cannot be changed later. One would need to deregister the validator, register it again, and direct
+  delegators to redelegate in order to change it.
+- Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
+  different account indices (or mnemonics) must be used.
 
 ### De-registering your validator
 
