@@ -4,10 +4,13 @@ use alloy::{
 };
 use anyhow::Result;
 use ark_ec::CurveGroup;
-use hotshot_contract_adapter::sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTable};
+use hotshot_contract_adapter::sol_types::{
+    EdOnBN254PointSol, G1PointSol, G2PointSol,
+    StakeTable::{self, StakeTableErrors},
+};
 use jf_signature::constants::CS_ID_BLS_BN254;
 
-use crate::{parse::Commission, BLSKeyPair, StateVerKey};
+use crate::{l1::DecodeRevertError as _, parse::Commission, BLSKeyPair, StateVerKey};
 
 fn prepare_bls_payload(
     bls_key_pair: &BLSKeyPair,
@@ -41,7 +44,8 @@ pub async fn register_validator(
             commission.to_evm(),
         )
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
@@ -59,7 +63,8 @@ pub async fn update_consensus_keys(
     Ok(stake_table
         .updateConsensusKeys(bls_vk_sol.into(), schnorr_vk_sol.into(), sig_sol.into())
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
@@ -72,7 +77,8 @@ pub async fn deregister_validator(
     Ok(stake_table
         .deregisterValidator()
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }

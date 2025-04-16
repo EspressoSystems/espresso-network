@@ -24,7 +24,7 @@ pub mod claim;
 pub mod delegation;
 pub mod demo;
 pub mod info;
-mod l1;
+pub mod l1;
 pub mod parse;
 pub mod registration;
 

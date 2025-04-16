@@ -1,6 +1,8 @@
 use alloy::{primitives::Address, providers::Provider, rpc::types::TransactionReceipt};
 use anyhow::Result;
-use hotshot_contract_adapter::sol_types::StakeTable;
+use hotshot_contract_adapter::sol_types::StakeTable::{self, StakeTableErrors};
+
+use crate::l1::DecodeRevertError;
 
 pub async fn claim_withdrawal(
     provider: impl Provider,
@@ -12,7 +14,8 @@ pub async fn claim_withdrawal(
     Ok(st
         .claimWithdrawal(validator_address)
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
@@ -26,7 +29,8 @@ pub async fn claim_validator_exit(
     Ok(st
         .claimValidatorExit(validator_address)
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
