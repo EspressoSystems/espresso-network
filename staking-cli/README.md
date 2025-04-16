@@ -2,10 +2,10 @@
 
 WARNING: This CLI is intended for use in testnet purposes only.
 
-This CLI helps users interact with the Espresso staking contract, either as a delegator or a node
-operator.
+This CLI helps users interact with the Espresso staking contract, either as a delegator or a node operator.
 
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
+
 **Table of Contents**
 
 - [Espresso staking CLI](#espresso-staking-cli)
@@ -39,13 +39,15 @@ To show help for a command run `staking-cli COMMAND --help`, for example `stakin
 If you run into any problems please open an issue on https://github.com/EspressoSystems/espresso-network.
 
 ## Getting Started
+
 ### Overview
 
 You can get help for the CLI by running:
 
     staking-cli --help
-    
+
 Which will show all the available commands and options shared by commands:
+
 ```
     A CLI to interact with the Espresso stake table contract
 
@@ -108,7 +110,7 @@ Options:
 
             [env: USE_LEDGER=]
 
-``` 
+```
 
 or by passing `--help` to a command, for example `delegate`:
 
@@ -132,6 +134,7 @@ Options:
 First, determine if you would like to use a Mnemonic phrase or ledger hardware wallet.
 
 If you don't know which account index to use, you can find it by running:
+
 ```bash
 staking-cli --mnemonic MNEMONIC --account-index 0 account
 staking-cli --mnemonic MNEMONIC --account-index 1 account
@@ -140,6 +143,7 @@ staking-cli --ledger-index 0 account
 staking-cli --ledger-index 1 account
 # etc
 ```
+
 Repeat with different indices until you find the address you want to use.
 
 Note that for ledger signing to work
@@ -158,11 +162,10 @@ Once you've identified your desired account index (here 2), initialize a configu
     # or
     staking-cli init --ledger-index 2
 
-This creates a TOML config file with the contracts of our decaf Testnet, deployed on Sepolia. With
-the config file you don't need to provide the configuration values every time you run the CLI.
+This creates a TOML config file with the contracts of our decaf Testnet, deployed on Sepolia. With the config file you
+don't need to provide the configuration values every time you run the CLI.
 
-NOTE: only for this `init` command the `--mnemonic` and `--ledger-index` flags are specified _after_ the
-command.
+NOTE: only for this `init` command the `--mnemonic` and `--ledger-index` flags are specified _after_ the command.
 
 ### Inspect the configuration
 
@@ -171,11 +174,13 @@ You can inspect the configuration file by running:
          staking-cli config
 
 ### View the stake table
+
 You can use the following command to display the current L1 stake table:
 
     staking-cli stake-table
 
 ## Delegators (or stakers)
+
 This section covers commands for stakers/delegators.
 
 ### Delegating
@@ -205,12 +210,13 @@ This section covers commands for stakers/delegators.
 
 ### Recovering funds after a validator exit
 
-1.  Wait for the exit escrow period to elapse after the validator deregistered itself (currently 1
-    week), then withdraw to your wallet by running
+1.  Wait for the exit escrow period to elapse after the validator deregistered itself (currently 1 week), then withdraw
+    to your wallet by running
 
          staking-cli claim-validator-exit --validator-address 0x12...34
 
 ## Node operators
+
 This section covers commands for node operators.
 
 ### Registering a validator
@@ -229,7 +235,8 @@ This section covers commands for node operators.
 
 ### De-registering your validator
 
-WARNING: running this command will remove your validator from the stake table and undelegate all the funds delegated to it.
+WARNING: running this command will remove your validator from the stake table and undelegate all the funds delegated to
+it.
 
     staking-cli deregister-validator
 
