@@ -11,11 +11,9 @@ use std::{
     future::Future,
     hash::Hash,
     marker::PhantomData,
-    sync::Arc,
 };
 
 use alloy::primitives::U256;
-use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};
@@ -398,17 +396,9 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
     ///
     /// # Errors
     /// Returns an error when the certificate is no longer relevant
-    pub async fn is_relevant(
-        &self,
-        view_number: TYPES::View,
-        decided_upgrade_certificate: Arc<RwLock<Option<Self>>>,
-    ) -> Result<()> {
-        let decided_upgrade_certificate_read = decided_upgrade_certificate.read().await;
+    pub async fn is_relevant(&self, view_number: TYPES::View) -> Result<()> {
         ensure!(
-            self.data.decide_by >= view_number
-                || decided_upgrade_certificate_read
-                    .clone()
-                    .is_some_and(|cert| cert == *self),
+            self.data.new_version_first_view >= view_number,
             "Upgrade certificate is no longer relevant."
         );
 

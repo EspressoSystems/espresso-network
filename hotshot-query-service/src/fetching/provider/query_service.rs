@@ -27,7 +27,10 @@ use vbs::version::StaticVersionType;
 
 use super::Provider;
 use crate::{
-    availability::{LeafQueryData, PayloadQueryData, VidCommonQueryData},
+    availability::{
+        ADVZCommonQueryData, ADVZPayloadQueryData, LeafQueryData, LeafQueryDataLegacy,
+        PayloadQueryData, VidCommonQueryData,
+    },
     fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
     Error, Header, Payload, VidCommon,
@@ -46,6 +49,131 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
     pub fn new(url: Url, _: Ver) -> Self {
         Self {
             client: Client::new(url),
+        }
+    }
+}
+
+impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+    async fn fetch_legacy_payload<Types: NodeType>(
+        &self,
+        req: PayloadRequest,
+    ) -> Option<Payload<Types>> {
+        let PayloadRequest(VidCommitment::V0(advz_commit)) = req else {
+            return None;
+        };
+
+        let res = try_join!(
+            self.client
+                .get::<ADVZPayloadQueryData<Types>>(&format!(
+                    "availability/payload/hash/{}",
+                    advz_commit
+                ))
+                .send(),
+            self.client
+                .get::<ADVZCommonQueryData<Types>>(&format!(
+                    "availability/vid/common/payload-hash/{}",
+                    advz_commit
+                ))
+                .send()
+        );
+        match res {
+            Ok((payload, common)) => {
+                let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common.common()) as usize;
+                let bytes = payload.data.encode();
+                let commit = match advz_scheme(num_storage_nodes).commit_only(bytes) {
+                    Ok(commit) => commit,
+                    Err(err) => {
+                        tracing::error!(%err, "unable to compute VID commitment");
+                        return None;
+                    },
+                };
+                if commit != advz_commit {
+                    tracing::error!(?req, ?commit, "received inconsistent payload");
+                    return None;
+                }
+
+                Some(payload.data)
+            },
+            Err(err) => {
+                tracing::error!("failed to fetch payload {req:?}: {err}");
+                None
+            },
+        }
+    }
+
+    async fn fetch_legacy_vid_common<Types: NodeType>(
+        &self,
+        req: VidCommonRequest,
+    ) -> Option<VidCommon> {
+        let VidCommonRequest(VidCommitment::V0(advz_commit)) = req else {
+            return None;
+        };
+
+        match self
+            .client
+            .get::<ADVZCommonQueryData<Types>>(&format!(
+                "availability/vid/common/payload-hash/{}",
+                advz_commit
+            ))
+            .send()
+            .await
+        {
+            Ok(res) => {
+                if ADVZScheme::is_consistent(&advz_commit, &res.common).is_ok() {
+                    Some(VidCommon::V0(res.common))
+                } else {
+                    tracing::error!(?req, ?res.common, "fetched inconsistent VID common data");
+                    None
+                }
+            },
+            Err(err) => {
+                tracing::error!("failed to fetch VID common {} : {err}", req.0);
+                None
+            },
+        }
+    }
+    async fn fetch_legacy_leaf<Types: NodeType>(
+        &self,
+        req: LeafRequest<Types>,
+    ) -> Option<LeafQueryData<Types>> {
+        match self
+            .client
+            .get::<LeafQueryDataLegacy<Types>>(&format!("availability/leaf/{}", req.height))
+            .send()
+            .await
+        {
+            Ok(mut leaf) => {
+                if leaf.height() != req.height {
+                    tracing::error!(?req, ?leaf, "received leaf with the wrong height");
+                    return None;
+                }
+
+                let expected_leaf_commit: [u8; 32] = req.expected_leaf.into();
+                let actual_leaf_commit: [u8; 32] = leaf.hash().into();
+                if actual_leaf_commit != expected_leaf_commit {
+                    tracing::error!(?req, ?leaf, hash = ?leaf.hash(), "received leaf with the wrong hash");
+                    return None;
+                }
+
+                let expected_qc_commit: [u8; 32] = req.expected_qc.into();
+                let actual_qc_commit: [u8; 32] = leaf.qc().commit().into();
+                if actual_qc_commit != expected_qc_commit {
+                    tracing::error!(?req, ?leaf, hash = ?leaf.qc().commit(), "received leaf with the wrong QC");
+                    return None;
+                }
+
+                // There is a potential DOS attack where the peer sends us a leaf with the full
+                // payload in it, which uses redundant resources in the database, since we fetch and
+                // store payloads separately. We can defend ourselves by simply dropping the payload
+                // if present.
+                leaf.leaf.unfill_block_payload();
+
+                Some(leaf.into())
+            },
+            Err(err) => {
+                tracing::error!("failed to fetch leaf {req:?}: {err}");
+                None
+            },
         }
     }
 }
@@ -144,8 +272,8 @@ where
                 Some(payload.data)
             },
             Err(err) => {
-                tracing::error!("failed to fetch payload {req:?}: {err}");
-                None
+                tracing::warn!("error fetching block payload {err}");
+                self.fetch_legacy_payload::<Types>(req).await
             },
         }
     }
@@ -187,8 +315,8 @@ where
                 Some(leaf)
             },
             Err(err) => {
-                tracing::error!("failed to fetch leaf {req:?}: {err}");
-                None
+                tracing::warn!("error fetching v2 leaf {err}");
+                self.fetch_legacy_leaf(req).await
             },
         }
     }
@@ -233,8 +361,8 @@ where
                 },
             },
             Err(err) => {
-                tracing::error!("failed to fetch VID common {req:?}: {err}");
-                None
+                tracing::warn!("error fetching v1 vid common {err}");
+                self.fetch_legacy_vid_common::<Types>(req).await
             },
         }
     }

@@ -344,27 +344,29 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         // If we are in the epoch transition and we are the leader in the next epoch,
         // we might want to start collecting dependencies for our next epoch proposal.
 
-        let leader_in_next_epoch = epoch_number.is_some()
-            && matches!(
-                epoch_transition_indicator,
-                EpochTransitionIndicator::InTransition
-            )
-            && epoch_membership
-                .next_epoch()
-                .await
-                .context(warn!(
-                    "Missing the randomized stake table for epoch {:?}",
-                    epoch_number.unwrap() + 1
-                ))?
-                .leader(view_number)
-                .await?
-                == self.public_key;
+        if !leader_in_current_epoch {
+            let leader_in_next_epoch = epoch_number.is_some()
+                && matches!(
+                    epoch_transition_indicator,
+                    EpochTransitionIndicator::InTransition
+                )
+                && epoch_membership
+                    .next_epoch()
+                    .await
+                    .context(warn!(
+                        "Missing the randomized stake table for epoch {:?}",
+                        epoch_number.unwrap() + 1
+                    ))?
+                    .leader(view_number)
+                    .await?
+                    == self.public_key;
 
-        // Don't even bother making the task if we are not entitled to propose anyway.
-        ensure!(
-            leader_in_current_epoch || leader_in_next_epoch,
-            debug!("We are not the leader of the next view")
-        );
+            // Don't even bother making the task if we are not entitled to propose anyway.
+            ensure!(
+                leader_in_current_epoch || leader_in_next_epoch,
+                debug!("We are not the leader of the next view")
+            );
+        }
 
         // Don't try to propose twice for the same view.
         ensure!(

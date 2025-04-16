@@ -86,7 +86,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             stop_proposing_time: handle.hotshot.config.stop_proposing_time,
             start_voting_time: handle.hotshot.config.start_voting_time,
             stop_voting_time: handle.hotshot.config.stop_voting_time,
+            epoch_start_block: handle.hotshot.config.epoch_start_block,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+            epoch_height: handle.epoch_height,
+            consensus: OuterConsensus::new(handle.hotshot.consensus()),
         };
 
         #[cfg(feature = "example-upgrade")]
@@ -245,8 +248,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             storage: Arc::clone(&handle.storage),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
-            epoch_upgrade_block_height: handle.hotshot.config.epoch_start_block,
-            staged_epoch_upgrade_certificate: None,
             consensus_metrics,
         }
     }
@@ -335,6 +336,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             view_start_time: Instant::now(),
+            first_epoch: None,
         }
     }
 }

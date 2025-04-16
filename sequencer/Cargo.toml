@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["fee"]
+default = ["fee", "pos"]
 testing = [
     "hotshot-testing",
     "marketplace-builder-core",

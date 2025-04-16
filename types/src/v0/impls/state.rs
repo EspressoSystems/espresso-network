@@ -745,7 +745,8 @@ fn validate_builder_fee(
         // TODO Marketplace signatures are placeholders for now. In
         // finished Marketplace signatures will cover the full
         // transaction.
-        if version.minor >= MarketplaceVersion::MINOR {
+        if version >= MarketplaceVersion::VERSION {
+            tracing::debug!("Validating (Marketplace) sequencing fee signature.");
             fee_info
                 .account()
                 .validate_sequencing_fee_signature_marketplace(
@@ -755,16 +756,20 @@ fn validate_builder_fee(
                 )
                 .then_some(())
                 .ok_or(BuilderValidationError::InvalidBuilderSignature)?;
-        } else {
-            fee_info
-                .account()
-                .validate_fee_signature(
-                    &signature,
-                    fee_info.amount().as_u64().unwrap(),
-                    proposed_header.metadata(),
-                )
-                .then_some(())
-                .ok_or(BuilderValidationError::InvalidBuilderSignature)?;
+        } else if !fee_info.account().validate_fee_signature(
+            &signature,
+            fee_info.amount().as_u64().unwrap(),
+            proposed_header.metadata(),
+        ) && !fee_info
+            .account()
+            .validate_fee_signature_with_vid_commitment(
+                &signature,
+                fee_info.amount().as_u64().unwrap(),
+                proposed_header.metadata(),
+                &proposed_header.payload_commitment(),
+            )
+        {
+            return Err(BuilderValidationError::InvalidBuilderSignature);
         }
     }
 

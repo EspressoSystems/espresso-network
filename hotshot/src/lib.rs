@@ -289,6 +289,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         // block header.
         let validated_state = initializer.anchor_state;
 
+        load_start_epoch_info(
+            membership_coordinator.membership(),
+            &initializer.start_epoch_info,
+            config.epoch_height,
+            config.epoch_start_block,
+        )
+        .await;
+
         // #3967 REVIEW NOTE: Should this actually be Some()? How do we know?
         let epoch = initializer.high_qc.data.block_number.map(|block_number| {
             TYPES::Epoch::new(epoch_from_block_number(
@@ -296,18 +304,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 config.epoch_height,
             ))
         });
-
-        if epoch.is_some() {
-            load_start_epoch_info(
-                membership_coordinator.membership(),
-                &initializer.start_epoch_info,
-                config.epoch_height,
-                config.epoch_start_block,
-            )
-            .await;
-        } else {
-            tracing::error!("SKIPPING LOAD_START_EPOCH_INFO");
-        }
 
         // Insert the validated state to state map.
         let mut validated_state_map = BTreeMap::default();
@@ -1214,26 +1210,14 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     epoch_height: u64,
     epoch_start_block: u64,
 ) {
-    let set_first_epoch = if let Some(epoch_info) = start_epoch_info.first() {
-        epoch_info.block_header.is_none()
-    } else {
-        true
-    };
+    let first_epoch_number =
+        TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
 
-    // The logic here is that if we're starting up in epochs, but we don't have a block header for the lowest epoch
-    // in start_epoch_info (or start_epoch_info is empty), then we must have restarted between the epoch upgrade
-    // and when add_epoch_root was called for the first time. To get us back to where we were, call set_first_epoch
-    // to pre-seed the state table and initial DRB results.
-    if set_first_epoch {
-        let first_epoch_number =
-            TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
-
-        tracing::debug!("Calling set_first_epoch for epoch {:?}", first_epoch_number);
-        membership
-            .write()
-            .await
-            .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
-    }
+    tracing::warn!("Calling set_first_epoch for epoch {:?}", first_epoch_number);
+    membership
+        .write()
+        .await
+        .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
 
     for epoch_info in start_epoch_info {
         if let Some(block_header) = &epoch_info.block_header {

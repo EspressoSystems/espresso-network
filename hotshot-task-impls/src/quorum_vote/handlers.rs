@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_broadcast::{InactiveReceiver, Sender};
 use async_lock::RwLock;
@@ -169,6 +169,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
 >(
     proposal: &QuorumProposalWrapper<TYPES>,
     task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
+    event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<()> {
     let version = task_state
         .upgrade_lock
@@ -220,36 +221,22 @@ pub(crate) async fn handle_quorum_proposal_validated<
         .await
     };
 
-    if let Some(cert) = &task_state.staged_epoch_upgrade_certificate {
-        if leaf_views.last().unwrap().leaf.height() >= task_state.epoch_upgrade_block_height {
-            let mut decided_certificate_lock = task_state
-                .upgrade_lock
-                .decided_upgrade_certificate
-                .write()
-                .await;
-            *decided_certificate_lock = Some(cert.clone());
-            drop(decided_certificate_lock);
+    if let (Some(cert), Some(_)) = (decided_upgrade_cert.clone(), new_decided_view_number) {
+        let mut decided_certificate_lock = task_state
+            .upgrade_lock
+            .decided_upgrade_certificate
+            .write()
+            .await;
+        *decided_certificate_lock = Some(cert.clone());
+        drop(decided_certificate_lock);
 
-            let _ = task_state
-                .storage
-                .write()
-                .await
-                .update_decided_upgrade_certificate(Some(cert.clone()))
-                .await;
-
-            task_state.staged_epoch_upgrade_certificate = None;
-        }
-    };
-
-    if let Some(cert) = decided_upgrade_cert.clone() {
         if cert.data.new_version == V::Epochs::VERSION {
-            task_state.staged_epoch_upgrade_certificate = Some(cert);
-
             let epoch_height = task_state.consensus.read().await.epoch_height;
             let first_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
-                task_state.epoch_upgrade_block_height,
+                proposal.block_header().block_number(),
                 epoch_height,
             ));
+
             tracing::debug!("Calling set_first_epoch for epoch {:?}", first_epoch_number);
             task_state
                 .membership
@@ -257,27 +244,28 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 .write()
                 .await
                 .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
-        } else {
-            let mut decided_certificate_lock = task_state
-                .upgrade_lock
-                .decided_upgrade_certificate
-                .write()
-                .await;
-            *decided_certificate_lock = Some(cert.clone());
-            drop(decided_certificate_lock);
 
-            let _ = task_state
-                .storage
-                .write()
-                .await
-                .update_decided_upgrade_certificate(Some(cert.clone()))
-                .await;
+            broadcast_event(
+                Arc::new(HotShotEvent::SetFirstEpoch(
+                    cert.data.new_version_first_view,
+                    first_epoch_number,
+                )),
+                event_sender,
+            )
+            .await;
         }
+
+        let _ = task_state
+            .storage
+            .write()
+            .await
+            .update_decided_upgrade_certificate(Some(cert.clone()))
+            .await;
     }
 
     let mut consensus_writer = task_state.consensus.write().await;
     if let Some(locked_view_number) = new_locked_view_number {
-        consensus_writer.update_locked_view(locked_view_number)?;
+        let _ = consensus_writer.update_locked_view(locked_view_number);
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -288,7 +276,14 @@ pub(crate) async fn handle_quorum_proposal_validated<
         consensus_writer.collect_garbage(old_decided_view, decided_view_number);
 
         // Set the new decided view.
-        consensus_writer.update_last_decided_view(decided_view_number)?;
+        consensus_writer
+            .update_last_decided_view(decided_view_number)
+            .context(|e| {
+                warn!(
+                    "`update_last_decided_view` failed; this should never happen. Error: {}",
+                    e
+                )
+            })?;
 
         consensus_writer
             .metrics
@@ -306,20 +301,17 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .number_of_views_per_decide_event
             .add_point(cur_number_of_views_per_decide_event as f64);
 
-        tracing::debug!(
-            "Sending Decide for view {:?}",
-            consensus_writer.last_decided_view()
-        );
-
         // We don't need to hold this while we broadcast
         drop(consensus_writer);
 
-        tracing::debug!(
-            "Successfully sent decide event, leaf views: {:?}, leaf views len: {:?}, qc view: {:?}",
-            decided_view_number,
-            leaf_views.len(),
-            new_decide_qc.as_ref().unwrap().view_number()
-        );
+        for leaf_info in &leaf_views {
+            tracing::info!(
+                "Sending decide for view {:?} at height {:?}",
+                leaf_info.leaf.view_number(),
+                leaf_info.leaf.block_header().block_number(),
+            );
+        }
+
         // Send an update to everyone saying that we've reached a decide
         broadcast_event(
             Event {
@@ -327,13 +319,20 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 event: EventType::Decide {
                     leaf_chain: Arc::new(leaf_views.clone()),
                     // This is never none if we've reached a new decide, so this is safe to unwrap.
-                    qc: Arc::new(new_decide_qc.unwrap()),
+                    qc: Arc::new(new_decide_qc.clone().unwrap()),
                     block_size: included_txns.map(|txns| txns.len().try_into().unwrap()),
                 },
             },
             &task_state.output_event_stream,
         )
         .await;
+
+        tracing::debug!(
+            "Successfully sent decide event, leaf views: {:?}, leaf views len: {:?}, qc view: {:?}",
+            decided_view_number,
+            leaf_views.len(),
+            new_decide_qc.as_ref().unwrap().view_number()
+        );
 
         if version >= V::Epochs::VERSION {
             for leaf_view in leaf_views {
@@ -429,6 +428,7 @@ pub(crate) async fn update_shared_state<
 
     let version = upgrade_lock.version(view_number).await?;
 
+    let now = Instant::now();
     let (validated_state, state_delta) = parent_state
         .validate_and_apply_header(
             &instance_state,
@@ -441,7 +441,10 @@ pub(crate) async fn update_shared_state<
         .await
         .wrap()
         .context(warn!("Block header doesn't extend the proposal!"))?;
+    let duration = now.elapsed();
+    tracing::debug!("Validation time: {:?}", duration);
 
+    let now = Instant::now();
     // Now that we've rounded everyone up, we need to update the shared state
     let mut consensus_writer = consensus.write().await;
 
@@ -454,6 +457,8 @@ pub(crate) async fn update_shared_state<
     }
 
     drop(consensus_writer);
+    let duration = now.elapsed();
+    tracing::debug!("update_leaf time: {:?}", duration);
 
     Ok(())
 }
@@ -513,6 +518,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     .await
     .wrap()
     .context(error!("Failed to sign vote. This should never happen."))?;
+    let now = Instant::now();
     // Add to the storage.
     storage
         .write()
@@ -521,6 +527,8 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .await
         .wrap()
         .context(error!("Failed to store VID share"))?;
+    let duration = now.elapsed();
+    tracing::debug!("append_vid_general time: {:?}", duration);
 
     // Make epoch root vote
 
@@ -542,7 +550,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .get_light_client_state(view_number)
             .wrap()
             .context(error!("Failed to generate light client state"))?;
-        let next_membership = membership.next_epoch().await?;
+        let next_membership = membership.next_epoch_stake_table().await?;
         let next_stake_table_state = compute_stake_table_commitment(
             &next_membership.stake_table().await,
             hotshot_types::light_client::STAKE_TABLE_CAPACITY,

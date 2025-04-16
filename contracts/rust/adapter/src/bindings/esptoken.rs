@@ -654,6 +654,7 @@ pub mod EspToken {
     pub static DEPLOYED_BYTECODE: alloy_sol_types::private::Bytes = alloy_sol_types::private::Bytes::from_static(
         b"`\x80`@R`\x046\x10a\0\xFAW_5`\xE0\x1C\x80cR\xD1\x90-\x11a\0\x92W\x80c\x95\xD8\x9BA\x11a\0bW\x80c\x95\xD8\x9BA\x14a\x02\xDBW\x80c\xA9\x05\x9C\xBB\x14a\x02\xEFW\x80c\xAD<\xB1\xCC\x14a\x03\x0EW\x80c\xDDb\xED>\x14a\x03>W\x80c\xF2\xFD\xE3\x8B\x14a\x03]W__\xFD[\x80cR\xD1\x90-\x14a\x02-W\x80cp\xA0\x821\x14a\x02AW\x80cqP\x18\xA6\x14a\x02\x81W\x80c\x8D\xA5\xCB[\x14a\x02\x95W__\xFD[\x80c#\xB8r\xDD\x11a\0\xCDW\x80c#\xB8r\xDD\x14a\x01\xBFW\x80c1<\xE5g\x14a\x01\xDEW\x80cH\\\xC9U\x14a\x01\xF9W\x80cO\x1E\xF2\x86\x14a\x02\x1AW__\xFD[\x80c\x06\xFD\xDE\x03\x14a\0\xFEW\x80c\t^\xA7\xB3\x14a\x01(W\x80c\r\x8En,\x14a\x01WW\x80c\x18\x16\r\xDD\x14a\x01\x82W[__\xFD[4\x80\x15a\x01\tW__\xFD[Pa\x01\x12a\x03|V[`@Qa\x01\x1F\x91\x90a\x0F\x8DV[`@Q\x80\x91\x03\x90\xF3[4\x80\x15a\x013W__\xFD[Pa\x01Ga\x01B6`\x04a\x0F\xDDV[a\x04<V[`@Q\x90\x15\x15\x81R` \x01a\x01\x1FV[4\x80\x15a\x01bW__\xFD[P`@\x80Q`\x01\x81R_` \x82\x01\x81\x90R\x91\x81\x01\x91\x90\x91R``\x01a\x01\x1FV[4\x80\x15a\x01\x8DW__\xFD[P\x7FR\xC62G\xE1\xF4}\xB1\x9D\\\xE0F\x000\xC4\x97\xF0g\xCAL\xEB\xF7\x1B\xA9\x8E\xEA\xDA\xBE \xBA\xCE\x02T[`@Q\x90\x81R` \x01a\x01\x1FV[4\x80\x15a\x01\xCAW__\xFD[Pa\x01Ga\x01\xD96`\x04a\x10\x05V[a\x04UV[4\x80\x15a\x01\xE9W__\xFD[P`@Q`\x12\x81R` \x01a\x01\x1FV[4\x80\x15a\x02\x04W__\xFD[Pa\x02\x18a\x02\x136`\x04a\x10?V[a\x04zV[\0[a\x02\x18a\x02(6`\x04a\x10\x84V[a\x05\xF2V[4\x80\x15a\x028W__\xFD[Pa\x01\xB1a\x06\x11V[4\x80\x15a\x02LW__\xFD[Pa\x01\xB1a\x02[6`\x04a\x11HV[`\x01`\x01`\xA0\x1B\x03\x16_\x90\x81R_Q` a\x12\xE5_9_Q\x90_R` R`@\x90 T\x90V[4\x80\x15a\x02\x8CW__\xFD[Pa\x02\x18a\x06,V[4\x80\x15a\x02\xA0W__\xFD[P\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0T`@Q`\x01`\x01`\xA0\x1B\x03\x90\x91\x16\x81R` \x01a\x01\x1FV[4\x80\x15a\x02\xE6W__\xFD[Pa\x01\x12a\x06?V[4\x80\x15a\x02\xFAW__\xFD[Pa\x01Ga\x03\t6`\x04a\x0F\xDDV[a\x06}V[4\x80\x15a\x03\x19W__\xFD[Pa\x01\x12`@Q\x80`@\x01`@R\x80`\x05\x81R` \x01d\x03R\xE3\x02\xE3`\xDC\x1B\x81RP\x81V[4\x80\x15a\x03IW__\xFD[Pa\x01\xB1a\x03X6`\x04a\x10?V[a\x06\x8AV[4\x80\x15a\x03hW__\xFD[Pa\x02\x18a\x03w6`\x04a\x11HV[a\x06\xD3V[\x7FR\xC62G\xE1\xF4}\xB1\x9D\\\xE0F\x000\xC4\x97\xF0g\xCAL\xEB\xF7\x1B\xA9\x8E\xEA\xDA\xBE \xBA\xCE\x03\x80T``\x91_Q` a\x12\xE5_9_Q\x90_R\x91a\x03\xBA\x90a\x11aV[\x80`\x1F\x01` \x80\x91\x04\x02` \x01`@Q\x90\x81\x01`@R\x80\x92\x91\x90\x81\x81R` \x01\x82\x80Ta\x03\xE6\x90a\x11aV[\x80\x15a\x041W\x80`\x1F\x10a\x04\x08Wa\x01\0\x80\x83T\x04\x02\x83R\x91` \x01\x91a\x041V[\x82\x01\x91\x90_R` _ \x90[\x81T\x81R\x90`\x01\x01\x90` \x01\x80\x83\x11a\x04\x14W\x82\x90\x03`\x1F\x16\x82\x01\x91[PPPPP\x91PP\x90V[_3a\x04I\x81\x85\x85a\x07\x15V[`\x01\x91PP[\x92\x91PPV[_3a\x04b\x85\x82\x85a\x07'V[a\x04m\x85\x85\x85a\x07\x8AV[`\x01\x91PP[\x93\x92PPPV[\x7F\xF0\xC5~\x16\x84\r\xF0@\xF1P\x88\xDC/\x81\xFE9\x1C9#\xBE\xC7>#\xA9f.\xFC\x9C\"\x9Cj\0\x80T`\x01`@\x1B\x81\x04`\xFF\x16\x15\x90g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x16_\x81\x15\x80\x15a\x04\xBFWP\x82[\x90P_\x82g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x16`\x01\x14\x80\x15a\x04\xDBWP0;\x15[\x90P\x81\x15\x80\x15a\x04\xE9WP\x80\x15[\x15a\x05\x07W`@Qc\xF9.\xE8\xA9`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[\x84Tg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x19\x16`\x01\x17\x85U\x83\x15a\x051W\x84T`\xFF`@\x1B\x19\x16`\x01`@\x1B\x17\x85U[a\x05|`@Q\x80`@\x01`@R\x80`\x0E\x81R` \x01m\"\xB9\xB892\xB9\xB9\xB7\x90*7\xB5\xB2\xB7`\x91\x1B\x81RP`@Q\x80`@\x01`@R\x80`\x03\x81R` \x01b\x04U5`\xEC\x1B\x81RPa\x07\xE7V[a\x05\x85\x87a\x07\xF9V[a\x05\x8Da\x08\nV[a\x05\xA3\x86k O\xCE^>%\x02a\x10\0\0\0a\x08\x12V[\x83\x15a\x05\xE9W\x84T`\xFF`@\x1B\x19\x16\x85U`@Q`\x01\x81R\x7F\xC7\xF5\x05\xB2\xF3q\xAE!u\xEEI\x13\xF4I\x9E\x1F&3\xA7\xB5\x93c!\xEE\xD1\xCD\xAE\xB6\x11Q\x81\xD2\x90` \x01`@Q\x80\x91\x03\x90\xA1[PPPPPPPV[a\x05\xFAa\x08FV[a\x06\x03\x82a\x08\xEAV[a\x06\r\x82\x82a\t1V[PPV[_a\x06\x1Aa\t\xEDV[P_Q` a\x13\x05_9_Q\x90_R\x90V[a\x064a\n6V[a\x06=_a\n\x91V[V[\x7FR\xC62G\xE1\xF4}\xB1\x9D\\\xE0F\x000\xC4\x97\xF0g\xCAL\xEB\xF7\x1B\xA9\x8E\xEA\xDA\xBE \xBA\xCE\x04\x80T``\x91_Q` a\x12\xE5_9_Q\x90_R\x91a\x03\xBA\x90a\x11aV[_3a\x04I\x81\x85\x85a\x07\x8AV[`\x01`\x01`\xA0\x1B\x03\x91\x82\x16_\x90\x81R\x7FR\xC62G\xE1\xF4}\xB1\x9D\\\xE0F\x000\xC4\x97\xF0g\xCAL\xEB\xF7\x1B\xA9\x8E\xEA\xDA\xBE \xBA\xCE\x01` \x90\x81R`@\x80\x83 \x93\x90\x94\x16\x82R\x91\x90\x91R T\x90V[a\x06\xDBa\n6V[`\x01`\x01`\xA0\x1B\x03\x81\x16a\x07\tW`@Qc\x1EO\xBD\xF7`\xE0\x1B\x81R_`\x04\x82\x01R`$\x01[`@Q\x80\x91\x03\x90\xFD[a\x07\x12\x81a\n\x91V[PV[a\x07\"\x83\x83\x83`\x01a\x0B\x01V[PPPV[_a\x072\x84\x84a\x06\x8AV[\x90P_\x19\x81\x14a\x07\x84W\x81\x81\x10\x15a\x07vW`@Qc}\xC7\xA0\xD9`\xE1\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x84\x16`\x04\x82\x01R`$\x81\x01\x82\x90R`D\x81\x01\x83\x90R`d\x01a\x07\0V[a\x07\x84\x84\x84\x84\x84\x03_a\x0B\x01V[PPPPV[`\x01`\x01`\xA0\x1B\x03\x83\x16a\x07\xB3W`@QcKc~\x8F`\xE1\x1B\x81R_`\x04\x82\x01R`$\x01a\x07\0V[`\x01`\x01`\xA0\x1B\x03\x82\x16a\x07\xDCW`@Qc\xECD/\x05`\xE0\x1B\x81R_`\x04\x82\x01R`$\x01a\x07\0V[a\x07\"\x83\x83\x83a\x0B\xE5V[a\x07\xEFa\r\x1EV[a\x06\r\x82\x82a\rgV[a\x08\x01a\r\x1EV[a\x07\x12\x81a\r\xB7V[a\x06=a\r\x1EV[`\x01`\x01`\xA0\x1B\x03\x82\x16a\x08;W`@Qc\xECD/\x05`\xE0\x1B\x81R_`\x04\x82\x01R`$\x01a\x07\0V[a\x06\r_\x83\x83a\x0B\xE5V[0`\x01`\x01`\xA0\x1B\x03\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x16\x14\x80a\x08\xCCWP\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0`\x01`\x01`\xA0\x1B\x03\x16a\x08\xC0_Q` a\x13\x05_9_Q\x90_RT`\x01`\x01`\xA0\x1B\x03\x16\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x14\x15[\x15a\x06=W`@Qcp>F\xDD`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\x08\xF2a\n6V[`@Q`\x01`\x01`\xA0\x1B\x03\x82\x16\x81R\x7F\xF7\x87!\"n\xFE\x9A\x1B\xB6x\x18\x9A\x16\xD1UI(\xB9\xF2\x19.,\xB9>\xED\xA8;y\xFA@\0}\x90` \x01`@Q\x80\x91\x03\x90\xA1PV[\x81`\x01`\x01`\xA0\x1B\x03\x16cR\xD1\x90-`@Q\x81c\xFF\xFF\xFF\xFF\x16`\xE0\x1B\x81R`\x04\x01` `@Q\x80\x83\x03\x81\x86Z\xFA\x92PPP\x80\x15a\t\x8BWP`@\x80Q`\x1F=\x90\x81\x01`\x1F\x19\x16\x82\x01\x90\x92Ra\t\x88\x91\x81\x01\x90a\x11\x99V[`\x01[a\t\xB3W`@QcL\x9C\x8C\xE3`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x83\x16`\x04\x82\x01R`$\x01a\x07\0V[_Q` a\x13\x05_9_Q\x90_R\x81\x14a\t\xE3W`@Qc*\x87Ri`\xE2\x1B\x81R`\x04\x81\x01\x82\x90R`$\x01a\x07\0V[a\x07\"\x83\x83a\r\xBFV[0`\x01`\x01`\xA0\x1B\x03\x7F\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x16\x14a\x06=W`@Qcp>F\xDD`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[3a\nh\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0T`\x01`\x01`\xA0\x1B\x03\x16\x90V[`\x01`\x01`\xA0\x1B\x03\x16\x14a\x06=W`@Qc\x11\x8C\xDA\xA7`\xE0\x1B\x81R3`\x04\x82\x01R`$\x01a\x07\0V[\x7F\x90\x16\xD0\x9Dr\xD4\x0F\xDA\xE2\xFD\x8C\xEA\xC6\xB6#Lw\x06!O\xD3\x9C\x1C\xD1\xE6\t\xA0R\x8C\x19\x93\0\x80T`\x01`\x01`\xA0\x1B\x03\x19\x81\x16`\x01`\x01`\xA0\x1B\x03\x84\x81\x16\x91\x82\x17\x84U`@Q\x92\x16\x91\x82\x90\x7F\x8B\xE0\x07\x9CS\x16Y\x14\x13D\xCD\x1F\xD0\xA4\xF2\x84\x19I\x7F\x97\"\xA3\xDA\xAF\xE3\xB4\x18okdW\xE0\x90_\x90\xA3PPPV[_Q` a\x12\xE5_9_Q\x90_R`\x01`\x01`\xA0\x1B\x03\x85\x16a\x0B8W`@Qc\xE6\x02\xDF\x05`\xE0\x1B\x81R_`\x04\x82\x01R`$\x01a\x07\0V[`\x01`\x01`\xA0\x1B\x03\x84\x16a\x0BaW`@QcJ\x14\x06\xB1`\xE1\x1B\x81R_`\x04\x82\x01R`$\x01a\x07\0V[`\x01`\x01`\xA0\x1B\x03\x80\x86\x16_\x90\x81R`\x01\x83\x01` \x90\x81R`@\x80\x83 \x93\x88\x16\x83R\x92\x90R \x83\x90U\x81\x15a\x0B\xDEW\x83`\x01`\x01`\xA0\x1B\x03\x16\x85`\x01`\x01`\xA0\x1B\x03\x16\x7F\x8C[\xE1\xE5\xEB\xEC}[\xD1OqB}\x1E\x84\xF3\xDD\x03\x14\xC0\xF7\xB2)\x1E[ \n\xC8\xC7\xC3\xB9%\x85`@Qa\x0B\xD5\x91\x81R` \x01\x90V[`@Q\x80\x91\x03\x90\xA3[PPPPPV[_Q` a\x12\xE5_9_Q\x90_R`\x01`\x01`\xA0\x1B\x03\x84\x16a\x0C\x1FW\x81\x81`\x02\x01_\x82\x82Ta\x0C\x14\x91\x90a\x11\xB0V[\x90\x91UPa\x0C\x8F\x90PV[`\x01`\x01`\xA0\x1B\x03\x84\x16_\x90\x81R` \x82\x90R`@\x90 T\x82\x81\x10\x15a\x0CqW`@Qc9\x144\xE3`\xE2\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x86\x16`\x04\x82\x01R`$\x81\x01\x82\x90R`D\x81\x01\x84\x90R`d\x01a\x07\0V[`\x01`\x01`\xA0\x1B\x03\x85\x16_\x90\x81R` \x83\x90R`@\x90 \x90\x83\x90\x03\x90U[`\x01`\x01`\xA0\x1B\x03\x83\x16a\x0C\xADW`\x02\x81\x01\x80T\x83\x90\x03\x90Ua\x0C\xCBV[`\x01`\x01`\xA0\x1B\x03\x83\x16_\x90\x81R` \x82\x90R`@\x90 \x80T\x83\x01\x90U[\x82`\x01`\x01`\xA0\x1B\x03\x16\x84`\x01`\x01`\xA0\x1B\x03\x16\x7F\xDD\xF2R\xAD\x1B\xE2\xC8\x9Bi\xC2\xB0h\xFC7\x8D\xAA\x95+\xA7\xF1c\xC4\xA1\x16(\xF5ZM\xF5#\xB3\xEF\x84`@Qa\r\x10\x91\x81R` \x01\x90V[`@Q\x80\x91\x03\x90\xA3PPPPV[\x7F\xF0\xC5~\x16\x84\r\xF0@\xF1P\x88\xDC/\x81\xFE9\x1C9#\xBE\xC7>#\xA9f.\xFC\x9C\"\x9Cj\0T`\x01`@\x1B\x90\x04`\xFF\x16a\x06=W`@Qc\x1A\xFC\xD7\x9F`\xE3\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[a\roa\r\x1EV[_Q` a\x12\xE5_9_Q\x90_R\x7FR\xC62G\xE1\xF4}\xB1\x9D\\\xE0F\x000\xC4\x97\xF0g\xCAL\xEB\xF7\x1B\xA9\x8E\xEA\xDA\xBE \xBA\xCE\x03a\r\xA8\x84\x82a\x12\x13V[P`\x04\x81\x01a\x07\x84\x83\x82a\x12\x13V[a\x06\xDBa\r\x1EV[a\r\xC8\x82a\x0E\x14V[`@Q`\x01`\x01`\xA0\x1B\x03\x83\x16\x90\x7F\xBC|\xD7Z \xEE'\xFD\x9A\xDE\xBA\xB3 A\xF7U!M\xBCk\xFF\xA9\x0C\xC0\"[9\xDA.\\-;\x90_\x90\xA2\x80Q\x15a\x0E\x0CWa\x07\"\x82\x82a\x0EwV[a\x06\ra\x0E\xE9V[\x80`\x01`\x01`\xA0\x1B\x03\x16;_\x03a\x0EIW`@QcL\x9C\x8C\xE3`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x82\x16`\x04\x82\x01R`$\x01a\x07\0V[_Q` a\x13\x05_9_Q\x90_R\x80T`\x01`\x01`\xA0\x1B\x03\x19\x16`\x01`\x01`\xA0\x1B\x03\x92\x90\x92\x16\x91\x90\x91\x17\x90UV[``__\x84`\x01`\x01`\xA0\x1B\x03\x16\x84`@Qa\x0E\x93\x91\x90a\x12\xCEV[_`@Q\x80\x83\x03\x81\x85Z\xF4\x91PP=\x80_\x81\x14a\x0E\xCBW`@Q\x91P`\x1F\x19`?=\x01\x16\x82\x01`@R=\x82R=_` \x84\x01>a\x0E\xD0V[``\x91P[P\x91P\x91Pa\x0E\xE0\x85\x83\x83a\x0F\x08V[\x95\x94PPPPPV[4\x15a\x06=W`@Qc\xB3\x98\x97\x9F`\xE0\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[``\x82a\x0F\x1DWa\x0F\x18\x82a\x0FdV[a\x04sV[\x81Q\x15\x80\x15a\x0F4WP`\x01`\x01`\xA0\x1B\x03\x84\x16;\x15[\x15a\x0F]W`@Qc\x99\x96\xB3\x15`\xE0\x1B\x81R`\x01`\x01`\xA0\x1B\x03\x85\x16`\x04\x82\x01R`$\x01a\x07\0V[P\x80a\x04sV[\x80Q\x15a\x0FtW\x80Q\x80\x82` \x01\xFD[`@Qc\n\x12\xF5!`\xE1\x1B\x81R`\x04\x01`@Q\x80\x91\x03\x90\xFD[` \x81R_\x82Q\x80` \x84\x01R\x80` \x85\x01`@\x85\x01^_`@\x82\x85\x01\x01R`@`\x1F\x19`\x1F\x83\x01\x16\x84\x01\x01\x91PP\x92\x91PPV[\x805`\x01`\x01`\xA0\x1B\x03\x81\x16\x81\x14a\x0F\xD8W__\xFD[\x91\x90PV[__`@\x83\x85\x03\x12\x15a\x0F\xEEW__\xFD[a\x0F\xF7\x83a\x0F\xC2V[\x94` \x93\x90\x93\x015\x93PPPV[___``\x84\x86\x03\x12\x15a\x10\x17W__\xFD[a\x10 \x84a\x0F\xC2V[\x92Pa\x10.` \x85\x01a\x0F\xC2V[\x92\x95\x92\x94PPP`@\x91\x90\x91\x015\x90V[__`@\x83\x85\x03\x12\x15a\x10PW__\xFD[a\x10Y\x83a\x0F\xC2V[\x91Pa\x10g` \x84\x01a\x0F\xC2V[\x90P\x92P\x92\x90PV[cNH{q`\xE0\x1B_R`A`\x04R`$_\xFD[__`@\x83\x85\x03\x12\x15a\x10\x95W__\xFD[a\x10\x9E\x83a\x0F\xC2V[\x91P` \x83\x015g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x10\xB9W__\xFD[\x83\x01`\x1F\x81\x01\x85\x13a\x10\xC9W__\xFD[\x805g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x10\xE3Wa\x10\xE3a\x10pV[`@Q`\x1F\x82\x01`\x1F\x19\x90\x81\x16`?\x01\x16\x81\x01g\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x82\x82\x10\x17\x15a\x11\x12Wa\x11\x12a\x10pV[`@R\x81\x81R\x82\x82\x01` \x01\x87\x10\x15a\x11)W__\xFD[\x81` \x84\x01` \x83\x017_` \x83\x83\x01\x01R\x80\x93PPPP\x92P\x92\x90PV[_` \x82\x84\x03\x12\x15a\x11XW__\xFD[a\x04s\x82a\x0F\xC2V[`\x01\x81\x81\x1C\x90\x82\x16\x80a\x11uW`\x7F\x82\x16\x91P[` \x82\x10\x81\x03a\x11\x93WcNH{q`\xE0\x1B_R`\"`\x04R`$_\xFD[P\x91\x90PV[_` \x82\x84\x03\x12\x15a\x11\xA9W__\xFD[PQ\x91\x90PV[\x80\x82\x01\x80\x82\x11\x15a\x04OWcNH{q`\xE0\x1B_R`\x11`\x04R`$_\xFD[`\x1F\x82\x11\x15a\x07\"W\x80_R` _ `\x1F\x84\x01`\x05\x1C\x81\x01` \x85\x10\x15a\x11\xF4WP\x80[`\x1F\x84\x01`\x05\x1C\x82\x01\x91P[\x81\x81\x10\x15a\x0B\xDEW_\x81U`\x01\x01a\x12\0V[\x81Qg\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\x81\x11\x15a\x12-Wa\x12-a\x10pV[a\x12A\x81a\x12;\x84Ta\x11aV[\x84a\x11\xCFV[` `\x1F\x82\x11`\x01\x81\x14a\x12sW_\x83\x15a\x12\\WP\x84\x82\x01Q[_\x19`\x03\x85\x90\x1B\x1C\x19\x16`\x01\x84\x90\x1B\x17\x84Ua\x0B\xDEV[_\x84\x81R` \x81 `\x1F\x19\x85\x16\x91[\x82\x81\x10\x15a\x12\xA2W\x87\x85\x01Q\x82U` \x94\x85\x01\x94`\x01\x90\x92\x01\x91\x01a\x12\x82V[P\x84\x82\x10\x15a\x12\xBFW\x86\x84\x01Q_\x19`\x03\x87\x90\x1B`\xF8\x16\x1C\x19\x16\x81U[PPPP`\x01\x90\x81\x1B\x01\x90UPV[_\x82Q\x80` \x85\x01\x84^_\x92\x01\x91\x82RP\x91\x90PV\xFER\xC62G\xE1\xF4}\xB1\x9D\\\xE0F\x000\xC4\x97\xF0g\xCAL\xEB\xF7\x1B\xA9\x8E\xEA\xDA\xBE \xBA\xCE\x006\x08\x94\xA1;\xA1\xA3!\x06g\xC8(I-\xB9\x8D\xCA> v\xCC75\xA9 \xA3\xCAP]8+\xBC\xA1dsolcC\0\x08\x1C\0\n",
     );
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `AddressEmptyCode(address)` and selector `0x9996b315`.
     ```solidity
     error AddressEmptyCode(address target);
@@ -721,6 +722,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967InvalidImplementation(address)` and selector `0x4c9c8ce3`.
     ```solidity
     error ERC1967InvalidImplementation(address implementation);
@@ -790,6 +792,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC1967NonPayable()` and selector `0xb398979f`.
     ```solidity
     error ERC1967NonPayable();
@@ -850,6 +853,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC20InsufficientAllowance(address,uint256,uint256)` and selector `0xfb8f41b2`.
     ```solidity
     error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed);
@@ -939,6 +943,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC20InsufficientBalance(address,uint256,uint256)` and selector `0xe450d38c`.
     ```solidity
     error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed);
@@ -1028,6 +1033,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC20InvalidApprover(address)` and selector `0xe602df05`.
     ```solidity
     error ERC20InvalidApprover(address approver);
@@ -1095,6 +1101,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC20InvalidReceiver(address)` and selector `0xec442f05`.
     ```solidity
     error ERC20InvalidReceiver(address receiver);
@@ -1162,6 +1169,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC20InvalidSender(address)` and selector `0x96c6fd1e`.
     ```solidity
     error ERC20InvalidSender(address sender);
@@ -1229,6 +1237,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `ERC20InvalidSpender(address)` and selector `0x94280d62`.
     ```solidity
     error ERC20InvalidSpender(address spender);
@@ -1296,6 +1305,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `FailedInnerCall()` and selector `0x1425ea42`.
     ```solidity
     error FailedInnerCall();
@@ -1356,6 +1366,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `InvalidInitialization()` and selector `0xf92ee8a9`.
     ```solidity
     error InvalidInitialization();
@@ -1416,6 +1427,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `NotInitializing()` and selector `0xd7e6bcf8`.
     ```solidity
     error NotInitializing();
@@ -1476,6 +1488,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableInvalidOwner(address)` and selector `0x1e4fbdf7`.
     ```solidity
     error OwnableInvalidOwner(address owner);
@@ -1543,6 +1556,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `OwnableUnauthorizedAccount(address)` and selector `0x118cdaa7`.
     ```solidity
     error OwnableUnauthorizedAccount(address account);
@@ -1610,6 +1624,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UUPSUnauthorizedCallContext()` and selector `0xe07c8dba`.
     ```solidity
     error UUPSUnauthorizedCallContext();
@@ -1670,6 +1685,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Custom error with signature `UUPSUnsupportedProxiableUUID(bytes32)` and selector `0xaa1d49a4`.
     ```solidity
     error UUPSUnsupportedProxiableUUID(bytes32 slot);
@@ -1737,6 +1753,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Approval(address,address,uint256)` and selector `0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925`.
     ```solidity
     event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -1857,6 +1874,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Initialized(uint64)` and selector `0xc7f505b2f371ae2175ee4913f4499e1f2633a7b5936321eed1cdaeb6115181d2`.
     ```solidity
     event Initialized(uint64 version);
@@ -1955,6 +1973,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `OwnershipTransferred(address,address)` and selector `0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0`.
     ```solidity
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -2068,6 +2087,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Transfer(address,address,uint256)` and selector `0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef`.
     ```solidity
     event Transfer(address indexed from, address indexed to, uint256 value);
@@ -2188,6 +2208,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Upgrade(address)` and selector `0xf78721226efe9a1bb678189a16d1554928b9f2192e2cb93eeda83b79fa40007d`.
     ```solidity
     event Upgrade(address implementation);
@@ -2288,6 +2309,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Event with signature `Upgraded(address)` and selector `0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b`.
     ```solidity
     event Upgraded(address indexed implementation);
@@ -2444,6 +2466,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `UPGRADE_INTERFACE_VERSION()` and selector `0xad3cb1cc`.
     ```solidity
     function UPGRADE_INTERFACE_VERSION() external view returns (string memory);
@@ -2451,6 +2474,7 @@ pub mod EspToken {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct UPGRADE_INTERFACE_VERSIONCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`UPGRADE_INTERFACE_VERSION()`](UPGRADE_INTERFACE_VERSIONCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2555,6 +2579,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `allowance(address,address)` and selector `0xdd62ed3e`.
     ```solidity
     function allowance(address owner, address spender) external view returns (uint256);
@@ -2567,6 +2592,7 @@ pub mod EspToken {
         #[allow(missing_docs)]
         pub spender: alloy::sol_types::private::Address,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`allowance(address,address)`](allowanceCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2690,6 +2716,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `approve(address,uint256)` and selector `0x095ea7b3`.
     ```solidity
     function approve(address spender, uint256 value) external returns (bool);
@@ -2702,6 +2729,7 @@ pub mod EspToken {
         #[allow(missing_docs)]
         pub value: alloy::sol_types::private::primitives::aliases::U256,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`approve(address,uint256)`](approveCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2825,6 +2853,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `balanceOf(address)` and selector `0x70a08231`.
     ```solidity
     function balanceOf(address account) external view returns (uint256);
@@ -2835,6 +2864,7 @@ pub mod EspToken {
         #[allow(missing_docs)]
         pub account: alloy::sol_types::private::Address,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`balanceOf(address)`](balanceOfCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2943,6 +2973,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `decimals()` and selector `0x313ce567`.
     ```solidity
     function decimals() external view returns (uint8);
@@ -2950,6 +2981,7 @@ pub mod EspToken {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct decimalsCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`decimals()`](decimalsCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3054,6 +3086,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `getVersion()` and selector `0x0d8e6e2c`.
     ```solidity
     function getVersion() external pure returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
@@ -3061,6 +3094,7 @@ pub mod EspToken {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct getVersionCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`getVersion()`](getVersionCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3181,6 +3215,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initialize(address,address)` and selector `0x485cc955`.
     ```solidity
     function initialize(address _owner, address _initialGrantRecipient) external;
@@ -3313,6 +3348,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `name()` and selector `0x06fdde03`.
     ```solidity
     function name() external view returns (string memory);
@@ -3320,6 +3356,7 @@ pub mod EspToken {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct nameCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`name()`](nameCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3424,6 +3461,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `owner()` and selector `0x8da5cb5b`.
     ```solidity
     function owner() external view returns (address);
@@ -3431,6 +3469,7 @@ pub mod EspToken {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct ownerCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`owner()`](ownerCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3535,6 +3574,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `proxiableUUID()` and selector `0x52d1902d`.
     ```solidity
     function proxiableUUID() external view returns (bytes32);
@@ -3542,6 +3582,7 @@ pub mod EspToken {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct proxiableUUIDCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`proxiableUUID()`](proxiableUUIDCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3646,6 +3687,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `renounceOwnership()` and selector `0x715018a6`.
     ```solidity
     function renounceOwnership() external;
@@ -3754,6 +3796,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `symbol()` and selector `0x95d89b41`.
     ```solidity
     function symbol() external view returns (string memory);
@@ -3761,6 +3804,7 @@ pub mod EspToken {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct symbolCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`symbol()`](symbolCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3865,6 +3909,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `totalSupply()` and selector `0x18160ddd`.
     ```solidity
     function totalSupply() external view returns (uint256);
@@ -3872,6 +3917,7 @@ pub mod EspToken {
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
     pub struct totalSupplyCall {}
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`totalSupply()`](totalSupplyCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -3976,6 +4022,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `transfer(address,uint256)` and selector `0xa9059cbb`.
     ```solidity
     function transfer(address to, uint256 value) external returns (bool);
@@ -3988,6 +4035,7 @@ pub mod EspToken {
         #[allow(missing_docs)]
         pub value: alloy::sol_types::private::primitives::aliases::U256,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`transfer(address,uint256)`](transferCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -4111,6 +4159,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `transferFrom(address,address,uint256)` and selector `0x23b872dd`.
     ```solidity
     function transferFrom(address from, address to, uint256 value) external returns (bool);
@@ -4125,6 +4174,7 @@ pub mod EspToken {
         #[allow(missing_docs)]
         pub value: alloy::sol_types::private::primitives::aliases::U256,
     }
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     ///Container type for the return parameters of the [`transferFrom(address,address,uint256)`](transferFromCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -4255,6 +4305,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `transferOwnership(address)` and selector `0xf2fde38b`.
     ```solidity
     function transferOwnership(address newOwner) external;
@@ -4370,6 +4421,7 @@ pub mod EspToken {
             }
         }
     };
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `upgradeToAndCall(address,bytes)` and selector `0x4f1ef286`.
     ```solidity
     function upgradeToAndCall(address newImplementation, bytes memory data) external payable;
@@ -4503,6 +4555,7 @@ pub mod EspToken {
         }
     };
     ///Container for all the [`EspToken`](self) function calls.
+    #[derive()]
     pub enum EspTokenCalls {
         #[allow(missing_docs)]
         UPGRADE_INTERFACE_VERSION(UPGRADE_INTERFACE_VERSIONCall),
@@ -4926,6 +4979,7 @@ pub mod EspToken {
         }
     }
     ///Container for all the [`EspToken`](self) custom errors.
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum EspTokenErrors {
         #[allow(missing_docs)]
         AddressEmptyCode(AddressEmptyCode),
@@ -5392,6 +5446,7 @@ pub mod EspToken {
         }
     }
     ///Container for all the [`EspToken`](self) events.
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum EspTokenEvents {
         #[allow(missing_docs)]
         Approval(Approval),

@@ -194,14 +194,8 @@ impl TestSystem {
         Ok(())
     }
 
-    pub fn cmd(&self) -> Command {
-        let mut cmd = escargot::CargoBuild::new()
-            .bin("staking-cli")
-            .current_release()
-            .current_target()
-            .run()
-            .unwrap()
-            .command();
+    /// Inject test system config into CLI command via arguments
+    pub fn args(&self, cmd: &mut Command) {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
             .arg("--mnemonic")
@@ -210,7 +204,6 @@ impl TestSystem {
             .arg(self.token.to_string())
             .arg("--stake-table-address")
             .arg(self.stake_table.to_string());
-        cmd
     }
 }
 

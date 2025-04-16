@@ -491,7 +491,13 @@ impl Header {
         {
             if version < MarketplaceVersion::version() {
                 ensure!(
-                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table,),
+                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table)
+                        || fee_account.validate_fee_signature_with_vid_commitment(
+                            fee_signature,
+                            *fee_amount,
+                            &ns_table,
+                            &payload_commitment
+                        ),
                     "invalid builder signature"
                 );
             } else {
