@@ -25,6 +25,7 @@ use hotshot_types::{
     },
     PeerConfig,
 };
+use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 
 use super::{
@@ -111,6 +112,13 @@ pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = &NodeState>;
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "T: NodeType")]
+pub struct StakeTableWithEpochNumber<T: NodeType> {
+    pub epoch: Option<EpochNumber>,
+    pub stake_table: Vec<PeerConfig<T>>,
+}
+
 pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the stake table for a given epoch
     fn get_stake_table(
@@ -119,9 +127,7 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     ) -> impl Send + Future<Output = Vec<PeerConfig<T>>>;
 
     /// Get the stake table for the current epoch if not provided
-    fn get_stake_table_current(
-        &self,
-    ) -> impl Send + Future<Output = (Option<EpochNumber>, Vec<PeerConfig<T>>)>;
+    fn get_stake_table_current(&self) -> impl Send + Future<Output = StakeTableWithEpochNumber<T>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {

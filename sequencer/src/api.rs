@@ -5,7 +5,9 @@ use async_lock::RwLock;
 use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
-use data_source::{CatchupDataSource, StakeTableDataSource, SubmitDataSource};
+use data_source::{
+    CatchupDataSource, StakeTableDataSource, StakeTableWithEpochNumber, SubmitDataSource,
+};
 use derivative::Derivative;
 use espresso_types::{
     config::PublicNetworkConfig,
@@ -25,7 +27,7 @@ use hotshot_events_service::events_source::{
 };
 use hotshot_query_service::data_source::ExtensibleDataSource;
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::ViewNumber,
     event::Event,
     light_client::StateSignatureRequestBody,
     network::NetworkConfig,
@@ -179,7 +181,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(&self) -> (Option<EpochNumber>, Vec<PeerConfig<SeqTypes>>) {
+    async fn get_stake_table_current(&self) -> StakeTableWithEpochNumber<SeqTypes> {
         self.as_ref().get_stake_table_current().await
     }
 }
@@ -206,11 +208,14 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         mem.stake_table().await
     }
 
-    /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(&self) -> (Option<EpochNumber>, Vec<PeerConfig<SeqTypes>>) {
+    /// Get the stake table for the current epoch and return it along with the epoch number
+    async fn get_stake_table_current(&self) -> StakeTableWithEpochNumber<SeqTypes> {
         let epoch = self.consensus().await.read().await.cur_epoch().await;
 
-        (epoch, self.get_stake_table(epoch).await)
+        StakeTableWithEpochNumber {
+            epoch,
+            stake_table: self.get_stake_table(epoch).await,
+        }
     }
 }
 
