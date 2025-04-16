@@ -1122,7 +1122,7 @@ mod persistence_tests {
     ) -> anyhow::Result<()> {
         setup_test();
 
-        let epoch_height = 20;
+        let epoch_height = 10;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let anvil_instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
@@ -1178,7 +1178,7 @@ mod persistence_tests {
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
-            .take(40)
+            .take(20)
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
@@ -1199,7 +1199,7 @@ mod persistence_tests {
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
-            .take(65)
+            .take(35)
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
