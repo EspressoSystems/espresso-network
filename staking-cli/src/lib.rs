@@ -7,7 +7,7 @@ use alloy::{
         local::{coins_bip39::English, MnemonicBuilder},
     },
 };
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 pub(crate) use hotshot_types::{
