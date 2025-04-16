@@ -2083,13 +2083,13 @@ impl MembershipPersistence for Persistence {
         l1_block: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        let events_json = serde_json::to_string(&events).context("failed to serialize events ")?;
+        let events_json = serde_json::to_value(&events).context("failed to serialize events ")?;
 
         let mut tx = self.db.write().await?;
 
         tx.upsert(
             "stake_table_events",
-            ["l1_block", "events"],
+            ["l1_block", "data"],
             ["l1_block"],
             [(l1_block as i64, events_json)],
         )
@@ -2100,7 +2100,7 @@ impl MembershipPersistence for Persistence {
     async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
         let mut tx = self.db.write().await?;
 
-        let row = query("SELECT l1_block, events FROM stake_table_events LIMIT 1")
+        let row = query("SELECT l1_block, data FROM stake_table_events LIMIT 1")
             .fetch_optional(tx.as_mut())
             .await?;
 
