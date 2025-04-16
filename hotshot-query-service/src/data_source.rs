@@ -283,7 +283,7 @@ pub mod availability_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_update<D: TestableDataSource>()
+    pub async fn slow_test_update<D: TestableDataSource>()
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
