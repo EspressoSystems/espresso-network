@@ -48,6 +48,7 @@ use crate::{EpochVersion, SequencerVersions};
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 
+#[derive(Clone, PartialEq)]
 pub struct StakeTableEvents {
     registrations: Vec<(ValidatorRegistered, Log)>,
     deregistrations: Vec<(ValidatorExit, Log)>,
@@ -343,14 +344,12 @@ impl StakeTableFetcher {
         persistence: Arc<dyn MembershipPersistence>,
         l1_client: L1Client,
         chain_config: ChainConfig,
-        store_events: bool,
     ) -> Self {
         Self {
             peers,
             persistence,
             l1_client,
             chain_config,
-            store_events,
         }
     }
 
@@ -360,11 +359,20 @@ impl StakeTableFetcher {
         to_block: u64,
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
         let res = self.persistence.load_events().await?;
-        let l1_block = res.as_ref().map(|(block, _)| block);
 
-        let contract_events =
-            Self::fetch_events_from_contract(self.l1_client.clone(), contract, l1_block, to_block)
-                .await?;
+        let from_block = res.as_ref().map(|(block, _)| block + 1);
+
+        tracing::info!("loaded events from storage from_block={from_block:?}");
+
+        let contract_events = Self::fetch_events_from_contract(
+            self.l1_client.clone(),
+            contract,
+            from_block,
+            to_block,
+        )
+        .await?;
+
+        tracing::info!("loading events from contract");
 
         let contract_events = contract_events.sort_events()?;
 
@@ -382,7 +390,7 @@ impl StakeTableFetcher {
     pub async fn fetch_events_from_contract(
         l1_client: L1Client,
         contract: Address,
-        from_block: Option<&u64>,
+        from_block: Option<u64>,
         to_block: u64,
     ) -> anyhow::Result<StakeTableEvents> {
         let stake_table_contract = StakeTable::new(contract, l1_client.provider.clone());
@@ -390,7 +398,7 @@ impl StakeTableFetcher {
         // get the block number when the contract was initialized
         // to avoid fetching events from block number 0
         let from_block = match from_block {
-            Some(block) => *block,
+            Some(block) => block,
             None => {
                 loop {
                     match stake_table_contract.initializedAtBlock().call().await {
@@ -572,12 +580,11 @@ impl StakeTableFetcher {
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         let events = self.fetch_events(contract, to_block).await?;
 
-        if self.store_events {
-            self.persistence
-                .store_events(to_block, events.clone())
-                .await
-                .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?
-        }
+        tracing::info!("storing events in storage to_block={to_block:?}");
+        self.persistence
+            .store_events(to_block, events.clone())
+            .await
+            .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
 
         active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
     }
@@ -685,6 +692,10 @@ pub struct EpochCommittee {
 impl EpochCommittees {
     pub fn first_epoch(&self) -> Option<Epoch> {
         self.first_epoch
+    }
+
+    pub fn fetcher(&self) -> &StakeTableFetcher {
+        &self.fetcher
     }
 
     /// Updates `Self.stake_table` with stake_table for
@@ -848,7 +859,6 @@ impl EpochCommittees {
                 persistence: Arc::new(persistence),
                 l1_client,
                 chain_config,
-                store_events: true,
             },
         }
     }

@@ -23,12 +23,15 @@ pub trait ChainConfigPersistence: Sized + Send + Sync {
 #[cfg(any(test, feature = "testing"))]
 mod testing {
 
-    use espresso_types::v0::traits::{PersistenceOptions, SequencerPersistence};
+    use espresso_types::{
+        traits::MembershipPersistence,
+        v0::traits::{PersistenceOptions, SequencerPersistence},
+    };
 
     use super::*;
     #[allow(dead_code)]
     #[async_trait]
-    pub trait TestablePersistence: SequencerPersistence {
+    pub trait TestablePersistence: SequencerPersistence + MembershipPersistence {
         type Storage: Sync;
 
         async fn tmp_storage() -> Self::Storage;
@@ -45,18 +48,26 @@ mod testing {
 mod persistence_tests {
     use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
+    use alloy::{node_bindings::Anvil, signers::local::LocalSigner};
     use anyhow::bail;
     use async_lock::RwLock;
     use committable::{Commitment, Committable};
     use espresso_types::{
-        traits::{EventConsumer, NullEventConsumer, PersistenceOptions}, v0_3::Validator, Event, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState
+        traits::{EventConsumer, NullEventConsumer, PersistenceOptions},
+        v0_3::{StakeTableFetcher, Validator},
+        Event, Header, L1Client, Leaf, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
+        ValidatedState,
+    };
+    use futures::{
+        future::{self, join_all},
+        StreamExt,
     };
     use hotshot::{
         types::{BLSPubKey, SignatureKey},
         InitializerEpochInfo,
     };
     use hotshot_example_types::node_types::TestVersions;
-    use hotshot_query_service::testing::mocks::MockVersions;
+    use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
     use hotshot_types::{
         data::{
             ns_table::parse_ns_table, vid_commitment, vid_disperse::VidDisperseShare2, DaProposal2,
@@ -79,11 +90,23 @@ mod persistence_tests {
         vote::HasViewNumber,
     };
     use indexmap::IndexMap;
+    use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
+    use surf_disco::Client;
     use testing::TestablePersistence;
-    use vbs::version::{StaticVersionType, Version};
+    use tide_disco::error::ServerError;
+    use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use super::*;
+    use crate::{
+        api::{
+            data_source::testing::TestableSequencerDataSource,
+            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            Options,
+        },
+        testing::TestConfigBuilder,
+        SequencerApiVersion,
+    };
 
     #[derive(Clone, Debug, Default)]
     struct EventCollector {
@@ -1097,39 +1120,136 @@ mod persistence_tests {
             .is_err());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
+    ) -> anyhow::Result<()> {
+        setup_test();
 
-    // #[tokio::test(flavor = "multi_thread")]
-    // pub async fn test_stake_table_fetching_from_persistence<P : TestablePersistence>() -> anyhow::Result<()> {
-    //     setup_test();
+        let epoch_height = 20;
 
-    //     let tmp = P::tmp_storage().await;
-    //     let mut opt = P::options(&tmp);
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-    //     let storage = opt.create().await.unwrap();
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
 
-    //     let validator = Validator::mock();
-    //     let mut st = IndexMap::new();
-    //     st.insert(validator.account, validator);
-    //     storage
-    //         .store_stake(EpochNumber::new(10), st.clone())
-    //         .await?;
+        let signer = LocalSigner::from(secret_key);
 
-    //     let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
-    //     assert_eq!(st, table);
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
 
-    //     let val2 = Validator::mock();
-    //     let mut st2 = IndexMap::new();
-    //     st2.insert(val2.account, val2);
-    //     storage
-    //         .store_stake(EpochNumber::new(11), st2.clone())
-    //         .await?;
+        let port = pick_unused_port().expect("No ports free for query service");
+        let options = Options::with_port(port);
 
-    //     let tables = storage.load_latest_stake(4).await?.unwrap();
-    //     let mut iter = tables.iter();
-    //     assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
-    //     assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
-    //     assert_eq!(None, iter.next());
+        const NUM_NODES: usize = 5;
 
-    //     Ok(())
-    // }
+        let storage = join_all((0..NUM_NODES).map(|_| P::tmp_storage())).await;
+        let persistences: [_; NUM_NODES] = storage
+            .iter()
+            .map(P::options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config.clone())
+            .persistences(persistences.clone())
+            .pos_hook::<PosVersion>()
+            .await
+            .expect("Pos Deployment")
+            .build();
+
+        let network = TestNetwork::new(config, PosVersion::new()).await;
+
+        // Connect client.
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        client.connect(None).await;
+        tracing::info!(port, "server running");
+
+        network
+            .server
+            .event_stream()
+            .await
+            .filter(|event| future::ready(matches!(event.event, EventType::Decide { .. })))
+            .take(40)
+            .collect::<Vec<_>>()
+            .await;
+
+        let persistence = persistences[0].clone().create().await.unwrap();
+        let events = persistence
+            .load_events()
+            .await
+            .expect("failed to load events");
+        assert!(events.is_some());
+        let (l1, events) = events.unwrap();
+        assert!(!events.is_empty());
+
+        network
+            .server
+            .event_stream()
+            .await
+            .filter(|event| future::ready(matches!(event.event, EventType::Decide { .. })))
+            .take(65)
+            .collect::<Vec<_>>()
+            .await;
+
+        network.stop_consensus().await;
+
+        let events = persistence
+            .load_events()
+            .await
+            .expect("failed to load events");
+        assert!(events.is_some());
+
+        let (l1_block, persistence_events) = events.unwrap();
+
+        assert!(!persistence_events.is_empty());
+
+        let coordinator = network
+            .server
+            .consensus()
+            .read()
+            .await
+            .membership_coordinator
+            .clone();
+        let membership = coordinator.membership();
+        let membership_read = membership.read().await;
+
+        let fetcher = membership_read.fetcher();
+        //    let block_height =
+        //   client
+        //    .get::<u64>("node/block-height")
+        //    .send()
+        //    .await
+        //    .expect("getting Espresso block height");
+
+        //    let header =
+        //    client
+        //    .get::<Header>(&format!("availability/header/{block_height}"))
+        //    .send()
+        //    .await
+        //    .expect("header");
+
+        //    let l1_block = header.l1_finalized();
+        // asserting fetching events from contract
+        // asserting fetching events from persistence
+        // asserting together all result in same
+
+        let l1_client = L1Client::new(vec![l1_url]).unwrap();
+        let node_state = network.server.node_state();
+        let chain_config = node_state.chain_config;
+        let contract = chain_config.stake_table_contract.unwrap();
+        let contract_events =
+            StakeTableFetcher::fetch_events_from_contract(l1_client, contract, None, l1_block)
+                .await
+                .unwrap();
+        assert_eq!(contract_events, persistence_events, "events does not match");
+
+        Ok(())
+    }
 }

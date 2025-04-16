@@ -649,7 +649,7 @@ impl<T: StateCatchup> StateCatchup for Vec<T> {
 }
 
 #[async_trait]
-pub trait PersistenceOptions: Clone + Send + Sync + 'static {
+pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);

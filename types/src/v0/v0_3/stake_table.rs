@@ -74,8 +74,6 @@ pub struct StakeTableFetcher {
     pub(crate)  l1_client: L1Client,
     /// Verifiable `ChainConfig` holding contract address
     pub(crate) chain_config: ChainConfig,
-    /// Flag whether to store the fetched events from contract
-    pub (crate) store_events: bool,
 }
 
 // (log block number, log index)
