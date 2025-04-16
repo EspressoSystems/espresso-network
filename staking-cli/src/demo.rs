@@ -141,12 +141,12 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
 
     let mk_signer = |account_index| -> Result<PrivateKeySigner> {
         Ok(MnemonicBuilder::<English>::default()
-            .phrase(config.mnemonic.clone())
+            .phrase(config.signer.mnemonic.as_ref().unwrap())
             .index(account_index)?
             .build()?)
     };
 
-    let grant_recipient = mk_signer(config.account_index)?;
+    let grant_recipient = mk_signer(config.signer.account_index.unwrap())?;
 
     tracing::info!(
         "grant recipient account for token funding: {}",

@@ -93,7 +93,7 @@ export async function createSafeTransaction(
 ): Promise<LocalSafeTransaction> {
   // Prepare the safe transaction data with the contract address, data, and value
   let safeTransactionData = createSafeTransactionData(contractAddress, data, value);
-  if (getEnvVar("USE_HARDWARE_WALLET")) {
+  if (getEnvVar("USE_HARDWARE_WALLET") == "true") {
     console.log(`Please sign the message on your connected Ledger device`);
   }
 

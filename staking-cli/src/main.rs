@@ -1,11 +1,11 @@
+#![doc = include_str!("../../README.md")]
 use std::path::PathBuf;
 
 use alloy::{
+    self,
     eips::BlockId,
-    network::EthereumWallet,
     primitives::{utils::format_ether, Address},
     providers::{Provider, ProviderBuilder},
-    signers::local::{coins_bip39::English, MnemonicBuilder},
 };
 use anyhow::Result;
 use clap::Parser;
@@ -16,8 +16,8 @@ use staking_cli::{
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
     info::{display_stake_table, stake_table_info},
-    registration::{deregister_validator, register_validator},
-    Commands, Config,
+    registration::{deregister_validator, register_validator, update_consensus_keys},
+    Commands, Config, ValidSignerConfig,
 };
 use sysinfo::System;
 
@@ -117,8 +117,15 @@ pub async fn main() -> Result<()> {
     // Run the init command first because config values required by other
     // commands are not present.
     match config.commands {
-        Commands::Init => {
-            let config = toml::from_str::<Config>(include_str!("../config.decaf.toml"))?;
+        Commands::Init {
+            mnemonic,
+            account_index,
+            ledger,
+        } => {
+            let mut config = toml::from_str::<Config>(include_str!("../config.decaf.toml"))?;
+            config.signer.mnemonic = mnemonic;
+            config.signer.account_index = Some(account_index);
+            config.signer.ledger = ledger;
 
             // Create directory where config file will be saved
             std::fs::create_dir_all(cli.config_dir()).unwrap_or_else(|err| {
@@ -130,10 +137,6 @@ pub async fn main() -> Result<()> {
                 .unwrap_or_else(|err| exit_err("failed to write config file", err));
 
             println!("New config file saved to {}", config_path.display());
-            println!(
-                "Fill in your mnemonic in the config file at {}",
-                config_path.display()
-            );
             return Ok(());
         },
         Commands::Purge { force } => {
@@ -163,6 +166,13 @@ pub async fn main() -> Result<()> {
             println!("Config file removed from {}", config_path.display());
             return Ok(());
         },
+        Commands::Config => {
+            println!("Config file at {}\n", config_path.display());
+            let mut config = config;
+            config.signer.mnemonic = config.signer.mnemonic.map(|_| "***".to_string());
+            println!("{}", toml::to_string_pretty(&config)?);
+            return Ok(());
+        },
         Commands::Version => {
             println!("staking-cli version: {}", env!("CARGO_PKG_VERSION"));
             println!("{}", git_version::git_version!(prefix = "git rev: "));
@@ -176,30 +186,13 @@ pub async fn main() -> Result<()> {
     // When the staking CLI is used for our testnet, the env var names are different.
     let config = config.apply_env_var_overrides()?;
 
-    // Clap serde will put default value if they aren't set. We check some
-    // common configuration mistakes.
-    if config.stake_table_address == Address::ZERO {
-        exit("Stake table address is not set")
-    };
-
-    let signer = MnemonicBuilder::<English>::default()
-        .phrase(config.mnemonic.as_str())
-        .index(config.account_index)?
-        .build()?;
-    let account = signer.address();
-    let wallet = EthereumWallet::from(signer);
-    let provider = ProviderBuilder::new()
-        .wallet(wallet)
-        .on_http(config.rpc_url.clone());
-    let stake_table_addr = config.stake_table_address;
-    let token_addr = config.token_address;
-    let token = EspToken::new(config.token_address, &provider);
-
-    let result = match config.commands {
-        Commands::Info {
+    // Commands that don't need a signer
+    match config.commands {
+        Commands::StakeTable {
             l1_block_number,
             compact,
         } => {
+            let provider = ProviderBuilder::new().on_http(config.rpc_url.clone());
             let query_block = l1_block_number.unwrap_or(BlockId::latest());
             let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
                 exit_err("Failed to get block {query_block}", "Block not found");
@@ -215,6 +208,37 @@ pub async fn main() -> Result<()> {
             display_stake_table(stake_table, compact)?;
             return Ok(());
         },
+        _ => {}, // Other commands handled below.
+    }
+
+    let (wallet, account) = TryInto::<ValidSignerConfig>::try_into(config.signer.clone())?
+        .wallet()
+        .await?;
+    match config.commands {
+        Commands::Account => {
+            println!("{account}");
+            return Ok(());
+        },
+        _ => {}, // Other commands handled after shared setup.
+    };
+
+    // Clap serde will put default value if they aren't set. We check some
+    // common configuration mistakes.
+    if config.stake_table_address == Address::ZERO {
+        exit("Stake table address is not set use --stake-table-address or STAKE_TABLE_ADDRESS")
+    };
+
+    let provider = ProviderBuilder::new()
+        .wallet(wallet)
+        .on_http(config.rpc_url.clone());
+    let stake_table_addr = config.stake_table_address;
+
+    // Commands that interact with the stake table
+
+    let token_addr = config.token_address;
+    let token = EspToken::new(config.token_address, &provider);
+
+    let result = match config.commands {
         Commands::RegisterValidator {
             consensus_private_key,
             state_private_key,
@@ -225,6 +249,20 @@ pub async fn main() -> Result<()> {
                 &provider,
                 stake_table_addr,
                 commission,
+                account,
+                (consensus_private_key).into(),
+                (&state_private_key).into(),
+            )
+            .await
+        },
+        Commands::UpdateConsensusKeys {
+            consensus_private_key,
+            state_private_key,
+        } => {
+            tracing::info!("Updating validator {account} with new keys");
+            update_consensus_keys(
+                &provider,
+                stake_table_addr,
                 account,
                 (consensus_private_key).into(),
                 (&state_private_key).into(),
