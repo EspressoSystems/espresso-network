@@ -375,7 +375,6 @@ impl StakeTableFetcher {
         tracing::info!("loading events from contract");
 
         let contract_events = contract_events.sort_events()?;
-
         if let Some((_, persistence_events)) = res {
             Ok(persistence_events
                 .into_iter()
