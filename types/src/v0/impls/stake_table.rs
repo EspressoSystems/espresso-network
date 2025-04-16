@@ -375,7 +375,7 @@ impl StakeTableFetcher {
         tracing::info!("loading events from contract");
 
         let contract_events = contract_events.sort_events()?;
-      let events =   if let Some((_, persistence_events)) = res {
+        let mut events = if let Some((_, persistence_events)) = res {
             persistence_events
                 .into_iter()
                 .chain(contract_events)
@@ -383,6 +383,13 @@ impl StakeTableFetcher {
         } else {
             contract_events
         };
+
+        // There are no duplicates because the RPC returns all events,
+        // which are stored directly in persistence as is.
+        // However, this step is taken as a precaution.
+        // The vector is already sorted above, so this should be fast.
+        events.dedup_by_key(|(k, _)| (k.0, k.1));
+
         Ok(events)
     }
 
