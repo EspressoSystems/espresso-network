@@ -17,7 +17,7 @@ use hotshot_query_service::{
     status::StatusDataSource,
 };
 use hotshot_types::{
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     light_client::StateSignatureRequestBody,
     traits::{
         network::ConnectedNetwork,
@@ -118,8 +118,10 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         epoch: Option<<T as NodeType>::Epoch>,
     ) -> impl Send + Future<Output = Vec<PeerConfig<T>>>;
 
-    /// Get the stake table for  the current epoch if not provided
-    fn get_stake_table_current(&self) -> impl Send + Future<Output = Vec<PeerConfig<T>>>;
+    /// Get the stake table for the current epoch if not provided
+    fn get_stake_table_current(
+        &self,
+    ) -> impl Send + Future<Output = (Option<EpochNumber>, Vec<PeerConfig<T>>)>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {

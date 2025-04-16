@@ -25,7 +25,7 @@ use hotshot_events_service::events_source::{
 };
 use hotshot_query_service::data_source::ExtensibleDataSource;
 use hotshot_types::{
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     event::Event,
     light_client::StateSignatureRequestBody,
     network::NetworkConfig,
@@ -179,10 +179,11 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
+    async fn get_stake_table_current(&self) -> (Option<EpochNumber>, Vec<PeerConfig<SeqTypes>>) {
         self.as_ref().get_stake_table_current().await
     }
 }
+
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     StakeTableDataSource<SeqTypes> for ApiState<N, P, V>
 {
@@ -206,10 +207,10 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
+    async fn get_stake_table_current(&self) -> (Option<EpochNumber>, Vec<PeerConfig<SeqTypes>>) {
         let epoch = self.consensus().await.read().await.cur_epoch().await;
 
-        self.get_stake_table(epoch).await
+        (epoch, self.get_stake_table(epoch).await)
     }
 }
 
