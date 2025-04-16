@@ -108,7 +108,7 @@ impl TryFrom<SignerConfig> for ValidSignerConfig {
                 account_index: account_index as usize,
             })
         } else {
-            bail!("Either mnemonic or ledger index must be provided")
+            bail!("Either mnemonic or --ledger flag must be provided")
         }
     }
 }
@@ -143,7 +143,7 @@ impl ValidSignerConfig {
                                 },
                                 LedgerError::UnexpectedNullResponse => {
                                     eprintln!(
-                                        "Failed to create Ledger signer {attempt}/{max_attempts}: {err:#}, please open the Ethereum app"
+                                        "Failed to access ledger {attempt}/{max_attempts}: {err:#}, please unlock ledger and open the Ethereum app"
                                     );
                                 },
                                 _ => {
