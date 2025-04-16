@@ -1931,12 +1931,10 @@ mod test {
     use alloy::{node_bindings::Anvil, primitives::U256, signers::local::LocalSigner};
     use committable::{Commitment, Committable};
     use espresso_types::{
-        config::PublicHotShotConfig,
-        traits::NullEventConsumer,
-        v0_1::{UpgradeMode, ViewBasedUpgrade},
-        BackoffParams, EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
-        MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
-        UpgradeType, ValidatedState, V0_1,
+        config::PublicHotShotConfig, traits::NullEventConsumer, BackoffParams, EpochVersion,
+        FeeAmount, FeeVersion, Header, MarketplaceVersion, MockSequencerVersions,
+        SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade, UpgradeMode, UpgradeType,
+        ValidatedState, ViewBasedUpgrade, V0_1,
     };
     use futures::{
         future::{self, join_all},

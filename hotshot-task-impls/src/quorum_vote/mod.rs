@@ -21,7 +21,6 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::UpgradeLock,
-    simple_certificate::UpgradeCertificate,
     simple_vote::HasEpoch,
     traits::{
         block_contents::BlockHeader,
@@ -326,6 +325,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.epoch_height,
         );
 
+        let now = Instant::now();
         // We use this `epoch_membership` to vote,
         // meaning that we must know the leader for the current view in the current epoch
         // and must therefore perform the full DRB catchup.
@@ -340,6 +340,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 return;
             },
         };
+        let duration = now.elapsed();
+        tracing::info!("membership_for_epoch time: {:?}", duration);
 
         let is_vote_leaf_extended = is_last_block(leaf.height(), self.epoch_height);
         let is_vote_epoch_root = is_epoch_root(leaf.height(), self.epoch_height);
@@ -430,12 +432,6 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     /// Signature key for light client state
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
 
-    /// Upgrade certificate to enable epochs, staged until we reach the specified block height
-    pub staged_epoch_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
-
-    /// Block height at which to enable the epoch upgrade
-    pub epoch_upgrade_block_height: u64,
-
     /// View timeout from config.
     pub timeout: u64,
 }
@@ -478,7 +474,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     },
                 };
                 if event_view == view_number {
-                    tracing::trace!(
+                    tracing::debug!(
                         "Vote dependency {:?} completed for view {:?}, my id is {:?}",
                         dependency_type,
                         view_number,
@@ -602,7 +598,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 );
 
                 // Handle the event before creating the dependency task.
-                if let Err(e) = handle_quorum_proposal_validated(&proposal.data, self).await {
+                if let Err(e) =
+                    handle_quorum_proposal_validated(&proposal.data, self, &event_sender).await
+                {
                     tracing::debug!(
                         "Failed to handle QuorumProposalValidated event; error = {e:#}"
                     );

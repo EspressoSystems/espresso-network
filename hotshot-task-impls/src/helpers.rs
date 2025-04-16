@@ -82,6 +82,8 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     .wrap()
     .context(error!("Failed to sign proposal. This should never happen."))?;
 
+    tracing::info!("Sending proposal request for view {}", view_number);
+
     // First, broadcast that we need a proposal to the current leader
     broadcast_event(
         HotShotEvent::QuorumProposalRequestSend(signed_proposal_request, signature).into(),
@@ -208,6 +210,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         let next_epoch_number =
             TYPES::Epoch::new(epoch_from_block_number(decided_block_number, epoch_height) + 2);
 
+        let mut start = Instant::now();
         if let Err(e) = storage
             .write()
             .await
@@ -216,7 +219,9 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         {
             tracing::error!("Failed to store epoch root for epoch {next_epoch_number}: {e}");
         }
+        tracing::info!("Time taken to store epoch root: {:?}", start.elapsed());
 
+        start = Instant::now();
         let write_callback = {
             tracing::debug!("Calling add_epoch_root for epoch {next_epoch_number}");
             let membership_reader = membership.read().await;
@@ -228,6 +233,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             let mut membership_writer = membership.write().await;
             write_callback(&mut *membership_writer);
         }
+        tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
 
         let mut consensus_writer = consensus.write().await;
         consensus_writer
