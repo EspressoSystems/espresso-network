@@ -5,6 +5,7 @@ use alloy::primitives::{
     Address, U256,
 };
 use anyhow::Result;
+use sequencer_utils::test_utils::setup_test;
 use staking_cli::*;
 
 use crate::deploy::TestSystem;
@@ -34,43 +35,33 @@ impl Utf8 for Output {
     }
 }
 
-pub fn base_cmd() -> Command {
-    // On the CI (CI=true) assume that the binary is built because we run the tests via nextest
-    // archive.
-    let ci = match std::env::var("CI").unwrap_or_default().parse::<bool>() {
-        Ok(ci) => ci,
-        Err(_) => false,
-    };
-    if ci {
-        // From nextest docs:
-        //
-        // To obtain the path to a crate's executables, Cargo provides the [CARGO_BIN_EXE_<name>]
-        // option to integration tests at build time. To handle target directory remapping, use the
-        // value of NEXTEST_BIN_EXE_<name> at runtime. To retain compatibility with cargo test, you
-        // can fall back to the value of CARGO_BIN_EXE_<name> at build time.
-        let path = std::env::var("NEXTEST_BIN_EXE_staking-cli")
-            .unwrap_or_else(|_| env!("CARGO_BIN_EXE_staking-cli").to_string());
-        tracing::warn!("Running in CI mode, assuming the staking-cli binary at {path} exists");
-        let cmd = Command::new(path);
-        cmd
-    } else {
-        escargot::CargoBuild::new()
-            .bin("staking-cli")
-            .current_release()
-            .run()
-            .unwrap()
-            .command()
-    }
+/// Creates a new command to run the staking-cli binary.
+///
+/// Will use `NEXTEST_BIN_EXE_staking-cli` if available, otherwise falls back to
+/// `CARGO_BIN_EXE_staking-cli` which is set by cargo at compile time for integration tests.
+fn base_cmd() -> Command {
+    // From nextest docs:
+    //
+    // To obtain the path to a crate's executables, Cargo provides the [CARGO_BIN_EXE_<name>]
+    // option to integration tests at build time. To handle target directory remapping, use the
+    // value of NEXTEST_BIN_EXE_<name> at runtime. To retain compatibility with cargo test, you
+    // can fall back to the value of CARGO_BIN_EXE_<name> at build time.
+    let path = std::env::var("NEXTEST_BIN_EXE_staking-cli")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_staking-cli").to_string());
+    tracing::info!("Using staking-cli binary at {path}");
+    Command::new(path)
 }
 
 #[test]
 fn test_cli_version() -> Result<()> {
+    setup_test();
     base_cmd().arg("version").output()?.assert_success();
     Ok(())
 }
 
 #[test]
 fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
+    setup_test();
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
 
@@ -100,6 +91,7 @@ fn test_cli_create_and_remove_config_file() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_cli_register_validator() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     let mut cmd = base_cmd();
     system.cmd(&mut cmd);
@@ -129,6 +121,7 @@ async fn test_cli_register_validator() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_delegate() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
@@ -146,6 +139,7 @@ async fn test_cli_delegate() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_deregister_validator() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
@@ -157,6 +151,7 @@ async fn test_cli_deregister_validator() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_undelegate() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
     let amount = "123";
@@ -176,6 +171,7 @@ async fn test_cli_undelegate() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_claim_withdrawal() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     let amount = U256::from(123);
     system.register_validator().await?;
@@ -195,6 +191,7 @@ async fn test_cli_claim_withdrawal() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_claim_validator_exit() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     let amount = U256::from(123);
     system.register_validator().await?;
@@ -214,6 +211,7 @@ async fn test_cli_claim_validator_exit() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_stake_for_demo_default_num_validators() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
 
     let mut cmd = base_cmd();
@@ -224,6 +222,7 @@ async fn test_cli_stake_for_demo_default_num_validators() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
 
     let mut cmd = base_cmd();
@@ -238,6 +237,7 @@ async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_approve() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     let amount = "123";
 
@@ -256,6 +256,7 @@ async fn test_cli_approve() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_balance() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
 
     // Check balance of account owner
@@ -286,6 +287,7 @@ async fn test_cli_balance() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_allowance() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
 
     // Check allowance of account owner
@@ -316,6 +318,7 @@ async fn test_cli_allowance() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_transfer() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
     let amount = parse_ether("0.123")?;
@@ -336,6 +339,7 @@ async fn test_cli_transfer() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_info_full() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 
@@ -358,6 +362,7 @@ async fn test_cli_info_full() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_info_compact() -> Result<()> {
+    setup_test();
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
 

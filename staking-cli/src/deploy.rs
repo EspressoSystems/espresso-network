@@ -1,4 +1,4 @@
-use std::{path::PathBuf, process::Command, time::Duration};
+use std::{process::Command, time::Duration};
 
 use alloy::{
     network::{Ethereum, EthereumWallet},
