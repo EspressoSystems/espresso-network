@@ -14,25 +14,25 @@ members = [
     "contracts/rust/adapter",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
-    "hotshot",
-    "hotshot-builder-api",
+    "crates/hotshot/hotshot",
+    "crates/hotshot/builder-api",
     "hotshot-builder-core",
     "hotshot-builder-core-refactored",
     "hotshot-events-service",
-    "hotshot-example-types",
-    "hotshot-examples",
-    "hotshot-fakeapi",
-    "hotshot-libp2p-networking",
-    "hotshot-macros",
-    "hotshot-orchestrator",
+    "crates/hotshot/example-types",
+    "crates/hotshot/examples",
+    "crates/hotshot/hotshot-fakeapi",
+    "crates/hotshot/libp2p-networking",
+    "crates/hotshot/macros",
+    "crates/hotshot/orchestrator",
     "hotshot-query-service",
-    "hotshot-stake-table",
+    "crates/hotshot/stake-table",
     "hotshot-state-prover",
-    "hotshot-task",
-    "hotshot-task-impls",
-    "hotshot-testing",
-    "hotshot-types",
-    "hotshot-utils",
+    "crates/hotshot/task",
+    "crates/hotshot/task-impls",
+    "crates/hotshot/testing",
+    "crates/hotshot/types",
+    "crates/hotshot/utils",
     "marketplace-builder",
     "marketplace-solver",
     "node-metrics",
@@ -133,23 +133,23 @@ marketplace-builder-shared = { path = "marketplace-builder-shared" }
 hotshot-builder-core = { path = "hotshot-builder-core" }
 
 # Hotshot imports
-hotshot = { path = "hotshot" }
-hotshot-builder-api = { path = "hotshot-builder-api" }
-hotshot-task-impls = { path = "hotshot-task-impls" }
-hotshot-macros = { path = "hotshot-macros" }
+hotshot = { path = "crates/hotshot/hotshot" }
+hotshot-builder-api = { path = "crates/hotshot/builder-api" }
+hotshot-task-impls = { path = "crates/hotshot/task-impls" }
+hotshot-macros = { path = "crates/hotshot/macros" }
 hotshot-events-service = { path = "hotshot-events-service" }
-hotshot-utils = { path = "hotshot-utils" }
-hotshot-orchestrator = { path = "hotshot-orchestrator" }
+hotshot-utils = { path = "crates/hotshot/utils" }
+hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
-hotshot-stake-table = { path = "hotshot-stake-table" }
+hotshot-stake-table = { path = "crates/hotshot/stake-table" }
 hotshot-state-prover = { version = "0.1.0", path = "hotshot-state-prover" }
-hotshot-task = { path = "hotshot-task" }
-hotshot-testing = { path = "hotshot-testing" }
-hotshot-types = { path = "hotshot-types" }
-hotshot-libp2p-networking = { path = "hotshot-libp2p-networking" }
+hotshot-task = { path = "crates/hotshot/task" }
+hotshot-testing = { path = "crates/hotshot/testing" }
+hotshot-types = { path = "crates/hotshot/types" }
+hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
 hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 # Temporary, used to pull in the mock auction results provider
-hotshot-example-types = { path = "hotshot-example-types" }
+hotshot-example-types = { path = "crates/hotshot/example-types" }
 
 # VID import
 vid = { path = "vid", features = [ "parallel", "keccak256" ] }
