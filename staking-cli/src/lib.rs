@@ -75,7 +75,7 @@ pub struct SignerConfig {
     /// Use a ledger device to sign transactions.
     ///
     /// NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the
-    /// Ethereum app setings.
+    /// Ethereum app settings.
     #[clap(long, env = "USE_LEDGER")]
     pub ledger: bool,
 }

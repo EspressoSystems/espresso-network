@@ -104,7 +104,7 @@ Options:
         --ledger
             Use a ledger device to sign transactions.
 
-            NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app setings.
+            NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app settings.
 
             [env: USE_LEDGER=]
 
