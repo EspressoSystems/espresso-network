@@ -12,7 +12,9 @@ use std::{
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
-use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
+use hotshot_builder_api::{
+    v0_1::block_info::AvailableBlockInfo, v0_2::block_info::AvailableBlockHeaderInputV2,
+};
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -182,7 +184,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                         .unwrap_or(TYPES::View::new(0))
                         + 1
                 {
-                    tracing::error!("High QC in epoch version and not the first QC after upgrade");
+                    tracing::warn!("High QC in epoch version and not the first QC after upgrade");
+                    self.send_empty_block(event_stream, block_view, block_epoch, version)
+                        .await;
                     return None;
                 }
                 // 0 here so we use the highest block number in the calculation below
@@ -276,7 +280,25 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             .number_of_empty_blocks_proposed
             .add(1);
 
-        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(version, *block_view) else {
+        let num_storage_nodes = match self
+            .membership_coordinator
+            .stake_table_for_epoch(block_epoch)
+            .await
+        {
+            Ok(epoch_stake_table) => epoch_stake_table.total_nodes().await,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to get num_storage_nodes for epoch {:?}: {}",
+                    block_epoch,
+                    e
+                );
+                return;
+            },
+        };
+
+        let Some(null_fee) =
+            null_block::builder_fee::<TYPES, V>(num_storage_nodes, version, *block_view)
+        else {
             tracing::error!("Failed to get null fee");
             return;
         };
@@ -412,8 +434,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         block_view: TYPES::View,
         block_epoch: Option<TYPES::Epoch>,
         version: Version,
+        num_storage_nodes: usize,
     ) -> Option<PackedBundle<TYPES>> {
-        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(version, *block_view) else {
+        let Some(null_fee) =
+            null_block::builder_fee::<TYPES, V>(num_storage_nodes, version, *block_view)
+        else {
             tracing::error!("Failed to calculate null block fee.");
             return None;
         };
@@ -457,7 +482,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             Err(e) => {
                 tracing::info!("Failed to get a block for view {block_view:?}: {e}. Continuing with empty block.");
 
-                let null_block = self.null_block(block_view, block_epoch, version).await?;
+                let num_storage_nodes = self
+                    .membership_coordinator
+                    .stake_table_for_epoch(block_epoch)
+                    .await
+                    .ok()?
+                    .total_nodes()
+                    .await;
+                let null_block = self
+                    .null_block(block_view, block_epoch, version, num_storage_nodes)
+                    .await?;
 
                 // Increment the metric for number of empty blocks proposed
                 self.consensus
@@ -715,13 +749,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         }
         results
             .into_iter()
-            .filter_map(|result| match result {
-                Ok(value) => Some(value),
-                Err(err) => {
-                    tracing::warn!(%err,"Error getting available blocks");
-                    None
-                },
-            })
+            .filter_map(|result| result.ok())
             .flatten()
             .collect::<Vec<_>>()
     }
@@ -757,6 +785,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         });
 
         if available_blocks.is_empty() {
+            tracing::info!("No available blocks");
             bail!("No available blocks");
         }
 
@@ -786,9 +815,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             let response = {
                 let client = &self.builder_clients[builder_idx];
 
-                let (block, header_input) = futures::join! {
+                let (block, header_input, legacy_header_input) = futures::join! {
                     client.claim_block(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
-                    client.claim_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
+                    client.claim_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
+                    client.claim_legacy_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
                 };
 
                 let block_data = match block {
@@ -799,10 +829,37 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                     },
                 };
 
-                let header_input = match header_input {
-                    Ok(block_data) => block_data,
-                    Err(err) => {
-                        tracing::warn!(%err, "Error claiming header input");
+                let header_input = match (header_input, legacy_header_input) {
+                    (Ok(header_input), _) => {
+                        // verify the message signature and the fee_signature
+                        if !header_input
+                            .validate_signature(block_info.offered_fee, &block_data.metadata)
+                        {
+                            tracing::warn!(
+                              "Failed to verify available block header input data response message signature"
+                            );
+                            continue;
+                        }
+
+                        header_input
+                    },
+                    (Err(_), Ok(legacy_header_input)) => {
+                        // verify the message signature and the fee_signature
+                        if !legacy_header_input
+                            .validate_signature(block_info.offered_fee, &block_data.metadata)
+                        {
+                            tracing::warn!(
+                              "Failed to verify available legacy block header input data response message signature"
+                            );
+                            continue;
+                        }
+                        AvailableBlockHeaderInputV2 {
+                            fee_signature: legacy_header_input.fee_signature,
+                            sender: legacy_header_input.sender,
+                        }
+                    },
+                    (Err(err1), Err(err2)) => {
+                        tracing::warn!(%err1, %err2, "Error claiming header input");
                         continue;
                     },
                 };

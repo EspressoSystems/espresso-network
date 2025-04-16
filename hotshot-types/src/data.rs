@@ -1320,7 +1320,7 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
             block_header,
             upgrade_certificate,
             block_payload: _,
-            view_change_evidence: _,
+            view_change_evidence,
             next_drb_result,
             with_epoch,
         } = self;
@@ -1341,6 +1341,16 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
                 cb = cb
                     .constant_str("next_drb_result")
                     .fixed_size_bytes(next_drb_result);
+            }
+
+            match view_change_evidence {
+                Some(ViewChangeEvidence2::Timeout(cert)) => {
+                    cb = cb.field("timeout cert", cert.commit());
+                },
+                Some(ViewChangeEvidence2::ViewSync(cert)) => {
+                    cb = cb.field("viewsync cert", cert.commit());
+                },
+                None => {},
             }
         }
 
@@ -1860,6 +1870,7 @@ pub mod null_block {
     /// Builder fee data for a null block payload
     #[must_use]
     pub fn builder_fee<TYPES: NodeType, V: Versions>(
+        num_storage_nodes: usize,
         version: vbs::version::Version,
         view_number: u64,
     ) -> Option<BuilderFee<TYPES>> {
@@ -1884,12 +1895,29 @@ pub mod null_block {
                 }),
                 Err(_) => None,
             }
-        } else {
+        } else if version >= V::Epochs::VERSION {
             let (_null_block, null_block_metadata) =
                 <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
 
             match TYPES::BuilderSignatureKey::sign_fee(&priv_key, FEE_AMOUNT, &null_block_metadata)
             {
+                Ok(sig) => Some(BuilderFee {
+                    fee_amount: FEE_AMOUNT,
+                    fee_account: pub_key,
+                    fee_signature: sig,
+                }),
+                Err(_) => None,
+            }
+        } else {
+            let (_null_block, null_block_metadata) =
+                <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
+
+            match TYPES::BuilderSignatureKey::sign_fee_with_vid_commitment(
+                &priv_key,
+                FEE_AMOUNT,
+                &null_block_metadata,
+                &commitment::<V>(num_storage_nodes)?,
+            ) {
                 Ok(sig) => Some(BuilderFee {
                     fee_amount: FEE_AMOUNT,
                     fee_account: pub_key,

@@ -1061,7 +1061,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             .next()
             .expect("INCONSISTENT STATE: anchor leaf not in state map!");
         if **anchor_entry.0 != old_anchor_view.saturating_sub(1) {
-            tracing::error!(
+            tracing::info!(
                 "Something about GC has failed. Older leaf exists than the previous anchor leaf."
             );
         }

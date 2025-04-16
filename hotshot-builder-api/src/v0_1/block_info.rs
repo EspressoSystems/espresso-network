@@ -9,6 +9,7 @@ use std::{hash::Hash, marker::PhantomData};
 use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey, BlockPayload},
     utils::BuilderCommitment,
+    vid::advz::ADVZCommitment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +72,42 @@ pub struct AvailableBlockHeaderInputV2<TYPES: NodeType> {
     pub fee_signature:
         <<TYPES as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::BuilderSignature,
     pub sender: <TYPES as NodeType>::BuilderSignatureKey,
+}
+
+/// legacy version of the AvailableBlockHeaderInputV2 type, used on git tag `20280228-patch3`
+///
+/// this was inadvertently changed to remove some deprecated fields,
+/// which resulted in a builder incompatibility.
+///
+/// This type can be removed after the builder is upgraded in deployment.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(bound = "")]
+pub struct AvailableBlockHeaderInputV2Legacy<TYPES: NodeType> {
+    pub vid_commitment: ADVZCommitment,
+    // signature over vid_commitment, BlockPayload::Metadata, and offered_fee
+    pub fee_signature:
+        <<TYPES as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::BuilderSignature,
+    // signature over the current response
+    pub message_signature:
+        <<TYPES as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::BuilderSignature,
+    pub sender: <TYPES as NodeType>::BuilderSignatureKey,
+}
+
+impl<TYPES: NodeType> AvailableBlockHeaderInputV2Legacy<TYPES> {
+    pub fn validate_signature(
+        &self,
+        offered_fee: u64,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ) -> bool {
+        self.sender
+            .validate_builder_signature(&self.message_signature, self.vid_commitment.as_ref())
+            && self.sender.validate_fee_signature_with_vid_commitment(
+                &self.fee_signature,
+                offered_fee,
+                metadata,
+                &hotshot_types::data::VidCommitment::V0(self.vid_commitment),
+            )
+    }
 }
 
 impl<TYPES: NodeType> AvailableBlockHeaderInputV2<TYPES> {

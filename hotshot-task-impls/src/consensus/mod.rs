@@ -44,6 +44,7 @@ mod handlers;
 
 /// Task state for the Consensus task.
 pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
     /// Our public key
     pub public_key: TYPES::SignatureKey,
 
@@ -146,7 +147,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::debug!("Failed to handle TimeoutVoteRecv event; error = {e}");
                 }
             },
+            HotShotEvent::SetFirstEpoch(view, epoch) => {
+                self.first_epoch = Some((*view, *epoch));
+            },
             HotShotEvent::ViewChange(new_view_number, epoch_number) => {
+                if let Some((view, epoch)) = self.first_epoch {
+                    if *new_view_number == view && *epoch_number != Some(epoch) {
+                        broadcast_event(
+                            Arc::new(HotShotEvent::ViewChange(*new_view_number, Some(epoch))),
+                            &sender,
+                        )
+                        .await;
+                    }
+                }
                 if let Err(e) =
                     handle_view_change(*new_view_number, *epoch_number, &sender, &receiver, self)
                         .await
@@ -172,12 +185,30 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 );
                 // Transition to the new epoch by sending ViewChange
                 let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
-                tracing::info!("Entering new epoch: {:?}", next_epoch);
                 broadcast_event(
                     Arc::new(HotShotEvent::ViewChange(cert_view + 1, Some(next_epoch))),
                     &sender,
                 )
                 .await;
+                tracing::info!("Entering new epoch: {:?}", next_epoch);
+                tracing::info!(
+                    "Stake table for epoch {:?}:\n\n{:?}",
+                    next_epoch,
+                    self.membership_coordinator
+                        .stake_table_for_epoch(Some(next_epoch))
+                        .await?
+                        .stake_table()
+                        .await
+                );
+                tracing::info!(
+                    "Stake table for epoch {:?}:\n\n{:?}",
+                    next_epoch + 1,
+                    self.membership_coordinator
+                        .stake_table_for_epoch(Some(next_epoch + 1))
+                        .await?
+                        .stake_table()
+                        .await
+                );
             },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {
                 if !high_qc

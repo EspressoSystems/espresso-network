@@ -907,7 +907,6 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
                 let vid_common: ADVZCommon = bincode::deserialize(&vid_common_bytes)
                     .context("failed to deserialize vid_common")?;
-
                 let new_vid_common_bytes = bincode::serialize(&VidCommon::V0(vid_common))
                     .context("failed to serialize vid_common")?;
 

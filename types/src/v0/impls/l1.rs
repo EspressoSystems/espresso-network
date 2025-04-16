@@ -45,10 +45,10 @@ use url::Url;
 
 use super::{
     active_validator_set_from_l1_events,
-    v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
+    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
     v0_3::Validator,
-    validators_from_l1_events, L1BlockInfo, L1BlockInfoWithParent, L1ClientMetrics, L1State,
-    L1UpdateTask, StakeTableEvent,
+    validators_from_l1_events, L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
+    StakeTableEvent,
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 
