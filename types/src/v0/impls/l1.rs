@@ -41,8 +41,8 @@ use tracing::Instrument;
 use url::Url;
 
 use super::{
-    v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
-    L1BlockInfo, L1BlockInfoWithParent, L1ClientMetrics, L1State, L1UpdateTask,
+    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
+    L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 

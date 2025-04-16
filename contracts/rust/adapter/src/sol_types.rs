@@ -211,6 +211,23 @@ use self::{
     },
 };
 
+impl PartialEq for ValidatorRegistered {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVk == other.blsVk
+            && self.schnorrVk == other.schnorrVk
+            && self.commission == other.commission
+    }
+}
+
+impl PartialEq for ConsensusKeysUpdated {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
+    }
+}
+
 impl Serialize for ValidatorRegistered {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

@@ -79,7 +79,7 @@ pub struct StakeTableFetcher {
 // (log block number, log index)
 pub type EventKey = (u64, u64);
 
-#[derive(Clone, derive_more::From, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, derive_more::From, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StakeTableEvent {
     Register(ValidatorRegistered),
     Deregister(ValidatorExit),
