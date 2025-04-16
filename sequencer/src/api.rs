@@ -1006,9 +1006,6 @@ pub mod test_helpers {
                 );
 
                 network_config.with_upgrades(upgrades);
-                // network_config.upgrades(upgrades);
-                // self.network_config = Some(network_config);
-                // return Ok(self.upgrades(upgrades));
                 return Ok(self.network_config(network_config));
             }
             Ok(self)
@@ -1079,6 +1076,8 @@ pub mod test_helpers {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
                         let upgrades_map = cfg.upgrades();
+
+                        tracing::error!(?upgrades_map);
                         let marketplace_builder_url = marketplace_builder_url.clone();
                         async move {
                             if i == 0 {
@@ -2794,8 +2793,21 @@ mod test {
         bind_version: MockSeqVersions,
     ) {
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
+        let anvil = Anvil::new().block_time(1).spawn();
         let l1 = anvil.endpoint_url();
+        let secret_key = anvil.keys()[0].clone();
+        let signer = LocalSigner::from(secret_key);
+
+        const NUM_NODES: usize = 5;
+        let test_config = TestConfigBuilder::default()
+            .epoch_height(200)
+            .epoch_start_block(321)
+            .l1_url(l1)
+            .signer(signer.clone())
+            .set_upgrades::<MockSeqVersions>()
+            .await
+            .build();
+        let upgrades = test_config.upgrades();
 
         let chain_config_upgrade = upgrades
             .get(&<MockSeqVersions as Versions>::Upgrade::VERSION)
@@ -2804,7 +2816,7 @@ mod test {
             .chain_config()
             .unwrap();
 
-        const NUM_NODES: usize = 5;
+        tracing::error!(?chain_config_upgrade);
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::from(options::Http {
                 port,
@@ -2817,15 +2829,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .network_config(
-                TestConfigBuilder::default()
-                    .l1_url(l1)
-                    .upgrades::<MockSeqVersions>(upgrades)
-                    .build(),
-            )
-            .pos_hook::<MockSeqVersions>()
-            .await
-            .expect("pos version")
+            .network_config(test_config)
             .build();
 
         let mut network = TestNetwork::new(config, bind_version).await;
@@ -2835,37 +2839,28 @@ mod test {
         // First loop to get an `UpgradeProposal`. Note that the
         // actual upgrade will take several subsequent views for
         // voting and finally the actual upgrade.
-        let new_version_first_view = loop {
+        let upgrade = loop {
             let event = events.next().await.unwrap();
+            let view_number = event.view_number;
             match event.event {
                 EventType::UpgradeProposal { proposal, .. } => {
+                    tracing::info!(?proposal, "proposal");
                     let upgrade = proposal.data.upgrade_proposal;
                     let new_version = upgrade.new_version;
+                    tracing::info!(?new_version, "upgrade proposal new version");
                     assert_eq!(new_version, <MockSeqVersions as Versions>::Upgrade::VERSION);
-                    break upgrade.new_version_first_view;
+                    // upgrade.new_version_first_view
+                    break upgrade;
                 },
                 _ => continue,
             }
         };
-        tracing::info!(?new_version_first_view, "seen upgrade proposal");
 
-        let client: Client<ServerError, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{port}").parse().unwrap());
-        client.connect(None).await;
-        tracing::info!(port, "server running");
-
-        // Loop to wait on the upgrade itself.
         loop {
-            // Get height as a proxy for view number. Height is always
-            // >= to view. Especially when using Anvil, there should be little
-            // difference. As a possible alternative we might loop on
-            // hotshot events here again and pull the view number off
-            // the event.
-            let height = client
-                .get::<ViewNumber>("status/block-height")
-                .send()
-                .await
-                .unwrap();
+            let event = events.next().await.unwrap();
+            let view_number = event.view_number;
+            tracing::info!(?upgrade.new_version_first_view, "seen upgrade proposal");
+            tracing::info!(?upgrade, "seen upgrade proposal");
 
             let states: Vec<_> = network
                 .peers
@@ -2879,12 +2874,12 @@ mod test {
                 .map(|state| state.chain_config.resolve())
                 .collect();
 
-            tracing::info!(?height, ?new_version_first_view, "checking config");
+            tracing::info!(?view_number, ?upgrade.new_version_first_view, "checking config");
 
             // ChainConfigs will eventually be resolved
             if let Some(configs) = configs {
                 tracing::info!(?configs, "configs");
-                if height > new_version_first_view + 10 {
+                if view_number > upgrade.new_version_first_view + 10 {
                     for config in configs {
                         assert_eq!(config, chain_config_upgrade);
                     }
@@ -2893,6 +2888,52 @@ mod test {
             }
             sleep(Duration::from_millis(200)).await;
         }
+        // tracing::info!(?new_version_first_view, "seen upgrade proposal");
+
+        //         let client: Client<ServerError, SequencerApiVersion> =
+        //             Client::new(format!("http://localhost:{port}").parse().unwrap());
+        //         client.connect(None).await;
+        //         tracing::info!(port, "server running");
+
+        // // Loop to wait on the upgrade itself.
+        // loop {
+        //     // Get height as a proxy for view number. Height is always
+        //     // >= to view. Especially when using Anvil, there should be little
+        //     // difference. As a possible alternative we might loop on
+        //     // hotshot events here again and pull the view number off
+        //     // the event.
+        //     let height = client
+        //         .get::<ViewNumber>("status/block-height")
+        //         .send()
+        //         .await
+        //         .unwrap();
+
+        //     let states: Vec<_> = network
+        //         .peers
+        //         .iter()
+        //         .map(|peer| async { peer.consensus().read().await.decided_state().await })
+        //         .collect();
+
+        //     let configs: Option<Vec<ChainConfig>> = join_all(states)
+        //         .await
+        //         .iter()
+        //         .map(|state| state.chain_config.resolve())
+        //         .collect();
+
+        //     tracing::info!(?height, ?new_version_first_view, "checking config");
+
+        //     // ChainConfigs will eventually be resolved
+        //     if let Some(configs) = configs {
+        //         tracing::info!(?configs, "configs");
+        //         if height > new_version_first_view + 10 {
+        //             for config in configs {
+        //                 // assert_eq!(config, chain_config_upgrade);
+        //             }
+        //             break; // if assertion did not panic, we need to exit the loop
+        //         }
+        //     }
+        //     sleep(Duration::from_millis(200)).await;
+        // }
 
         network.server.shut_down().await;
     }
@@ -3143,7 +3184,6 @@ mod test {
         let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
         let l1_url = instance.endpoint_url();
         let secret_key = instance.keys()[0].clone();
-
         let signer = LocalSigner::from(secret_key);
 
         let network_config = TestConfigBuilder::default()

@@ -28,6 +28,7 @@ use espresso_types::{
 use genesis::L1Finalized;
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
+use hotshot_stake_table::vec_based::StakeTable;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -55,7 +56,7 @@ use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
-    light_client::{StateKeyPair, StateSignKey},
+    light_client::{CircuitField, StateKeyPair, StateSignKey, StateVerKey},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -65,6 +66,7 @@ use hotshot_types::{
     utils::BuilderCommitment,
     ValidatorConfig,
 };
+
 pub use options::Options;
 use serde::{Deserialize, Serialize};
 use vbs::version::{StaticVersion, StaticVersionType};
@@ -94,6 +96,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Clone for Node<N, P> 
 }
 
 pub type SequencerApiVersion = StaticVersion<0, 1>;
+pub type XStakeTable = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeImplementation<SeqTypes>
     for Node<N, P>
@@ -595,8 +598,9 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
+        v0_99::ChainConfig,
         EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade,
+        SeqTypes, Transaction, Upgrade, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
     use futures::{
         future::join_all,
@@ -636,6 +640,7 @@ pub mod testing {
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
+    use staking_cli::demo::pos_deploy_routine;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -851,12 +856,64 @@ pub mod testing {
             self
         }
 
+        pub async fn set_upgrades<V: Versions>(mut self) -> Self {
+            let version = <V as Versions>::Upgrade::VERSION;
+            let upgrade = if version >= EpochVersion::VERSION {
+                tracing::error!(?version, "set_upgrade version");
+                let blocks_per_epoch = self.config.epoch_height;
+                let epoch_start_block = self.config.epoch_start_block;
+
+                let initial_stake_table = stake_table(self.config.known_nodes_with_stake.clone());
+
+                let address = pos_deploy_routine(
+                    &self.l1_url,
+                    &self.signer,
+                    blocks_per_epoch,
+                    epoch_start_block,
+                    initial_stake_table,
+                    None,
+                )
+                .await
+                .expect("deployed pos contracts");
+                let chain_config = ChainConfig {
+                    base_fee: 0.into(),
+                    stake_table_contract: Some(address),
+                    ..Default::default()
+                };
+
+                let mode = UpgradeMode::View(ViewBasedUpgrade {
+                    start_voting_view: None,
+                    stop_voting_view: None,
+                    start_proposing_view: 200,
+                    stop_proposing_view: 1000,
+                });
+
+                let upgrade_type = UpgradeType::Epoch { chain_config };
+                Upgrade { mode, upgrade_type }
+            } else {
+                panic!("upgrade not configured for version {:?}", version)
+            };
+
+            let mut upgrades = std::collections::BTreeMap::new();
+            upgrade.set_hotshot_config_parameters(&mut self.config);
+            upgrades.insert(version, upgrade);
+
+            self.upgrades = upgrades;
+            self
+        }
+
         pub fn epoch_height(mut self, epoch_height: u64) -> Self {
             self.config.epoch_height = epoch_height;
             self
         }
 
+        pub fn epoch_start_block(mut self, start_block: u64) -> Self {
+            self.config.epoch_start_block = start_block;
+            self
+        }
+
         pub fn build(self) -> TestConfig<NUM_NODES> {
+            tracing::error!(?self.upgrades, "TestConfig.build()");
             TestConfig {
                 config: self.config,
                 priv_keys: self.priv_keys,
@@ -956,6 +1013,21 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
+    pub fn stake_table(nodes: Vec<PeerConfig<SeqTypes>>) -> XStakeTable {
+        let mut st = XStakeTable::new(STAKE_TABLE_CAPACITY_FOR_TEST as usize);
+        nodes.iter().for_each(|config| {
+            st.register(
+                *config.stake_table_entry.key(),
+                config.stake_table_entry.stake(),
+                config.state_ver_key.clone(),
+            )
+            .unwrap()
+        });
+        st.advance();
+        st.advance();
+        st
+    }
+
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
         pub fn num_nodes(&self) -> usize {
             self.priv_keys.len()
@@ -1030,24 +1102,8 @@ pub mod testing {
             .await
         }
 
-        pub fn stake_table(&self) -> StakeTable<BLSPubKey, StateVerKey, CircuitField> {
-            let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(
-                STAKE_TABLE_CAPACITY_FOR_TEST as usize,
-            );
-            self.config
-                .known_nodes_with_stake
-                .iter()
-                .for_each(|config| {
-                    st.register(
-                        *config.stake_table_entry.key(),
-                        config.stake_table_entry.stake(),
-                        config.state_ver_key.clone(),
-                    )
-                    .unwrap()
-                });
-            st.advance();
-            st.advance();
-            st
+        pub fn stake_table(&self) -> XStakeTable {
+            stake_table(self.config.known_nodes_with_stake.clone())
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -1117,6 +1173,7 @@ pub mod testing {
 
             let coordinator = EpochMembershipCoordinator::new(membership, 100);
 
+            tracing::error!(?upgrades);
             let node_state = NodeState::new(
                 i as u64,
                 chain_config,

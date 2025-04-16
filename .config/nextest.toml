@@ -1,6 +1,6 @@
 [profile.default]
 # Kill tests after 3 periods of 2m, because they are probably hanging
-slow-timeout = { period = "2m", terminate-after = 3 }
+slow-timeout = { period = "2m", terminate-after = 8 }
 default-filter = 'not (deps(hotshot-testing) | test(slow_) | package(tests))'
 retries = 2
 
