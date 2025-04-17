@@ -39,7 +39,7 @@ use crate::{
     Config,
 };
 
-pub type XStakeTable = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
+pub type StakeTableVecBased = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
 
 pub const STAKE_TABLE_CAPACITY_FOR_TEST: u64 = 3;
 type Prov = FillProvider<
@@ -328,7 +328,7 @@ pub async fn pos_deploy_routine(
     signer: &LocalSigner<SigningKey>, // TODO maybe from_instance(AnvilInstance)
     blocks_per_epoch: u64,
     epoch_start_block: u64,
-    initial_stake_table: XStakeTable,
+    initial_stake_table: StakeTableVecBased,
     _multisig: Option<Address>,
     multiple_delegators: bool,
 ) -> anyhow::Result<Address> {
@@ -447,7 +447,7 @@ mod test {
         let secret_key = anvil.keys()[0].clone();
         let signer = LocalSigner::from(secret_key);
 
-        let mut st = XStakeTable::new(STAKE_TABLE_CAPACITY_FOR_TEST as usize);
+        let mut st = StakeTableVecBased::new(STAKE_TABLE_CAPACITY_FOR_TEST as usize);
         mock_stake(num_nodes).0.iter().for_each(|config| {
             st.register(
                 *config.stake_table_entry.key(),

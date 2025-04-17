@@ -95,7 +95,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Clone for Node<N, P> 
 }
 
 pub type SequencerApiVersion = StaticVersion<0, 1>;
-pub type XStakeTable = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
+pub type StakeTableVecBased = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeImplementation<SeqTypes>
     for Node<N, P>
@@ -1000,8 +1000,8 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
-    pub fn stake_table(nodes: Vec<PeerConfig<SeqTypes>>) -> XStakeTable {
-        let mut st = XStakeTable::new(STAKE_TABLE_CAPACITY_FOR_TEST as usize);
+    pub fn stake_table(nodes: Vec<PeerConfig<SeqTypes>>) -> StakeTableVecBased {
+        let mut st = StakeTableVecBased::new(STAKE_TABLE_CAPACITY_FOR_TEST as usize);
         nodes.iter().for_each(|config| {
             st.register(
                 *config.stake_table_entry.key(),
@@ -1093,7 +1093,7 @@ pub mod testing {
             .await
         }
 
-        pub fn stake_table(&self) -> XStakeTable {
+        pub fn stake_table(&self) -> StakeTableVecBased {
             stake_table(self.config.known_nodes_with_stake.clone())
         }
 
