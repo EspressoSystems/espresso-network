@@ -25,7 +25,7 @@ use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
 use hotshot_types::{
     light_client::{CircuitField, StateKeyPair, StateVerKey},
     signature_key::{BLSKeyPair, BLSPubKey},
-    traits::{signature_key::SignatureKey, stake_table::StakeTableScheme},
+    traits::signature_key::SignatureKey,
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -420,10 +420,12 @@ fn staking_priv_keys() -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
 mod test {
     use alloy::node_bindings::Anvil;
     use espresso_types::{v0_3::StakeTable, SeqTypes};
-    use hotshot_types::{traits::signature_key::StakeTableEntryType, PeerConfig};
+    use hotshot_types::{
+        traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme},
+        PeerConfig,
+    };
 
     use super::*;
-    use crate::deploy::TestSystem;
 
     fn mock_stake(n: u16) -> StakeTable {
         [..n]

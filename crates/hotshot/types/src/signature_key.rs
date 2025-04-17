@@ -19,7 +19,7 @@ use rand_chacha::ChaCha20Rng;
 use tracing::instrument;
 
 use crate::{
-    light_client::{CircuitField, LightClientState, StakeTableState, StateVerKey},
+    light_client::{LightClientState, StakeTableState},
     qc::{BitVectorQc, QcParams},
     stake_table::StakeTableEntry,
     traits::{
