@@ -1,8 +1,9 @@
 use alloy::{primitives::Address, providers::Provider, rpc::types::TransactionReceipt};
 use anyhow::Result;
-use hotshot_contract_adapter::sol_types::StakeTable::{self, StakeTableErrors};
-
-use crate::l1::DecodeRevertError;
+use hotshot_contract_adapter::{
+    evm::DecodeRevert as _,
+    sol_types::StakeTable::{self, StakeTableErrors},
+};
 
 pub async fn claim_withdrawal(
     provider: impl Provider,
@@ -40,7 +41,7 @@ mod test {
     use alloy::primitives::U256;
 
     use super::*;
-    use crate::{deploy::TestSystem, l1::decode_log};
+    use crate::deploy::TestSystem;
 
     #[tokio::test]
     async fn test_claim_withdrawal() -> Result<()> {
@@ -56,7 +57,7 @@ mod test {
             claim_withdrawal(&system.provider, system.stake_table, validator_address).await?;
         assert!(receipt.status());
 
-        let event = decode_log::<StakeTable::Withdrawal>(&receipt).unwrap();
+        let event = receipt.decoded_log::<StakeTable::Withdrawal>().unwrap();
         assert_eq!(event.amount, amount);
 
         Ok(())
@@ -76,7 +77,7 @@ mod test {
             claim_validator_exit(&system.provider, system.stake_table, validator_address).await?;
         assert!(receipt.status());
 
-        let event = decode_log::<StakeTable::Withdrawal>(&receipt).unwrap();
+        let event = receipt.decoded_log::<StakeTable::Withdrawal>().unwrap();
         assert_eq!(event.amount, amount);
 
         Ok(())

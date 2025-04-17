@@ -1,5 +1,6 @@
 use std::{pin::Pin, sync::Arc};
 
+use alloy::primitives::Address;
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
@@ -12,6 +13,7 @@ use espresso_types::{
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleTree},
+    v0_3::Validator,
     v0_99::ChainConfig,
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2,
     NodeState, PubKey, Transaction, ValidatedState,
@@ -20,6 +22,7 @@ use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
+use hotshot::types::BLSPubKey;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -38,6 +41,7 @@ use hotshot_types::{
     vote::HasViewNumber,
     PeerConfig,
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -182,6 +186,14 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.as_ref().get_stake_table_current().await
     }
+
+    /// Get all the validators
+    async fn get_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        self.as_ref().get_validators(epoch).await
+    }
 }
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     StakeTableDataSource<SeqTypes> for ApiState<N, P, V>
@@ -210,6 +222,25 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         let epoch = self.consensus().await.read().await.cur_epoch().await;
 
         self.get_stake_table(epoch).await
+    }
+
+    /// Get the whole validators map
+    async fn get_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        let mem = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+            .context("membership not found")?;
+
+        let r = mem.coordinator.membership().read().await;
+        r.validators(&epoch)
     }
 }
 
@@ -839,7 +870,10 @@ pub mod test_helpers {
 
         /// Setup for POS testing. Deploys contracts and adds the
         /// stake table address to state. Must be called before `build()`.
-        pub async fn pos_hook<V: Versions>(self) -> anyhow::Result<Self> {
+        pub async fn pos_hook<V: Versions>(
+            self,
+            multiple_delegators: bool,
+        ) -> anyhow::Result<Self> {
             if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
                 && <V as Versions>::Base::VERSION < EpochVersion::VERSION
             {
@@ -916,6 +950,7 @@ pub mod test_helpers {
                     .address(Contract::EspTokenProxy)
                     .expect("ESP token deployed"),
                 staking_priv_keys,
+                multiple_delegators,
             )
             .await?;
 
@@ -1931,10 +1966,12 @@ mod test {
     use alloy::{node_bindings::Anvil, primitives::U256, signers::local::LocalSigner};
     use committable::{Commitment, Committable};
     use espresso_types::{
-        config::PublicHotShotConfig, traits::NullEventConsumer, BackoffParams, EpochVersion,
-        FeeAmount, FeeVersion, Header, MarketplaceVersion, MockSequencerVersions,
-        SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade, UpgradeMode, UpgradeType,
-        ValidatedState, ViewBasedUpgrade, V0_1,
+        config::PublicHotShotConfig,
+        traits::NullEventConsumer,
+        v0_1::{block_reward, RewardAmount},
+        BackoffParams, EpochVersion, FeeAmount, FeeVersion, Header, MarketplaceVersion,
+        MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
+        UpgradeMode, UpgradeType, ValidatedState, ViewBasedUpgrade, V0_1,
     };
     use futures::{
         future::{self, join_all},
@@ -3105,7 +3142,7 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config.clone())
-            .pos_hook::<PosVersion>()
+            .pos_hook::<PosVersion>(false)
             .await
             .expect("Pos Deployment")
             .build();
@@ -3159,5 +3196,234 @@ mod test {
             epochs.contains(&wanted_epochs),
             "Epochs are not progressing"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pos_rewards_basic() -> anyhow::Result<()> {
+        // Basic PoS rewards test:
+        // - Sets up a single validator and a single delegator (the node itself).
+        // - Sets the number of blocks in each epoch to 20.
+        // - Rewards begin applying from block 41 (i.e., the start of the 3rd epoch).
+        // - Since the validator is also the delegator, it receives the full reward.
+        // - Verifies that the reward at block height 60 matches the expected amount.
+        setup_test();
+        let epoch_height = 20;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 1;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(false)
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // first two epochs will be 1 and 2
+        // rewards are distributed starting third epoch
+        // third epoch starts from block 40 as epoch height is 20
+        // wait for atleast 65 blocks
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(65)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let staking_priv_keys = network_config.staking_priv_keys();
+        let account = staking_priv_keys[0].0.clone();
+        let address = account.address();
+
+        let block_height = 60;
+
+        // get the validator address balance at block height 60
+        let amount = client
+            .get::<Option<RewardAmount>>(&format!(
+                "reward-state/reward-balance/{block_height}/{address}"
+            ))
+            .send()
+            .await
+            .unwrap()
+            .unwrap();
+
+        tracing::info!("amount={amount:?}");
+
+        let epoch_start_block = 40;
+        // The validator gets all the block reward so we can calculate the expected amount
+        let expected_amount = block_reward().0 * (U256::from(block_height - epoch_start_block));
+
+        assert_eq!(amount.0, expected_amount, "reward amount don't match");
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
+        // This test registers 5 validators and multiple delegators for each validator.
+        // One of the delegators is also a validator.
+        // The test verifies that the cumulative reward at each block height equals the total block reward,
+        // which is a constant.
+
+        setup_test();
+        let epoch_height = 20;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 5;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(true)
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // wait for atleast 75 blocks
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(75)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        // We are going to check cumulative blocks from block height 40 to 67
+        // Basically epoch 3 and epoch 4 as epoch height is 20
+        // get all the validators
+        let validators = client
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
+            .send()
+            .await
+            .expect("failed to get validator");
+
+        // insert all the address in a map
+        // We will query the reward-balance at each block height for all the addresses
+        // We don't know which validator was the leader because we don't have access to Membership
+        let mut addresses = HashSet::new();
+        for v in validators.values() {
+            addresses.insert(v.account);
+            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        }
+        // get all the validators
+        let validators = client
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/4")
+            .send()
+            .await
+            .expect("failed to get validator");
+        for v in validators.values() {
+            addresses.insert(v.account);
+            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        }
+
+        let mut prev_cumulative_amount = U256::ZERO;
+        // Check Cumulative rewards for epoch 3
+        // i.e block height 41 to 59
+        for block in 41..=67 {
+            let mut cumulative_amount = U256::ZERO;
+            for address in addresses.clone() {
+                let amount = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state/reward-balance/{block}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .ok()
+                    .flatten();
+
+                if let Some(amount) = amount {
+                    tracing::info!("address={address}, amount= {amount}");
+                    cumulative_amount += amount.0;
+                };
+            }
+
+            // assert cumulative reward is equal to block reward
+            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward().0);
+            tracing::info!("cumulative_amount is correct for block={block}");
+            prev_cumulative_amount = cumulative_amount;
+        }
+
+        Ok(())
     }
 }

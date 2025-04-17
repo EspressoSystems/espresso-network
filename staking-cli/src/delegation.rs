@@ -4,12 +4,13 @@ use alloy::{
     rpc::types::TransactionReceipt,
 };
 use anyhow::Result;
-use hotshot_contract_adapter::sol_types::{
-    EspToken::{self, EspTokenErrors},
-    StakeTable::{self, StakeTableErrors},
+use hotshot_contract_adapter::{
+    evm::DecodeRevert as _,
+    sol_types::{
+        EspToken::{self, EspTokenErrors},
+        StakeTable::{self, StakeTableErrors},
+    },
 };
-
-use crate::l1::DecodeRevertError as _;
 
 pub async fn approve(
     provider: impl Provider,
@@ -62,7 +63,7 @@ pub async fn undelegate(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{deploy::TestSystem, l1::decode_log};
+    use crate::deploy::TestSystem;
 
     #[tokio::test]
     async fn test_delegate() -> Result<()> {
@@ -80,7 +81,7 @@ mod test {
         .await?;
         assert!(receipt.status());
 
-        let event = decode_log::<StakeTable::Delegated>(&receipt).unwrap();
+        let event = receipt.decoded_log::<StakeTable::Delegated>().unwrap();
         assert_eq!(event.validator, validator_address);
         assert_eq!(event.amount, amount);
 
@@ -104,7 +105,7 @@ mod test {
         .await?;
         assert!(receipt.status());
 
-        let event = decode_log::<StakeTable::Undelegated>(&receipt).unwrap();
+        let event = receipt.decoded_log::<StakeTable::Undelegated>().unwrap();
         assert_eq!(event.validator, validator_address);
         assert_eq!(event.amount, amount);
 

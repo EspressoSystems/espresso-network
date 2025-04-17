@@ -5,6 +5,7 @@ use ark_ff::{BigInteger, PrimeField};
 
 #[allow(dead_code)]
 pub(crate) mod bindings;
+pub mod evm;
 pub mod jellyfish;
 pub mod light_client;
 pub mod sol_types;
