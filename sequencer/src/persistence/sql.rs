@@ -2091,7 +2091,7 @@ impl MembershipPersistence for Persistence {
         tx.upsert(
             "stake_table_events",
             ["id", "l1_block", "data"],
-            ["id", "l1_block"],
+            ["id"],
             [(0_i64, l1_block as i64, events_json)],
         )
         .await?;
