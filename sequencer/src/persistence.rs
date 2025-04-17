@@ -1155,7 +1155,7 @@ mod persistence_tests {
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook::<PosVersion>()
+            .pos_hook::<PosVersion>(true)
             .await
             .expect("Pos deployment failed")
             .build();
