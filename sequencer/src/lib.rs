@@ -600,7 +600,7 @@ pub mod testing {
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
         v0_99::ChainConfig,
         EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade, UpgradeMode, UpgradeType, ViewBasedUpgrade,
+        SeqTypes, Transaction, Upgrade, UpgradeMap, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
     use futures::{
         future::join_all,
@@ -856,10 +856,9 @@ pub mod testing {
             self
         }
 
-        pub async fn set_upgrades<V: Versions>(mut self) -> Self {
-            let version = <V as Versions>::Upgrade::VERSION;
+        pub async fn set_upgrades(mut self, version: Version) -> Self {
             let upgrade = if version >= EpochVersion::VERSION {
-                tracing::error!(?version, "set_upgrade version");
+                tracing::debug!(?version, "set_upgrade version");
                 let blocks_per_epoch = self.config.epoch_height;
                 let epoch_start_block = self.config.epoch_start_block;
 
@@ -1055,6 +1054,10 @@ pub mod testing {
 
         pub fn l1_url(&self) -> Url {
             self.l1_url.clone()
+        }
+
+        pub fn get_upgrade_map(&self) -> UpgradeMap {
+            self.upgrades.clone().into()
         }
 
         pub fn upgrades(&self) -> BTreeMap<Version, Upgrade> {
