@@ -23,7 +23,6 @@ hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }
-rand_chacha = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 portpicker = { workspace = true }
 rand = { workspace = true }
