@@ -40,7 +40,7 @@ use super::{
     impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
-    v0_3::{IndexedStake, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     EpochVersion, SequencerVersions,
 };
 use crate::{
@@ -649,7 +649,7 @@ impl<T: StateCatchup> StateCatchup for Vec<T> {
 }
 
 #[async_trait]
-pub trait PersistenceOptions: Clone + Send + Sync + 'static {
+pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);
@@ -675,6 +675,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
     ) -> anyhow::Result<()>;
+
+    async fn store_events(
+        &self,
+        l1_block: u64,
+        events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()>;
+    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>>;
 }
 
 #[async_trait]

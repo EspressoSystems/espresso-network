@@ -1,6 +1,5 @@
 use std::{
     cmp::{min, Ordering},
-    collections::BTreeMap,
     num::NonZeroUsize,
     pin::Pin,
     result::Result as StdResult,
@@ -28,10 +27,8 @@ use futures::{
     future::{Future, TryFuture, TryFutureExt},
     stream::{self, StreamExt},
 };
-use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::{FeeContract, StakeTable};
+use hotshot_contract_adapter::sol_types::FeeContract;
 use hotshot_types::traits::metrics::Metrics;
-use indexmap::IndexMap;
 use lru::LruCache;
 use parking_lot::RwLock;
 use tokio::{
@@ -44,11 +41,8 @@ use tracing::Instrument;
 use url::Url;
 
 use super::{
-    active_validator_set_from_l1_events,
     v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
-    v0_3::Validator,
-    validators_from_l1_events, L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
-    StakeTableEvent,
+    L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
 };
 use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
 
@@ -894,207 +888,6 @@ impl L1Client {
             .await
     }
 
-    /// Fetch all stake table events from L1
-    pub async fn fetch_stake_table_events(
-        &self,
-        contract: Address,
-        to_block: u64,
-    ) -> anyhow::Result<BTreeMap<(u64, u64), StakeTableEvent>> {
-        let stake_table_contract = StakeTable::new(contract, self.provider.clone());
-
-        // get the block number when the contract was initialized
-        // to avoid fetching events from block number 0
-        let from_block = loop {
-            match stake_table_contract.initializedAtBlock().call().await {
-                Ok(init_block) => {
-                    break init_block._0.to::<u64>();
-                },
-                Err(err) => {
-                    // Retry fetching incase of an error
-                    tracing::warn!(%err, "Failed to retrieve initial block, retrying..");
-                    sleep(self.options().l1_retry_delay).await;
-                },
-            }
-        };
-
-        // To avoid making large RPC calls, divide the range into smaller chunks.
-        // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
-        // default value  is `10000` if env variable is not set
-        let mut start = from_block;
-        let end = to_block;
-        let chunk_size = self.options().l1_events_max_block_range;
-        let chunks = std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
-                return None;
-            }
-
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
-        });
-
-        // fetch registered events
-        // retry if the call to the provider to fetch the events fails
-        let registered_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = self.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ValidatorRegistered events in range");
-                loop {
-                    match stake_table_contract
-                        .clone()
-                        .ValidatorRegistered_filter()
-                        .from_block(from)
-                        .to_block(to_block)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "ValidatorRegistered Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
-            }
-        });
-
-        // fetch validator de registration events
-        let deregistered_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = self.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ValidatorExit events in range");
-                loop {
-                    match stake_table_contract
-                        .ValidatorExit_filter()
-                        .from_block(from)
-                        .to_block(to_block)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "ValidatorExit Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
-            }
-        });
-
-        // fetch delegated events
-        let delegated_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = self.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch Delegated events in range");
-                loop {
-                    match stake_table_contract
-                        .Delegated_filter()
-                        .from_block(from)
-                        .to_block(to_block)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "Delegated Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
-            }
-        });
-        // fetch undelegated events
-        let undelegated_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            let retry_delay = self.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch Undelegated events in range");
-                loop {
-                    match stake_table_contract
-                        .Undelegated_filter()
-                        .from_block(from)
-                        .to_block(to_block)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "Undelegated Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
-            }
-        });
-
-        // fetch consensus keys updated events
-        let keys_update_events = stream::iter(chunks).then(|(from, to)| {
-            let retry_delay = self.options().l1_retry_delay;
-            let stake_table_contract = stake_table_contract.clone();
-            async move {
-                tracing::debug!(from, to, "fetch ConsensusKeysUpdated events in range");
-                loop {
-                    match stake_table_contract
-                        .ConsensusKeysUpdated_filter()
-                        .from_block(from)
-                        .to_block(to_block)
-                        .query()
-                        .await
-                    {
-                        Ok(events) => break stream::iter(events),
-                        Err(err) => {
-                            tracing::warn!(from, to, %err, "ConsensusKeysUpdated Error");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
-            }
-        });
-
-        let registered = registered_events.flatten().collect().await;
-        let deregistered = deregistered_events.flatten().collect().await;
-        let delegated = delegated_events.flatten().collect().await;
-        let undelegated = undelegated_events.flatten().collect().await;
-        let keys_update = keys_update_events.flatten().collect().await;
-
-        // Sort all events by log index and log block number for correct order.
-        StakeTableEvent::sort_events(
-            registered,
-            deregistered,
-            delegated,
-            undelegated,
-            keys_update,
-        )
-    }
-
-    /// Get `StakeTable` at specific l1 block height.
-    /// This function fetches and processes various events (ValidatorRegistered, ValidatorExit,
-    /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
-    /// contract's initialization block to the provided `to_block` value.
-    /// Events are fetched in chunks to and retries are implemented for failed requests.
-    pub async fn fetch_stake_table(
-        &self,
-        contract: Address,
-        to_block: u64,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
-        let events = self.fetch_stake_table_events(contract, to_block).await?;
-        active_validator_set_from_l1_events(events.values().cloned())
-    }
-
-    pub async fn fetch_all_validators(
-        &self,
-        contract: Address,
-        to_block: u64,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
-        let events = self.fetch_stake_table_events(contract, to_block).await?;
-        // Process the sorted events and return the resulting stake table.
-        validators_from_l1_events(events.values().cloned())
-    }
-
     /// Check if the given address is a proxy contract.
     pub async fn is_proxy_contract(&self, proxy_address: Address) -> anyhow::Result<bool> {
         // confirm that the proxy_address is a proxy
@@ -1138,7 +931,7 @@ impl L1Client {
         }
     }
 
-    fn options(&self) -> &L1ClientOptions {
+    pub(crate) fn options(&self) -> &L1ClientOptions {
         self.transport.options()
     }
 
