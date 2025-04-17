@@ -856,6 +856,8 @@ pub mod testing {
             self
         }
 
+        /// Version specific upgrade setup. Extend to future upgrades
+        /// by adding a branch to the `match` statement.
         pub async fn set_upgrades(mut self, version: Version) -> Self {
             let upgrade = match version {
                 version if version >= EpochVersion::VERSION => {
