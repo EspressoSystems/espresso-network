@@ -48,7 +48,9 @@ members = [
 exclude = ["sequencer-sqlite"]
 
 [workspace.dependencies]
-alloy = { version = "0.12.5", default-features = false, features = [
+# The --alloy-version in the justfile gen-bindings recipe should match the version here.
+# TODO: to update past 0.13 we need https://github.com/foundry-rs/foundry/issues/10321
+alloy = { version = "0.13", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
@@ -230,6 +232,7 @@ rand = "0.8.5"
 time = "0.3"
 trait-set = "0.3.0"
 
+# NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
 [profile.dev]
 # Probably the least demanding setting in terms of compilation time and memory
 # that still provide tracebacks with line numbers.

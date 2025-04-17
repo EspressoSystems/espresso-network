@@ -10,7 +10,10 @@ use alloy::{
 use anyhow::Result;
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
-use hotshot_contract_adapter::sol_types::EspToken;
+use hotshot_contract_adapter::{
+    evm::DecodeRevert as _,
+    sol_types::EspToken::{self, EspTokenErrors},
+};
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
@@ -106,7 +109,10 @@ pub async fn main() -> Result<()> {
             Err(err) => {
                 // This is a user error print the hopefully helpful error
                 // message without backtrace and exit.
-                exit_err("Error in configuration file", err);
+                exit_err(
+                    format!("Error in configuration file at {}", config_path.display()),
+                    err,
+                );
             },
         }
     } else {
@@ -331,7 +337,8 @@ pub async fn main() -> Result<()> {
             Ok(token
                 .transfer(to, amount)
                 .send()
-                .await?
+                .await
+                .maybe_decode_revert::<EspTokenErrors>()?
                 .get_receipt()
                 .await?)
         },

@@ -15,24 +15,31 @@ sqlite-unbundled = ["sequencer/sqlite-unbundled"]
 embedded-db = ["sequencer/embedded-db"]
 
 [dependencies]
-alloy-node-bindings = "=0.12.5"
 sequencer = { path = "../sequencer" }
 tokio = { version = "1", default-features = false, features = [
-	"rt-multi-thread",
-	"macros",
-	"parking_lot",
-	"sync",
+    "rt-multi-thread",
+    "macros",
+    "parking_lot",
+    "sync",
 ] }
 anyhow = "^1.0"
 
 [profile.dev]
-# No optimizations
-opt-level = 0
-# Skip compiling the debug information.
-debug = false
-# Skip linking symbols.
-strip = true
+# Probably the least demanding setting in terms of compilation time and memory
+# that still provide tracebacks with line numbers.
+strip = "none"
+debug = "line-tables-only"
+
+[profile.dev-debug]
+# This profile should allow connecting debuggers. Compiles more slowly and
+# requires significantly more memory to compile.
+inherits = "dev"
+strip = "none"
+debug = "full"
+
 [profile.test]
 opt-level = 1
+[profile.test.package.client]
+opt-level = 0
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
