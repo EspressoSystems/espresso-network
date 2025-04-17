@@ -123,7 +123,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 if self.voting_stake_table_epoch != option_state_epoch {
                     let Ok(membership) = consensus
                         .membership_coordinator
-                        .membership_for_epoch(option_state_epoch)
+                        .stake_table_for_epoch(option_state_epoch)
                         .await
                     else {
                         tracing::error!(

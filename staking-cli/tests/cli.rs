@@ -1,4 +1,7 @@
-use std::process::{Command, Output, Stdio};
+use std::{
+    path::PathBuf,
+    process::{Command, Output, Stdio},
+};
 
 use alloy::primitives::{
     utils::{format_ether, parse_ether},
@@ -28,6 +31,24 @@ impl AssertSuccess for Output {
     }
 }
 
+trait AssertFailure {
+    fn assert_failure(&self) -> &Self;
+}
+
+impl AssertFailure for Output {
+    fn assert_failure(&self) -> &Self {
+        if self.status.success() {
+            let stderr = String::from_utf8(self.stderr.clone()).expect("stderr is utf8");
+            let stdout = String::from_utf8(self.stdout.clone()).expect("stdout is utf8");
+            panic!(
+                "Command succeeded but should have failed:\nstderr: {}\nstdout: {}",
+                stderr, stdout
+            );
+        }
+        self
+    }
+}
+
 trait Utf8 {
     fn utf8(&self) -> String;
 }
@@ -35,6 +56,16 @@ trait Utf8 {
 impl Utf8 for Output {
     fn utf8(&self) -> String {
         String::from_utf8(self.stdout.clone()).expect("stdout is utf8")
+    }
+}
+
+trait Utf8Err {
+    fn utf8_err(&self) -> String;
+}
+
+impl Utf8Err for Output {
+    fn utf8_err(&self) -> String {
+        String::from_utf8(self.stderr.clone()).expect("stderr is utf8")
     }
 }
 
@@ -49,9 +80,13 @@ fn base_cmd() -> Command {
     // option to integration tests at build time. To handle target directory remapping, use the
     // value of NEXTEST_BIN_EXE_<name> at runtime. To retain compatibility with cargo test, you
     // can fall back to the value of CARGO_BIN_EXE_<name> at build time.
-    let path = std::env::var("NEXTEST_BIN_EXE_staking-cli")
-        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_staking-cli").to_string());
-    tracing::info!("Using staking-cli binary at {path}");
+    let path: PathBuf = std::env::var("NEXTEST_BIN_EXE_staking-cli")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_staking-cli").to_string())
+        .into();
+    tracing::debug!("staking-cli path: {}", path.display());
+    if !path.exists() {
+        panic!("staking-cli binary not found at {}", path.display());
+    };
     Command::new(path)
 }
 
@@ -121,6 +156,27 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
     assert!(config.signer.ledger);
     assert_eq!(config.signer.account_index, Some(42));
 
+    Ok(())
+}
+
+// TODO: ideally we would test that the decoding works for all the commands
+#[tokio::test]
+async fn test_cli_contract_revert() -> Result<()> {
+    setup_test();
+    let system = TestSystem::deploy().await?;
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Mnemonic);
+
+    let output = cmd
+        .arg("transfer")
+        .arg("--to")
+        .arg("0x1111111111111111111111111111111111111111")
+        .arg("--amount")
+        .arg(U256::MAX.to_string())
+        .output()?
+        .assert_failure()
+        .utf8_err();
+    assert!(output.contains("ERC20InsufficientBalance"));
     Ok(())
 }
 

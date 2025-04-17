@@ -1094,15 +1094,11 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        // TODO(abdul): Change this to version >= EpochVersion::version()
-        // when we deploy the permissionless contract in native demo
-        // so that marketplace version also supports this,
-        // and the marketplace integration test passes
         let mut leader_config = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
         let proposed_header_height = parent_leaf.height() + 1;
-        if version == EpochVersion::version()
+        if version >= EpochVersion::version()
             && !first_two_epochs(proposed_header_height, instance_state).await?
         {
             leader_config = Some(

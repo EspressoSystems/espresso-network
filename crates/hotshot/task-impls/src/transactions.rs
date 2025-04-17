@@ -830,13 +830,33 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                 };
 
                 let header_input = match (header_input, legacy_header_input) {
+                    (Ok(header_input), Ok(legacy_header_input)) => {
+                        // verify the message signature and the fee_signature
+                        if header_input
+                            .validate_signature(block_info.offered_fee, &block_data.metadata)
+                        {
+                            header_input
+                        } else if legacy_header_input
+                            .validate_signature(block_info.offered_fee, &block_data.metadata)
+                        {
+                            AvailableBlockHeaderInputV2 {
+                                fee_signature: legacy_header_input.fee_signature,
+                                sender: legacy_header_input.sender,
+                            }
+                        } else {
+                            tracing::warn!(
+                              "Failed to verify available new or legacy block header input data response message signature"
+                            );
+                            continue;
+                        }
+                    },
                     (Ok(header_input), _) => {
                         // verify the message signature and the fee_signature
                         if !header_input
                             .validate_signature(block_info.offered_fee, &block_data.metadata)
                         {
                             tracing::warn!(
-                              "Failed to verify available block header input data response message signature"
+                              "Failed to verify available new block header input data response message signature"
                             );
                             continue;
                         }
