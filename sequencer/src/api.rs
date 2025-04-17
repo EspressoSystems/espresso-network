@@ -1947,7 +1947,6 @@ mod test {
         status_test_helper, submit_test_helper, TestNetwork, TestNetworkConfigBuilder,
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
-
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType};
 

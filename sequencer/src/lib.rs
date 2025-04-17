@@ -66,7 +66,6 @@ use hotshot_types::{
     utils::BuilderCommitment,
     ValidatorConfig,
 };
-
 pub use options::Options;
 use serde::{Deserialize, Serialize};
 use vbs::version::{StaticVersion, StaticVersionType};
@@ -615,7 +614,6 @@ pub mod testing {
     use hotshot_builder_core_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
-
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
