@@ -327,6 +327,7 @@ pub async fn pos_deploy_routine(
     epoch_start_block: u64,
     initial_stake_table: XStakeTable,
     _multisig: Option<Address>,
+    multiple_delegators: bool,
 ) -> anyhow::Result<Address> {
     let contracts = &mut Contracts::new();
 
@@ -375,7 +376,7 @@ pub async fn pos_deploy_routine(
     )
     .await?;
 
-    let staking_priv_keys = staking_priv_keys(); // arbitrary num
+    let staking_priv_keys = staking_priv_keys();
 
     let stake_table_address = contracts
         .address(Contract::StakeTableProxy)
@@ -389,7 +390,7 @@ pub async fn pos_deploy_routine(
             .address(Contract::EspTokenProxy)
             .expect("ESP token deployed"),
         staking_priv_keys,
-        false,
+        multiple_delegators,
     )
     .await?;
 
@@ -455,7 +456,7 @@ mod test {
         st.advance();
         st.advance();
 
-        let _address = pos_deploy_routine(&l1, &signer, 50, 1, st, None)
+        let _address = pos_deploy_routine(&l1, &signer, 50, 1, st, None, false)
             .await
             .unwrap();
 

@@ -718,10 +718,8 @@ pub mod test_helpers {
     use std::time::Duration;
 
     use alloy::{
-        network::EthereumWallet,
         node_bindings::Anvil,
         primitives::{Address, U256},
-        providers::{Provider, ProviderBuilder},
     };
     use committable::Committable;
     use espresso_types::{
@@ -742,11 +740,8 @@ pub mod test_helpers {
     use itertools::izip;
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
-    use sequencer_utils::{
-        deployer::{self, Contract, Contracts},
-        test_utils::setup_test,
-    };
-    use staking_cli::demo::stake_in_contract_for_test;
+    use sequencer_utils::test_utils::setup_test;
+    use staking_cli::demo::pos_deploy_routine;
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -890,75 +885,25 @@ pub mod test_helpers {
                 .network_config
                 .as_ref()
                 .expect("network_config is required");
-            let signer = network_config.signer();
-            let contracts = &mut Contracts::new();
 
-            let wallet = EthereumWallet::from(signer.clone());
-            let provider = ProviderBuilder::new()
-                .wallet(wallet.clone())
-                .on_http(network_config.l1_url());
-            let admin = provider.get_accounts().await?[0];
+            let l1_url = network_config.l1_url();
+            let signer = network_config.signer();
 
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
             let initial_stake_table = network_config.stake_table();
-            let (genesis_state, genesis_stake) =
-                legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
-            // deploy EspToken, proxy
-            let token_proxy_addr =
-                deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
-
-            // deploy light client v1, proxy
-            let lc_proxy_addr = deployer::deploy_light_client_proxy(
-                &provider,
-                contracts,
-                true, // use mock
-                genesis_state.clone(),
-                genesis_stake.clone(),
-                admin,
-                None, // no permissioned prover
-            )
-            .await?;
-            // upgrade to LightClientV2
-            deployer::upgrade_light_client_v2(
-                &provider,
-                contracts,
-                true, // use mock
+            let stake_table_address = pos_deploy_routine(
+                &l1_url,
+                &signer,
                 blocks_per_epoch,
                 epoch_start_block,
-            )
-            .await?;
-
-            // deploy permissionless stake table
-            let exit_escrow_period = U256::from(300); // 300 sec
-            let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
-                &provider,
-                contracts,
-                token_proxy_addr,
-                lc_proxy_addr,
-                exit_escrow_period,
-                admin,
-            )
-            .await?;
-
-            let staking_priv_keys = network_config.staking_priv_keys();
-
-            let stake_table_address = contracts
-                .address(Contract::StakeTableProxy)
-                .expect("stake table deployed");
-
-            stake_in_contract_for_test(
-                network_config.l1_url(),
-                signer,
-                stake_table_address,
-                contracts
-                    .address(Contract::EspTokenProxy)
-                    .expect("ESP token deployed"),
-                staking_priv_keys,
+                initial_stake_table,
+                None,
                 multiple_delegators,
             )
-            .await?;
+            .await
+            .expect("deployed pos contracts");
 
             // Add stake table address to `ChainConfig` (held in state),
             // avoiding overwrite other values. Base fee is set to `0` to avoid
@@ -1966,10 +1911,7 @@ mod api_tests {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::HashSet,
-        time::Duration,
-    };
+    use std::{collections::HashSet, time::Duration};
 
     use alloy::{node_bindings::Anvil, primitives::U256, signers::local::LocalSigner};
     use committable::{Commitment, Committable};
@@ -2005,7 +1947,7 @@ mod test {
         status_test_helper, submit_test_helper, TestNetwork, TestNetworkConfigBuilder,
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
-    
+
     use tokio::time::sleep;
     use vbs::version::{StaticVersion, StaticVersionType};
 

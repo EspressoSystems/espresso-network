@@ -615,7 +615,7 @@ pub mod testing {
     use hotshot_builder_core_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
-    
+
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
@@ -874,6 +874,7 @@ pub mod testing {
                         epoch_start_block,
                         initial_stake_table,
                         None,
+                        false,
                     )
                     .await
                     .expect("deployed pos contracts");
