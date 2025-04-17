@@ -1,3 +1,4 @@
+use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
@@ -5,10 +6,12 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_1::{RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleTree},
+    v0_3::Validator,
     v0_99::ChainConfig,
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::Future;
+use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
     availability::AvailabilityDataSource,
     data_source::{UpdateDataSource, VersionedDataSource},
@@ -25,6 +28,7 @@ use hotshot_types::{
     },
     PeerConfig,
 };
+use indexmap::IndexMap;
 use tide_disco::Url;
 
 use super::{
@@ -120,6 +124,12 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
 
     /// Get the stake table for  the current epoch if not provided
     fn get_stake_table_current(&self) -> impl Send + Future<Output = Vec<PeerConfig<T>>>;
+
+    /// Get all the validators
+    fn get_validators(
+        &self,
+        epoch: <T as NodeType>::Epoch,
+    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>>>;
 }
 
 pub(crate) trait CatchupDataSource: Sync {
