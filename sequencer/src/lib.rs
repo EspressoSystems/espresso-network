@@ -900,7 +900,6 @@ pub mod testing {
         }
 
         pub fn build(self) -> TestConfig<NUM_NODES> {
-            tracing::error!(?self.upgrades, "TestConfig.build()");
             TestConfig {
                 config: self.config,
                 priv_keys: self.priv_keys,
@@ -1164,7 +1163,6 @@ pub mod testing {
 
             let coordinator = EpochMembershipCoordinator::new(membership, 100);
 
-            tracing::error!(?upgrades);
             let node_state = NodeState::new(
                 i as u64,
                 chain_config,

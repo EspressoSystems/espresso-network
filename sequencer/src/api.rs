@@ -996,7 +996,6 @@ pub mod test_helpers {
                         let cfg = &cfg.network_config;
                         let upgrades_map = cfg.upgrades();
 
-                        tracing::error!(?upgrades_map);
                         let marketplace_builder_url = marketplace_builder_url.clone();
                         async move {
                             if i == 0 {
