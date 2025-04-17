@@ -2746,13 +2746,17 @@ mod test {
     }
 
     async fn test_upgrade_helper<V: Versions>(upgrades: BTreeMap<Version, Upgrade>, version: V) {
+        // wait this number of views beyond the configured first view
+        // before asserting anything.
+        let wait_extra_views = 10;
+        // Number of nodes running in the test network.
+        const NUM_NODES: usize = 5;
         let upgrade_version = <V as Versions>::Upgrade::VERSION;
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
         let l1 = anvil.endpoint_url();
         let signer = LocalSigner::from(anvil.keys()[0].clone());
 
-        const NUM_NODES: usize = 5;
         let test_config = TestConfigBuilder::default()
             .epoch_height(200)
             .epoch_start_block(321)
@@ -2763,8 +2767,8 @@ mod test {
             .build();
 
         let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
+        tracing::debug!(?chain_config_upgrade);
 
-        tracing::error!(?chain_config_upgrade);
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::from(options::Http {
                 port,
@@ -2785,7 +2789,7 @@ mod test {
         let mut events = network.server.event_stream().await;
 
         // First loop to get an `UpgradeProposal`. Note that the
-        // actual upgrade will take several subsequent views for
+        // actual upgrade will take several to many subsequent views for
         // voting and finally the actual upgrade.
         let upgrade = loop {
             let event = events.next().await.unwrap();
@@ -2802,32 +2806,31 @@ mod test {
             }
         };
 
-        // Loop until we get the expected `new_version_first_view`.
+        // Loop until we get the `new_version_first_view`, then test the upgrade.
         loop {
             let event = events.next().await.unwrap();
             let view_number = event.view_number;
 
-            let states: Vec<_> = network
-                .peers
-                .iter()
-                .map(|peer| async { peer.consensus().read().await.decided_state().await })
-                .collect();
-
-            let configs: Option<Vec<ChainConfig>> = join_all(states)
-                .await
-                .iter()
-                .map(|state| state.chain_config.resolve())
-                .collect();
-
             tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
-            // ChainConfigs will eventually be resolved
-            if let Some(configs) = configs {
+            if view_number > upgrade.new_version_first_view + wait_extra_views {
+                let states: Vec<_> = network
+                    .peers
+                    .iter()
+                    .map(|peer| async { peer.consensus().read().await.decided_state().await })
+                    .collect();
+
+                let configs: Option<Vec<ChainConfig>> = join_all(states)
+                    .await
+                    .iter()
+                    .map(|state| state.chain_config.resolve())
+                    .collect();
+
                 tracing::debug!(?configs, "`ChainConfig`s for nodes");
-                if view_number > upgrade.new_version_first_view + 10 {
+                if let Some(configs) = configs {
                     for config in configs {
                         assert_eq!(config, chain_config_upgrade);
                     }
-                    break; // if assertion did not panic, we need to exit the loop
+                    break; // if assertion did not panic, the test was successful, so we exit the loop
                 }
             }
             sleep(Duration::from_millis(200)).await;
