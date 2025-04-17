@@ -2090,9 +2090,9 @@ impl MembershipPersistence for Persistence {
 
         tx.upsert(
             "stake_table_events",
-            ["l1_block", "data"],
-            ["l1_block"],
-            [(l1_block as i64, events_json)],
+            ["id", "l1_block", "data"],
+            ["id", "l1_block"],
+            [(0_i64, l1_block as i64, events_json)],
         )
         .await?;
         tx.commit().await
@@ -2101,7 +2101,7 @@ impl MembershipPersistence for Persistence {
     async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
         let mut tx = self.db.write().await?;
 
-        let row = query("SELECT l1_block, data FROM stake_table_events LIMIT 1")
+        let row = query("SELECT l1_block, data FROM stake_table_events WHERE id = 0")
             .fetch_optional(tx.as_mut())
             .await?;
 
