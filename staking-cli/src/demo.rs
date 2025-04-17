@@ -402,10 +402,10 @@ fn staking_priv_keys() -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
     let num_nodes = STAKE_TABLE_CAPACITY_FOR_TEST;
 
     let (_, priv_keys): (Vec<_>, Vec<_>) = (0..num_nodes)
-        .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed(seed, i as u64))
+        .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed(seed, i))
         .unzip();
     let state_key_pairs = (0..num_nodes)
-        .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i as u64))
+        .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i))
         .collect::<Vec<_>>();
 
     let mut rng = ChaCha20Rng::from_seed([42u8; 32]); // Create a deterministic RNG
