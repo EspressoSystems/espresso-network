@@ -28,6 +28,7 @@ use hotshot_types::{
     },
     PeerConfig,
 };
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 
