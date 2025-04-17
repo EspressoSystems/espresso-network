@@ -2725,7 +2725,6 @@ mod test {
             .build();
 
         let mut network = TestNetwork::new(config, version).await;
-
         let mut events = network.server.event_stream().await;
 
         // First loop to get an `UpgradeProposal`. Note that the
