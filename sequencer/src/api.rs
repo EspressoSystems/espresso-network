@@ -2768,7 +2768,7 @@ mod test {
         bind_version: MockSeqVersions,
     ) {
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().block_time(1).spawn();
+        let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
         let l1 = anvil.endpoint_url();
         let secret_key = anvil.keys()[0].clone();
         let signer = LocalSigner::from(secret_key);
@@ -2831,11 +2831,10 @@ mod test {
             }
         };
 
+        tracing::info!(?upgrade.new_version_first_view, "seen upgrade proposal");
         loop {
             let event = events.next().await.unwrap();
             let view_number = event.view_number;
-            tracing::info!(?upgrade.new_version_first_view, "seen upgrade proposal");
-            tracing::info!(?upgrade, "seen upgrade proposal");
 
             let states: Vec<_> = network
                 .peers
@@ -2849,8 +2848,7 @@ mod test {
                 .map(|state| state.chain_config.resolve())
                 .collect();
 
-            tracing::info!(?view_number, ?upgrade.new_version_first_view, "checking config");
-
+            tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
             // ChainConfigs will eventually be resolved
             if let Some(configs) = configs {
                 tracing::info!(?configs, "configs");
