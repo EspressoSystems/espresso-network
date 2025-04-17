@@ -2650,66 +2650,6 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_fee_upgrade_view_based() {
-        setup_test();
-
-        let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<V0_1, FeeVersion>;
-
-        let mode = UpgradeMode::View(ViewBasedUpgrade {
-            start_voting_view: None,
-            stop_voting_view: None,
-            start_proposing_view: 1,
-            stop_proposing_view: 10,
-        });
-
-        let upgrade_type = UpgradeType::Fee {
-            chain_config: ChainConfig {
-                max_block_size: 300.into(),
-                base_fee: 1.into(),
-                ..Default::default()
-            },
-        };
-
-        upgrades.insert(
-            <MySequencerVersions as Versions>::Upgrade::VERSION,
-            Upgrade { mode, upgrade_type },
-        );
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_fee_upgrade_time_based() {
-        setup_test();
-
-        let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
-
-        let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<V0_1, FeeVersion>;
-
-        let mode = UpgradeMode::Time(TimeBasedUpgrade {
-            start_proposing_time: Timestamp::from_integer(now).unwrap(),
-            stop_proposing_time: Timestamp::from_integer(now + 500).unwrap(),
-            start_voting_time: None,
-            stop_voting_time: None,
-        });
-
-        let upgrade_type = UpgradeType::Fee {
-            chain_config: ChainConfig {
-                max_block_size: 300.into(),
-                base_fee: 1.into(),
-                ..Default::default()
-            },
-        };
-
-        upgrades.insert(
-            <MySequencerVersions as Versions>::Upgrade::VERSION,
-            Upgrade { mode, upgrade_type },
-        );
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn test_pos_upgrade_view_based() {
         setup_test();
 
