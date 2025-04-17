@@ -2730,13 +2730,14 @@ mod test {
             }
         };
 
+        let wanted_view = upgrade.new_version_first_view + wait_extra_views;
         // Loop until we get the `new_version_first_view`, then test the upgrade.
         loop {
             let event = events.next().await.unwrap();
             let view_number = event.view_number;
 
             tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
-            if view_number > upgrade.new_version_first_view + wait_extra_views {
+            if view_number > wanted_view {
                 let states: Vec<_> = network
                     .peers
                     .iter()
