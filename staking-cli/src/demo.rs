@@ -318,7 +318,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_deploy_rutine() -> Result<()> {
+    async fn test_deploy_routine() -> Result<()> {
         let num_nodes = 3;
         let anvil = Anvil::new().spawn();
         let l1 = anvil.endpoint_url();
