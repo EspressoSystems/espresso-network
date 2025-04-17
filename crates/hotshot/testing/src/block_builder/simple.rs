@@ -319,7 +319,7 @@ where
 
         let mut blocks = self.blocks.write().await;
         let entry = blocks.get_mut(block_hash).ok_or(BuildError::NotFound)?;
-        entry.header_input.take().ok_or(BuildError::Missing)
+        Ok(entry.header_input.clone().ok_or(BuildError::Missing)?)
     }
 
     async fn builder_address(&self) -> Result<TYPES::BuilderSignatureKey, BuildError> {

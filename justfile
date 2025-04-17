@@ -14,7 +14,6 @@ demo-native *args: build
 
 fmt:
     cargo fmt --all
-    cargo fmt -- hotshot-testing/tests/**/*.rs
 
 lint:
     #!/usr/bin/env bash
@@ -151,7 +150,10 @@ gen-bindings:
 
     # Generate the alloy bindings
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --use "0.8.28" --alloy --alloy-version "0.12.5" --contracts ./contracts/src/ --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff
+    forge bind --skip test --skip script --use "0.8.28" --alloy --alloy-version "0.13.0" --contracts ./contracts/src/ \
+      --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
+      --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
+      --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff
 
     cargo fmt --all
     cargo sort -g -w
@@ -215,3 +217,4 @@ dev-download-srs:
     @echo "Check existence or download SRS for dev/test"
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
     2>&1 | tee log.txt
+

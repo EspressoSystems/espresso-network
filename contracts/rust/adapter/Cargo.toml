@@ -5,6 +5,10 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
+# Contract bindings docs fail to compile
+[lib]
+doctest = false
+
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -25,6 +29,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true }
 
 [[bin]]
 name = "eval-domain"
