@@ -4,7 +4,12 @@ use alloy::{
     rpc::types::TransactionReceipt,
 };
 use anyhow::Result;
-use hotshot_contract_adapter::sol_types::{EspToken, StakeTable};
+use hotshot_contract_adapter::sol_types::{
+    EspToken::{self, EspTokenErrors},
+    StakeTable::{self, StakeTableErrors},
+};
+
+use crate::l1::DecodeRevertError as _;
 
 pub async fn approve(
     provider: impl Provider,
@@ -16,7 +21,8 @@ pub async fn approve(
     Ok(token
         .approve(stake_table_address, amount)
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<EspTokenErrors>()?
         .get_receipt()
         .await?)
 }
@@ -28,12 +34,11 @@ pub async fn delegate(
     amount: U256,
 ) -> Result<TransactionReceipt> {
     let st = StakeTable::new(stake_table, provider);
-    // TODO: needs alloy 0.12: use err.as_decoded_error::<StakeTableErrors>().unwrap();
-    // to provide better error messages in case of failure
     Ok(st
         .delegate(validator_address, amount)
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
@@ -48,7 +53,8 @@ pub async fn undelegate(
     Ok(st
         .undelegate(validator_address, amount)
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
