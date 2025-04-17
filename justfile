@@ -14,7 +14,6 @@ demo-native *args: build
 
 fmt:
     cargo fmt --all
-    cargo fmt -- hotshot-testing/tests/**/*.rs
 
 lint:
     #!/usr/bin/env bash

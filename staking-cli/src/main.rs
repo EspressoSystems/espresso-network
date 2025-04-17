@@ -10,13 +10,15 @@ use alloy::{
 use anyhow::Result;
 use clap::Parser;
 use clap_serde_derive::ClapSerde;
-use hotshot_contract_adapter::sol_types::EspToken::{self, EspTokenErrors};
+use hotshot_contract_adapter::{
+    evm::DecodeRevert as _,
+    sol_types::EspToken::{self, EspTokenErrors},
+};
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
     demo::stake_for_demo,
     info::{display_stake_table, stake_table_info},
-    l1::DecodeRevertError,
     registration::{deregister_validator, register_validator, update_consensus_keys},
     Commands, Config, ValidSignerConfig,
 };
