@@ -16,6 +16,13 @@ embedded-db = ["sequencer/embedded-db"]
 
 [dependencies]
 sequencer = { path = "../sequencer" }
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "parking_lot",
+    "sync",
+] }
+anyhow = "^1.0"
 
 [profile.dev]
 # Probably the least demanding setting in terms of compilation time and memory
