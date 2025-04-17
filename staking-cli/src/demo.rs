@@ -175,6 +175,7 @@ pub async fn stake_in_contract_for_test(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn add_multiple_delegators<F: TxFiller<Ethereum>, P: Provider<Ethereum>>(
     rpc_url: &Url,
     validator_address: Address,
