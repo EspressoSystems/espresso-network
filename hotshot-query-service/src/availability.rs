@@ -1384,7 +1384,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn slow_test_old_api() {
+    async fn test_old_api() {
         setup_test();
 
         // Create the consensus network.

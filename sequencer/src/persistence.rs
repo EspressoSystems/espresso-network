@@ -1118,11 +1118,11 @@ mod persistence_tests {
     // test for validating stake table event fetching from persistence,
     // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
     #[tokio::test(flavor = "multi_thread")]
-    pub async fn slow_test_stake_table_fetching_from_persistence<P: TestablePersistence>(
+    pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
     ) -> anyhow::Result<()> {
         setup_test();
 
-        let epoch_height = 30;
+        let epoch_height = 20;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let anvil_instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
@@ -1178,7 +1178,7 @@ mod persistence_tests {
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
-            .take(60)
+            .take(40)
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
@@ -1199,7 +1199,7 @@ mod persistence_tests {
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
-            .take(95)
+            .take(65)
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
