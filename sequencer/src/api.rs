@@ -2651,41 +2651,26 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pos_upgrade_view_based() {
-        setup_test();
-
-        let upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<FeeVersion, EpochVersion>;
-
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
+        type PosUpgrade = SequencerVersions<FeeVersion, EpochVersion>;
+        test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
     }
 
     #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_marketplace_upgrade_view_based() {
-        setup_test();
-
-        let upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<EpochVersion, MarketplaceVersion>;
-
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
+        type MarketplaceUpgrade = SequencerVersions<EpochVersion, MarketplaceVersion>;
+        test_upgrade_helper::<MarketplaceUpgrade>(MarketplaceUpgrade::new()).await;
     }
 
     #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_marketplace_upgrade_time_based() {
-        setup_test();
-
-        let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<EpochVersion, MarketplaceVersion>;
-
-        upgrades.insert(
-            <MySequencerVersions as Versions>::Upgrade::VERSION,
-            Upgrade::marketplace_time_based(),
-        );
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
+        type MarketplaceUpgrade = SequencerVersions<EpochVersion, MarketplaceVersion>;
+        test_upgrade_helper::<MarketplaceUpgrade>(MarketplaceUpgrade::new()).await;
     }
 
-    async fn test_upgrade_helper<V: Versions>(upgrades: BTreeMap<Version, Upgrade>, version: V) {
+    async fn test_upgrade_helper<V: Versions>(version: V) {
+        setup_test();
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;

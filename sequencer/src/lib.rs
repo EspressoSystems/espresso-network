@@ -857,40 +857,28 @@ pub mod testing {
         }
 
         pub async fn set_upgrades(mut self, version: Version) -> Self {
-            let upgrade = if version >= EpochVersion::VERSION {
-                tracing::debug!(?version, "set_upgrade version");
-                let blocks_per_epoch = self.config.epoch_height;
-                let epoch_start_block = self.config.epoch_start_block;
+            let upgrade = match version {
+                version if version >= EpochVersion::VERSION => {
+                    tracing::debug!(?version, "upgrade version");
+                    let blocks_per_epoch = self.config.epoch_height;
+                    let epoch_start_block = self.config.epoch_start_block;
 
-                let initial_stake_table = stake_table(self.config.known_nodes_with_stake.clone());
+                    let initial_stake_table =
+                        stake_table(self.config.known_nodes_with_stake.clone());
 
-                let address = pos_deploy_routine(
-                    &self.l1_url,
-                    &self.signer,
-                    blocks_per_epoch,
-                    epoch_start_block,
-                    initial_stake_table,
-                    None,
-                )
-                .await
-                .expect("deployed pos contracts");
-                let chain_config = ChainConfig {
-                    base_fee: 0.into(),
-                    stake_table_contract: Some(address),
-                    ..Default::default()
-                };
-
-                let mode = UpgradeMode::View(ViewBasedUpgrade {
-                    start_voting_view: None,
-                    stop_voting_view: None,
-                    start_proposing_view: 200,
-                    stop_proposing_view: 1000,
-                });
-
-                let upgrade_type = UpgradeType::Epoch { chain_config };
-                Upgrade { mode, upgrade_type }
-            } else {
-                panic!("upgrade not configured for version {:?}", version)
+                    let address = pos_deploy_routine(
+                        &self.l1_url,
+                        &self.signer,
+                        blocks_per_epoch,
+                        epoch_start_block,
+                        initial_stake_table,
+                        None,
+                    )
+                    .await
+                    .expect("deployed pos contracts");
+                    Upgrade::pos_view_based(address)
+                },
+                _ => panic!("Upgrade not configured for version {:?}", version),
             };
 
             let mut upgrades = std::collections::BTreeMap::new();

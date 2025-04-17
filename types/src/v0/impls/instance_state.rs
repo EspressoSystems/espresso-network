@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use alloy::primitives::Address;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -22,7 +23,7 @@ use super::{
     traits::MembershipPersistence,
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    SeqTypes, TimeBasedUpgrade, UpgradeType,
+    SeqTypes, TimeBasedUpgrade, UpgradeType, ViewBasedUpgrade,
 };
 use crate::v0::{
     traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
@@ -347,6 +348,23 @@ impl Upgrade {
                 config.stop_voting_view = u64::MAX;
             },
         }
+    }
+    pub fn pos_view_based(address: Address) -> Upgrade {
+        let chain_config = ChainConfig {
+            base_fee: 0.into(),
+            stake_table_contract: Some(address),
+            ..Default::default()
+        };
+
+        let mode = UpgradeMode::View(ViewBasedUpgrade {
+            start_voting_view: None,
+            stop_voting_view: None,
+            start_proposing_view: 200,
+            stop_proposing_view: 1000,
+        });
+
+        let upgrade_type = UpgradeType::Epoch { chain_config };
+        Upgrade { mode, upgrade_type }
     }
 
     pub fn marketplace_time_based() -> Upgrade {
