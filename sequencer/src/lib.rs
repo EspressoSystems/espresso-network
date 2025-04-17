@@ -598,9 +598,8 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        v0_99::ChainConfig,
         EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade, UpgradeMap, UpgradeMode, UpgradeType, ViewBasedUpgrade,
+        SeqTypes, Transaction, Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -616,13 +615,13 @@ pub mod testing {
     use hotshot_builder_core_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
-    use hotshot_stake_table::vec_based::StakeTable;
+    
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
         event::LeafInfo,
-        light_client::{CircuitField, StateKeyPair, StateVerKey},
+        light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader,

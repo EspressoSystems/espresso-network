@@ -6,9 +6,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot::types::BLSPubKey;
 use hotshot_types::{
-    data::EpochNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    traits::{node_implementation::Versions, states::InstanceState},
+    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
 };
 use indexmap::IndexMap;

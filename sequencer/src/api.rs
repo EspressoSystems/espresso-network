@@ -726,8 +726,7 @@ pub mod test_helpers {
     use committable::Committable;
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, Upgrade, UpgradeMode,
-        UpgradeType, ValidatedState, ViewBasedUpgrade,
+        EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -1968,7 +1967,7 @@ mod api_tests {
 #[cfg(test)]
 mod test {
     use std::{
-        collections::{BTreeMap, HashSet},
+        collections::HashSet,
         time::Duration,
     };
 
@@ -1979,8 +1978,7 @@ mod test {
         traits::NullEventConsumer,
         v0_1::{block_reward, RewardAmount},
         BackoffParams, EpochVersion, FeeAmount, FeeVersion, Header, MarketplaceVersion,
-        MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade, UpgradeMap,
-        UpgradeMode, UpgradeType, ValidatedState, ViewBasedUpgrade, V0_1,
+        MockSequencerVersions, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -2000,16 +1998,16 @@ mod test {
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
-    use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
+    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, spawn_dishonest_peer_catchup_api, state_signature_test_helper,
         status_test_helper, submit_test_helper, TestNetwork, TestNetworkConfigBuilder,
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
-    use time::OffsetDateTime;
+    
     use tokio::time::sleep;
-    use vbs::version::{StaticVersion, StaticVersionType, Version};
+    use vbs::version::{StaticVersion, StaticVersionType};
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
