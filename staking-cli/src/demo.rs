@@ -320,6 +320,9 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
     Ok(())
 }
 
+/// Commonly used contract deployment routine.
+// TODO move to proper place for shared code. See:
+// https://github.com/EspressoSystems/espresso-network/pull/3083#discussion_r2048832370
 pub async fn pos_deploy_routine(
     l1_url: &Url,
     signer: &LocalSigner<SigningKey>, // TODO maybe from_instance(AnvilInstance)
