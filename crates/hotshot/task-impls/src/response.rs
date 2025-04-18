@@ -153,7 +153,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
         let consensus_reader = self.consensus.read().await;
         let cur_epoch = consensus_reader.cur_epoch();
         let next_epoch = cur_epoch.map(|epoch| epoch + 1);
-        let is_last_block = match consensus_reader.validated_state_map().get(&view) {
+        let is_transition_block = match consensus_reader.validated_state_map().get(&view) {
             Some(View {
                 view_inner:
                     ViewInner::Leaf {
@@ -170,7 +170,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
             // The sender belongs to the current epoch.
             target_epochs.push(cur_epoch);
         }
-        if is_last_block && self.valid_sender(sender, next_epoch).await {
+        if is_transition_block && self.valid_sender(sender, next_epoch).await {
             // It's the last block in epoch and the sender belongs to the next epoch.
             target_epochs.push(next_epoch);
         }

@@ -233,7 +233,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
         };
 
         let mut maybe_next_epoch_vid_share = None;
-        // If this is the last block in the epoch, we might need two VID shares.
+        // If this is an epoch transition block, we might need two VID shares.
         if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
             && is_epoch_transition(leaf.block_header().block_number(), self.epoch_height)
         {
@@ -289,7 +289,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     },
                     Err(e) => {
                         tracing::warn!(
-                            "This is the last block in epoch, we are in both epochs \
+                            "This is an epoch transition block, we are in both epochs \
                              but we received only one VID share. Do not vote! Error: {e:?}"
                         );
                         return;
