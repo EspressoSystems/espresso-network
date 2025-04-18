@@ -18,7 +18,6 @@ use alloy::{
     },
 };
 use anyhow::Result;
-use espresso_types::PubKey;
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::EspToken::{self, EspTokenErrors},
@@ -28,7 +27,6 @@ use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
 use hotshot_types::{
     light_client::{CircuitField, StateKeyPair, StateVerKey},
     signature_key::{BLSKeyPair, BLSPubKey},
-    traits::signature_key::SignatureKey,
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -328,6 +326,7 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
 /// Commonly used contract deployment routine.
 // TODO move to proper place for shared code. See:
 // https://github.com/EspressoSystems/espresso-network/pull/3083#discussion_r2048832370
+#[allow(clippy::too_many_arguments)]
 pub async fn pos_deploy_routine(
     l1_url: &Url,
     signer: &LocalSigner<SigningKey>, // TODO maybe from_instance(AnvilInstance)
@@ -407,9 +406,12 @@ pub async fn pos_deploy_routine(
 #[cfg(test)]
 mod test {
     use alloy::node_bindings::Anvil;
-    use espresso_types::{v0_3::StakeTable, SeqTypes};
+    use espresso_types::{v0_3::StakeTable, PubKey, SeqTypes};
     use hotshot_types::{
-        traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme},
+        traits::{
+            signature_key::{SignatureKey, StakeTableEntryType},
+            stake_table::StakeTableScheme,
+        },
         PeerConfig,
     };
 
