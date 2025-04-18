@@ -334,6 +334,7 @@ pub async fn pos_deploy_routine(
     blocks_per_epoch: u64,
     epoch_start_block: u64,
     initial_stake_table: StakeTableVecBased,
+    private_keys: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
     _multisig: Option<Address>,
     multiple_delegators: bool,
 ) -> anyhow::Result<Address> {
@@ -384,8 +385,6 @@ pub async fn pos_deploy_routine(
     )
     .await?;
 
-    let staking_priv_keys = staking_priv_keys();
-
     let stake_table_address = contracts
         .address(Contract::StakeTableProxy)
         .expect("stake table deployed");
@@ -397,32 +396,12 @@ pub async fn pos_deploy_routine(
         contracts
             .address(Contract::EspTokenProxy)
             .expect("ESP token deployed"),
-        staking_priv_keys,
+        private_keys,
         multiple_delegators,
     )
     .await?;
 
     Ok(stake_table_address)
-}
-
-fn staking_priv_keys() -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
-    let seed = [42u8; 32];
-    let num_nodes = STAKE_TABLE_CAPACITY_FOR_TEST;
-
-    let (_, priv_keys): (Vec<_>, Vec<_>) = (0..num_nodes)
-        .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed(seed, i))
-        .unzip();
-    let state_key_pairs = (0..num_nodes)
-        .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i))
-        .collect::<Vec<_>>();
-
-    let mut rng = ChaCha20Rng::from_seed([42u8; 32]); // Create a deterministic RNG
-    let eth_key_pairs = (0..num_nodes).map(|_| SigningKey::random(&mut rng).into());
-    eth_key_pairs
-        .zip(priv_keys.iter())
-        .zip(state_key_pairs.iter())
-        .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
-        .collect()
 }
 
 #[cfg(test)]
@@ -442,6 +421,26 @@ mod test {
             .map(|_| PeerConfig::default())
             .collect::<Vec<PeerConfig<SeqTypes>>>()
             .into()
+    }
+
+    fn staking_priv_keys() -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+        let seed = [42u8; 32];
+        let num_nodes = STAKE_TABLE_CAPACITY_FOR_TEST;
+
+        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..num_nodes)
+            .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed(seed, i))
+            .unzip();
+        let state_key_pairs = (0..num_nodes)
+            .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i))
+            .collect::<Vec<_>>();
+
+        let mut rng = ChaCha20Rng::from_seed([42u8; 32]); // Create a deterministic RNG
+        let eth_key_pairs = (0..num_nodes).map(|_| SigningKey::random(&mut rng).into());
+        eth_key_pairs
+            .zip(priv_keys.iter())
+            .zip(state_key_pairs.iter())
+            .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
+            .collect()
     }
 
     #[tokio::test]
@@ -464,7 +463,8 @@ mod test {
         st.advance();
         st.advance();
 
-        let _address = pos_deploy_routine(&l1, &signer, 50, 1, st, None, false)
+        let priv_keys = staking_priv_keys();
+        let _address = pos_deploy_routine(&l1, &signer, 50, 1, st, priv_keys, None, false)
             .await
             .unwrap();
 

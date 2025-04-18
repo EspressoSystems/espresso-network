@@ -820,6 +820,21 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
+    pub fn staking_priv_keys(
+        priv_keys: &[BLSPrivKey],
+        state_key_pairs: &[StateKeyPair],
+        num_nodes: usize,
+    ) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+        let seed = [42u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
+        let eth_key_pairs = (0..num_nodes).map(|_| SigningKey::random(&mut rng).into());
+        eth_key_pairs
+            .zip(priv_keys.iter())
+            .zip(state_key_pairs.iter())
+            .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
+            .collect()
+    }
+
     impl<const NUM_NODES: usize> TestConfigBuilder<NUM_NODES> {
         pub fn builder_port(mut self, builder_port: Option<u16>) -> Self {
             self.builder_port = builder_port;
@@ -865,12 +880,16 @@ pub mod testing {
                     let initial_stake_table =
                         stake_table(self.config.known_nodes_with_stake.clone());
 
+                    let staking_private_keys =
+                        staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
+
                     let address = pos_deploy_routine(
                         &self.l1_url,
                         &self.signer,
                         blocks_per_epoch,
                         epoch_start_block,
                         initial_stake_table,
+                        staking_private_keys.clone(),
                         None,
                         false,
                     )
@@ -1052,14 +1071,7 @@ pub mod testing {
         }
 
         pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
-            let seed = [42u8; 32];
-            let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
-            let eth_key_pairs = (0..self.num_nodes()).map(|_| SigningKey::random(&mut rng).into());
-            eth_key_pairs
-                .zip(self.priv_keys.iter())
-                .zip(self.state_key_pairs.iter())
-                .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
-                .collect()
+            staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
         }
 
         pub async fn init_nodes<V: Versions>(
