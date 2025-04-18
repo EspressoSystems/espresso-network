@@ -361,7 +361,7 @@ where
         };
 
         // Our block_stream is more-or-less always the same, the only difference
-        // is a an additional filter on the identified transactions being found
+        // is an additional filter on the identified transactions being found
         // In general, we use our `transaction_target` to identify the starting
         // `block_height` and `transaction_index`, and we grab up to `limit`
         // transactions from that point.  We then grab only the blocks for those
