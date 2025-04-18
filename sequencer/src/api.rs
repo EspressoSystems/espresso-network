@@ -899,6 +899,7 @@ pub mod test_helpers {
                 blocks_per_epoch,
                 epoch_start_block,
                 initial_stake_table,
+                network_config.staking_priv_keys(),
                 None,
                 multiple_delegators,
             )
