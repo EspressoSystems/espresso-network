@@ -8,7 +8,7 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::{ADVZNsProof, RewardAccount},
+    v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
     FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
 use futures::{try_join, FutureExt};
@@ -56,7 +56,7 @@ pub struct ADVZNamespaceProofQueryData {
     pub transactions: Vec<Transaction>,
 }
 
-pub(super) fn get_balance<State, Ver>() -> Result<Api<State, merklized_state::Error, Ver>>
+pub(super) fn fee<State, Ver>() -> Result<Api<State, merklized_state::Error, Ver>>
 where
     State: 'static + Send + Sync + ReadState,
     Ver: 'static + StaticVersionType,
@@ -66,7 +66,7 @@ where
         + MerklizedStateHeightPersistence,
 {
     let mut options = merklized_state::Options::default();
-    let extension = toml::from_str(include_str!("../../api/merklized_state.toml"))?;
+    let extension = toml::from_str(include_str!("../../api/fee.toml"))?;
     options.extensions.push(extension);
 
     let mut api =
@@ -81,6 +81,62 @@ where
                 .parse()
                 .map_err(|_| merklized_state::Error::Custom {
                     message: "failed to parse address".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+            let path = state.get_path(snapshot, key).await?;
+            Ok(path.elem().copied())
+        }
+        .boxed()
+    })?;
+    Ok(api)
+}
+
+pub(super) fn reward<State, Ver>() -> Result<Api<State, merklized_state::Error, Ver>>
+where
+    State: 'static + Send + Sync + ReadState,
+    Ver: 'static + StaticVersionType,
+    <State as ReadState>::State: Send
+        + Sync
+        + MerklizedStateDataSource<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
+        + MerklizedStateHeightPersistence,
+{
+    let mut options = merklized_state::Options::default();
+    let extension = toml::from_str(include_str!("../../api/reward.toml"))?;
+    options.extensions.push(extension);
+
+    let mut api = merklized_state::define_api::<
+        State,
+        SeqTypes,
+        RewardMerkleTree,
+        Ver,
+        { RewardMerkleTree::ARITY },
+    >(&options)?;
+
+    api.get("get_latest_reward_balance", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let height = state.get_last_state_height().await?;
+            let snapshot = Snapshot::Index(height as u64);
+            let key = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: "failed to parse reward address".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+            let path = state.get_path(snapshot, key).await?;
+            Ok(path.elem().copied())
+        }
+        .boxed()
+    })?
+    .get("get_reward_balance", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let height: usize = req.integer_param("height")?;
+            let snapshot = Snapshot::Index(height as u64);
+            let key = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: "failed to parse reward address".to_string(),
                     status: StatusCode::BAD_REQUEST,
                 })?;
             let path = state.get_path(snapshot, key).await?;
@@ -282,6 +338,25 @@ where
             Ok(state
                 .read(|state| state.get_stake_table_current().boxed())
                 .await)
+        }
+        .boxed()
+    })?
+    .at("get_validators", |req, state| {
+        async move {
+            let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
+            state
+                .read(|state| state.get_validators(EpochNumber::new(epoch)).boxed())
+                .await
+                .map_err(|err| hotshot_query_service::node::Error::Custom {
+                    message: format!("failed to get validators mapping: err: {err}"),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?;

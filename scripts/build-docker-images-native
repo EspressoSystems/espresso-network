@@ -2,13 +2,7 @@
 #
 # Used to build docker images in a quick way for local testing.
 #
-# On Linux:
-#
-#   - Native executables are built and patched to run inside docker.
-#   - Expected to be run in nix-shell or nix develop because it requires patchelf
-#     to be installed.
-#
-# On Darwin: the build is done inside a docker container.
+# The build is done inside a docker container.
 #
 # Usage: scripts/build-docker-images-native
 #
@@ -17,10 +11,8 @@ set -euo pipefail
 # Check kernel
 case $(uname -s) in
   Linux)
-    KERNEL=linux
     ;;
   Darwin)
-    KERNEL=darwin
     ;;
   *)
     echo "This script is only supported on Linux and Darwin"
@@ -33,7 +25,6 @@ case $(uname -m) in
   x86_64)
     ARCH=amd64
     PLATFORM=linux/amd64
-    INTERPRETER=/lib64/ld-linux-x86-64.so.2
     ;;
   arm64)
     ARCH=arm64
@@ -46,44 +37,33 @@ case $(uname -m) in
 esac
 
 # Compile binaries
-case $KERNEL in
-  linux)
-    CARGO_TARGET_DIR=target
-    cargo build --release
-    # espresso-dev-node requires embedded-db feature to build so we build it separately
-    cargo build --bin espresso-dev-node --release --features 'testing embedded-db'
-    # building sequencer-sqlite binary
-    cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml
-    ;;
-  darwin)
-  # Use a different target directory for docker builds to avoid conflicts with
-  # native builds.
-  CARGO_TARGET_DIR=target/docker
-  CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 
-  # Pull our latest devops-rust image. Using an older image may cause a failing
-  # rustup channels sync.
-  docker pull ghcr.io/espressosystems/devops-rust:stable
+# Use a different target directory for docker builds to avoid conflicts with
+# native builds.
+CARGO_TARGET_DIR=target/docker
+CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 
-  # Build in docker container:
-  #   - RUSTFLAGS is needed for compilation.
-  #   - CARGO_TARGET_DIR is set to point to the location where the hosts
-  #     CARGO_TARGET_DIR is mounted.
-  #   - PWD is mounted to /work.
-  #   - Cargo registry and git directory are mounted to avoid re-downloading
-  #     dependencies.
-  docker run \
-    -e RUSTFLAGS \
-    -e CARGO_TARGET_DIR=/work/target/docker \
-    -v "$(pwd):/work" \
-    -v "$CARGO_HOME/registry:/usr/local/cargo/registry" \
-    -v "$CARGO_HOME/git:/usr/local/cargo/git" \
-    -it ghcr.io/espressosystems/devops-rust:stable \
-    bash -c "cd /work && cargo build --release \
-    && cargo build --bin espresso-dev-node --release --all-features \
-    && cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml"
-    ;;
-esac
+# Pull our latest devops-rust image. Using an older image may cause a failing
+# rustup channels sync.
+docker pull rust
+
+# Build in docker container:
+#   - CARGO_TARGET_DIR is set to point to the location where the hosts
+#     CARGO_TARGET_DIR is mounted.
+#   - PWD is mounted to /work.
+#   - Cargo registry and git directory are mounted to avoid re-downloading
+#     dependencies.
+docker run \
+  -e CARGO_TARGET_DIR=/work/target/docker \
+  -v "$(pwd):/work" \
+  -v "$CARGO_HOME/registry:/usr/local/cargo/registry" \
+  -v "$CARGO_HOME/git:/usr/local/cargo/git" \
+  -it rust \
+  bash -c "cd /work \
+  && git config --global --add safe.directory /work \
+  && cargo build --release \
+  && cargo build --bin espresso-dev-node --release --features 'embedded-db testing' \
+  && cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml"
 
 # Copy binaries to a temporary directory.
 WORKDIR=$(mktemp -d -t espresso-docker-build-XXXXXXXX)
@@ -128,18 +108,14 @@ binaries=(
 mkdir -p "${WORKDIR}/target/$ARCH/release"
 for binary in "${binaries[@]}"; do
   cp -v "${CARGO_TARGET_DIR}/release/$binary" "${WORKDIR}/target/$ARCH/release"
-  # Patch the interpreter for running without nix inside the ubuntu based docker image.
-  if [ $KERNEL == "linux" ]; then
-    patchelf --set-interpreter "$INTERPRETER" "${WORKDIR}/target/$ARCH/release/$binary"
-  fi
 done
 
-mkdir -p ${WORKDIR}/docker/scripts
-cp -v docker/scripts/sequencer-awssecretsmanager.sh ${WORKDIR}/docker/scripts
+mkdir -p "${WORKDIR}/docker/scripts"
+cp -v docker/scripts/sequencer-awssecretsmanager.sh "${WORKDIR}/docker/scripts"
 
 # Copy the dev-node and sequencer-entrypoint script
-mkdir -p ${WORKDIR}/scripts
-cp -v scripts/sequencer-entrypoint ${WORKDIR}/scripts/
+mkdir -p "${WORKDIR}/scripts"
+cp -v scripts/sequencer-entrypoint "${WORKDIR}/scripts/"
 
 export DOCKER_BUILDKIT=1
 images=(
@@ -164,5 +140,5 @@ images=(
  update-permissioned-stake-table
 )
 for image in "${images[@]}"; do
-  docker build --platform $PLATFORM -t ghcr.io/espressosystems/espresso-sequencer/$image:main -f docker/$image.Dockerfile ${WORKDIR}
+  docker build --platform $PLATFORM -t ghcr.io/espressosystems/espresso-sequencer/$image:main -f docker/$image.Dockerfile "$WORKDIR"
 done

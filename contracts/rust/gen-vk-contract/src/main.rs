@@ -5,9 +5,9 @@
 
 use std::{fs::OpenOptions, io::Write, path::PathBuf, process::Command};
 
+use alloy::hex::ToHexExt;
 use clap::Parser;
-use ethers::core::abi::AbiEncode;
-use hotshot_contract_adapter::jellyfish::ParsedVerifyingKey;
+use hotshot_contract_adapter::sol_types::VerifyingKeySol;
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use jf_pcs::prelude::UnivariateUniversalParams;
 
@@ -45,7 +45,7 @@ fn main() {
         hotshot_state_prover::preprocess(&srs, STAKE_TABLE_CAPACITY)
             .expect("Circuit preprocess failed")
     };
-    let vk: ParsedVerifyingKey = vk.into();
+    let vk: VerifyingKeySol = vk.into();
 
     // calculate the path to solidity file
     let contract_name = if mock {
@@ -171,46 +171,46 @@ fn main() {
     }}",
     import_path,
                 contract_name,
-                vk.domain_size,
-                vk.num_inputs,
-                vk.sigma_0.x,
-                vk.sigma_0.y,
-                vk.sigma_1.x,
-                vk.sigma_1.y,
-                vk.sigma_2.x,
-                vk.sigma_2.y,
-                vk.sigma_3.x,
-                vk.sigma_3.y,
-                vk.sigma_4.x,
-                vk.sigma_4.y,
-                vk.q_1.x,
-                vk.q_1.y,
-                vk.q_2.x,
-                vk.q_2.y,
-                vk.q_3.x,
-                vk.q_3.y,
-                vk.q_4.x,
-                vk.q_4.y,
-                vk.q_m_12.x,
-                vk.q_m_12.y,
-                vk.q_m_34.x,
-                vk.q_m_34.y,
-                vk.q_o.x,
-                vk.q_o.y,
-                vk.q_c.x,
-                vk.q_c.y,
-                vk.q_h_1.x,
-                vk.q_h_1.y,
-                vk.q_h_2.x,
-                vk.q_h_2.y,
-                vk.q_h_3.x,
-                vk.q_h_3.y,
-                vk.q_h_4.x,
-                vk.q_h_4.y,
-                vk.q_ecc.x,
-                vk.q_ecc.y,
-                vk.g2_lsb.encode_hex(),
-                vk.g2_msb.encode_hex(),
+                vk.domainSize,
+                vk.numInputs,
+                vk.sigma0.x,
+                vk.sigma0.y,
+                vk.sigma1.x,
+                vk.sigma1.y,
+                vk.sigma2.x,
+                vk.sigma2.y,
+                vk.sigma3.x,
+                vk.sigma3.y,
+                vk.sigma4.x,
+                vk.sigma4.y,
+                vk.q1.x,
+                vk.q1.y,
+                vk.q2.x,
+                vk.q2.y,
+                vk.q3.x,
+                vk.q3.y,
+                vk.q4.x,
+                vk.q4.y,
+                vk.qM12.x,
+                vk.qM12.y,
+                vk.qM34.x,
+                vk.qM34.y,
+                vk.qO.x,
+                vk.qO.y,
+                vk.qC.x,
+                vk.qC.y,
+                vk.qH1.x,
+                vk.qH1.y,
+                vk.qH2.x,
+                vk.qH2.y,
+                vk.qH3.x,
+                vk.qH3.y,
+                vk.qH4.x,
+                vk.qH4.y,
+                vk.qEcc.x,
+                vk.qEcc.y,
+                vk.g2LSB.encode_hex(),
+                vk.g2MSB.encode_hex(),
             )
             .into_bytes();
 

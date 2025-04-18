@@ -45,7 +45,6 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
 
     use async_lock::RwLock;
     use espresso_types::{EpochCommittees, Leaf, Payload, SeqTypes, Transaction};
-    use ethers_conv::ToAlloy;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::vid_disperse::{ADVZDisperse, ADVZDisperseShare},
@@ -73,10 +72,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             committee.clone(),
             committee,
             node_state.l1_client,
-            node_state
-                .chain_config
-                .stake_table_contract
-                .map(|a| a.to_alloy()),
+            node_state.chain_config,
             node_state.state_catchup,
             NoStorage,
         ))),

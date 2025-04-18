@@ -36,23 +36,23 @@
 //!
 //! What states do we need to track?
 //! 1. Node Information
-//!    a. Node Identity Information
-//!    b. Node State Information (specifically voter participation, latest block
-//!       information, and staking information)
+//!    * Node Identity Information
+//!    * Node State Information (specifically voter participation, latest block
+//!      information, and staking information)
 //! 2. Network Information
-//!    a. Latest Block
-//!    b. The most recent N blocks (N assumed to be 50 at the moment)
-//!        - Information can be derived from these most recent 50 blocks
-//!          that allows us to derive histogram data, producer data, and
-//!          the most recent block information.  We might be able to get away
-//!          with just storing the header information of these blocks, since we
-//!          don't need the full block data.
-//!    c. The most recent N votes participants
-//!    d. The top block producers over the latest N blocks
-//!    e. Histogram data for the latest N blocks
-//!        - Block Size
-//!        - Block Time
-//!        - Block Space Used
+//!    * Latest Block
+//!    * The most recent N blocks (N assumed to be 50 at the moment)
+//!      - Information can be derived from these most recent 50 blocks
+//!        that allows us to derive histogram data, producer data, and
+//!        the most recent block information.  We might be able to get away
+//!        with just storing the header information of these blocks, since we
+//!        don't need the full block data.
+//!    * The most recent N votes participants
+//!    * The top block producers over the latest N blocks
+//!    * Histogram data for the latest N blocks
+//!      - Block Size
+//!      - Block Time
+//!      - Block Space Used
 //!
 //! ## Data Streams
 //!
@@ -86,37 +86,34 @@
 //! What Data Streams do we need to provide to clients?
 //!
 //! 1. Node Information
-//!     a. Node Identity Information
-//!         - Should be able to be sent in an initial batch
-//!         - Should be able to send individual updates as they occur
-//!     b. Node State Information
-//!         - Should be able to be sent in an initial batch
-//!         - Should be able to send individual updates as they occur
-//!     c. Block Information
-//!         - Should be able to be sent in an initial batch
-//!         - Should be able to send individual updates as they occur
+//!    * Node Identity Information
+//!      - Should be able to be sent in an initial batch
+//!      - Should be able to send individual updates as they occur
+//!    * Node State Information
+//!      - Should be able to be sent in an initial batch
+//!      - Should be able to send individual updates as they occur
+//!    * Block Information
+//!      - Should be able to be sent in an initial batch
+//!      - Should be able to send individual updates as they occur
 
 pub mod api;
 pub mod service;
 
+use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 use clap::Parser;
-use espresso_types::{PubKey, SeqTypes};
-use futures::channel::mpsc::{self, Sender};
-use hotshot::traits::implementations::{
-    CdnMetricsValue, CdnTopic, PushCdnNetwork, WrappedSignatureKey,
+use futures::{
+    channel::mpsc::{self, Sender},
+    StreamExt,
 };
-use hotshot_query_service::metrics::PrometheusMetrics;
-use hotshot_types::traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey};
+use service::data_state::MAX_VOTERS_HISTORY;
 use tide_disco::App;
 use tokio::spawn;
 use url::Url;
 
 use crate::{
     api::node_validator::v0::{
-        cdn::{BroadcastRollCallTask, CdnReceiveMessagesTask},
         create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
-        HotshotQueryServiceLeafStreamRetriever, ProcessProduceLeafStreamTask,
-        StateClientMessageSender, STATIC_VER_0_1,
+        BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender, STATIC_VER_0_1,
     },
     service::{client_message::InternalClientMessage, server_message::ServerMessage},
 };
@@ -175,13 +172,6 @@ pub struct Options {
         default_value = "9000"
     )]
     port: u16,
-
-    /// cdn_marshal_endpoint is the endpoint for the CDN marshal service.
-    ///
-    /// This endpoint is optional, and if it is not provided, then the CDN
-    /// service will not be utilized.
-    #[clap(long, env = "ESPRESSO_NODE_VALIDATOR_CDN_MARSHAL_ENDPOINT")]
-    cdn_marshal_endpoint: Option<String>,
 }
 
 impl Options {
@@ -199,10 +189,6 @@ impl Options {
 
     fn port(&self) -> u16 {
         self.port
-    }
-
-    fn cdn_marshal_endpoint(&self) -> &Option<String> {
-        &self.cdn_marshal_endpoint
     }
 }
 
@@ -240,20 +226,59 @@ pub async fn run_standalone_service(options: Options) {
         },
     }
 
-    let (leaf_sender, leaf_receiver) = mpsc::channel(10);
+    let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
 
-    let _process_consume_leaves = ProcessProduceLeafStreamTask::new(
-        HotshotQueryServiceLeafStreamRetriever::new(options.leaf_stream_base_url().clone()),
-        leaf_sender,
-    );
+    let client = surf_disco::Client::new(options.leaf_stream_base_url().clone());
 
-    let node_validator_task_state = match create_node_validator_processing(
+    // Let's get the current starting block height.
+    let block_height = {
+        // Retry up to 4 times to get the block height
+        let mut i = 0;
+        let block_height: Option<u64> = loop {
+            let block_height_result = client.get("status/block-height").send().await;
+            match block_height_result {
+                Ok(block_height) => break Some(block_height),
+                Err(err) => {
+                    tracing::warn!("retrieve block height request failed: {}", err);
+                },
+            };
+
+            // Sleep so we're not spamming too much with back to back requests.
+            // The sleep time delay will be 10ms, then 100ms, then 1s, then 10s.
+            tokio::time::sleep(std::time::Duration::from_millis(10u64.pow(i + 1))).await;
+            i += 1;
+
+            if i >= 4 {
+                break None;
+            }
+        };
+
+        if let Some(block_height) = block_height {
+            // We want to make sure that we have at least MAX_VOTERS_HISTORY blocks of
+            // history that we are pulling
+            block_height.saturating_sub(MAX_VOTERS_HISTORY as u64 + 1)
+        } else {
+            panic!("unable to retrieve block height");
+        }
+    };
+
+    tracing::debug!("creating stream starting at block height: {}", block_height);
+
+    let leaf_stream = SurfDiscoAvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
+    let block_stream = SurfDiscoAvailabilityAPIStream::new_block_stream(client, block_height);
+
+    let zipped_stream = leaf_stream.zip(block_stream);
+
+    let _process_consume_leaves =
+        BridgeLeafAndBlockStreamToSenderTask::new(zipped_stream, leaf_and_block_pair_sender);
+
+    let _node_validator_task_state = match create_node_validator_processing(
         NodeValidatorConfig {
             stake_table_url_base: options.stake_table_source_base_url().clone(),
             initial_node_public_base_urls: options.initial_node_public_base_urls().to_vec(),
         },
         internal_client_message_receiver,
-        leaf_receiver,
+        leaf_and_block_pair_receiver,
     )
     .await
     {
@@ -262,36 +287,6 @@ pub async fn run_standalone_service(options: Options) {
         Err(err) => {
             panic!("error defining node validator api: {:?}", err);
         },
-    };
-
-    let _cdn_tasks = if let Some(cdn_broker_url_string) = options.cdn_marshal_endpoint() {
-        let (public_key, private_key) = PubKey::generated_from_seed_indexed([1; 32], 0);
-        let cdn_network_result = PushCdnNetwork::<<SeqTypes as NodeType>::SignatureKey>::new(
-            cdn_broker_url_string.to_string(),
-            vec![CdnTopic::Global],
-            hotshot::traits::implementations::KeyPair {
-                public_key: WrappedSignatureKey(public_key),
-                private_key: private_key.clone(),
-            },
-            CdnMetricsValue::new(&PrometheusMetrics::default()),
-        );
-        let cdn_network = match cdn_network_result {
-            Ok(cdn_network) => cdn_network,
-            Err(err) => {
-                panic!("error creating cdn network: {:?}", err);
-            },
-        };
-
-        let url_sender = node_validator_task_state.url_sender.clone();
-
-        let broadcast_cdn_network = cdn_network.clone();
-        let cdn_receive_message_task = CdnReceiveMessagesTask::new(cdn_network, url_sender);
-        let broadcast_roll_call_task =
-            BroadcastRollCallTask::new(broadcast_cdn_network, public_key);
-
-        Some((broadcast_roll_call_task, cdn_receive_message_task))
-    } else {
-        None
     };
 
     let port = options.port();

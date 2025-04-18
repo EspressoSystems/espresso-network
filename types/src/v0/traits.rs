@@ -2,6 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
+use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
@@ -32,14 +33,13 @@ use hotshot_types::{
     PeerConfig,
 };
 use indexmap::IndexMap;
-use primitive_types::U256;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
-    v0_3::{IndexedStake, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     EpochVersion, SequencerVersions,
 };
 use crate::{
@@ -365,7 +365,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
 }
 
 #[async_trait]
-pub trait PersistenceOptions: Clone + Send + Sync + 'static {
+pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);
@@ -391,6 +391,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
     ) -> anyhow::Result<()>;
+
+    async fn store_events(
+        &self,
+        l1_block: u64,
+        events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()>;
+    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>>;
 }
 
 #[async_trait]
@@ -502,11 +509,11 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         };
         let validated_state = if leaf.block_header().height() == 0 {
             // If we are starting from genesis, we can provide the full state.
-            Some(Arc::new(genesis_validated_state))
+            genesis_validated_state
         } else {
             // Otherwise, we will have to construct a sparse state and fetch missing data during
             // catchup.
-            None
+            ValidatedState::from_header(leaf.block_header())
         };
 
         // If we are not starting from genesis, we start from the view following the maximum view
@@ -545,8 +552,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         let state_cert = self
             .load_state_cert()
             .await
-            .context("loading light client state update certificate")?
-            .unwrap_or(LightClientStateUpdateCertificate::genesis());
+            .context("loading light client state update certificate")?;
 
         tracing::info!(
             ?leaf,
@@ -564,7 +570,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
                 epoch_height,
                 epoch_start_block,
                 anchor_leaf: leaf,
-                anchor_state: validated_state.unwrap_or_default(),
+                anchor_state: Arc::new(validated_state),
                 anchor_state_delta: None,
                 start_view: view,
                 start_epoch: epoch,

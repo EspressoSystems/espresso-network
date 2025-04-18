@@ -1,17 +1,21 @@
 use std::{pin::Pin, sync::Arc};
 
+use alloy::primitives::Address;
 use anyhow::{bail, Context};
 use async_lock::RwLock;
 use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
-use data_source::{CatchupDataSource, StakeTableDataSource, SubmitDataSource};
+use data_source::{
+    CatchupDataSource, StakeTableDataSource, StakeTableWithEpochNumber, SubmitDataSource,
+};
 use derivative::Derivative;
 use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleTree},
+    v0_3::Validator,
     v0_99::ChainConfig,
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2,
     NodeState, PubKey, Transaction, ValidatedState,
@@ -20,6 +24,7 @@ use futures::{
     future::{BoxFuture, Future, FutureExt},
     stream::BoxStream,
 };
+use hotshot::types::BLSPubKey;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
@@ -38,6 +43,7 @@ use hotshot_types::{
     vote::HasViewNumber,
     PeerConfig,
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
@@ -66,7 +72,7 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
 struct ConsensusState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
-    state_signer: Arc<StateSigner<SequencerApiVersion>>,
+    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
     node_state: NodeState,
     network_config: NetworkConfig<SeqTypes>,
@@ -107,7 +113,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState
         }
     }
 
-    async fn state_signer(&self) -> &StateSigner<SequencerApiVersion> {
+    async fn state_signer(&self) -> &Arc<RwLock<StateSigner<SequencerApiVersion>>> {
         &self.consensus.as_ref().get().await.get_ref().state_signer
     }
 
@@ -179,10 +185,19 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
+    async fn get_stake_table_current(&self) -> StakeTableWithEpochNumber<SeqTypes> {
         self.as_ref().get_stake_table_current().await
     }
+
+    /// Get all the validators
+    async fn get_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        self.as_ref().get_validators(epoch).await
+    }
 }
+
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     StakeTableDataSource<SeqTypes> for ApiState<N, P, V>
 {
@@ -197,7 +212,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .read()
             .await
             .membership_coordinator
-            .membership_for_epoch(epoch)
+            .stake_table_for_epoch(epoch)
             .await
         else {
             return vec![];
@@ -205,11 +220,33 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         mem.stake_table().await
     }
 
-    /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(&self) -> Vec<PeerConfig<SeqTypes>> {
+    /// Get the stake table for the current epoch and return it along with the epoch number
+    async fn get_stake_table_current(&self) -> StakeTableWithEpochNumber<SeqTypes> {
         let epoch = self.consensus().await.read().await.cur_epoch().await;
 
-        self.get_stake_table(epoch).await
+        StakeTableWithEpochNumber {
+            epoch,
+            stake_table: self.get_stake_table(epoch).await,
+        }
+    }
+
+    /// Get the whole validators map
+    async fn get_validators(
+        &self,
+        epoch: <SeqTypes as NodeType>::Epoch,
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        let mem = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .await
+            .context("membership not found")?;
+
+        let r = mem.coordinator.membership().read().await;
+        r.validators(&epoch)
     }
 }
 
@@ -648,7 +685,12 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
     for ApiState<N, P, V>
 {
     async fn get_state_signature(&self, height: u64) -> Option<StateSignatureRequestBody> {
-        self.state_signer().await.get_state_signature(height).await
+        self.state_signer()
+            .await
+            .read()
+            .await
+            .get_state_signature(height)
+            .await
     }
 }
 
@@ -656,19 +698,24 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> StateSig
 pub mod test_helpers {
     use std::time::Duration;
 
+    use alloy::{
+        network::EthereumWallet,
+        node_bindings::Anvil,
+        primitives::{Address, U256},
+        providers::{Provider, ProviderBuilder},
+    };
     use committable::Committable;
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
     };
-    use ethers::{prelude::Address, utils::Anvil};
     use futures::{
         future::{join_all, FutureExt},
         stream::StreamExt,
     };
     use hotshot::types::{Event, EventType};
-    use hotshot_contract_adapter::light_client::{ParsedLightClientState, ParsedStakeTableState};
-    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
+    use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
+    use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -676,7 +723,11 @@ pub mod test_helpers {
     use itertools::izip;
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
-    use sequencer_utils::test_utils::setup_test;
+    use sequencer_utils::{
+        deployer::{self, Contract, Contracts},
+        test_utils::setup_test,
+    };
+    use staking_cli::demo::stake_in_contract_for_test;
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -690,7 +741,7 @@ pub mod test_helpers {
         network,
         persistence::no_storage,
         testing::{
-            run_marketplace_builder, run_test_builder, wait_for_decide_on_handle, TestConfig,
+            run_legacy_builder, run_marketplace_builder, wait_for_decide_on_handle, TestConfig,
             TestConfigBuilder,
         },
     };
@@ -756,19 +807,6 @@ pub mod test_helpers {
                 api_config: None,
             }
         }
-
-        pub fn with_max_block_size(&self, max_block_size: u64) -> Self {
-            let cf = ChainConfig {
-                max_block_size: max_block_size.into(),
-                ..Default::default()
-            }
-            .into();
-
-            let mut cfg = self.clone();
-            cfg.state.iter_mut().for_each(|s| s.chain_config = cf);
-
-            cfg
-        }
     }
 
     impl<const NUM_NODES: usize, P, C> TestNetworkConfigBuilder<{ NUM_NODES }, P, C>
@@ -817,6 +855,117 @@ pub mod test_helpers {
             self
         }
 
+        /// Setup for POS testing. Deploys contracts and adds the
+        /// stake table address to state. Must be called before `build()`.
+        pub async fn pos_hook<V: Versions>(
+            self,
+            multiple_delegators: bool,
+        ) -> anyhow::Result<Self> {
+            if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
+                && <V as Versions>::Base::VERSION < EpochVersion::VERSION
+            {
+                panic!("given version does not require pos deployment");
+            };
+
+            let network_config = self
+                .network_config
+                .as_ref()
+                .expect("network_config is required");
+            let signer = network_config.signer();
+            let contracts = &mut Contracts::new();
+
+            let wallet = EthereumWallet::from(signer.clone());
+            let provider = ProviderBuilder::new()
+                .wallet(wallet.clone())
+                .on_http(network_config.l1_url());
+            let admin = provider.get_accounts().await?[0];
+
+            let blocks_per_epoch = network_config.hotshot_config().epoch_height;
+            let epoch_start_block = network_config.hotshot_config().epoch_start_block;
+            let initial_stake_table = network_config.stake_table();
+            let (genesis_state, genesis_stake) =
+                legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+
+            // deploy EspToken, proxy
+            let token_proxy_addr =
+                deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+
+            // deploy light client v1, proxy
+            let lc_proxy_addr = deployer::deploy_light_client_proxy(
+                &provider,
+                contracts,
+                true, // use mock
+                genesis_state.clone(),
+                genesis_stake.clone(),
+                admin,
+                None, // no permissioned prover
+            )
+            .await?;
+            // upgrade to LightClientV2
+            deployer::upgrade_light_client_v2(
+                &provider,
+                contracts,
+                true, // use mock
+                blocks_per_epoch,
+                epoch_start_block,
+            )
+            .await?;
+
+            // deploy permissionless stake table
+            let exit_escrow_period = U256::from(300); // 300 sec
+            let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+                &provider,
+                contracts,
+                token_proxy_addr,
+                lc_proxy_addr,
+                exit_escrow_period,
+                admin,
+            )
+            .await?;
+
+            let staking_priv_keys = network_config.staking_priv_keys();
+
+            let stake_table_address = contracts
+                .address(Contract::StakeTableProxy)
+                .expect("stake table deployed");
+
+            stake_in_contract_for_test(
+                network_config.l1_url(),
+                signer,
+                stake_table_address,
+                contracts
+                    .address(Contract::EspTokenProxy)
+                    .expect("ESP token deployed"),
+                staking_priv_keys,
+                multiple_delegators,
+            )
+            .await?;
+
+            // Add stake table address to `ChainConfig` (held in state),
+            // avoiding overwrite other values. Base fee is set to `0` to avoid
+            // unnecessary catchup of `FeeState`.
+            let state = self.state[0].clone();
+            let chain_config = if let Some(cf) = state.chain_config.resolve() {
+                ChainConfig {
+                    base_fee: 0.into(),
+                    stake_table_contract: Some(stake_table_address),
+                    ..cf
+                }
+            } else {
+                ChainConfig {
+                    base_fee: 0.into(),
+                    stake_table_contract: Some(stake_table_address),
+                    ..Default::default()
+                }
+            };
+
+            let state = ValidatedState {
+                chain_config: chain_config.into(),
+                ..state
+            };
+            Ok(self.states(std::array::from_fn(|_| state.clone())))
+        }
+
         pub fn build(self) -> TestNetworkConfig<{ NUM_NODES }, P, C> {
             TestNetworkConfig {
                 state: self.state,
@@ -834,12 +983,19 @@ pub mod test_helpers {
             bind_version: V,
         ) -> Self {
             let mut cfg = cfg;
-            let mut builder_tasks = Vec::new();
             let mut marketplace_builder_url = "http://example.com".parse().unwrap();
+            let mut builder_tasks = Vec::new();
 
             if <V as Versions>::Base::VERSION < MarketplaceVersion::VERSION {
-                let (task, url) =
-                    run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
+                let chain_config = cfg.state[0].chain_config.resolve();
+                if chain_config.is_none() {
+                    tracing::warn!("Chain config is not set, using default max_block_size");
+                }
+                let (task, url) = run_legacy_builder::<{ NUM_NODES }>(
+                    cfg.network_config.builder_port(),
+                    chain_config.map(|c| *c.max_block_size),
+                )
+                .await;
                 builder_tasks.push(task);
                 cfg.network_config.set_builder_urls(vec1::vec1![url]);
             };
@@ -852,10 +1008,8 @@ pub mod test_helpers {
                 )
                 .await;
                 builder_tasks.push(task);
-                cfg.network_config
-                    .set_builder_urls(vec1::vec1![url.clone()]);
                 marketplace_builder_url = url;
-            }
+            };
 
             // add default storage if none is provided as query module is now required
             let mut opt = cfg.api_config.clone();
@@ -946,9 +1100,9 @@ pub mod test_helpers {
             }
         }
 
-        pub fn light_client_genesis(&self) -> (ParsedLightClientState, ParsedStakeTableState) {
+        pub fn light_client_genesis(&self) -> (LightClientStateSol, StakeTableStateSol) {
             let st = self.cfg.stake_table();
-            light_client_genesis_from_stake_table(st).unwrap()
+            legacy_light_client_genesis_from_stake_table(st).unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {
@@ -976,7 +1130,7 @@ pub mod test_helpers {
 
         let options = opt(Options::with_port(port));
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1028,7 +1182,7 @@ pub mod test_helpers {
 
         let options = opt(Options::with_port(port).submit(Default::default()));
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1064,7 +1218,7 @@ pub mod test_helpers {
 
         let options = opt(Options::with_port(port));
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1106,7 +1260,7 @@ pub mod test_helpers {
 
         let options = opt(Options::with_port(port));
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1151,7 +1305,7 @@ pub mod test_helpers {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.balance, 0.into());
+        assert_eq!(res.balance, U256::ZERO);
         assert_eq!(
             res.proof
                 .verify(
@@ -1164,7 +1318,7 @@ pub mod test_helpers {
                         .commitment()
                 )
                 .unwrap(),
-            0.into()
+            U256::ZERO,
         );
 
         // Undecided block state.
@@ -1255,17 +1409,17 @@ pub mod test_helpers {
 mod api_tests {
     use std::fmt::Debug;
 
+    use alloy::node_bindings::Anvil;
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
         Header, Leaf2, MockSequencerVersions, NamespaceId,
     };
-    use ethers::utils::Anvil;
     use futures::{future, stream::StreamExt};
-    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
     use hotshot_query_service::availability::{
-        AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
+        AvailabilityDataSource, BlockQueryData, StateCertQueryData, VidCommonQueryData,
     };
     use hotshot_types::{
         data::{
@@ -1327,7 +1481,7 @@ mod api_tests {
         let port = pick_unused_port().expect("No ports free");
         let storage = D::create_storage().await;
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
@@ -1474,6 +1628,7 @@ mod api_tests {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: None,
+                state_cert: None,
             },
         };
         let mut qc = QuorumCertificate2::genesis::<MockSequencerVersions>(
@@ -1687,6 +1842,7 @@ mod api_tests {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: None,
+                state_cert: None,
             },
         };
 
@@ -1717,24 +1873,95 @@ mod api_tests {
             vid_share: None,
             state: Default::default(),
             delta: None,
+            state_cert: None,
+        }
+    }
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    pub(crate) async fn test_state_cert_query<D: TestableSequencerDataSource>() {
+        setup_test();
+
+        const TEST_EPOCH_HEIGHT: u64 = 10;
+        const TEST_EPOCHS: u64 = 3;
+
+        // Start query service.
+        let port = pick_unused_port().expect("No ports free");
+        let storage = D::create_storage().await;
+        let anvil = Anvil::new().spawn();
+        let l1 = anvil.endpoint().parse().unwrap();
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1)
+            .epoch_height(TEST_EPOCH_HEIGHT)
+            .build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
+            .network_config(network_config)
+            .build();
+        let network = TestNetwork::new(config, EpochsTestVersions {}).await;
+        let mut events = network.server.event_stream().await;
+
+        // Wait until 3 epochs have passed.
+        loop {
+            let event = events.next().await.unwrap();
+            tracing::info!("Received event from handle: {event:?}");
+
+            if let hotshot::types::EventType::Decide { leaf_chain, .. } = event.event {
+                println!(
+                    "Decide event received: {:?}",
+                    leaf_chain.first().unwrap().leaf.height()
+                );
+                if leaf_chain
+                    .first()
+                    .is_some_and(|leaf| leaf.leaf.height() >= TEST_EPOCHS * TEST_EPOCH_HEIGHT)
+                {
+                    break;
+                } else {
+                    // Keep waiting
+                }
+            }
+        }
+
+        // Connect client.
+        let client: Client<ServerError, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        client.connect(None).await;
+
+        // Get the state cert for the 3rd epoch.
+        for i in 0..TEST_EPOCHS {
+            let state_cert = client
+                .get::<StateCertQueryData<SeqTypes>>(&format!("availability/state-cert/{i}"))
+                .send()
+                .await
+                .unwrap()
+                .0;
+            tracing::info!("state_cert: {:?}", state_cert);
+            assert_eq!(state_cert.epoch.u64(), i);
+            assert_eq!(
+                state_cert.light_client_state.block_height,
+                (i + 1) * TEST_EPOCH_HEIGHT - 5
+            );
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{collections::BTreeMap, time::Duration};
+    use std::{
+        collections::{BTreeMap, HashSet},
+        time::Duration,
+    };
 
+    use alloy::{node_bindings::Anvil, primitives::U256, signers::local::LocalSigner};
     use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
-        v0_1::{UpgradeMode, ViewBasedUpgrade},
-        EpochVersion, FeeAccount, FeeAmount, FeeVersion, Header, MarketplaceVersion,
-        MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
-        UpgradeType, ValidatedState, V0_1,
+        v0_1::{block_reward, RewardAmount},
+        EpochVersion, FeeAmount, FeeVersion, Header, MarketplaceVersion, MockSequencerVersions,
+        SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade, UpgradeMode, UpgradeType,
+        ValidatedState, ViewBasedUpgrade, V0_1,
     };
-    use ethers::utils::Anvil;
     use futures::{
         future::{self, join_all},
         stream::{StreamExt, TryStreamExt},
@@ -1748,6 +1975,7 @@ mod test {
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        utils::epoch_from_block_number,
         ValidatorConfig,
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
@@ -1783,7 +2011,7 @@ mod test {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         let options = Options::with_port(port);
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::<5, _, NullStateCatchup>::default()
             .api_config(options)
@@ -1827,7 +2055,7 @@ mod test {
         let options = SqlDataSource::options(&storage, Options::with_port(port));
 
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1892,7 +2120,7 @@ mod test {
             .await
             .unwrap()
             .unwrap();
-        let expected = ethers::types::U256::max_value();
+        let expected = U256::MAX;
         assert_eq!(expected, amount.0);
     }
 
@@ -1907,7 +2135,7 @@ mod test {
             SqlDataSource::leaf_only_ds_options(&storage, Options::with_port(port)).unwrap();
 
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -1994,7 +2222,7 @@ mod test {
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
@@ -2096,7 +2324,7 @@ mod test {
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         const EPOCH_HEIGHT: u64 = 5;
         let network_config = TestConfigBuilder::default()
             .l1_url(l1)
@@ -2410,7 +2638,7 @@ mod test {
 
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let chain_config: ChainConfig = ChainConfig::default();
 
@@ -2467,7 +2695,7 @@ mod test {
 
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let cf = ChainConfig {
             max_block_size: 300.into(),
@@ -2661,7 +2889,7 @@ mod test {
     ) {
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let chain_config_upgrade = upgrades
             .get(&<MockSeqVersions as Versions>::Upgrade::VERSION)
@@ -2775,7 +3003,7 @@ mod test {
             .unwrap();
         let port = pick_unused_port().unwrap();
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
@@ -2838,7 +3066,7 @@ mod test {
         // Start up again, resuming from the last decided leaf.
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
@@ -2904,7 +3132,7 @@ mod test {
 
         let options = Options::with_port(port).config(Default::default());
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -2922,7 +3150,8 @@ mod test {
         );
 
         // Fetch the config from node 1, a different node than the one running the service.
-        let validator = ValidatorConfig::generated_from_seed_indexed([0; 32], 1, 1, false);
+        let validator =
+            ValidatorConfig::generated_from_seed_indexed([0; 32], 1, U256::from(1), false);
         let config = peers.fetch_config(validator.clone()).await.unwrap();
 
         // Check the node-specific information in the recovered config is correct.
@@ -2960,7 +3189,7 @@ mod test {
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
 
         let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
+        let l1 = anvil.endpoint_url();
         let network_config = TestConfigBuilder::default().l1_url(l1).build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
@@ -2990,5 +3219,330 @@ mod test {
             }
         }
         assert_eq!(receive_count, total_count + 1);
+    }
+
+    // TODO when `EpochVersion` becomes base version we can merge this
+    // w/ above test.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_epoch_progression() {
+        setup_test();
+        let epoch_height = 35;
+        let wanted_epochs = 4;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let hotshot_event_streaming_port =
+            pick_unused_port().expect("No ports free for hotshot event streaming");
+        let hotshot_url = format!("http://localhost:{hotshot_event_streaming_port}")
+            .parse()
+            .unwrap();
+
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+
+        let hotshot_events = HotshotEvents {
+            events_service_port: hotshot_event_streaming_port,
+        };
+
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
+        let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
+
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config.clone())
+            .pos_hook::<PosVersion>(false)
+            .await
+            .expect("Pos Deployment")
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+
+        let mut subscribed_events = client
+            .socket("hotshot-events/events")
+            .subscribe::<Event<SeqTypes>>()
+            .await
+            .unwrap();
+
+        let wanted_views = epoch_height * wanted_epochs;
+
+        let mut views = HashSet::new();
+        let mut epochs = HashSet::new();
+        for _ in 0..=600 {
+            let event = subscribed_events.next().await.unwrap();
+            let event = event.unwrap();
+            let view_number = event.view_number;
+            views.insert(view_number.u64());
+
+            if let hotshot::types::EventType::Decide { qc, .. } = event.event {
+                assert!(qc.data.epoch.is_some(), "epochs are live");
+                assert!(qc.data.block_number.is_some());
+
+                let epoch = qc.data.epoch.unwrap().u64();
+                epochs.insert(epoch);
+
+                tracing::debug!(
+                    "Got decide: epoch: {:?}, block: {:?} ",
+                    epoch,
+                    qc.data.block_number
+                );
+
+                let expected_epoch =
+                    epoch_from_block_number(qc.data.block_number.unwrap(), epoch_height);
+                tracing::debug!("expected epoch: {}, qc epoch: {}", expected_epoch, epoch);
+
+                assert_eq!(expected_epoch, epoch);
+            }
+            if views.contains(&wanted_views) {
+                tracing::info!("Client Received at least desired views, exiting loop");
+                break;
+            }
+        }
+
+        // prevent false positive when we overflow the range
+        assert!(views.contains(&wanted_views), "Views are not progressing");
+        assert!(
+            epochs.contains(&wanted_epochs),
+            "Epochs are not progressing"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pos_rewards_basic() -> anyhow::Result<()> {
+        // Basic PoS rewards test:
+        // - Sets up a single validator and a single delegator (the node itself).
+        // - Sets the number of blocks in each epoch to 20.
+        // - Rewards begin applying from block 41 (i.e., the start of the 3rd epoch).
+        // - Since the validator is also the delegator, it receives the full reward.
+        // - Verifies that the reward at block height 60 matches the expected amount.
+        setup_test();
+        let epoch_height = 20;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 1;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(false)
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // first two epochs will be 1 and 2
+        // rewards are distributed starting third epoch
+        // third epoch starts from block 40 as epoch height is 20
+        // wait for atleast 65 blocks
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(65)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let staking_priv_keys = network_config.staking_priv_keys();
+        let account = staking_priv_keys[0].0.clone();
+        let address = account.address();
+
+        let block_height = 60;
+
+        // get the validator address balance at block height 60
+        let amount = client
+            .get::<Option<RewardAmount>>(&format!(
+                "reward-state/reward-balance/{block_height}/{address}"
+            ))
+            .send()
+            .await
+            .unwrap()
+            .unwrap();
+
+        tracing::info!("amount={amount:?}");
+
+        let epoch_start_block = 40;
+        // The validator gets all the block reward so we can calculate the expected amount
+        let expected_amount = block_reward().0 * (U256::from(block_height - epoch_start_block));
+
+        assert_eq!(amount.0, expected_amount, "reward amount don't match");
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
+        // This test registers 5 validators and multiple delegators for each validator.
+        // One of the delegators is also a validator.
+        // The test verifies that the cumulative reward at each block height equals the total block reward,
+        // which is a constant.
+
+        setup_test();
+        let epoch_height = 20;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 5;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(true)
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // wait for atleast 75 blocks
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(75)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        // We are going to check cumulative blocks from block height 40 to 67
+        // Basically epoch 3 and epoch 4 as epoch height is 20
+        // get all the validators
+        let validators = client
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
+            .send()
+            .await
+            .expect("failed to get validator");
+
+        // insert all the address in a map
+        // We will query the reward-balance at each block height for all the addresses
+        // We don't know which validator was the leader because we don't have access to Membership
+        let mut addresses = HashSet::new();
+        for v in validators.values() {
+            addresses.insert(v.account);
+            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        }
+        // get all the validators
+        let validators = client
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/4")
+            .send()
+            .await
+            .expect("failed to get validator");
+        for v in validators.values() {
+            addresses.insert(v.account);
+            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        }
+
+        let mut prev_cumulative_amount = U256::ZERO;
+        // Check Cumulative rewards for epoch 3
+        // i.e block height 41 to 59
+        for block in 41..=67 {
+            let mut cumulative_amount = U256::ZERO;
+            for address in addresses.clone() {
+                let amount = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state/reward-balance/{block}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .ok()
+                    .flatten();
+
+                if let Some(amount) = amount {
+                    tracing::info!("address={address}, amount= {amount}");
+                    cumulative_amount += amount.0;
+                };
+            }
+
+            // assert cumulative reward is equal to block reward
+            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward().0);
+            tracing::info!("cumulative_amount is correct for block={block}");
+            prev_cumulative_amount = cumulative_amount;
+        }
+
+        Ok(())
     }
 }

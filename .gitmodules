@@ -9,7 +9,7 @@
 [submodule "lib/bn254"]
 	path = contracts/lib/bn254
 	url = https://github.com/EspressoSystems/solidity-bn254
-	branch = commonprefix-patch
+	tag = v0.3.0
 [submodule "contracts/lib/solmate"]
 	path = contracts/lib/solmate
 	url = https://github.com/transmissions11/solmate

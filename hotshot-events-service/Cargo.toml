@@ -6,6 +6,7 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+alloy = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -13,7 +14,6 @@ clap = { workspace = true }
 derive_more = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
-primitive-types = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 snafu = "0.8"

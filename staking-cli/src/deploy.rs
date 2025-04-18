@@ -1,39 +1,27 @@
 use std::{process::Command, time::Duration};
 
 use alloy::{
-    network::{Ethereum, EthereumWallet},
+    network::{Ethereum, EthereumWallet, TransactionBuilder as _},
     primitives::{utils::parse_ether, Address, U256},
     providers::{
         ext::AnvilApi as _,
-        fillers::{
-            BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
-            WalletFiller,
-        },
+        fillers::{FillProvider, JoinFill, WalletFiller},
         layers::AnvilProvider,
-        Identity, ProviderBuilder, RootProvider, WalletProvider,
+        utils::JoinedRecommendedFillers,
+        Provider as _, ProviderBuilder, RootProvider, WalletProvider,
     },
-    transports::BoxTransport,
+    rpc::types::TransactionRequest,
 };
 use anyhow::Result;
-use contract_bindings_alloy::{
-    erc1967proxy::ERC1967Proxy,
-    esptoken::EspToken::{self, EspTokenInstance},
-    staketable::StakeTable::{self, StakeTableInstance},
-};
+use hotshot_contract_adapter::sol_types::{ERC1967Proxy, EspToken, StakeTable};
+use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng as _};
 use url::Url;
 
 use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
 
 type TestProvider = FillProvider<
-    JoinFill<
-        JoinFill<
-            Identity,
-            JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
-        >,
-        WalletFiller<EthereumWallet>,
-    >,
-    AnvilProvider<RootProvider<BoxTransport>, BoxTransport>,
-    BoxTransport,
+    JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
+    AnvilProvider<RootProvider>,
     Ethereum,
 >;
 
@@ -43,13 +31,14 @@ type SchnorrKeyPair = jf_signature::schnorr::KeyPair<ark_ed_on_bn254::EdwardsCon
 pub struct TestSystem {
     pub provider: TestProvider,
     pub deployer_address: Address,
-    pub token: EspTokenInstance<BoxTransport, TestProvider>,
-    pub stake_table: StakeTableInstance<BoxTransport, TestProvider>,
+    pub token: Address,
+    pub stake_table: Address,
     pub exit_escrow_period: Duration,
     pub rpc_url: Url,
     pub bls_key_pair: BLSKeyPair,
     pub schnorr_key_pair: SchnorrKeyPair,
     pub commission: Commission,
+    pub approval_amount: U256,
 }
 
 impl TestSystem {
@@ -57,9 +46,9 @@ impl TestSystem {
         let exit_escrow_period = Duration::from_secs(1);
         let port = portpicker::pick_unused_port().unwrap();
         // Spawn anvil
-        let provider = ProviderBuilder::new()
-            .with_recommended_fillers()
-            .on_anvil_with_wallet_and_config(|anvil| anvil.port(port).arg("--accounts").arg("20"));
+        let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
+            anvil.port(port).arg("--accounts").arg("20")
+        })?;
         let rpc_url = format!("http://localhost:{}", port).parse()?;
         let deployer_address = provider.default_signer_address();
 
@@ -70,14 +59,15 @@ impl TestSystem {
             .calldata()
             .clone();
 
-        let proxy = ERC1967Proxy::deploy(provider.clone(), *token_impl.address(), data).await?;
-        let token = EspToken::new(*proxy.address(), provider.clone());
+        let token_proxy =
+            ERC1967Proxy::deploy(provider.clone(), *token_impl.address(), data).await?;
+        let token = EspToken::new(*token_proxy.address(), provider.clone());
 
         // `StakeTable.sol`
         let stake_table_impl = StakeTable::deploy(provider.clone()).await?;
         let data = stake_table_impl
             .initialize(
-                *token.address(),
+                *token_proxy.address(),
                 "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".parse()?, // fake LC address
                 U256::from(exit_escrow_period.as_secs()),
                 deployer_address,
@@ -85,37 +75,46 @@ impl TestSystem {
             .calldata()
             .clone();
 
-        let proxy =
+        let st_proxy =
             ERC1967Proxy::deploy(provider.clone(), *stake_table_impl.address(), data).await?;
-        let stake_table = StakeTable::new(*proxy.address(), provider.clone());
 
+        let approval_amount = parse_ether("1000000")?;
         // Approve the stake table contract so it can transfer tokens to itself
         let receipt = token
-            .approve(*stake_table.address(), parse_ether("1000000")?)
+            .approve(*st_proxy.address(), approval_amount)
             .send()
             .await?
             .get_receipt()
             .await?;
         assert!(receipt.status());
 
-        let bls_key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
-        let schnorr_key_pair = SchnorrKeyPair::generate(&mut rand::thread_rng());
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let (bls_key_pair, schnorr_key_pair) = Self::gen_consensus_keys(&mut rng);
+
         Ok(Self {
             provider,
             deployer_address,
-            token,
-            stake_table,
+            token: *token_proxy.address(),
+            stake_table: *st_proxy.address(),
             exit_escrow_period,
             rpc_url,
             bls_key_pair,
             schnorr_key_pair,
             commission: Commission::try_from("12.34")?,
+            approval_amount,
         })
+    }
+
+    pub fn gen_consensus_keys(
+        rng: &mut (impl RngCore + CryptoRng),
+    ) -> (BLSKeyPair, SchnorrKeyPair) {
+        (BLSKeyPair::generate(rng), SchnorrKeyPair::generate(rng))
     }
 
     pub async fn register_validator(&self) -> Result<()> {
         let receipt = register_validator(
-            self.stake_table.clone(),
+            &self.provider,
+            self.stake_table,
             self.commission,
             self.deployer_address,
             self.bls_key_pair.clone(),
@@ -127,8 +126,8 @@ impl TestSystem {
     }
 
     pub async fn deregister_validator(&self) -> Result<()> {
-        let receipt = self
-            .stake_table
+        let stake_table = StakeTable::new(self.stake_table, &self.provider);
+        let receipt = stake_table
             .deregisterValidator()
             .send()
             .await?
@@ -139,8 +138,8 @@ impl TestSystem {
     }
 
     pub async fn delegate(&self, amount: U256) -> Result<()> {
-        let receipt = self
-            .stake_table
+        let stake_table = StakeTable::new(self.stake_table, &self.provider);
+        let receipt = stake_table
             .delegate(self.deployer_address, amount)
             .send()
             .await?
@@ -151,8 +150,8 @@ impl TestSystem {
     }
 
     pub async fn undelegate(&self, amount: U256) -> Result<()> {
-        let receipt = self
-            .stake_table
+        let stake_table = StakeTable::new(self.stake_table, &self.provider);
+        let receipt = stake_table
             .undelegate(self.deployer_address, amount)
             .send()
             .await?
@@ -162,8 +161,21 @@ impl TestSystem {
         Ok(())
     }
 
+    pub async fn transfer_eth(&self, to: Address, amount: U256) -> Result<()> {
+        let tx = TransactionRequest::default().with_to(to).with_value(amount);
+        let receipt = self
+            .provider
+            .send_transaction(tx)
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+        Ok(())
+    }
+
     pub async fn transfer(&self, to: Address, amount: U256) -> Result<()> {
-        self.token
+        let token = EspToken::new(self.token, &self.provider);
+        token
             .transfer(to, amount)
             .send()
             .await?
@@ -174,33 +186,55 @@ impl TestSystem {
 
     pub async fn warp_to_unlock_time(&self) -> Result<()> {
         self.provider
-            .anvil_increase_time(U256::from(self.exit_escrow_period.as_secs()))
+            .anvil_increase_time(self.exit_escrow_period.as_secs())
             .await?;
         Ok(())
     }
 
     pub async fn balance(&self, address: Address) -> Result<U256> {
-        Ok(self.token.balanceOf(address).call().await?._0)
+        let token = EspToken::new(self.token, &self.provider);
+        Ok(token.balanceOf(address).call().await?._0)
     }
 
-    pub fn cmd(&self) -> Command {
-        let mut cmd = escargot::CargoBuild::new()
-            .bin("staking-cli")
-            .current_release()
-            .current_target()
-            .run()
-            .unwrap()
-            .command();
+    pub async fn allowance(&self, owner: Address) -> Result<U256> {
+        let token = EspToken::new(self.token, &self.provider);
+        Ok(token.allowance(owner, self.stake_table).call().await?._0)
+    }
+
+    pub async fn approve(&self, amount: U256) -> Result<()> {
+        let token = EspToken::new(self.token, &self.provider);
+        token
+            .approve(self.stake_table, amount)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        assert!(self.allowance(self.deployer_address).await? == amount);
+        Ok(())
+    }
+
+    /// Inject test system config into CLI command via arguments
+    pub fn args(&self, cmd: &mut Command, signer: Signer) {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
-            .arg("--mnemonic")
-            .arg(DEV_MNEMONIC)
             .arg("--token-address")
-            .arg(self.token.address().to_string())
+            .arg(self.token.to_string())
             .arg("--stake-table-address")
-            .arg(self.stake_table.address().to_string());
-        cmd
+            .arg(self.stake_table.to_string())
+            .arg("--account-index")
+            .arg("0");
+
+        match signer {
+            Signer::Mnemonic => cmd.arg("--mnemonic").arg(DEV_MNEMONIC),
+            Signer::Ledger => cmd.arg("--ledger"),
+        };
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum Signer {
+    Ledger,
+    Mnemonic,
 }
 
 #[cfg(test)]
@@ -210,9 +244,10 @@ mod test {
     #[tokio::test]
     async fn test_deploy() -> Result<()> {
         let system = TestSystem::deploy().await?;
+        let stake_table = StakeTable::new(system.stake_table, &system.provider);
         // sanity check that we can fetch the exit escrow period
         assert_eq!(
-            system.stake_table.exitEscrowPeriod().call().await?._0,
+            stake_table.exitEscrowPeriod().call().await?._0,
             U256::from(system.exit_escrow_period.as_secs())
         );
 

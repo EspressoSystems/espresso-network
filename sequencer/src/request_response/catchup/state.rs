@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -8,7 +9,6 @@ use espresso_types::{
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, SeqTypes, SequencerVersions,
 };
-use ethers::types::U256;
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::ViewNumber, message::UpgradeLock, traits::node_implementation::Versions,

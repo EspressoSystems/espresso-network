@@ -10,11 +10,11 @@ name = "integration"
 path = "main.rs"
 
 [dev-dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 client = { path = "../client" }
 dotenvy = { workspace = true }
 espresso-types = { path = "../types", features = ["testing"] }
-ethers = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 surf-disco = { workspace = true }

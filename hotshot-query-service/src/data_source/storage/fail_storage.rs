@@ -29,7 +29,7 @@ use super::{
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryablePayload,
-        TransactionHash, TransactionQueryData, VidCommonQueryData,
+        StateCertQueryData, TransactionHash, TransactionQueryData, VidCommonQueryData,
     },
     data_source::{
         storage::{PayloadMetadata, VidCommonMetadata},
@@ -63,6 +63,7 @@ pub enum FailableAction {
     GetVidCommonMetadataRange,
     GetTransaction,
     FirstAvailableLeaf,
+    GetStateCert,
 
     /// Target any action for failure.
     Any,
@@ -262,7 +263,7 @@ impl<S, Types: NodeType> MigrateTypes<Types> for FailStorage<S>
 where
     S: MigrateTypes<Types> + Sync,
 {
-    async fn migrate_types(&self) -> anyhow::Result<()> {
+    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -467,6 +468,11 @@ where
             .await?;
         self.inner.first_available_leaf(from).await
     }
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+        self.maybe_fail_read(FailableAction::GetStateCert).await?;
+        self.inner.get_state_cert(epoch).await
+    }
 }
 
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>
@@ -492,6 +498,14 @@ where
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.insert_vid(common, share).await
+    }
+
+    async fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
+    ) -> anyhow::Result<()> {
+        self.maybe_fail_write(FailableAction::Any).await?;
+        self.inner.insert_state_cert(state_cert).await
     }
 }
 

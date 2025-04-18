@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use clap::Parser;
+use espresso_types::traits::SequencerPersistence;
 #[allow(unused_imports)]
 use espresso_types::{
     traits::NullEventConsumer, FeeVersion, MarketplaceVersion, SequencerVersions,
@@ -33,8 +35,30 @@ pub async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
+        #[cfg(all(feature = "fee", feature = "pos"))]
+        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                SequencerVersions::<espresso_types::FeeVersion, espresso_types::EpochVersion>::new(
+                ),
+            )
+            .await
+        },
+        #[cfg(feature = "pos")]
+        (espresso_types::EpochVersion::VERSION, _) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                // Specifying V0_0 disables upgrades
+                SequencerVersions::<espresso_types::EpochVersion, espresso_types::V0_0>::new(),
+            )
+            .await
+        },
         #[cfg(all(feature = "fee", feature = "marketplace"))]
-        (FeeVersion::VERSION, MarketplaceVersion::VERSION) => {
+        (FeeVersion::VERSION, espresso_types::MarketplaceVersion::VERSION) => {
             run(
                 genesis,
                 modules,
@@ -49,17 +73,18 @@ pub async fn main() -> anyhow::Result<()> {
                 genesis,
                 modules,
                 opt,
-                SequencerVersions::<FeeVersion, V0_0>::new(),
+                SequencerVersions::<FeeVersion, espresso_types::V0_0>::new(),
             )
             .await
         },
         #[cfg(feature = "marketplace")]
-        (MarketplaceVersion::VERSION, _) => {
+        (espresso_types::MarketplaceVersion::VERSION, _) => {
             run(
                 genesis,
                 modules,
                 opt,
-                SequencerVersions::<MarketplaceVersion, V0_0>::new(),
+                SequencerVersions::<espresso_types::MarketplaceVersion, espresso_types::V0_0>::new(
+                ),
             )
             .await
         },
@@ -179,6 +204,10 @@ where
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
     let persistence = storage_opt.create().await?;
+    persistence
+        .migrate_consensus()
+        .await
+        .context("failed to migrate consensus data")?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
@@ -297,6 +326,7 @@ mod test {
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
+            epoch_start_block: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

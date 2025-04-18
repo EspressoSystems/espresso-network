@@ -53,6 +53,7 @@ name = "simple-server"
 required-features = ["sql-data-source", "testing"]
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-lock = { workspace = true }
@@ -78,7 +79,6 @@ jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfis
     "parallel",
 ] }
 lazy_static = "1"
-primitive-types = { workspace = true }
 prometheus = { version = "0.13", default-features = false }
 semver = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }

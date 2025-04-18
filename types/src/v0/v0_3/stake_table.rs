@@ -1,18 +1,22 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
-use crate::SeqTypes;
+use crate::{traits::{MembershipPersistence, StateCatchup}, SeqTypes};
 use alloy::primitives::{Address, U256};
 use derive_more::derive::{From, Into};
 use hotshot::types::{BLSPubKey, SignatureKey};
-use hotshot_contract_adapter::stake_table::NodeInfoJf;
+use hotshot_contract_adapter::sol_types::StakeTable::{ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered};
 use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
+    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys,
+    traits::node_implementation::NodeType, PeerConfig,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use crate::v0::ChainConfig;
+use super::L1Client;
 
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
-pub struct PermissionedStakeTableEntry(NodeInfoJf);
+#[serde(bound = "TYPES: NodeType")]
+pub struct PermissionedStakeTableEntry<TYPES: NodeType>(PeerConfigKeys<TYPES>);
 
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
@@ -55,3 +59,31 @@ pub type IndexedStake = (
     EpochNumber,
     IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
 );
+
+
+
+#[derive(Clone, derive_more::derive::Debug)]
+pub struct StakeTableFetcher {
+    /// Peers for catching up the stake table
+    #[debug(skip)]
+    pub(crate) peers: Arc<dyn StateCatchup>, 
+    /// Methods for stake table persistence.
+    #[debug(skip)]
+    pub(crate)  persistence: Arc<dyn MembershipPersistence>,
+    /// L1 provider
+    pub(crate)  l1_client: L1Client,
+    /// Verifiable `ChainConfig` holding contract address
+    pub(crate) chain_config: ChainConfig,
+}
+
+// (log block number, log index)
+pub type EventKey = (u64, u64);
+
+#[derive(Clone, derive_more::From, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum StakeTableEvent {
+    Register(ValidatorRegistered),
+    Deregister(ValidatorExit),
+    Delegate(Delegated),
+    Undelegate(Undelegated),
+    KeyUpdate(ConsensusKeysUpdated),
+}

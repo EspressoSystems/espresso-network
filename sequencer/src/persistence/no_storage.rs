@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use espresso_types::{
     traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{IndexedStake, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     Leaf2, NetworkConfig,
 };
 use hotshot::{types::BLSPubKey, InitializerEpochInfo};
@@ -265,5 +265,16 @@ impl MembershipPersistence for NoStorage {
         _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
     ) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn store_events(
+        &self,
+        _l1_block: u64,
+        _events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
+        Ok(None)
     }
 }

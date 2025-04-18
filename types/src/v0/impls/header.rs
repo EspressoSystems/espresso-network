@@ -3,11 +3,10 @@ use std::fmt;
 use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use ethers_conv::ToAlloy;
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::VidCommitment,
+    data::{VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
@@ -28,19 +27,22 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    instance_state::NodeState, state::ValidatedState, v0_1::RewardMerkleCommitment, v0_3::Validator,
+    instance_state::NodeState,
+    state::ValidatedState,
+    v0_1::{RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
+    v0_3::Validator,
 };
 use crate::{
+    eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{apply_rewards, catchup_missing_accounts, first_two_epochs},
+        impls::reward::{apply_rewards, find_validator_info, first_two_epochs},
         MarketplaceVersion,
     },
     v0_1, v0_2, v0_3,
     v0_99::{self, ChainConfig, IterableFeeInfo, SolverAuctionResults},
-    BlockMerkleCommitment, BuilderSignature, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
-    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes,
-    UpgradeType,
+    BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment,
+    Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -460,7 +462,7 @@ impl Header {
         // Enforce that the sequencer block timestamp is not behind the L1 block timestamp. This can
         // only happen if our clock is badly out of sync with L1.
         if let Some(l1_block) = &l1.finalized {
-            let l1_timestamp = l1_block.timestamp.as_u64();
+            let l1_timestamp = l1_block.timestamp.to::<u64>();
             if timestamp < l1_timestamp {
                 tracing::warn!("Espresso timestamp {timestamp} behind L1 timestamp {l1_timestamp}, local clock may be out of sync");
                 timestamp = l1_timestamp;
@@ -489,7 +491,13 @@ impl Header {
         {
             if version < MarketplaceVersion::version() {
                 ensure!(
-                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table,),
+                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table)
+                        || fee_account.validate_fee_signature_with_vid_commitment(
+                            fee_signature,
+                            *fee_amount,
+                            &ns_table,
+                            &payload_commitment
+                        ),
                     "invalid builder signature"
                 );
             } else {
@@ -759,13 +767,14 @@ impl Header {
     }
 
     /// Fee paid by the block builder
-    pub fn reward_merkle_tree_root(&self) -> Option<RewardMerkleCommitment> {
+    pub fn reward_merkle_tree_root(&self) -> RewardMerkleCommitment {
+        let empty_reward_merkle_tree = RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT);
         match self {
-            Self::V1(_) => None,
-            Self::V2(_) => None,
-            Self::V3(fields) => Some(fields.reward_merkle_tree_root),
+            Self::V1(_) => empty_reward_merkle_tree.commitment(),
+            Self::V2(_) => empty_reward_merkle_tree.commitment(),
+            Self::V3(fields) => fields.reward_merkle_tree_root,
             // TODO: add reward commitment to v99
-            Self::V99(_) => None,
+            Self::V99(_) => empty_reward_merkle_tree.commitment(),
         }
     }
 
@@ -885,7 +894,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state
                 .l1_client
                 .get_finalized_deposits(
-                    addr.to_alloy(),
+                    addr,
                     parent_leaf
                         .block_header()
                         .l1_finalized()
@@ -988,6 +997,7 @@ impl BlockHeader<SeqTypes> for Header {
         metadata: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
         builder_fee: BuilderFee<SeqTypes>,
         version: Version,
+        view_number: u64,
     ) -> Result<Self, Self::Error> {
         tracing::info!("preparing to propose legacy header");
 
@@ -1020,7 +1030,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state
                 .l1_client
                 .get_finalized_deposits(
-                    addr.to_alloy(),
+                    addr,
                     parent_leaf
                         .block_header()
                         .l1_finalized()
@@ -1084,19 +1094,21 @@ impl BlockHeader<SeqTypes> for Header {
                 .context("remembering block proof")?;
         }
 
-        // TODO(abdul): Change this to version >= EpochVersion::version()
-        // when we deploy the permissionless contract in native demo
-        // so that marketplace version also supports this,
-        // and the marketplace integration test passes
         let mut leader_config = None;
         // Rewards are distributed only if the current epoch is not the first or second epoch
         // this is because we don't have stake table from the contract for the first two epochs
-        if version == EpochVersion::version()
-            && !first_two_epochs(parent_leaf.height(), instance_state).await?
+        let proposed_header_height = parent_leaf.height() + 1;
+        if version >= EpochVersion::version()
+            && !first_two_epochs(proposed_header_height, instance_state).await?
         {
             leader_config = Some(
-                catchup_missing_accounts(instance_state, &mut validated_state, parent_leaf, view)
-                    .await?,
+                find_validator_info(
+                    instance_state,
+                    &mut validated_state,
+                    parent_leaf,
+                    ViewNumber::new(view_number),
+                )
+                .await?,
             );
         };
 
@@ -1240,10 +1252,12 @@ impl ExplorerHeader<SeqTypes> for Header {
 
 #[cfg(test)]
 mod test_headers {
-
     use std::sync::Arc;
 
-    use ethers::{types::Address, utils::Anvil};
+    use alloy::{
+        node_bindings::Anvil,
+        primitives::{Address, U256},
+    };
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::test_utils::setup_test;
@@ -1429,7 +1443,7 @@ mod test_headers {
     async fn test_new_header_timestamp_behind_finalized_l1_block() {
         let l1_finalized = Some(L1BlockInfo {
             number: 1,
-            timestamp: 1.into(),
+            timestamp: U256::from(1),
             ..Default::default()
         });
         TestCase {
@@ -1557,12 +1571,9 @@ mod test_headers {
     async fn test_proposal_validation_success() {
         setup_test();
 
-        let anvil = Anvil::new().block_time(1u32).spawn();
+        let anvil = Anvil::new().block_time(1u64).spawn();
         let mut genesis_state = NodeState::mock()
-            .with_l1(
-                L1Client::new(vec![anvil.endpoint().parse().unwrap()])
-                    .expect("Failed to create L1 client"),
-            )
+            .with_l1(L1Client::new(vec![anvil.endpoint_url()]).expect("Failed to create L1 client"))
             .with_current_version(StaticVersion::<0, 1>::version());
 
         let genesis = GenesisForTest::default().await;
@@ -1616,6 +1627,7 @@ mod test_headers {
             ns_table,
             builder_fee,
             StaticVersion::<0, 1>::version(),
+            *parent_leaf.view_number() + 1,
         )
         .await
         .unwrap();
@@ -1623,7 +1635,7 @@ mod test_headers {
         let mut proposal_state = parent_state.clone();
         for fee_info in genesis_state
             .l1_client
-            .get_finalized_deposits(Address::default().to_alloy(), None, 0)
+            .get_finalized_deposits(Address::default(), None, 0)
             .await
         {
             proposal_state.insert_fee_deposit(fee_info).unwrap();
@@ -1639,6 +1651,7 @@ mod test_headers {
                 &parent_leaf,
                 &proposal,
                 StaticVersion::<0, 1>::version(),
+                parent_leaf.view_number() + 1,
             )
             .await
             .unwrap()

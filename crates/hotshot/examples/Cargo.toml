@@ -1,0 +1,112 @@
+[package]
+authors = { workspace = true }
+description = "HotShot Examples and binaries"
+edition = { workspace = true }
+name = "hotshot-examples"
+readme = "README.md"
+version = { workspace = true }
+license = "MIT"
+
+[features]
+default = ["docs", "doc-images", "hotshot-testing"]
+
+# Build the extended documentation
+docs = []
+doc-images = []
+hotshot-testing = ["hotshot/hotshot-testing"]
+fixed-leader-election = []
+
+# Common
+[[example]]
+name = "orchestrator"
+path = "orchestrator.rs"
+
+# Libp2p
+[[example]]
+name = "validator-libp2p"
+path = "libp2p/validator.rs"
+
+[[example]]
+name = "multi-validator-libp2p"
+path = "libp2p/multi-validator.rs"
+
+[[example]]
+name = "all-libp2p"
+path = "libp2p/all.rs"
+
+# Combined
+[[example]]
+name = "all-combined"
+path = "combined/all.rs"
+
+[[example]]
+name = "multi-validator-combined"
+path = "combined/multi-validator.rs"
+
+[[example]]
+name = "validator-combined"
+path = "combined/validator.rs"
+
+[[example]]
+name = "orchestrator-combined"
+path = "combined/orchestrator.rs"
+
+# Push CDN
+[[example]]
+name = "all-push-cdn"
+path = "push-cdn/all.rs"
+
+[[example]]
+name = "validator-push-cdn"
+path = "push-cdn/validator.rs"
+
+[[example]]
+name = "multi-validator-push-cdn"
+path = "push-cdn/multi-validator.rs"
+
+[[example]]
+name = "cdn-broker"
+path = "push-cdn/broker.rs"
+
+[[example]]
+name = "cdn-marshal"
+path = "push-cdn/marshal.rs"
+
+[[example]]
+name = "whitelist-push-cdn"
+path = "push-cdn/whitelist-adapter.rs"
+
+[dependencies]
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.7", package = "cdn-broker", features = ["global-permits"] }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.7", package = "cdn-marshal" }
+chrono = { workspace = true }
+clap = { workspace = true, optional = true }
+futures = { workspace = true }
+hotshot = { workspace = true }
+hotshot-example-types = { workspace = true }
+hotshot-libp2p-networking = { workspace = true }
+hotshot-orchestrator = { workspace = true }
+hotshot-testing = { workspace = true }
+hotshot-types = { workspace = true }
+local-ip-address = "0.6"
+portpicker = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
+sha2 = { workspace = true }
+surf-disco = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+
+tracing = { workspace = true }
+url = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+toml = { workspace = true }
+tracing-subscriber = "0.3"
+

@@ -1,6 +1,7 @@
 use crate::{v0_1, v0_99, BlockSize, ChainId, FeeAccount, FeeAmount};
+use alloy::primitives::{Address, U256};
+use alloy_compat::ethers_serde;
 use committable::{Commitment, Committable};
-use ethers::types::{Address, U256};
 use itertools::Either;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,7 @@ pub struct ChainConfig {
     /// This is optional so that fees can easily be toggled on/off, with no need to deploy a
     /// contract when they are off. In a future release, after fees are switched on and thoroughly
     /// tested, this may be made mandatory.
+    #[serde(with = "ethers_serde::option_address")]
     pub fee_contract: Option<Address>,
 
     /// Account that receives sequencing fees.
@@ -35,6 +37,7 @@ pub struct ChainConfig {
     /// This is optional so that stake can easily be toggled on/off, with no need to deploy a
     /// contract when they are off. In a future release, after PoS is switched on and thoroughly
     /// tested, this may be made mandatory.
+    #[serde(with = "ethers_serde::option_address")]
     pub stake_table_contract: Option<Address>,
 }
 
