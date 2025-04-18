@@ -10,7 +10,7 @@ use espresso_types::{
     parse_duration, parse_size,
     traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
-    v0_3::{IndexedStake, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
 };
 use futures::stream::StreamExt;
@@ -2077,6 +2077,43 @@ impl MembershipPersistence for Persistence {
         )
         .await?;
         tx.commit().await
+    }
+
+    async fn store_events(
+        &self,
+        l1_block: u64,
+        events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()> {
+        let events_json = serde_json::to_value(&events).context("failed to serialize events ")?;
+
+        let mut tx = self.db.write().await?;
+
+        tx.upsert(
+            "stake_table_events",
+            ["id", "l1_block", "data"],
+            ["id"],
+            [(0_i64, l1_block as i64, events_json)],
+        )
+        .await?;
+        tx.commit().await
+    }
+
+    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
+        let mut tx = self.db.write().await?;
+
+        let row = query("SELECT l1_block, data FROM stake_table_events WHERE id = 0")
+            .fetch_optional(tx.as_mut())
+            .await?;
+
+        match row {
+            None => Ok(None),
+            Some(row) => {
+                let l1 = row.try_get::<i64, _>("l1_block")?;
+                let events = row.try_get::<serde_json::Value, _>("data")?;
+                let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_value(events)?;
+                Ok(Some((l1 as u64, events)))
+            },
+        }
     }
 }
 

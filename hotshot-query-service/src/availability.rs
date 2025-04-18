@@ -1006,8 +1006,8 @@ mod test {
         let port = pick_unused_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         let options = Options {
-            small_object_range_limit: 300,
-            large_object_range_limit: 200,
+            small_object_range_limit: 500,
+            large_object_range_limit: 500,
             ..Default::default()
         };
 
@@ -1395,8 +1395,8 @@ mod test {
         let port = pick_unused_port().unwrap();
 
         let options = Options {
-            small_object_range_limit: 300,
-            large_object_range_limit: 200,
+            small_object_range_limit: 500,
+            large_object_range_limit: 500,
             ..Default::default()
         };
 
