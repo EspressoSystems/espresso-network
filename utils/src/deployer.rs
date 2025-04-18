@@ -214,6 +214,8 @@ pub(crate) async fn deploy_light_client_contract(
         )
         .await?;
 
+    assert!(verify_contract_address(&provider, plonk_verifier_addr.clone()).await?);
+
     // when generate alloy's bindings, we supply a placeholder address, now we modify the actual
     // bytecode with deployed address of the library.
     let target_lc_bytecode = if mock {
@@ -316,6 +318,22 @@ pub async fn deploy_light_client_proxy(
             .await?;
     }
 
+    // post deploy verification checks
+    assert_eq!(lc_proxy.getVersion().call().await?.majorVersion, 1);
+    assert_eq!(lc_proxy.owner().call().await?._0, admin);
+    assert_eq!(
+        lc_proxy.permissionedProver().call().await?._0,
+        prover.unwrap()
+    );
+    assert_eq!(
+        lc_proxy.stateHistoryRetentionPeriod().call().await?._0,
+        864000
+    );
+    assert_eq!(
+        lc_proxy.currentBlockNumber().call().await?._0,
+        U256::from(provider.get_block_number().await?)
+    );
+
     Ok(lc_proxy_addr)
 }
 
@@ -334,6 +352,8 @@ pub async fn upgrade_light_client_v2(
         None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
+            let state_history_retention_period =
+                proxy.stateHistoryRetentionPeriod().call().await?._0;
             // first deploy PlonkVerifierV2.sol
             let pv2_addr = contracts
                 .deploy(
@@ -341,6 +361,9 @@ pub async fn upgrade_light_client_v2(
                     PlonkVerifierV2::deploy_builder(&provider),
                 )
                 .await?;
+
+            assert!(verify_contract_address(&provider, pv2_addr.clone()).await?);
+
             // then deploy LightClientV2.sol
             let target_lcv2_bytecode = if is_mock {
                 LightClientV2Mock::BYTECODE.encode_hex()
@@ -396,6 +419,26 @@ pub async fn upgrade_light_client_v2(
                 .get_receipt()
                 .await?;
             if receipt.inner.is_success() {
+                // post deploy verification checks
+                let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
+                assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+                assert_eq!(
+                    proxy_as_v2.blocksPerEpoch().call().await?._0,
+                    blocks_per_epoch
+                );
+                assert_eq!(
+                    proxy_as_v2.epochStartBlock().call().await?._0,
+                    epoch_start_block
+                );
+                assert_eq!(
+                    proxy_as_v2.stateHistoryRetentionPeriod().call().await?._0,
+                    state_history_retention_period
+                );
+                assert_eq!(
+                    proxy_as_v2.currentBlockNumber().call().await?._0,
+                    U256::from(provider.get_block_number().await?)
+                );
+
                 tracing::info!(%lcv2_addr, "LightClientProxy successfully upgrade to: ")
             } else {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
@@ -439,6 +482,11 @@ pub async fn deploy_fee_contract_proxy(
     if !is_proxy_contract(&provider, fee_proxy_addr).await? {
         panic!("FeeContractProxy detected not as a proxy, report error!");
     }
+
+    // post deploy verification checks
+    let fee_proxy = FeeContract::new(fee_proxy_addr, &provider);
+    assert_eq!(fee_proxy.getVersion().call().await?.majorVersion, 1);
+    assert_eq!(fee_proxy.owner().call().await?._0, admin);
 
     Ok(fee_proxy_addr)
 }
@@ -486,6 +534,20 @@ pub async fn deploy_token_proxy(
     if !is_proxy_contract(&provider, token_proxy_addr).await? {
         panic!("EspTokenProxy detected not as a proxy, report error!");
     }
+
+    // post deploy verification checks
+    let token_proxy = EspToken::new(token_proxy_addr, &provider);
+    assert_eq!(token_proxy.getVersion().call().await?.majorVersion, 1);
+    assert_eq!(token_proxy.owner().call().await?._0, owner);
+    assert_eq!(token_proxy.symbol().call().await?._0, "ESP");
+    assert_eq!(token_proxy.decimals().call().await?._0, 18);
+    assert_eq!(token_proxy.name().call().await?._0, "Espresso Token");
+    let total_supply = token_proxy.totalSupply().call().await?._0;
+    assert_eq!(
+        token_proxy.balanceOf(init_grant_recipient).call().await?._0,
+        total_supply
+    );
+
     Ok(token_proxy_addr)
 }
 
@@ -517,6 +579,16 @@ pub async fn deploy_stake_table_proxy(
     if !is_proxy_contract(&provider, st_proxy_addr).await? {
         panic!("StakeTableProxy detected not as a proxy, report error!");
     }
+
+    let st_proxy = StakeTable::new(st_proxy_addr, &provider);
+    assert_eq!(st_proxy.getVersion().call().await?.majorVersion, 1);
+    assert_eq!(st_proxy.owner().call().await?._0, owner);
+    assert_eq!(st_proxy.token().call().await?._0, token_addr);
+    assert_eq!(st_proxy.lightClient().call().await?._0, light_client_addr);
+    assert_eq!(
+        st_proxy.exitEscrowPeriod().call().await?._0,
+        exit_escrow_period
+    );
 
     Ok(st_proxy_addr)
 }
@@ -596,6 +668,19 @@ pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result
     Ok(impl_address != Address::default())
 }
 
+pub async fn verify_contract_address(provider: impl Provider, address: Address) -> Result<bool> {
+    if address == Address::ZERO {
+        return Ok(false);
+    }
+
+    let code = provider.get_code_at(address).await?;
+    if code.is_empty() {
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
@@ -603,6 +688,35 @@ mod tests {
 
     use super::*;
     use crate::test_utils::setup_test;
+
+    #[tokio::test]
+    async fn test_verify_contract_address() -> Result<(), anyhow::Error> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+
+        // test with zero address returns false
+        let zero_address = Address::ZERO;
+        assert_eq!(
+            verify_contract_address(&provider, zero_address).await?,
+            false
+        );
+
+        // Test with a non-contract address (e.g., a random address)
+        let random_address = Address::random();
+        assert_eq!(
+            verify_contract_address(&provider, random_address).await?,
+            false
+        );
+
+        // Deploy a contract and test with its address
+        let fee_contract = FeeContract::deploy(&provider).await?;
+        let contract_address = *fee_contract.address();
+        assert_eq!(
+            verify_contract_address(&provider, contract_address).await?,
+            true
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_is_proxy_contract() -> Result<()> {
@@ -828,6 +942,12 @@ mod tests {
         )
         .await?;
 
+        let state_history_retention_period = LightClient::new(lc_proxy_addr, &provider)
+            .stateHistoryRetentionPeriod()
+            .call()
+            .await?
+            ._0;
+
         // then upgrade to v2
         upgrade_light_client_v2(
             &provider,
@@ -854,6 +974,10 @@ mod tests {
         assert_eq!(lc.getVersion().call().await?.majorVersion, 2);
         assert_eq!(lc.blocksPerEpoch().call().await?._0, blocks_per_epoch);
         assert_eq!(lc.epochStartBlock().call().await?._0, epoch_start_block);
+        assert_eq!(
+            lc.stateHistoryRetentionPeriod().call().await?._0,
+            state_history_retention_period
+        );
 
         // test mock-specific functions
         if is_mock {
