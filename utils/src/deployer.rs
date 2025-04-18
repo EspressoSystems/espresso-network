@@ -565,6 +565,10 @@ pub async fn deploy_stake_table_proxy(
         .await?;
     let stake_table = StakeTable::new(stake_table_addr, &provider);
 
+    // verify light client and token addresses are contracts
+    assert!(verify_contract_address(&provider, light_client_addr).await?);
+    assert!(verify_contract_address(&provider, token_addr).await?);
+
     let init_data = stake_table
         .initialize(token_addr, light_client_addr, exit_escrow_period, owner)
         .calldata()
