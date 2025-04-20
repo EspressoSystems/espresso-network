@@ -391,6 +391,27 @@ export PLONK_VERIFIER_V2_ADDRESS=
 source .env.contracts.arbSepolia && forge clean && forge script contracts/script/LightClientArbitrumStaging.s.sol:UpgradeLightClientArbitrumV2Script --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
 ```
 
+## Upgrade to LightClientArbitrumV2 Patch (no multisig admin)
+
+This patch adds functionality to modify the `epochStartBlock` and it also calls that method `updateEpochStartBlock(...)`
+to set the new epoch start block upon upgrading. So ensure the new `EPOCH_START_BLOCK` value is in the env file.
+
+1. Ensure that you've deployed [`PlonkVerifierV2`](#deploy-plonkverifierv2)
+
+2. In the `.env.contracts.arbSepolia` file, add/update the following:
+
+```bash
+export LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS=
+export PLONK_VERIFIER_V2_ADDRESS=
+export EPOCH_START_BLOCK=
+```
+
+3. Then in a terminal, run the following:
+
+```bash
+source .env.contracts.arbSepolia && forge clean && forge script contracts/script/LightClientArbitrumStaging.s.sol:UpgradeLightClientArbitrumV2PatchScript --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
+```
+
 # Known Errors
 
 1. Error Parsing ABI for contract Scenario: You ran `just gen-bindings` Example:
