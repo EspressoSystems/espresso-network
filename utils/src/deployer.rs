@@ -214,7 +214,7 @@ pub(crate) async fn deploy_light_client_contract(
         )
         .await?;
 
-    assert!(verify_contract_address(&provider, plonk_verifier_addr.clone()).await?);
+    assert!(is_contract(&provider, plonk_verifier_addr.clone()).await?);
 
     // when generate alloy's bindings, we supply a placeholder address, now we modify the actual
     // bytecode with deployed address of the library.
@@ -321,10 +321,9 @@ pub async fn deploy_light_client_proxy(
     // post deploy verification checks
     assert_eq!(lc_proxy.getVersion().call().await?.majorVersion, 1);
     assert_eq!(lc_proxy.owner().call().await?._0, admin);
-    assert_eq!(
-        lc_proxy.permissionedProver().call().await?._0,
-        prover.unwrap()
-    );
+    if let Some(prover) = prover {
+        assert_eq!(lc_proxy.permissionedProver().call().await?._0, prover);
+    }
     assert_eq!(
         lc_proxy.stateHistoryRetentionPeriod().call().await?._0,
         864000
@@ -362,7 +361,7 @@ pub async fn upgrade_light_client_v2(
                 )
                 .await?;
 
-            assert!(verify_contract_address(&provider, pv2_addr.clone()).await?);
+            assert!(is_contract(&provider, pv2_addr.clone()).await?);
 
             // then deploy LightClientV2.sol
             let target_lcv2_bytecode = if is_mock {
@@ -566,8 +565,8 @@ pub async fn deploy_stake_table_proxy(
     let stake_table = StakeTable::new(stake_table_addr, &provider);
 
     // verify light client and token addresses are contracts
-    assert!(verify_contract_address(&provider, light_client_addr).await?);
-    assert!(verify_contract_address(&provider, token_addr).await?);
+    assert!(is_contract(&provider, light_client_addr).await?);
+    assert!(is_contract(&provider, token_addr).await?);
 
     let init_data = stake_table
         .initialize(token_addr, light_client_addr, exit_escrow_period, owner)
@@ -672,7 +671,7 @@ pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result
     Ok(impl_address != Address::default())
 }
 
-pub async fn verify_contract_address(provider: impl Provider, address: Address) -> Result<bool> {
+pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bool> {
     if address == Address::ZERO {
         return Ok(false);
     }
@@ -694,30 +693,21 @@ mod tests {
     use crate::test_utils::setup_test;
 
     #[tokio::test]
-    async fn test_verify_contract_address() -> Result<(), anyhow::Error> {
+    async fn test_is_contract() -> Result<(), anyhow::Error> {
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
 
         // test with zero address returns false
         let zero_address = Address::ZERO;
-        assert_eq!(
-            verify_contract_address(&provider, zero_address).await?,
-            false
-        );
+        assert_eq!(is_contract(&provider, zero_address).await?, false);
 
         // Test with a non-contract address (e.g., a random address)
         let random_address = Address::random();
-        assert_eq!(
-            verify_contract_address(&provider, random_address).await?,
-            false
-        );
+        assert_eq!(is_contract(&provider, random_address).await?, false);
 
         // Deploy a contract and test with its address
         let fee_contract = FeeContract::deploy(&provider).await?;
         let contract_address = *fee_contract.address();
-        assert_eq!(
-            verify_contract_address(&provider, contract_address).await?,
-            true
-        );
+        assert_eq!(is_contract(&provider, contract_address).await?, true);
 
         Ok(())
     }
