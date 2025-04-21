@@ -4,7 +4,13 @@ use alloy::{
 };
 use anyhow::Result;
 use ark_ec::CurveGroup;
-use hotshot_contract_adapter::sol_types::{EdOnBN254PointSol, G1PointSol, G2PointSol, StakeTable};
+use hotshot_contract_adapter::{
+    evm::DecodeRevert as _,
+    sol_types::{
+        EdOnBN254PointSol, G1PointSol, G2PointSol,
+        StakeTable::{self, StakeTableErrors},
+    },
+};
 use jf_signature::constants::CS_ID_BLS_BN254;
 
 use crate::{parse::Commission, BLSKeyPair, StateVerKey};
@@ -41,7 +47,8 @@ pub async fn register_validator(
             commission.to_evm(),
         )
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
@@ -59,7 +66,8 @@ pub async fn update_consensus_keys(
     Ok(stake_table
         .updateConsensusKeys(bls_vk_sol.into(), schnorr_vk_sol.into(), sig_sol.into())
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
@@ -72,7 +80,8 @@ pub async fn deregister_validator(
     Ok(stake_table
         .deregisterValidator()
         .send()
-        .await?
+        .await
+        .maybe_decode_revert::<StakeTableErrors>()?
         .get_receipt()
         .await?)
 }
@@ -82,7 +91,7 @@ mod test {
     use rand::{rngs::StdRng, SeedableRng as _};
 
     use super::*;
-    use crate::{deploy::TestSystem, l1::decode_log};
+    use crate::deploy::TestSystem;
 
     #[tokio::test]
     async fn test_register_validator() -> Result<()> {
@@ -103,7 +112,9 @@ mod test {
         .await?;
         assert!(receipt.status());
 
-        let event = decode_log::<StakeTable::ValidatorRegistered>(&receipt).unwrap();
+        let event = receipt
+            .decoded_log::<StakeTable::ValidatorRegistered>()
+            .unwrap();
         assert_eq!(event.account, validator_address);
         assert_eq!(event.commission, system.commission.to_evm());
 
@@ -122,7 +133,7 @@ mod test {
         let receipt = deregister_validator(&system.provider, system.stake_table).await?;
         assert!(receipt.status());
 
-        let event = decode_log::<StakeTable::ValidatorExit>(&receipt).unwrap();
+        let event = receipt.decoded_log::<StakeTable::ValidatorExit>().unwrap();
         assert_eq!(event.validator, system.deployer_address);
 
         Ok(())
@@ -148,7 +159,9 @@ mod test {
         .await?;
         assert!(receipt.status());
 
-        let event = decode_log::<StakeTable::ConsensusKeysUpdated>(&receipt).unwrap();
+        let event = receipt
+            .decoded_log::<StakeTable::ConsensusKeysUpdated>()
+            .unwrap();
         assert_eq!(event.account, system.deployer_address);
 
         assert_eq!(event.blsVK, bls_vk_sol.into());

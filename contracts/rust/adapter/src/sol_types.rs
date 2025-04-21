@@ -201,3 +201,186 @@ impl From<G1PointSol> for staketable::BN254::G1Point {
         unsafe { std::mem::transmute(v) }
     }
 }
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use self::{
+    staketable::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
+    StakeTable::{
+        ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
+    },
+};
+
+impl PartialEq for ValidatorRegistered {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVk == other.blsVk
+            && self.schnorrVk == other.schnorrVk
+            && self.commission == other.commission
+    }
+}
+
+impl PartialEq for ConsensusKeysUpdated {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
+    }
+}
+
+impl Serialize for ValidatorRegistered {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.account, &self.blsVk, &self.schnorrVk, self.commission).serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for ValidatorRegistered {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (account, blsVk, schnorrVk, commission) = <(_, _, _, u16)>::deserialize(deserializer)?;
+        Ok(ValidatorRegistered {
+            account,
+            blsVk,
+            schnorrVk,
+            commission,
+        })
+    }
+}
+
+impl Serialize for EdOnBN254Point {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (self.x, self.y).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for EdOnBN254Point {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (x, y) = Deserialize::deserialize(deserializer)?;
+        Ok(EdOnBN254Point { x, y })
+    }
+}
+
+impl Serialize for G2Point {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.x0, &self.x1, &self.y0, &self.y1).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for G2Point {
+    fn deserialize<D>(deserializer: D) -> Result<G2Point, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (x0, x1, y0, y1) = Deserialize::deserialize(deserializer)?;
+
+        Ok(G2Point { x0, x1, y0, y1 })
+    }
+}
+
+impl Serialize for ValidatorExit {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.validator,).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidatorExit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (validator,): (alloy::sol_types::private::Address,) =
+            Deserialize::deserialize(deserializer)?;
+        Ok(ValidatorExit { validator })
+    }
+}
+
+impl Serialize for Delegated {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.delegator, &self.validator, &self.amount).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Delegated {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (delegator, validator, amount) = Deserialize::deserialize(deserializer)?;
+
+        Ok(Delegated {
+            delegator,
+            validator,
+            amount,
+        })
+    }
+}
+
+impl Serialize for Undelegated {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.delegator, &self.validator, &self.amount).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Undelegated {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (delegator, validator, amount) = Deserialize::deserialize(deserializer)?;
+
+        Ok(Undelegated {
+            delegator,
+            validator,
+            amount,
+        })
+    }
+}
+
+impl Serialize for ConsensusKeysUpdated {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.account, &self.blsVK, &self.schnorrVK).serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for ConsensusKeysUpdated {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (account, blsVK, schnorrVK) = Deserialize::deserialize(deserializer)?;
+
+        Ok(ConsensusKeysUpdated {
+            account,
+            blsVK,
+            schnorrVK,
+        })
+    }
+}
