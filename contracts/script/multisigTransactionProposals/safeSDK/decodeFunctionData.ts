@@ -13,6 +13,9 @@ async function decodeProposalData() {
     if (!contractName || !encodedData) {
       throw new Error("Contract name and encoded data are required");
     }
+    if (!ethers.isHexString(encodedData)) {
+      throw new Error("Encoded data must be a hex string");
+    }
 
     contractName = contractName.replace(".sol", "");
 
@@ -28,7 +31,11 @@ async function decodeProposalData() {
       console.log("No function call found in the encoded data");
     }
   } catch (error: any) {
-    console.error("Error Message:", error.shortMessage);
+    if (error.shortMessage) {
+      console.error("Error Message:", error.shortMessage);
+    } else {
+      console.error("Error Message:", error);
+    }
     console.error("Ensure the contract name is correct and the encoded data is valid e.g. it must start with 0x");
   }
 }
