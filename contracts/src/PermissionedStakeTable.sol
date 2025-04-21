@@ -48,7 +48,8 @@ contract PermissionedStakeTable is Ownable, InitializedAt {
     // internal methods
 
     function insert(NodeInfo[] memory newStakers) internal {
-        // TODO: revert if array empty
+        require(newStakers.length > 0, "PermissionedStakeTable: no stakers to insert");
+
         for (uint256 i = 0; i < newStakers.length; i++) {
             bytes32 stakerID = _hashBlsKey(newStakers[i].blsVK);
             if (stakers[stakerID]) {
@@ -59,7 +60,8 @@ contract PermissionedStakeTable is Ownable, InitializedAt {
     }
 
     function remove(BN254.G2Point[] memory stakersToRemove) internal {
-        // TODO: revert if array empty
+        require(stakersToRemove.length > 0, "PermissionedStakeTable: no stakers to remove");
+
         for (uint256 i = 0; i < stakersToRemove.length; i++) {
             bytes32 stakerID = _hashBlsKey(stakersToRemove[i]);
             if (!stakers[stakerID]) {
