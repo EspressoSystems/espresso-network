@@ -149,19 +149,10 @@ contract LightClientContractUpgradeToV2Script is Script {
 /// @notice Upgrades the light client contract first by deploying the new implementation
 /// and then executing the upgrade via the Safe Multisig wallet using the SAFE SDK.
 contract LightClientContractUpgradeToV2PatchScript is Script {
-    string internal originalContractName = "LightClient.sol:LightClient";
-    string internal upgradeContractName = "LightClientV2.sol:LightClientV2";
-
     /// @dev First the new implementation contract is deployed via the deployer wallet.
     /// It then uses the SAFE SDK via an ffi command to perform the upgrade through a Safe Multisig
     /// wallet.
     function run() public returns (address implementationAddress, bytes memory result) {
-        Options memory opts;
-        opts.referenceContract = originalContractName;
-
-        // validate that the new implementation contract is upgrade safe
-        // Upgrades.validateUpgrade(upgradeContractName, opts);
-
         // get the deployer to depley the new implementation contract
         address deployer;
         string memory ledgerCommand = vm.envString("USE_HARDWARE_WALLET");
