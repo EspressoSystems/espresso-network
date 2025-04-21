@@ -961,7 +961,9 @@ impl L1State {
             self.snapshot,
         );
 
-        self.last_finalized = Some(block.info.number());
+        if Some(block.info.number()) > self.last_finalized {
+            self.last_finalized = Some(block.info.number());
+        }
 
         if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block) {
             if old_number == block.info.number && block != old_block {

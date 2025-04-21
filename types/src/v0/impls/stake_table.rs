@@ -366,68 +366,85 @@ impl StakeTableFetcher {
         }
     }
 
+    /// Periodically updates the stake table from the L1 contract.
+    /// This function polls the finalized block number from the L1 client,
+    /// checks if enough blocks have passed i.e blocks passed >= `l1_events_max_block_range`,
+    /// and fetches stake table updates accordingly.
     fn update_loop(&self) -> impl Future<Output = ()> {
         let span = tracing::warn_span!("Stake table update loop");
+        // Clone necessary references for the async block.
         let self_clone = self.clone();
         let state = self.l1_client.state.clone();
 
         let l1_retry = self.l1_client.options().l1_retry_delay;
-        let max_events = self.l1_client.options().l1_events_max_block_range;
+        let max_range = self.l1_client.options().l1_events_max_block_range;
         let chain_config = self.chain_config.clone();
         let update_delay = self.l1_update_delay;
 
         async move {
-            let chain_config_lock = chain_config.lock().await;
-
-            let Some(address) = chain_config_lock.stake_table_contract else {
-                tracing::error!("No stake table address found in contract");
-                return;
-            };
-
-            drop(chain_config_lock);
-
-            let mut prev_finalized = loop {
-                let state_lock = state.lock().await;
-                if let Some(finalized) = state_lock.last_finalized {
-                    break finalized;
+        // get the stake table contract address from chain config
+        let stake_contract_address = {
+            let config = chain_config.lock().await;
+            match config.stake_table_contract {
+                Some(addr) => addr,
+                None => {
+                    tracing::error!("No stake table address found in chain config");
+                    return;
                 }
+            }
+        };
 
-                drop(state_lock);
-                sleep(l1_retry.clone()).await;
-            };
+        // Determine the starting point for syncing
+        let mut last_synced_block = loop {
+            if let Some(block) = state.lock().await.last_finalized {
+                break block;
+            }
+            sleep(l1_retry).await;
+        };
 
-            loop {
-                let state_lock = state.lock().await;
-                let new_finalized = state_lock.last_finalized;
-                drop(state_lock);
-
-                let Some(new_finalized) = new_finalized else {
-                    sleep(l1_retry).await;
-                    continue;
-                };
-
-                if (new_finalized - prev_finalized) >= max_events {
-                    loop {
-                        match self_clone
-                            .fetch_and_store_stake_table(address, new_finalized)
-                            .await
-                        {
-                            Ok(_) => {
-                                prev_finalized = new_finalized;
-                                break;
-                            },
-                            Err(e) => {
-                                tracing::error!("failed to fetch stake table {e:#}");
-                                sleep(l1_retry).await;
-                            },
-                        };
-                    }
-                }
-
-                sleep(update_delay).await
+        // Check if there's a more recent synced block in persisted data
+        if let Some((stored_block, _)) = self_clone.persistence.lock().await.load_events().await.unwrap() {
+            if stored_block > last_synced_block {
+                last_synced_block = stored_block;
             }
         }
-        .instrument(span)
+
+        // Main polling loop
+        loop {
+            let new_finalized = {
+                let state_lock = state.lock().await;
+                state_lock.last_finalized
+            };
+
+            let Some(finalized_block) = new_finalized else {
+                sleep(l1_retry).await;
+                continue;
+            };
+
+             // Only fetch updates if the finalized block has advanced enough.
+            if finalized_block - last_synced_block >= max_range {
+                // Try fetching stake table until it succeeds
+                loop {
+                    match self_clone
+                        .fetch_and_store_stake_table(stake_contract_address, finalized_block)
+                        .await
+                    {
+                        Ok(_) => {
+                            last_synced_block = finalized_block;
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to fetch stake table for block {finalized_block}: {e:#}");
+                            sleep(l1_retry).await;
+                        }
+                    }
+                }
+            }
+
+            sleep(update_delay).await;
+        }
+    }
+    .instrument(span)
     }
 
     pub async fn fetch_events(
