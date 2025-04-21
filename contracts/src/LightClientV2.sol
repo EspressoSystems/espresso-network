@@ -71,6 +71,7 @@ contract LightClientV2 is LightClient {
 
     function updateEpochStartBlock(uint64 newEpochStartBlock) public virtual onlyOwner {
         epochStartBlock = newEpochStartBlock;
+        firstEpoch = epochFromBlockNumber(epochStartBlock, blocksPerEpoch);
     }
 
     /// @dev See detailed doc in `LightClient.sol`
