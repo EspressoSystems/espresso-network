@@ -60,7 +60,6 @@ vec1 = { workspace = true }
 vid = { workspace = true }
 
 [dev-dependencies]
-espresso-types = { path = ".", features = [ "testing" ] }
 portpicker = { workspace = true }
 
 [package.metadata.cargo-machete]

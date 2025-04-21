@@ -2143,7 +2143,7 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-lock 3.4.0",
- "clap 4.5.34",
+ "clap",
  "committable",
  "espresso-types",
  "futures",
@@ -2333,7 +2333,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.34",
+ "clap",
  "console-subscriber 0.3.0",
  "dashmap",
  "derivative",
@@ -2356,7 +2356,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.34",
+ "clap",
  "console-subscriber 0.4.1",
  "derivative",
  "jf-signature 0.2.0",
@@ -2378,7 +2378,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.34",
+ "clap",
  "derive_more 1.0.0",
  "jf-signature 0.2.0",
  "parking_lot",
@@ -2394,7 +2394,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.34",
+ "clap",
  "jf-signature 0.1.0",
  "tokio",
  "tracing",
@@ -2407,7 +2407,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.34",
+ "clap",
  "jf-signature 0.2.0",
  "tokio",
  "tracing",
@@ -2573,18 +2573,6 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ea181bf566f71cb9a5d17a59e1871af638180a18fb0035c92ae62b705207123"
-dependencies = [
- "bitflags 1.3.2",
- "clap_lex 0.2.4",
- "indexmap 1.9.3",
- "textwrap",
-]
-
-[[package]]
-name = "clap"
 version = "4.5.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e958897981290da2a852763fe9cdb89cd36977a5d729023127095fa94d95e2ff"
@@ -2594,22 +2582,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "clap-serde"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d9609b451fd69eec0ecd379932d605a64bba1746397b31455962c8ba2fdfb7"
-dependencies = [
- "clap 3.2.25",
- "serde",
-]
-
-[[package]]
 name = "clap-serde-derive"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4b7d643cbdc3a4eb0b5db8b9844ab2002bc4be44c1244db5cd27df8e594c125"
 dependencies = [
- "clap 4.5.34",
+ "clap",
  "clap-serde-proc",
  "serde",
 ]
@@ -2633,7 +2611,7 @@ checksum = "83b0f35019843db2160b5bb19ae09b4e6411ac33fc6a712003c33e03090e2489"
 dependencies = [
  "anstream",
  "anstyle",
- "clap_lex 0.7.4",
+ "clap_lex",
  "strsim",
 ]
 
@@ -2647,15 +2625,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.100",
-]
-
-[[package]]
-name = "clap_lex"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2850f2f5a82cbf437dd5af4d49848fbdfc27c157c3d010345776f952765261c5"
-dependencies = [
- "os_str_bytes",
 ]
 
 [[package]]
@@ -3114,7 +3083,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.5.34",
+ "clap",
  "criterion-plot",
  "is-terminal",
  "itertools 0.10.5",
@@ -3590,7 +3559,7 @@ dependencies = [
  "ark-ff 0.4.2",
  "ark-poly",
  "ark-std 0.4.0",
- "clap 4.5.34",
+ "clap",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
@@ -3864,18 +3833,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "escargot"
-version = "0.5.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05a3ac187a16b5382fef8c69fd1bad123c67b7cf3932240a2d43dcdd32cded88"
-dependencies = [
- "log",
- "once_cell",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "espresso-macros"
 version = "0.1.0"
 source = "git+https://github.com/EspressoSystems/espresso-macros.git?tag=0.1.0#9e0b0258c99757c567676c4dd92f1501db0cf580"
@@ -3905,11 +3862,10 @@ dependencies = [
  "bincode",
  "blake3",
  "bytesize",
- "clap 4.5.34",
+ "clap",
  "cld",
  "committable",
  "derive_more 1.0.0",
- "espresso-types",
  "ethers-core",
  "fluent-asserter",
  "futures",
@@ -4395,7 +4351,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "ark-srs",
- "clap 4.5.34",
+ "clap",
  "hotshot-contract-adapter",
  "hotshot-stake-table",
  "hotshot-state-prover",
@@ -4896,7 +4852,7 @@ name = "hotshot-builder-api"
 version = "0.1.7"
 dependencies = [
  "async-trait",
- "clap 4.5.34",
+ "clap",
  "committable",
  "derive_more 1.0.0",
  "futures",
@@ -4918,17 +4874,13 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
- "atomic",
  "bincode",
- "bytemuck",
- "coarsetime",
  "committable",
  "derive_more 1.0.0",
  "futures",
  "hotshot",
  "hotshot-builder-api",
  "hotshot-example-types",
- "hotshot-macros",
  "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
@@ -4943,7 +4895,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.19",
- "tracing-test 0.1.0",
  "url",
  "vbs",
 ]
@@ -5019,7 +4970,7 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
- "clap 4.5.34",
+ "clap",
  "derive_more 1.0.0",
  "futures",
  "hotshot-example-types",
@@ -5072,7 +5023,7 @@ dependencies = [
  "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
  "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
  "chrono",
- "clap 4.5.34",
+ "clap",
  "futures",
  "hotshot",
  "hotshot-example-types",
@@ -5162,7 +5113,7 @@ dependencies = [
  "anyhow",
  "async-lock 3.4.0",
  "blake3",
- "clap 4.5.34",
+ "clap",
  "csv",
  "futures",
  "hotshot-types",
@@ -5192,7 +5143,7 @@ dependencies = [
  "backtrace-on-stack-overflow",
  "bincode",
  "chrono",
- "clap 4.5.34",
+ "clap",
  "committable",
  "custom_debug",
  "derivative",
@@ -5271,7 +5222,7 @@ dependencies = [
  "ark-ff 0.4.2",
  "ark-srs",
  "ark-std 0.4.0",
- "clap 4.5.34",
+ "clap",
  "displaydoc",
  "espresso-types",
  "futures",
@@ -5408,7 +5359,7 @@ dependencies = [
  "bincode",
  "bitvec",
  "blake3",
- "clap 4.5.34",
+ "clap",
  "committable",
  "derive_more 1.0.0",
  "digest 0.10.7",
@@ -7258,7 +7209,7 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
- "clap 4.5.34",
+ "clap",
  "committable",
  "espresso-types",
  "futures",
@@ -7367,7 +7318,7 @@ dependencies = [
  "async-lock 3.4.0",
  "async-trait",
  "bincode",
- "clap 4.5.34",
+ "clap",
  "committable",
  "espresso-types",
  "futures",
@@ -7767,7 +7718,7 @@ dependencies = [
  "bincode",
  "bitvec",
  "circular-buffer",
- "clap 4.5.34",
+ "clap",
  "espresso-types",
  "futures",
  "hotshot",
@@ -8095,12 +8046,6 @@ dependencies = [
  "dlv-list",
  "hashbrown 0.14.5",
 ]
-
-[[package]]
-name = "os_str_bytes"
-version = "6.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2355d85b9a3786f481747ced0e0ff2ba35213a1f9bd406ed906554d7af805a1"
 
 [[package]]
 name = "overload"
@@ -9953,14 +9898,13 @@ dependencies = [
  "byteorder",
  "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
  "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.34",
+ "clap",
  "client",
  "committable",
  "csv",
  "derivative",
  "derive_more 1.0.0",
  "dotenvy",
- "escargot",
  "espresso-macros",
  "espresso-types",
  "futures",
@@ -10032,7 +9976,7 @@ dependencies = [
  "anyhow",
  "ark-serialize 0.4.2",
  "async-trait",
- "clap 4.5.34",
+ "clap",
  "committable",
  "derive_more 1.0.0",
  "hotshot",
@@ -10701,8 +10645,7 @@ dependencies = [
  "anyhow",
  "ark-ec",
  "ark-ed-on-bn254",
- "clap 4.5.34",
- "clap-serde",
+ "clap",
  "clap-serde-derive",
  "derive_more 1.0.0",
  "directories 6.0.0",
@@ -11160,12 +11103,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "textwrap"
-version = "0.16.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11256,7 +11193,7 @@ dependencies = [
  "async-lock 3.4.0",
  "async-std",
  "async-trait",
- "clap 4.5.34",
+ "clap",
  "config",
  "derivative",
  "derive_more 0.99.19",

@@ -1069,7 +1069,6 @@ impl HotShotState<SeqTypes> for ValidatedState {
         }
     }
     /// Construct a genesis validated state.
-    #[must_use]
     fn genesis(instance: &Self::Instance) -> (Self, Self::Delta) {
         (instance.genesis_state.clone(), Delta::default())
     }
@@ -1900,7 +1899,7 @@ mod test {
         let account = key_pair.fee_account();
 
         let data = header.fee_info()[0].amount().as_u64().unwrap();
-        let sig = FeeAccount::sign_builder_message(&key_pair, &data.to_be_bytes()).unwrap();
+        let sig = FeeAccount::sign_fee(&key_pair, data, metadata).unwrap();
 
         // ensure the signature is indeed valid
         account
