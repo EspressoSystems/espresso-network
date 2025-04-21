@@ -698,16 +698,16 @@ mod tests {
 
         // test with zero address returns false
         let zero_address = Address::ZERO;
-        assert_eq!(is_contract(&provider, zero_address).await?, false);
+        assert!(!is_contract(&provider, zero_address).await?);
 
         // Test with a non-contract address (e.g., a random address)
         let random_address = Address::random();
-        assert_eq!(is_contract(&provider, random_address).await?, false);
+        assert!(!is_contract(&provider, random_address).await?);
 
         // Deploy a contract and test with its address
         let fee_contract = FeeContract::deploy(&provider).await?;
         let contract_address = *fee_contract.address();
-        assert_eq!(is_contract(&provider, contract_address).await?, true);
+        assert!(is_contract(&provider, contract_address).await?);
 
         Ok(())
     }
