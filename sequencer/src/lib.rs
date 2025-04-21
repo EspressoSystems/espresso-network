@@ -17,11 +17,12 @@ use std::sync::Arc;
 
 use alloy::primitives::U256;
 use anyhow::Context;
-use async_lock::RwLock;
+use async_lock::{Mutex, RwLock};
 use catchup::StatePeers;
 use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
+    v0_3::StakeTableFetcher,
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes,
     SolverAuctionResultsProvider, ValidatedState,
 };
@@ -479,14 +480,20 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         ),
     )
     .await;
+
+    let fetcher = StakeTableFetcher::new(
+        peers.clone(),
+        Arc::new(Mutex::new(persistence.clone())),
+        l1_client.clone(),
+        genesis.chain_config,
+        Duration::from_secs(15),
+    );
+    fetcher.spawn_update_loop().await;
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
-        l1_client.clone(),
-        genesis.chain_config,
-        peers.clone(),
-        persistence.clone(),
+        fetcher,
     );
     membership.reload_stake(50).await;
 
@@ -1099,13 +1106,20 @@ pub mod testing {
                 L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
             let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
             // Create the HotShot membership
+
+            let fetcher = StakeTableFetcher::new(
+                peers.clone(),
+                Arc::new(Mutex::new(persistence)),
+                l1_client.clone(),
+                chain_config,
+                Duration::from_secs(5),
+            );
+            fetcher.spawn_update_loop().await;
+
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
-                l1_client.clone(),
-                chain_config,
-                peers.clone(),
-                persistence.clone(),
+                fetcher,
             );
             membership.reload_stake(50).await;
 

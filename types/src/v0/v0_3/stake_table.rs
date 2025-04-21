@@ -1,7 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crate::{traits::{MembershipPersistence, StateCatchup}, SeqTypes};
 use alloy::primitives::{Address, U256};
+use async_lock::Mutex;
 use derive_more::derive::{From, Into};
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_contract_adapter::sol_types::StakeTable::{ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered};
@@ -11,6 +12,7 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinHandle;
 use crate::v0::ChainConfig;
 use super::L1Client;
 
@@ -69,12 +71,31 @@ pub struct StakeTableFetcher {
     pub(crate) peers: Arc<dyn StateCatchup>, 
     /// Methods for stake table persistence.
     #[debug(skip)]
-    pub(crate)  persistence: Arc<dyn MembershipPersistence>,
+    pub(crate)  persistence: Arc<Mutex<dyn MembershipPersistence>>,
     /// L1 provider
     pub(crate)  l1_client: L1Client,
     /// Verifiable `ChainConfig` holding contract address
-    pub(crate) chain_config: ChainConfig,
+    pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
+    pub(crate) update_task: Arc<StakeTableUpdateTask>,
+    pub(crate) l1_update_delay: Duration
 }
+
+
+
+
+
+#[derive( Debug, Default)]
+pub(crate) struct StakeTableUpdateTask(pub(crate) Mutex<Option<JoinHandle<()>>>);
+
+impl Drop for StakeTableUpdateTask {
+    fn drop(&mut self) {
+        if let Some(task) = self.0.get_mut().take() {
+            task.abort();
+        }
+    }
+}
+
+
 
 // (log block number, log index)
 pub type EventKey = (u64, u64);

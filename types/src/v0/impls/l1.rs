@@ -949,6 +949,7 @@ impl L1State {
         Self {
             snapshot: Default::default(),
             finalized: LruCache::new(cache_size),
+            last_finalized: None,
         }
     }
 
@@ -959,6 +960,8 @@ impl L1State {
             "inserting a finalized block {block:?} that isn't finalized; snapshot: {:?}",
             self.snapshot,
         );
+
+        self.last_finalized = Some(block.info.number());
 
         if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block) {
             if old_number == block.info.number && block != old_block {

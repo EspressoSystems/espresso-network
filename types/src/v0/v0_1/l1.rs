@@ -192,6 +192,7 @@ pub struct L1Client {
 pub(crate) struct L1State {
     pub(crate) snapshot: L1Snapshot,
     pub(crate) finalized: LruCache<u64, L1BlockInfoWithParent>,
+    pub(crate) last_finalized: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
