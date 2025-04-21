@@ -142,6 +142,31 @@ ts-node contracts/script/multisigTransactionProposals/safeSDK/delegateStake.ts $
 
 3. Follow the URL in the terminal output to the multisig wallet to sign the proposal and eventually execute it
 
+## Decoding Function Data
+
+### Prerequisites
+
+1. Node.js and npm: Ensure you have `Node.js` and `npm` installed on your system. You can download them from nodejs.org.
+2. Project Setup: Make sure your project is set up correctly with all necessary dependencies installed. Run
+   `npm install` in the project root to install dependencies.
+3. Compiled Contract ABIs: Ensure that the contract ABIs are compiled and available in the out directory by running
+   `forge build`. The script expects the ABI files to be located at out/<ContractName>.sol/<ContractName>.json. If this
+   doesn't work, start a nix shell, `nix-shell` and then run the build command
+
+### Usage
+
+To decode proposal data using the `decodeFunctionData` script, follow these steps:
+
+1. Assuming you're in the root folder
+2. Run the script using the following command and ensure that the $CONTRACT_NAME and $ENCODED_DATA are set
+
+```bash
+   ts-node contracts/script/multisigTransactionProposals/safeSDK/decodeFunctionData.ts $CONTRACT_NAME $ENCODED_DATA
+```
+
+Expected Output: The script will output the function name and arguments decoded from the provided data. If there is an
+error, such as an incorrect contract name or invalid encoded data, an error message will be displayed.
+
 ## Testing
 
 ### Testing Safe Multisig Wallets
