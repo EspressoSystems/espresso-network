@@ -390,7 +390,7 @@ impl StakeTableFetcher {
             drop(chain_config_lock);
             sleep(update_delay).await;
         };
-        
+
         // Determine the starting point for syncing
         let mut last_synced_block = loop {
             if let Some(block) = state.lock().await.last_finalized {
@@ -519,7 +519,6 @@ impl StakeTableFetcher {
             },
         };
 
-        tracing::error!("from_block={from_block}");
         // To avoid making large RPC calls, divide the range into smaller chunks.
         // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
         // default value  is `10000` if env variable is not set
@@ -540,8 +539,6 @@ impl StakeTableFetcher {
         // fetch registered events
         // retry if the call to the provider to fetch the events fails
         let registered_events = stream::iter(chunks.clone()).then(|(from, to)| {
-            tracing::error!("xx11 from={from:?} to={to:?}");
-
             let retry_delay = l1_client.options().l1_retry_delay;
             let stake_table_contract = stake_table_contract.clone();
             async move {
