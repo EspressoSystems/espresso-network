@@ -22,9 +22,15 @@ use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::EspToken::{self, EspTokenErrors},
 };
-use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
+use hotshot_stake_table::vec_based::StakeTable;
+use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
+use hotshot_types::{
+    light_client::{CircuitField, StateKeyPair, StateVerKey},
+    signature_key::{BLSKeyPair, BLSPubKey},
+};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use sequencer_utils::deployer::{self, Contract, Contracts};
 use url::Url;
 
 use crate::{
@@ -34,6 +40,9 @@ use crate::{
     Config,
 };
 
+pub type StakeTableVecBased = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
+
+pub const STAKE_TABLE_CAPACITY_FOR_TEST: u64 = 3;
 type Prov = FillProvider<
     JoinFill<
         JoinFill<
@@ -312,4 +321,155 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
 
     tracing::info!("completed staking for demo");
     Ok(())
+}
+
+/// Commonly used contract deployment routine.
+// TODO move to proper place for shared code. See:
+// https://github.com/EspressoSystems/espresso-network/pull/3083#discussion_r2048832370
+#[allow(clippy::too_many_arguments)]
+pub async fn pos_deploy_routine(
+    l1_url: &Url,
+    signer: &LocalSigner<SigningKey>, // TODO maybe from_instance(AnvilInstance)
+    blocks_per_epoch: u64,
+    epoch_start_block: u64,
+    initial_stake_table: StakeTableVecBased,
+    private_keys: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
+    _multisig: Option<Address>,
+    multiple_delegators: bool,
+) -> anyhow::Result<Address> {
+    let contracts = &mut Contracts::new();
+
+    let wallet = EthereumWallet::from(signer.clone());
+    let provider = ProviderBuilder::new()
+        .wallet(wallet.clone())
+        .on_http(l1_url.clone());
+    let admin = provider.get_accounts().await?[0];
+
+    let (genesis_state, genesis_stake) =
+        legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+
+    // deploy EspToken, proxy
+    let token_proxy_addr = deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+
+    // deploy light client v1, proxy
+    let lc_proxy_addr = deployer::deploy_light_client_proxy(
+        &provider,
+        contracts,
+        true, // use mock
+        genesis_state.clone(),
+        genesis_stake.clone(),
+        admin,
+        None, // no permissioned prover
+    )
+    .await?;
+    // upgrade to LightClientV2
+    deployer::upgrade_light_client_v2(
+        &provider,
+        contracts,
+        true, // use mock
+        blocks_per_epoch,
+        epoch_start_block,
+    )
+    .await?;
+
+    // deploy permissionless stake table
+    let exit_escrow_period = U256::from(300); // 300 sec
+    let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
+        &provider,
+        contracts,
+        token_proxy_addr,
+        lc_proxy_addr,
+        exit_escrow_period,
+        admin,
+    )
+    .await?;
+
+    let stake_table_address = contracts
+        .address(Contract::StakeTableProxy)
+        .expect("stake table deployed");
+
+    stake_in_contract_for_test(
+        l1_url.clone(),
+        signer.clone(),
+        stake_table_address,
+        contracts
+            .address(Contract::EspTokenProxy)
+            .expect("ESP token deployed"),
+        private_keys,
+        multiple_delegators,
+    )
+    .await?;
+
+    Ok(stake_table_address)
+}
+
+#[cfg(test)]
+mod test {
+    use alloy::node_bindings::Anvil;
+    use espresso_types::{v0_3::StakeTable, PubKey, SeqTypes};
+    use hotshot_types::{
+        traits::{
+            signature_key::{SignatureKey, StakeTableEntryType},
+            stake_table::StakeTableScheme,
+        },
+        PeerConfig,
+    };
+
+    use super::*;
+
+    fn mock_stake(n: u16) -> StakeTable {
+        [..n]
+            .iter()
+            .map(|_| PeerConfig::default())
+            .collect::<Vec<PeerConfig<SeqTypes>>>()
+            .into()
+    }
+
+    fn staking_priv_keys() -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+        let seed = [42u8; 32];
+        let num_nodes = STAKE_TABLE_CAPACITY_FOR_TEST;
+
+        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..num_nodes)
+            .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed(seed, i))
+            .unzip();
+        let state_key_pairs = (0..num_nodes)
+            .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i))
+            .collect::<Vec<_>>();
+
+        let mut rng = ChaCha20Rng::from_seed([42u8; 32]); // Create a deterministic RNG
+        let eth_key_pairs = (0..num_nodes).map(|_| SigningKey::random(&mut rng).into());
+        eth_key_pairs
+            .zip(priv_keys.iter())
+            .zip(state_key_pairs.iter())
+            .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_deploy_routine() -> Result<()> {
+        let num_nodes = 3;
+        let anvil = Anvil::new().spawn();
+        let l1 = anvil.endpoint_url();
+        let secret_key = anvil.keys()[0].clone();
+        let signer = LocalSigner::from(secret_key);
+
+        let mut st = StakeTableVecBased::new(STAKE_TABLE_CAPACITY_FOR_TEST as usize);
+        mock_stake(num_nodes).0.iter().for_each(|config| {
+            st.register(
+                *config.stake_table_entry.key(),
+                config.stake_table_entry.stake(),
+                config.state_ver_key.clone(),
+            )
+            .unwrap()
+        });
+        st.advance();
+        st.advance();
+
+        let priv_keys = staking_priv_keys();
+        let _address = pos_deploy_routine(&l1, &signer, 50, 1, st, priv_keys, None, false)
+            .await
+            .unwrap();
+
+        Ok(())
+    }
 }

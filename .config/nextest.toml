@@ -19,6 +19,10 @@ retries  = 10
 filter = 'test(test_hotshot_event_streaming_epoch_progression)'
 slow-timeout = { period = "8m", terminate-after = 4 }
 
+[[profile.default.overrides]]
+filter = 'test(test_pos_upgrade_view_based)'
+slow-timeout = { period = "2m", terminate-after = 5 }
+
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]
 filter = 'test(slow_test_restart)'
