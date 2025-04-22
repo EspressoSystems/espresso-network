@@ -1311,7 +1311,7 @@ mod persistence_tests {
         let query_service_port = pick_unused_port().expect("No ports free for query service");
         let query_api_options = Options::with_port(query_service_port);
 
-        const NODE_COUNT: usize = 1;
+        const NODE_COUNT: usize = 2;
 
         let storage = join_all((0..NODE_COUNT).map(|_| P::tmp_storage())).await;
         let persistence_options: [_; NODE_COUNT] = storage
@@ -1361,24 +1361,25 @@ mod persistence_tests {
             .expect("failed to load events");
         assert!(res1.is_some());
 
-        let (events1_l1_block, events1) = res1.unwrap();
-        assert!(!events1.is_empty());
+        let (mut prev_l1, prev_events) = res1.unwrap();
+        assert!(!prev_events.is_empty());
 
-        // wait for more than l1 stake table update interval (5s)
-        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        for _i in 0..10 {
+            // Wait for more than update interval to assert that persistence was updated
+            // L1 update interval is 5s for testing
+            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
 
-        let res2 = persistence
-            .load_events()
-            .await
-            .expect("failed to load events");
-        assert!(res2.is_some());
+            let res = persistence
+                .load_events()
+                .await
+                .expect("failed to load events");
 
-        let (events2_l1_block, events2) = res2.unwrap();
-        assert!(!events2.is_empty());
+            let (l1, events) = res.unwrap();
+            assert!(!events.is_empty());
 
-        tracing::info!("{events2_l1_block}");
-
-        assert!(events2_l1_block > events1_l1_block, "events not updated");
+            assert!(l1 > prev_l1, "events not updated");
+            prev_l1 = l1;
+        }
 
         Ok(())
     }
