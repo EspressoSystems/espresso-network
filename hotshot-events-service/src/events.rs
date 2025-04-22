@@ -97,12 +97,24 @@ where
         options.extensions.clone(),
     )?;
     api.with_version(api_ver)
-        .stream("events", move |_, state| {
+        .stream("v1_events", move |_, state| {
             async move {
                 tracing::info!("client subscribed to events");
                 state
                     .read(|state| {
                         async move { Ok(state.get_event_stream(None).await.map(Ok)) }.boxed()
+                    })
+                    .await
+            }
+            .try_flatten_stream()
+            .boxed()
+        })?
+        .stream("events", move |_, state| {
+            async move {
+                tracing::info!("client subscribed to legacy events");
+                state
+                    .read(|state| {
+                        async move { Ok(state.get_legacy_event_stream(None).await.map(Ok)) }.boxed()
                     })
                     .await
             }
