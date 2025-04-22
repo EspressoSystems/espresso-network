@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_broadcast::{Receiver, RecvError, Sender};
 use async_trait::async_trait;
 use futures::future::try_join_all;
-use hotshot_utils::anytrace::Result;
+use hotshot_utils::anytrace::*;
 use tokio::task::{spawn, JoinHandle};
 
 /// Trait for events that long-running tasks handle
@@ -82,10 +82,10 @@ impl<S: TaskState + Send + 'static> Task<S> {
                             break self.boxed_state();
                         }
 
-                        let _ =
+                        log!(
                             S::handle_event(&mut self.state, input, &self.sender, &self.receiver)
                                 .await
-                                .inspect_err(|e| tracing::debug!("{e}"));
+                        );
                     },
                     Err(RecvError::Closed) => {
                         break self.boxed_state();

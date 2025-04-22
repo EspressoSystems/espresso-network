@@ -29,6 +29,7 @@ use genesis::L1Finalized;
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 use hotshot_query_service::data_source::storage::SqlStorage;
+use hotshot_stake_table::vec_based::StakeTable;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -56,7 +57,7 @@ use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
-    light_client::{StateKeyPair, StateSignKey},
+    light_client::{CircuitField, StateKeyPair, StateSignKey, StateVerKey},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -95,6 +96,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Clone for Node<N, P> 
 }
 
 pub type SequencerApiVersion = StaticVersion<0, 1>;
+pub type StakeTableVecBased = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeImplementation<SeqTypes>
     for Node<N, P>
@@ -617,7 +619,7 @@ pub mod testing {
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
         EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade,
+        SeqTypes, Transaction, Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -633,13 +635,12 @@ pub mod testing {
     use hotshot_builder_core_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
-    use hotshot_stake_table::vec_based::StakeTable;
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
         event::LeafInfo,
-        light_client::{CircuitField, StateKeyPair, StateVerKey},
+        light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
             block_contents::BlockHeader,
@@ -657,6 +658,7 @@ pub mod testing {
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
+    use staking_cli::demo::pos_deploy_routine;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -842,6 +844,21 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
+    pub fn staking_priv_keys(
+        priv_keys: &[BLSPrivKey],
+        state_key_pairs: &[StateKeyPair],
+        num_nodes: usize,
+    ) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+        let seed = [42u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
+        let eth_key_pairs = (0..num_nodes).map(|_| SigningKey::random(&mut rng).into());
+        eth_key_pairs
+            .zip(priv_keys.iter())
+            .zip(state_key_pairs.iter())
+            .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
+            .collect()
+    }
+
     impl<const NUM_NODES: usize> TestConfigBuilder<NUM_NODES> {
         pub fn builder_port(mut self, builder_port: Option<u16>) -> Self {
             self.builder_port = builder_port;
@@ -875,8 +892,53 @@ pub mod testing {
             self
         }
 
+        /// Version specific upgrade setup. Extend to future upgrades
+        /// by adding a branch to the `match` statement.
+        pub async fn set_upgrades(mut self, version: Version) -> Self {
+            let upgrade = match version {
+                version if version >= EpochVersion::VERSION => {
+                    tracing::debug!(?version, "upgrade version");
+                    let blocks_per_epoch = self.config.epoch_height;
+                    let epoch_start_block = self.config.epoch_start_block;
+
+                    let initial_stake_table =
+                        stake_table(self.config.known_nodes_with_stake.clone());
+
+                    let staking_private_keys =
+                        staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
+
+                    let address = pos_deploy_routine(
+                        &self.l1_url,
+                        &self.signer,
+                        blocks_per_epoch,
+                        epoch_start_block,
+                        initial_stake_table,
+                        staking_private_keys.clone(),
+                        None,
+                        false,
+                    )
+                    .await
+                    .expect("deployed pos contracts");
+                    Upgrade::pos_view_based(address)
+                },
+                _ => panic!("Upgrade not configured for version {:?}", version),
+            };
+
+            let mut upgrades = std::collections::BTreeMap::new();
+            upgrade.set_hotshot_config_parameters(&mut self.config);
+            upgrades.insert(version, upgrade);
+
+            self.upgrades = upgrades;
+            self
+        }
+
         pub fn epoch_height(mut self, epoch_height: u64) -> Self {
             self.config.epoch_height = epoch_height;
+            self
+        }
+
+        pub fn epoch_start_block(mut self, start_block: u64) -> Self {
+            self.config.epoch_start_block = start_block;
             self
         }
 
@@ -980,6 +1042,21 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
+    pub fn stake_table(nodes: Vec<PeerConfig<SeqTypes>>) -> StakeTableVecBased {
+        let mut st = StakeTableVecBased::new(STAKE_TABLE_CAPACITY_FOR_TEST as usize);
+        nodes.iter().for_each(|config| {
+            st.register(
+                *config.stake_table_entry.key(),
+                config.stake_table_entry.stake(),
+                config.state_ver_key.clone(),
+            )
+            .unwrap()
+        });
+        st.advance();
+        st.advance();
+        st
+    }
+
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
         pub fn num_nodes(&self) -> usize {
             self.priv_keys.len()
@@ -1009,19 +1086,16 @@ pub mod testing {
             self.l1_url.clone()
         }
 
+        pub fn get_upgrade_map(&self) -> UpgradeMap {
+            self.upgrades.clone().into()
+        }
+
         pub fn upgrades(&self) -> BTreeMap<Version, Upgrade> {
             self.upgrades.clone()
         }
 
         pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
-            let seed = [42u8; 32];
-            let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
-            let eth_key_pairs = (0..self.num_nodes()).map(|_| SigningKey::random(&mut rng).into());
-            eth_key_pairs
-                .zip(self.priv_keys.iter())
-                .zip(self.state_key_pairs.iter())
-                .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
-                .collect()
+            staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
         }
 
         pub async fn init_nodes<V: Versions>(
@@ -1051,24 +1125,8 @@ pub mod testing {
             .await
         }
 
-        pub fn stake_table(&self) -> StakeTable<BLSPubKey, StateVerKey, CircuitField> {
-            let mut st = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(
-                STAKE_TABLE_CAPACITY_FOR_TEST as usize,
-            );
-            self.config
-                .known_nodes_with_stake
-                .iter()
-                .for_each(|config| {
-                    st.register(
-                        *config.stake_table_entry.key(),
-                        config.stake_table_entry.stake(),
-                        config.state_ver_key.clone(),
-                    )
-                    .unwrap()
-                });
-            st.advance();
-            st.advance();
-            st
+        pub fn stake_table(&self) -> StakeTableVecBased {
+            stake_table(self.config.known_nodes_with_stake.clone())
         }
 
         #[allow(clippy::too_many_arguments)]
