@@ -44,7 +44,11 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> RecipientSourceTrait<Request,
             .unwrap_or(EpochNumber::genesis());
 
         // Attempt to get the membership for the current epoch
-        let membership = match self.memberships.wait_for_catchup(epoch_number).await {
+        let membership = match self
+            .memberships
+            .membership_for_epoch(Some(epoch_number))
+            .await
+        {
             Ok(membership) => membership,
             Err(e) => {
                 warn!(
