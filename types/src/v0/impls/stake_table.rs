@@ -402,11 +402,25 @@ impl StakeTableFetcher {
         };
 
         // Check if there's a more recent synced block in persisted data
-        if let Some((stored_block, _)) = self_clone.persistence.lock().await.load_events().await.unwrap() {
-            if stored_block > last_synced_block {
-                last_synced_block = stored_block;
+       // Retry loading from persistence until successful
+       loop {
+        match self_clone.persistence.lock().await.load_events().await {
+            Ok(Some((stored_block, _))) => {
+                if stored_block > last_synced_block {
+                    last_synced_block = stored_block;
+                }
+                break;
+            }
+            Ok(None) => {
+                break;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load events from persistence: {e:#}. Retrying in {:?}", l1_retry);
+                sleep(l1_retry).await;
             }
         }
+    }
+
 
         tracing::info!("last_synced_block={last_synced_block}");
 
