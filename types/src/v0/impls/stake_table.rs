@@ -379,7 +379,9 @@ impl StakeTableFetcher {
         let update_delay = self.l1_client.options().stake_table_update_interval;
 
         async move {
-        // get the stake table contract address from chain config
+        // Get the stake table contract address from the chain config.
+        // This may not contain a stake table address if we are on a pre-epoch version.
+        // It keeps retrying until the chain config is upgraded after a successful upgrade to an epoch version.
         let stake_contract_address = loop {
             let chain_config_lock = chain_config.lock().await;
             if let Some(addr) = chain_config_lock.stake_table_contract {
