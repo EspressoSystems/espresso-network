@@ -167,6 +167,30 @@ To decode proposal data using the `decodeFunctionData` script, follow these step
 Expected Output: The script will output the function name and arguments decoded from the provided data. If there is an
 error, such as an incorrect contract name or invalid encoded data, an error message will be displayed.
 
+### Example Usage
+
+Let's say you have a transaction proposal like this where some input data is encoded. This indicates that it's a
+function call that has been encoded when the proposal to `upgradeToAndCall(...)` was triggered. You can check the
+contract the proposal is interacting with for the $CONTRACT_NAME and copy the encoded data so that you can decode it
+using this ts-node tool.
+
+![Image of transaction proposal with encoded data](images/safeProposal.png)
+
+In this example, the command is:
+
+```bash
+ts-node contracts/script/multisigTransactionProposals/safeSDK/decodeFunctionData.ts LightClientV2 0x167ac6180000000000000000000000000000000000000000000000000000000000002710
+```
+
+And the result for the above is:
+
+```bash
+Function Name: updateEpochStartBlock
+Arguments: 10000
+Signature: updateEpochStartBlock(uint64)
+Selector: 0x167ac618
+```
+
 ## Testing
 
 ### Testing Safe Multisig Wallets
