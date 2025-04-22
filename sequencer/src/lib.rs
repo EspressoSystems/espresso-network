@@ -486,7 +486,6 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         Arc::new(Mutex::new(persistence.clone())),
         l1_client.clone(),
         genesis.chain_config,
-        Duration::from_secs(15),
     );
     fetcher.spawn_update_loop().await;
     // Create the HotShot membership
@@ -602,8 +601,8 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade,
+        EpochVersion, Event, FeeAccount, MarketplaceVersion, NetworkConfig, PubKey, SeqTypes,
+        Transaction, Upgrade,
     };
     use futures::{
         future::join_all,
@@ -1102,8 +1101,19 @@ pub mod testing {
             let persistence = persistence_opt.create().await.unwrap();
 
             let chain_config = state.chain_config.resolve().unwrap_or_default();
-            let l1_client =
-                L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
+
+            let l1_opt = L1ClientOptions {
+                stake_table_update_interval: Duration::from_secs(5),
+                l1_events_max_block_range: 1,
+                l1_polling_interval: Duration::from_secs(1),
+                subscription_timeout: Duration::from_secs(5),
+                ..Default::default()
+            };
+            let l1_client = l1_opt
+                .connect(vec![self.l1_url.clone()])
+                .expect("failed to create L1 client");
+            l1_client.spawn_tasks().await;
+
             let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
             // Create the HotShot membership
 
@@ -1112,7 +1122,6 @@ pub mod testing {
                 Arc::new(Mutex::new(persistence)),
                 l1_client.clone(),
                 chain_config,
-                Duration::from_secs(5),
             );
             fetcher.spawn_update_loop().await;
 
