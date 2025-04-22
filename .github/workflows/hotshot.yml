@@ -44,8 +44,7 @@ jobs:
         with:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
-          # Saving the cache from test-ci-2 which is one of the faster test suites to complete
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.test_suites == 'test-ci-4' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.test_suites == 'test-ci-rest' }}
           prefix-key: v1-hotshot
 
       - uses: taiki-e/install-action@just
