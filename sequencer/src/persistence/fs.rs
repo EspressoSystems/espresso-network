@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
@@ -14,7 +14,7 @@ use clap::Parser;
 use espresso_types::{
     traits::MembershipPersistence,
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::{IndexedStake, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
 use hotshot::{types::BLSPubKey, InitializerEpochInfo};
@@ -1430,7 +1430,7 @@ impl MembershipPersistence for Persistence {
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
 
-        fs::create_dir_all(dir_path.clone()).context("failed to create proposals dir")?;
+        fs::create_dir_all(dir_path.clone()).context("failed to create stake table dir")?;
 
         let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
 
@@ -1447,6 +1447,47 @@ impl MembershipPersistence for Persistence {
                 Ok(())
             },
         )
+    }
+
+    async fn store_events(
+        &self,
+        l1_block: u64,
+        events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let dir_path = &inner.stake_table_dir_path();
+        let events_dir = dir_path.join("events");
+
+        fs::create_dir_all(events_dir.clone()).context("failed to create events dir")?;
+
+        let file_path = events_dir.with_extension("txt");
+
+        inner.replace(
+            &file_path,
+            |_| Ok(true),
+            |file| {
+                let writer = BufWriter::new(file);
+                serde_json::to_writer_pretty(writer, &(l1_block, events))?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
+        let inner = self.inner.write().await;
+        let dir_path = &inner.stake_table_dir_path();
+        let events_dir = dir_path.join("events");
+
+        let file_path = events_dir.with_extension("txt");
+
+        if !file_path.exists() {
+            return Ok(None);
+        }
+
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let (l1_block, events) = serde_json::from_reader(reader)?;
+        Ok(Some((l1_block, events)))
     }
 }
 
