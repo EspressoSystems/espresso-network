@@ -1,6 +1,23 @@
+# Excluding packages with `--exclude` instead of the filterset prevents nextest from compiling them.
+# We should find a better way to handle this for example by having consistent crate names.
 test-ci-rest *args:
   echo Running unit tests
-  RUST_LOG=error cargo nextest run -E 'not (test(tests_1) | test(tests_2) | test(tests_3) | test(tests_4) | test(tests_5) | test(tests_6))' --profile hotshot --lib --bins --tests --benches --workspace {{args}}
+  RUST_LOG=error cargo nextest run \
+  --exclude "marketplace-*" \
+  --exclude "sequencer*" \
+  --exclude builder \
+  --exclude client \
+  --exclude espresso-* \
+  --exclude hotshot-builder-core-refactored \
+  --exclude hotshot-query-service \
+  --exclude hotshot-state-prover \
+  --exclude hotshot-testing \
+  --exclude node-metrics \
+  --exclude staking-cli \
+  --exclude tests \
+  --exclude diff-test-hotshot \
+  --exclude gen-vk-contract \
+  --profile hotshot --lib --bins --tests --benches --workspace {{args}}
 
 test-ci-1 *args:
   echo Running integration test group 1
