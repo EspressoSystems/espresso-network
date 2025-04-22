@@ -4,9 +4,8 @@ use committable::Commitment;
 use espresso_types::{
     v0_1::{RewardAccount, RewardMerkleTree},
     v0_99::ChainConfig,
-    FeeAccount, FeeAmount, Leaf2,
+    FeeAccount, FeeMerkleTree, Leaf2,
 };
-use jf_merkle_tree::prelude::{Sha3Digest, Sha3Node, UniversalMerkleTree};
 use request_response::{request::Request as RequestTrait, Serializable};
 use serde::{Deserialize, Serialize};
 
@@ -37,7 +36,7 @@ pub enum Request {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Response {
     /// A response for the accounts at a given height and view
-    Accounts(UniversalMerkleTree<FeeAmount, Sha3Digest, FeeAccount, 256, Sha3Node>),
+    Accounts(FeeMerkleTree),
     /// A request for the leaf chain at a given height
     Leaf(Vec<Leaf2>),
     /// A response for a chain config with a particular commitment
