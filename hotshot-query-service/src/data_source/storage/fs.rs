@@ -20,13 +20,12 @@ use std::{
     hash::Hash,
     ops::{Bound, Deref, RangeBounds},
     path::Path,
+    sync::Arc,
 };
 
-use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use async_trait::async_trait;
 use atomic_store::{AtomicStore, AtomicStoreLoader, PersistenceError};
 use committable::Committable;
-use futures::future::Future;
 use hotshot_types::{
     data::{VidCommitment, VidShare},
     traits::{
@@ -36,6 +35,7 @@ use hotshot_types::{
 };
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::OptionExt;
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use vec1::Vec1;
 
 use super::{
@@ -131,7 +131,7 @@ pub struct FileSystemStorage<Types: NodeType>
 where
     Payload<Types>: QueryablePayload<Types>,
 {
-    inner: RwLock<FileSystemStorageInner<Types>>,
+    inner: Arc<RwLock<FileSystemStorageInner<Types>>>,
     metrics: PrometheusMetrics,
 }
 
@@ -199,7 +199,7 @@ where
         loader: &mut AtomicStoreLoader,
     ) -> Result<Self, PersistenceError> {
         Ok(Self {
-            inner: RwLock::new(FileSystemStorageInner {
+            inner: Arc::new(RwLock::new(FileSystemStorageInner {
                 index_by_leaf_hash: Default::default(),
                 index_by_block_hash: Default::default(),
                 index_by_payload_hash: Default::default(),
@@ -280,7 +280,7 @@ where
         }
 
         Ok(Self {
-            inner: RwLock::new(FileSystemStorageInner {
+            inner: Arc::new(RwLock::new(FileSystemStorageInner {
                 index_by_leaf_hash,
                 index_by_block_hash,
                 index_by_payload_hash,
@@ -293,7 +293,7 @@ where
                 vid_storage,
                 state_cert_storage,
                 top_storage: None,
-            }),
+            })),
             metrics: Default::default(),
         })
     }
@@ -316,7 +316,7 @@ pub trait Revert {
     fn revert(&mut self);
 }
 
-impl<Types> Revert for RwLockWriteGuard<'_, FileSystemStorageInner<Types>>
+impl<Types> Revert for OwnedRwLockWriteGuard<FileSystemStorageInner<Types>>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
@@ -329,7 +329,7 @@ where
     }
 }
 
-impl<Types> Revert for RwLockReadGuard<'_, FileSystemStorageInner<Types>>
+impl<Types> Revert for OwnedRwLockReadGuard<FileSystemStorageInner<Types>>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
@@ -349,7 +349,10 @@ impl<T: Revert> Drop for Transaction<T> {
         self.inner.revert();
     }
 }
-impl<Types> update::Transaction for Transaction<RwLockWriteGuard<'_, FileSystemStorageInner<Types>>>
+
+#[async_trait]
+impl<Types> update::Transaction
+    for Transaction<OwnedRwLockWriteGuard<FileSystemStorageInner<Types>>>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
@@ -365,13 +368,13 @@ where
         Ok(())
     }
 
-    fn revert(self) -> impl Future + Send {
+    async fn revert(self) {
         // The revert is handled when `self` is dropped.
-        async move {}
     }
 }
 
-impl<Types> update::Transaction for Transaction<RwLockReadGuard<'_, FileSystemStorageInner<Types>>>
+#[async_trait]
+impl<Types> update::Transaction for Transaction<OwnedRwLockReadGuard<FileSystemStorageInner<Types>>>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
@@ -381,37 +384,32 @@ where
         Ok(())
     }
 
-    fn revert(self) -> impl Future + Send {
+    async fn revert(self) {
         // The revert is handled when `self` is dropped.
-        async move {}
     }
 }
 
+#[async_trait]
 impl<Types: NodeType> VersionedDataSource for FileSystemStorage<Types>
 where
     Payload<Types>: QueryablePayload<Types>,
 {
-    type Transaction<'a>
-        = Transaction<RwLockWriteGuard<'a, FileSystemStorageInner<Types>>>
-    where
-        Self: 'a;
-    type ReadOnly<'a>
-        = Transaction<RwLockReadGuard<'a, FileSystemStorageInner<Types>>>
-    where
-        Self: 'a;
+    type Transaction = Transaction<OwnedRwLockWriteGuard<FileSystemStorageInner<Types>>>;
+    type ReadOnly = Transaction<OwnedRwLockReadGuard<FileSystemStorageInner<Types>>>;
 
-    async fn write(&self) -> anyhow::Result<Self::Transaction<'_>> {
+    async fn write(&self) -> anyhow::Result<Self::Transaction> {
         Ok(Transaction {
-            inner: self.inner.write().await,
+            inner: Arc::clone(&self.inner).write_owned().await,
         })
     }
 
-    async fn read(&self) -> anyhow::Result<Self::ReadOnly<'_>> {
+    async fn read(&self) -> anyhow::Result<Self::ReadOnly> {
         Ok(Transaction {
-            inner: self.inner.read().await,
+            inner: Arc::clone(&self.inner).read_owned().await,
         })
     }
 }
+
 fn range_iter<T>(
     mut iter: Iter<'_, T>,
     range: impl RangeBounds<usize>,
@@ -627,7 +625,7 @@ where
 }
 
 impl<Types: NodeType> UpdateAvailabilityStorage<Types>
-    for Transaction<RwLockWriteGuard<'_, FileSystemStorageInner<Types>>>
+    for Transaction<OwnedRwLockWriteGuard<FileSystemStorageInner<Types>>>
 where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,

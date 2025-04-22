@@ -238,17 +238,16 @@ impl<Mode: TransactionMode> Transaction<Mode> {
     }
 }
 
+#[async_trait]
 impl<Mode: TransactionMode> update::Transaction for Transaction<Mode> {
     async fn commit(mut self) -> anyhow::Result<()> {
         self.inner.commit().await?;
         self.metrics.set_closed(CloseType::Commit);
         Ok(())
     }
-    fn revert(mut self) -> impl Future + Send {
-        async move {
-            self.inner.rollback().await.unwrap();
-            self.metrics.set_closed(CloseType::Revert);
-        }
+    async fn revert(mut self) {
+        self.inner.rollback().await.unwrap();
+        self.metrics.set_closed(CloseType::Revert);
     }
 }
 

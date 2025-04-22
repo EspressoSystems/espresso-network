@@ -800,15 +800,10 @@ impl PruneStorage for SqlStorage {
     }
 }
 
+#[async_trait]
 impl VersionedDataSource for SqlStorage {
-    type Transaction<'a>
-        = Transaction<Write>
-    where
-        Self: 'a;
-    type ReadOnly<'a>
-        = Transaction<Read>
-    where
-        Self: 'a;
+    type Transaction = Transaction<Write>;
+    type ReadOnly = Transaction<Read>;
 
     async fn write(&self) -> anyhow::Result<Transaction<Write>> {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await

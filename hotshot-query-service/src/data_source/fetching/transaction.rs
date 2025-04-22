@@ -74,9 +74,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
         // We don't actively fetch transactions, because without a satisfying block payload, we have

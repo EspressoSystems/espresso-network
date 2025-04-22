@@ -15,7 +15,6 @@ use std::iter::once;
 
 use anyhow::{ensure, Context};
 use async_trait::async_trait;
-use futures::future::Future;
 use hotshot::types::{Event, EventType};
 use hotshot_types::{
     data::{ns_table::parse_ns_table, Leaf2, VidCommitment, VidDisperseShare, VidShare},
@@ -236,18 +235,14 @@ fn genesis_vid<Types: NodeType>(
 ///
 /// Only when a [`Transaction`] is committed are changes written back to storage, synchronized with
 /// any concurrent changes, and made visible to other connections to the same data source.
+#[async_trait]
 pub trait VersionedDataSource: Send + Sync {
     /// A transaction which can read and modify the data source.
-    type Transaction<'a>: Transaction
-    where
-        Self: 'a;
-
-    type ReadOnly<'a>: Transaction
-    where
-        Self: 'a;
+    type Transaction: Transaction;
+    type ReadOnly: Transaction;
 
     /// Start an atomic transaction on the data source.
-    fn write(&self) -> impl Future<Output = anyhow::Result<Self::Transaction<'_>>> + Send;
+    async fn write(&self) -> anyhow::Result<Self::Transaction>;
 
     /// Start a read-only transaction on the data source.
     ///
@@ -261,7 +256,7 @@ pub trait VersionedDataSource: Send + Sync {
     /// the write was committed.
     ///
     /// Read-only transactions do not need to be committed, and reverting has no effect.
-    fn read(&self) -> impl Future<Output = anyhow::Result<Self::ReadOnly<'_>>> + Send;
+    async fn read(&self) -> anyhow::Result<Self::ReadOnly>;
 }
 
 /// A unit of atomicity for updating a shared data source.
@@ -271,7 +266,8 @@ pub trait VersionedDataSource: Send + Sync {
 /// underlying storage, and are saved if the process restarts. It also allows pending changes to be
 /// rolled back ([revert](Self::revert)) so that they are never written back to storage and are no
 /// longer reflected even through the data source object which was used to make the changes.
+#[async_trait]
 pub trait Transaction: Send + Sync {
-    fn commit(self) -> impl Future<Output = anyhow::Result<()>> + Send;
-    fn revert(self) -> impl Future + Send;
+    async fn commit(self) -> anyhow::Result<()>;
+    async fn revert(self);
 }

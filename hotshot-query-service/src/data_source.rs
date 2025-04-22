@@ -285,7 +285,7 @@ pub mod availability_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_update<D: TestableDataSource>()
     where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        D::ReadOnly: NodeStorage<MockTypes>,
     {
         setup_test();
 
@@ -360,7 +360,7 @@ pub mod availability_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_range<D: TestableDataSource>()
     where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        D::ReadOnly: NodeStorage<MockTypes>,
     {
         setup_test();
 
@@ -458,7 +458,7 @@ pub mod availability_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_range_rev<D: TestableDataSource>()
     where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        D::ReadOnly: NodeStorage<MockTypes>,
     {
         setup_test();
 
@@ -566,7 +566,7 @@ pub mod persistence_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_revert<D: TestableDataSource>()
     where
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>
+        D::Transaction: UpdateAvailabilityStorage<MockTypes>
             + AvailabilityStorage<MockTypes>
             + NodeStorage<MockTypes>,
     {
@@ -620,7 +620,7 @@ pub mod persistence_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_reset<D: TestableDataSource>()
     where
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+        D::Transaction: UpdateAvailabilityStorage<MockTypes>,
     {
         use hotshot_example_types::node_types::TestVersions;
 
@@ -680,10 +680,10 @@ pub mod persistence_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_drop_tx<D: TestableDataSource>()
     where
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>
+        D::Transaction: UpdateAvailabilityStorage<MockTypes>
             + AvailabilityStorage<MockTypes>
             + NodeStorage<MockTypes>,
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        D::ReadOnly: NodeStorage<MockTypes>,
     {
         use hotshot_example_types::node_types::TestVersions;
 
@@ -802,7 +802,7 @@ pub mod node_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_sync_status<D: TestableDataSource>()
     where
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
+        D::Transaction: UpdateAvailabilityStorage<MockTypes>,
     {
         use hotshot_example_types::node_types::TestVersions;
 
@@ -1047,7 +1047,7 @@ pub mod node_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_vid_shares<D: TestableDataSource>()
     where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        D::ReadOnly: NodeStorage<MockTypes>,
     {
         setup_test();
 
@@ -1075,8 +1075,8 @@ pub mod node_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_vid_monotonicity<D: TestableDataSource>()
     where
-        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>,
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        D::Transaction: UpdateAvailabilityStorage<MockTypes>,
+        D::ReadOnly: NodeStorage<MockTypes>,
     {
         use hotshot_example_types::node_types::TestVersions;
 
@@ -1133,7 +1133,7 @@ pub mod node_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_vid_recovery<D: TestableDataSource>()
     where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
+        D::ReadOnly: NodeStorage<MockTypes>,
     {
         setup_test();
 

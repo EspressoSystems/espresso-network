@@ -190,7 +190,7 @@ async fn update_state_storage<T>(
 ) -> anyhow::Result<ValidatedState>
 where
     T: SequencerStateDataSource,
-    for<'a> T::Transaction<'a>: SequencerStateUpdate,
+    T::Transaction: SequencerStateUpdate,
 {
     let parent_chain_config = parent_state.chain_config;
 
@@ -271,7 +271,7 @@ pub(crate) async fn update_state_storage_loop<T>(
 ) -> anyhow::Result<()>
 where
     T: SequencerStateDataSource,
-    for<'a> T::Transaction<'a>: SequencerStateUpdate,
+    T::Transaction: SequencerStateUpdate,
 {
     let instance = instance.await;
     let peers = SqlStateCatchup::new(storage.clone(), Default::default());

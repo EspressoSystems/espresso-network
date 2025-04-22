@@ -390,9 +390,9 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
     S: PruneStorage + VersionedDataSource + HasMetrics + MigrateTypes<Types> + 'static,
-    for<'a> S::ReadOnly<'a>:
+    S::ReadOnly:
         AvailabilityStorage<Types> + PrunedHeightStorage + NodeStorage<Types> + AggregatesStorage,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
+    S::Transaction: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
     /// Build a [`FetchingDataSource`] with these options.
@@ -503,8 +503,8 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
     S: VersionedDataSource + PruneStorage + HasMetrics + MigrateTypes<Types> + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
-    for<'a> S::ReadOnly<'a>:
+    S::Transaction: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
+    S::ReadOnly:
         AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage + AggregatesStorage,
     P: AvailabilityProvider<Types>,
 {
@@ -602,7 +602,7 @@ impl<Types, S, P> StatusDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     S: VersionedDataSource + HasMetrics + Send + Sync + 'static,
-    for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
+    S::ReadOnly: NodeStorage<Types>,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
@@ -618,7 +618,7 @@ impl<Types, S, P> PrunedHeightDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     S: VersionedDataSource + HasMetrics + Send + Sync + 'static,
-    for<'a> S::ReadOnly<'a>: PrunedHeightStorage,
+    S::ReadOnly: PrunedHeightStorage,
     P: Send + Sync,
 {
     async fn load_pruned_height(&self) -> anyhow::Result<Option<u64>> {
@@ -633,8 +633,8 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
+    S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     async fn get_leaf<ID>(&self, id: ID) -> Fetch<LeafQueryData<Types>>
@@ -810,8 +810,8 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
+    S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
@@ -846,26 +846,21 @@ where
     }
 }
 
+#[async_trait]
 impl<Types, S, P> VersionedDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     S: VersionedDataSource + Send + Sync,
     P: Send + Sync,
 {
-    type Transaction<'a>
-        = S::Transaction<'a>
-    where
-        Self: 'a;
-    type ReadOnly<'a>
-        = S::ReadOnly<'a>
-    where
-        Self: 'a;
+    type Transaction = S::Transaction;
+    type ReadOnly = S::ReadOnly;
 
-    async fn write(&self) -> anyhow::Result<Self::Transaction<'_>> {
+    async fn write(&self) -> anyhow::Result<Self::Transaction> {
         self.fetcher.write().await
     }
 
-    async fn read(&self) -> anyhow::Result<Self::ReadOnly<'_>> {
+    async fn read(&self) -> anyhow::Result<Self::ReadOnly> {
         self.fetcher.read().await
     }
 }
@@ -895,26 +890,21 @@ where
     leaf_only: bool,
 }
 
+#[async_trait]
 impl<Types, S, P> VersionedDataSource for Fetcher<Types, S, P>
 where
     Types: NodeType,
     S: VersionedDataSource + Send + Sync,
     P: Send + Sync,
 {
-    type Transaction<'a>
-        = S::Transaction<'a>
-    where
-        Self: 'a;
-    type ReadOnly<'a>
-        = S::ReadOnly<'a>
-    where
-        Self: 'a;
+    type Transaction = S::Transaction;
+    type ReadOnly = S::ReadOnly;
 
-    async fn write(&self) -> anyhow::Result<Self::Transaction<'_>> {
+    async fn write(&self) -> anyhow::Result<Self::Transaction> {
         self.storage.write().await
     }
 
-    async fn read(&self) -> anyhow::Result<Self::ReadOnly<'_>> {
+    async fn read(&self) -> anyhow::Result<Self::ReadOnly> {
         self.storage.read().await
     }
 }
@@ -923,7 +913,7 @@ impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
     S: VersionedDataSource + Sync,
-    for<'a> S::ReadOnly<'a>: PrunedHeightStorage + NodeStorage<Types>,
+    S::ReadOnly: PrunedHeightStorage + NodeStorage<Types>,
 {
     pub async fn new(builder: Builder<Types, S, P>) -> anyhow::Result<Self> {
         let retry_semaphore = Arc::new(Semaphore::new(builder.rate_limit));
@@ -969,8 +959,8 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
+    S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     async fn get<T>(self: &Arc<Self>, req: impl Into<T::Request> + Send) -> Fetch<T>
@@ -1392,7 +1382,7 @@ where
     /// local database) whether `req` is fetchable or not.
     async fn fetch<T>(
         self: &Arc<Self>,
-        tx: &mut <Self as VersionedDataSource>::ReadOnly<'_>,
+        tx: &mut <Self as VersionedDataSource>::ReadOnly,
         req: T::Request,
     ) -> anyhow::Result<()>
     where
@@ -1583,8 +1573,8 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
-    for<'a> S::ReadOnly<'a>:
+    S::Transaction: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
+    S::ReadOnly:
         AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage + AggregatesStorage,
     P: AvailabilityProvider<Types>,
 {
@@ -1672,7 +1662,7 @@ impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
     S: VersionedDataSource,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
 {
     /// Store an object and notify anyone waiting on this object that it is available.
     async fn store_and_notify<T>(&self, obj: T)
@@ -1795,7 +1785,7 @@ impl<Types, S, P, State, const ARITY: usize> MerklizedStateDataSource<Types, Sta
 where
     Types: NodeType,
     S: VersionedDataSource + 'static,
-    for<'a> S::ReadOnly<'a>: MerklizedStateStorage<Types, State, ARITY>,
+    S::ReadOnly: MerklizedStateStorage<Types, State, ARITY>,
     P: Send + Sync,
     State: MerklizedState<Types, ARITY> + 'static,
     <State as MerkleTreeScheme>::Commitment: Send,
@@ -1818,7 +1808,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::ReadOnly<'a>: MerklizedStateHeightStorage,
+    S::ReadOnly: MerklizedStateHeightStorage,
     P: Send + Sync,
 {
     async fn get_last_state_height(&self) -> QueryResult<usize> {
@@ -1834,7 +1824,7 @@ impl<Types, S, P> NodeDataSource<Types> for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     S: VersionedDataSource + 'static,
-    for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
+    S::ReadOnly: NodeStorage<Types>,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
@@ -1902,7 +1892,7 @@ where
     Header<Types>: QueryableHeader<Types> + explorer::traits::ExplorerHeader<Types>,
     crate::Transaction<Types>: explorer::traits::ExplorerTransaction,
     S: VersionedDataSource + 'static,
-    for<'a> S::ReadOnly<'a>: ExplorerStorage<Types>,
+    S::ReadOnly: ExplorerStorage<Types>,
     P: Send + Sync,
 {
     async fn get_block_summaries(
@@ -2057,9 +2047,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>;
 
     /// Wait for someone else to fetch the object.

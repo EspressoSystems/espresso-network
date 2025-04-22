@@ -91,9 +91,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
         // Note: if leaf only mode is enabled
@@ -165,7 +164,7 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
     fn fetcher(&self) -> Arc<Fetcher<Types, S, P>> {
@@ -204,8 +203,8 @@ where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
+    S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     // Check if at least the header is available in local storage. If it is, we benefit two ways:

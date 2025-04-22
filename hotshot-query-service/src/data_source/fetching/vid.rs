@@ -98,9 +98,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
         fetch_header_and_then(
@@ -187,7 +186,7 @@ pub(super) fn fetch_vid_common_with_header<Types, S, P>(
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
     let Some(vid_fetcher) = fetcher.vid_common_fetcher.as_ref() else {
@@ -243,7 +242,7 @@ impl<Types: NodeType, S, P> Callback<VidCommon> for VidCommonCallback<Types, S, 
 where
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    S::Transaction: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
     async fn run(self, common: VidCommon) {
@@ -288,9 +287,8 @@ where
     ) -> anyhow::Result<()>
     where
         S: VersionedDataSource + 'static,
-        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-        for<'a> S::ReadOnly<'a>:
-            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        S::Transaction: UpdateAvailabilityStorage<Types>,
+        S::ReadOnly: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
         // Do not fetch if we are in leaf only mode
