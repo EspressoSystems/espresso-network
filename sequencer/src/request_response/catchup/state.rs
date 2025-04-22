@@ -347,4 +347,8 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> StateCatchup for RequestRespo
 
         Ok(response)
     }
+
+    fn is_local(&self) -> bool {
+        false
+    }
 }

@@ -384,6 +384,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .join(",")
         )
     }
+
+    fn is_local(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) trait CatchupStorage: Sync {
@@ -628,6 +632,10 @@ where
     fn name(&self) -> String {
         "SqlStateCatchup".into()
     }
+
+    fn is_local(&self) -> bool {
+        true
+    }
 }
 
 /// Disable catchup entirely.
@@ -719,6 +727,10 @@ impl StateCatchup for NullStateCatchup {
     fn name(&self) -> String {
         "NullStateCatchup".into()
     }
+
+    fn is_local(&self) -> bool {
+        true
+    }
 }
 
 /// A catchup implementation that parallelizes requests to many providers.
@@ -726,13 +738,18 @@ impl StateCatchup for NullStateCatchup {
 #[derive(Clone)]
 pub struct ParallelStateCatchup {
     providers: Arc<Mutex<Vec<Arc<dyn StateCatchup>>>>,
+    remote_request_delay: Duration,
 }
 
 impl ParallelStateCatchup {
-    /// Create a new [`ParallelStateCatchup`] with two providers
-    pub fn new(providers: &[Arc<dyn StateCatchup>]) -> Self {
+    /// Create a new [`ParallelStateCatchup`] with two providers.
+    ///
+    /// `remote_request_delay` is the amount of time to wait for a local response (e.g. database)
+    /// before spawning remote requests for the same data.
+    pub fn new(providers: &[Arc<dyn StateCatchup>], remote_request_delay: Duration) -> Self {
         Self {
             providers: Arc::new(Mutex::new(providers.to_vec())),
+            remote_request_delay,
         }
     }
 
@@ -755,10 +772,25 @@ impl ParallelStateCatchup {
             return Err(anyhow::anyhow!("no providers were initialized"));
         }
 
+        // Get the remote request delay so we can throw it into the future
+        let remote_request_delay = self.remote_request_delay;
+
         // Spawn futures for each provider
         let mut futures = FuturesUnordered::new();
         for provider in providers {
-            futures.push(AbortOnDropHandle::new(tokio::spawn(closure(provider))));
+            if provider.is_local() {
+                // If this is a local provider, spawn the future directly
+                let closure = closure.clone();
+                futures.push(AbortOnDropHandle::new(tokio::spawn(closure(provider))));
+            } else {
+                // If this is a remote provider, spawn a future that sleeps for the remote request delay
+                // before calling the closure. These will automatically be cancelled when this function returns
+                let closure = closure.clone();
+                futures.push(AbortOnDropHandle::new(tokio::spawn(async move {
+                    tokio::time::sleep(remote_request_delay).await;
+                    closure(provider).await
+                })));
+            }
         }
 
         // Return the first successful result
@@ -970,6 +1002,10 @@ impl StateCatchup for ParallelStateCatchup {
         *mt = merkle_tree;
 
         Ok(())
+    }
+
+    fn is_local(&self) -> bool {
+        self.providers.lock().iter().all(|p| p.is_local())
     }
 }
 

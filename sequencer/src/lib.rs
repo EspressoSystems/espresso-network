@@ -473,7 +473,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     }
 
     // Create the list of parallel catchup providers
-    let state_catchup_providers = ParallelStateCatchup::new(&[]);
+    let state_catchup_providers = ParallelStateCatchup::new(&[], Duration::from_secs(1));
 
     // Add the state peers to the list
     let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
@@ -1125,7 +1125,7 @@ pub mod testing {
                 L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
 
             // Create an empty list of catchup providers
-            let catchup_providers = ParallelStateCatchup::new(&[]);
+            let catchup_providers = ParallelStateCatchup::new(&[], Duration::from_secs(1));
 
             // If we have the state peers, add them
             if let Some(state_peers) = state_peers {

@@ -436,5 +436,9 @@ pub mod mock {
         fn name(&self) -> String {
             "MockStateCatchup".into()
         }
+
+        fn is_local(&self) -> bool {
+            true
+        }
     }
 }

@@ -227,6 +227,9 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
+    fn is_local(&self) -> bool;
+
     fn backoff(&self) -> &BackoffParams;
     fn name(&self) -> String;
 }
@@ -361,6 +364,10 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
 
     fn name(&self) -> String {
         (**self).name()
+    }
+
+    fn is_local(&self) -> bool {
+        (**self).is_local()
     }
 }
 
