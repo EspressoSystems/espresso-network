@@ -566,25 +566,25 @@ mod tests {
 
         // Process one message from both. Only the first one should be unique
         let mut cache = MessageDeduplicationCache::new();
-        assert!(cache.is_unique(message, true) == true);
+        assert!(cache.is_unique(message, true));
         assert!(cache.is_unique(message, false) == false);
 
         // Since we've already received it once on both, it should continue to be unique
         // on the second receive
-        assert!(cache.is_unique(message, true) == true);
+        assert!(cache.is_unique(message, true));
         assert!(cache.is_unique(message, false) == false);
 
         // Try both of the above tests the other way around
-        assert!(cache.is_unique(message, false) == true);
+        assert!(cache.is_unique(message, false));
         assert!(cache.is_unique(message, true) == false);
-        assert!(cache.is_unique(message, false) == true);
+        assert!(cache.is_unique(message, false));
         assert!(cache.is_unique(message, true) == false);
 
         // The same message from the same source a few times should always be treated as unique
-        assert!(cache.is_unique(message, true) == true);
-        assert!(cache.is_unique(message, true) == true);
-        assert!(cache.is_unique(message, true) == true);
+        assert!(cache.is_unique(message, true));
+        assert!(cache.is_unique(message, true));
+        assert!(cache.is_unique(message, true));
         assert!(cache.is_unique(message, false) == false);
-        assert!(cache.is_unique(message, false) == true);
+        assert!(cache.is_unique(message, false));
     }
 }
