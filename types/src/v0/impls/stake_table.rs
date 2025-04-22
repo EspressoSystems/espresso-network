@@ -475,7 +475,7 @@ impl StakeTableFetcher {
         let from_block = res
             .as_ref()
             .map(|(block, _)| block + 1)
-            .filter(|from| *from < to_block); // Only use from_block if it's less than to_block
+            .filter(|from| *from <= to_block); // Only use from_block if it's less than to_block
 
         tracing::info!("loaded events from storage from_block={from_block:?}");
 
