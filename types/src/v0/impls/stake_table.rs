@@ -381,7 +381,8 @@ impl StakeTableFetcher {
         async move {
         // Get the stake table contract address from the chain config.
         // This may not contain a stake table address if we are on a pre-epoch version.
-        // It keeps retrying until the chain config is upgraded after a successful upgrade to an epoch version.
+        // It keeps retrying until the chain config is upgraded 
+        // after a successful upgrade to an epoch version.
         let stake_contract_address = loop {
             let chain_config_lock = chain_config.lock().await;
             if let Some(addr) = chain_config_lock.stake_table_contract {
@@ -400,28 +401,28 @@ impl StakeTableFetcher {
             }
             sleep(l1_retry).await;
         };
-
         // Check if there's a more recent synced block in persisted data
-       // Retry loading from persistence until successful
-       loop {
-        match self_clone.persistence.lock().await.load_events().await {
-            Ok(Some((stored_block, _))) => {
-                if stored_block > last_synced_block {
-                    last_synced_block = stored_block;
+        // Retry loading from persistence until successful
+        loop {
+            match self_clone.persistence.lock().await.load_events().await {
+                Ok(Some((stored_block, _))) => {
+                    if stored_block > last_synced_block {
+                        last_synced_block = stored_block;
+                    }
+                    break;
                 }
-                break;
-            }
-            Ok(None) => {
-                break;
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load events from persistence: {e:#}. Retrying in {:?}", l1_retry);
-                sleep(l1_retry).await;
+                Ok(None) => {
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to load events from persistence: {e:#}. Retrying in {:?}",
+                        l1_retry
+                    );
+                    sleep(l1_retry).await;
+                }
             }
         }
-    }
-
-
         tracing::info!("last_synced_block={last_synced_block}");
 
         // Main polling loop
