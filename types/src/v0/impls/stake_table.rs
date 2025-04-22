@@ -473,7 +473,6 @@ impl StakeTableFetcher {
         tracing::info!("loading events from contract to_block={to_block:?}");
 
         let contract_events = contract_events.sort_events()?;
-        tracing::error!("xx>> contract_events={contract_events:?}");
         let mut events = match (from_block, res) {
             (Some(_), Some((_, persistence_events))) => persistence_events
                 .into_iter()
@@ -552,7 +551,7 @@ impl StakeTableFetcher {
                         .clone()
                         .ValidatorRegistered_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
@@ -576,7 +575,7 @@ impl StakeTableFetcher {
                     match stake_table_contract
                         .ValidatorExit_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
@@ -600,7 +599,7 @@ impl StakeTableFetcher {
                     match stake_table_contract
                         .Delegated_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
@@ -623,7 +622,7 @@ impl StakeTableFetcher {
                     match stake_table_contract
                         .Undelegated_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
@@ -647,7 +646,7 @@ impl StakeTableFetcher {
                     match stake_table_contract
                         .ConsensusKeysUpdated_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
