@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{traits::{MembershipPersistence, StateCatchup}, SeqTypes};
 use alloy::primitives::{Address, U256};
@@ -62,8 +62,6 @@ pub type IndexedStake = (
     IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
 );
 
-
-
 #[derive(Clone, derive_more::derive::Debug)]
 pub struct StakeTableFetcher {
     /// Peers for catching up the stake table
@@ -77,12 +75,7 @@ pub struct StakeTableFetcher {
     /// Verifiable `ChainConfig` holding contract address
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
-    pub(crate) l1_update_delay: Duration
 }
-
-
-
-
 
 #[derive( Debug, Default)]
 pub(crate) struct StakeTableUpdateTask(pub(crate) Mutex<Option<JoinHandle<()>>>);
@@ -94,8 +87,6 @@ impl Drop for StakeTableUpdateTask {
         }
     }
 }
-
-
 
 // (log block number, log index)
 pub type EventKey = (u64, u64);

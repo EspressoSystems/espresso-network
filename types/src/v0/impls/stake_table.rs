@@ -3,7 +3,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
     sync::Arc,
-    time::Duration,
 };
 
 use alloy::{
@@ -347,7 +346,6 @@ impl StakeTableFetcher {
         persistence: Arc<Mutex<dyn MembershipPersistence>>,
         l1_client: L1Client,
         chain_config: ChainConfig,
-        l1_update_delay: Duration,
     ) -> Self {
         Self {
             peers,
@@ -355,7 +353,6 @@ impl StakeTableFetcher {
             l1_client,
             chain_config: Arc::new(Mutex::new(chain_config)),
             update_task: StakeTableUpdateTask(Mutex::new(None)).into(),
-            l1_update_delay,
         }
     }
 
@@ -379,7 +376,7 @@ impl StakeTableFetcher {
         let l1_retry = self.l1_client.options().l1_retry_delay;
         let max_range = self.l1_client.options().l1_events_max_block_range;
         let chain_config = self.chain_config.clone();
-        let update_delay = self.l1_update_delay;
+        let update_delay = self.l1_client.options().stake_table_update_interval;
 
         async move {
         // get the stake table contract address from chain config
@@ -409,6 +406,8 @@ impl StakeTableFetcher {
             }
         }
 
+        tracing::info!("last_synced_block={last_synced_block}");
+
         // Main polling loop
         loop {
             let new_finalized = {
@@ -425,6 +424,7 @@ impl StakeTableFetcher {
             if finalized_block - last_synced_block >= max_range {
                 // Try fetching stake table until it succeeds
                 loop {
+                    tracing::info!("fetching stake table. l1_block={finalized_block:?}");
                     match self_clone
                         .fetch_and_store_stake_table(stake_contract_address, finalized_block)
                         .await
@@ -440,7 +440,6 @@ impl StakeTableFetcher {
                     }
                 }
             }
-
             sleep(update_delay).await;
         }
     }
@@ -456,7 +455,10 @@ impl StakeTableFetcher {
         let res = persistence_lock.load_events().await?;
         drop(persistence_lock);
 
-        let from_block = res.as_ref().map(|(block, _)| block + 1);
+        let from_block = res
+            .as_ref()
+            .map(|(block, _)| block + 1)
+            .filter(|from| *from < to_block); // Only use from_block if it's less than to_block
 
         tracing::info!("loaded events from storage from_block={from_block:?}");
 
@@ -468,23 +470,23 @@ impl StakeTableFetcher {
         )
         .await?;
 
-        tracing::info!("loading events from contract");
+        tracing::info!("loading events from contract to_block={to_block:?}");
 
         let contract_events = contract_events.sort_events()?;
-        let mut events = if let Some((_, persistence_events)) = res {
-            persistence_events
+        tracing::error!("xx>> contract_events={contract_events:?}");
+        let mut events = match (from_block, res) {
+            (Some(_), Some((_, persistence_events))) => persistence_events
                 .into_iter()
                 .chain(contract_events)
-                .collect()
-        } else {
-            contract_events
+                .collect(),
+            _ => contract_events,
         };
 
         // There are no duplicates because the RPC returns all events,
         // which are stored directly in persistence as is.
         // However, this step is taken as a precaution.
         // The vector is already sorted above, so this should be fast.
-        events.dedup_by_key(|(k, _)| (k.0, k.1));
+        events.dedup();
 
         Ok(events)
     }
@@ -518,6 +520,7 @@ impl StakeTableFetcher {
             },
         };
 
+        tracing::error!("from_block={from_block}");
         // To avoid making large RPC calls, divide the range into smaller chunks.
         // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
         // default value  is `10000` if env variable is not set
@@ -538,6 +541,8 @@ impl StakeTableFetcher {
         // fetch registered events
         // retry if the call to the provider to fetch the events fails
         let registered_events = stream::iter(chunks.clone()).then(|(from, to)| {
+            tracing::error!("xx11 from={from:?} to={to:?}");
+
             let retry_delay = l1_client.options().l1_retry_delay;
             let stake_table_contract = stake_table_contract.clone();
             async move {
@@ -774,13 +779,7 @@ impl StakeTableFetcher {
         let peers = Arc::new(mock::MockStateCatchup::default());
         let persistence = NoStorage;
 
-        Self::new(
-            peers,
-            Arc::new(Mutex::new(persistence)),
-            l1,
-            chain_config,
-            Duration::from_secs(5),
-        )
+        Self::new(peers, Arc::new(Mutex::new(persistence)), l1, chain_config)
     }
 }
 /// Holds Stake table and da stake

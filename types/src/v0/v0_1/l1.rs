@@ -151,6 +151,17 @@ pub struct L1ClientOptions {
     /// Typically this would be a WebSockets endpoint while the main provider uses HTTP.
     #[clap(long, env = "ESPRESSO_SEQUENCER_L1_WS_PROVIDER", value_delimiter = ',')]
     pub l1_ws_provider: Option<Vec<Url>>,
+    
+    /// Interval at which the background update loop polls the L1 stake table contract for new events
+    /// and updates local persistence.
+    ///
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL",
+        default_value = "2m",
+        value_parser = parse_duration,
+    )]
+    pub stake_table_update_interval: Duration,
 
     #[clap(skip = Arc::<Box<dyn Metrics>>::new(Box::new(NoMetrics)))]
     pub metrics: Arc<Box<dyn Metrics>>,
