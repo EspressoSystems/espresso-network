@@ -214,7 +214,7 @@ pub(crate) async fn deploy_light_client_contract(
         )
         .await?;
 
-    assert!(is_contract(&provider, plonk_verifier_addr.clone()).await?);
+    assert!(is_contract(&provider, plonk_verifier_addr).await?);
 
     // when generate alloy's bindings, we supply a placeholder address, now we modify the actual
     // bytecode with deployed address of the library.
@@ -361,7 +361,7 @@ pub async fn upgrade_light_client_v2(
                 )
                 .await?;
 
-            assert!(is_contract(&provider, pv2_addr.clone()).await?);
+            assert!(is_contract(&provider, pv2_addr).await?);
 
             // then deploy LightClientV2.sol
             let target_lcv2_bytecode = if is_mock {
