@@ -837,7 +837,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
         // After each batch insert, it is updated with the number of rows migrated.
         // This is necessary to resume from the same point in case of a restart.
         let (is_migration_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from types_migration LIMIT 1 ",
+            "SELECT completed, migrated_rows from types_migration WHERE id = 1 ",
         )
         .fetch_one(tx.as_mut())
         .await?;

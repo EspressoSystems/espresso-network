@@ -17,7 +17,7 @@ use super::{
     state::ValidatedState,
     traits::MembershipPersistence,
     v0_1::NoStorage,
-    v0_3::{IndexedStake, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     SeqTypes,
 };
 use crate::v0::{
@@ -81,6 +81,17 @@ impl MembershipPersistence for NoStorage {
         _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
     ) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn store_events(
+        &self,
+        _l1_block: u64,
+        _events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
+        Ok(None)
     }
 }
 
