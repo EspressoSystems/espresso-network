@@ -380,17 +380,17 @@ impl StakeTableFetcher {
 
         async move {
         // get the stake table contract address from chain config
-        let stake_contract_address = {
-            let config = chain_config.lock().await;
-            match config.stake_table_contract {
-                Some(addr) => addr,
-                None => {
-                    tracing::error!("No stake table address found in chain config");
-                    return;
-                }
+        let stake_contract_address = loop {
+            let chain_config_lock = chain_config.lock().await;
+            if let Some(addr) = chain_config_lock.stake_table_contract {
+                break addr;
+            } else {
+                tracing::info!("No stake table address found in chain config, retrying after {:?}", update_delay);
             }
+            drop(chain_config_lock);
+            sleep(update_delay).await;
         };
-
+        
         // Determine the starting point for syncing
         let mut last_synced_block = loop {
             if let Some(block) = state.lock().await.last_finalized {
