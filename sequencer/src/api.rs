@@ -718,10 +718,8 @@ pub mod test_helpers {
     use std::time::Duration;
 
     use alloy::{
-        network::EthereumWallet,
         node_bindings::Anvil,
         primitives::{Address, U256},
-        providers::{Provider, ProviderBuilder},
     };
     use committable::Committable;
     use espresso_types::{
@@ -742,11 +740,8 @@ pub mod test_helpers {
     use itertools::izip;
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
-    use sequencer_utils::{
-        deployer::{self, Contract, Contracts},
-        test_utils::setup_test,
-    };
-    use staking_cli::demo::stake_in_contract_for_test;
+    use sequencer_utils::test_utils::setup_test;
+    use staking_cli::demo::pos_deploy_routine;
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -890,75 +885,26 @@ pub mod test_helpers {
                 .network_config
                 .as_ref()
                 .expect("network_config is required");
-            let signer = network_config.signer();
-            let contracts = &mut Contracts::new();
 
-            let wallet = EthereumWallet::from(signer.clone());
-            let provider = ProviderBuilder::new()
-                .wallet(wallet.clone())
-                .on_http(network_config.l1_url());
-            let admin = provider.get_accounts().await?[0];
+            let l1_url = network_config.l1_url();
+            let signer = network_config.signer();
 
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
             let initial_stake_table = network_config.stake_table();
-            let (genesis_state, genesis_stake) =
-                legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
 
-            // deploy EspToken, proxy
-            let token_proxy_addr =
-                deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
-
-            // deploy light client v1, proxy
-            let lc_proxy_addr = deployer::deploy_light_client_proxy(
-                &provider,
-                contracts,
-                true, // use mock
-                genesis_state.clone(),
-                genesis_stake.clone(),
-                admin,
-                None, // no permissioned prover
-            )
-            .await?;
-            // upgrade to LightClientV2
-            deployer::upgrade_light_client_v2(
-                &provider,
-                contracts,
-                true, // use mock
+            let stake_table_address = pos_deploy_routine(
+                &l1_url,
+                &signer,
                 blocks_per_epoch,
                 epoch_start_block,
-            )
-            .await?;
-
-            // deploy permissionless stake table
-            let exit_escrow_period = U256::from(300); // 300 sec
-            let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
-                &provider,
-                contracts,
-                token_proxy_addr,
-                lc_proxy_addr,
-                exit_escrow_period,
-                admin,
-            )
-            .await?;
-
-            let staking_priv_keys = network_config.staking_priv_keys();
-
-            let stake_table_address = contracts
-                .address(Contract::StakeTableProxy)
-                .expect("stake table deployed");
-
-            stake_in_contract_for_test(
-                network_config.l1_url(),
-                signer,
-                stake_table_address,
-                contracts
-                    .address(Contract::EspTokenProxy)
-                    .expect("ESP token deployed"),
-                staking_priv_keys,
+                initial_stake_table,
+                network_config.staking_priv_keys(),
+                None,
                 multiple_delegators,
             )
-            .await?;
+            .await
+            .expect("deployed pos contracts");
 
             // Add stake table address to `ChainConfig` (held in state),
             // avoiding overwrite other values. Base fee is set to `0` to avoid
@@ -1050,6 +996,7 @@ pub mod test_helpers {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
                         let upgrades_map = cfg.upgrades();
+
                         let marketplace_builder_url = marketplace_builder_url.clone();
                         async move {
                             if i == 0 {
@@ -1964,10 +1911,7 @@ mod api_tests {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::{BTreeMap, HashSet},
-        time::Duration,
-    };
+    use std::{collections::HashSet, time::Duration};
 
     use alloy::{node_bindings::Anvil, primitives::U256, signers::local::LocalSigner};
     use committable::{Commitment, Committable};
@@ -1976,8 +1920,7 @@ mod test {
         traits::NullEventConsumer,
         v0_1::{block_reward, RewardAmount},
         BackoffParams, EpochVersion, FeeAmount, FeeVersion, Header, MarketplaceVersion,
-        MockSequencerVersions, SequencerVersions, TimeBasedUpgrade, Timestamp, Upgrade,
-        UpgradeMode, UpgradeType, ValidatedState, ViewBasedUpgrade, V0_1,
+        MockSequencerVersions, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -1997,16 +1940,15 @@ mod test {
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
-    use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
+    use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, spawn_dishonest_peer_catchup_api, state_signature_test_helper,
         status_test_helper, submit_test_helper, TestNetwork, TestNetworkConfigBuilder,
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
-    use time::OffsetDateTime;
     use tokio::time::sleep;
-    use vbs::version::{StaticVersion, StaticVersionType, Version};
+    use vbs::version::{StaticVersion, StaticVersionType};
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -2647,145 +2589,50 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_fee_upgrade_view_based() {
-        setup_test();
-
-        let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<V0_1, FeeVersion>;
-
-        let mode = UpgradeMode::View(ViewBasedUpgrade {
-            start_voting_view: None,
-            stop_voting_view: None,
-            start_proposing_view: 1,
-            stop_proposing_view: 10,
-        });
-
-        let upgrade_type = UpgradeType::Fee {
-            chain_config: ChainConfig {
-                max_block_size: 300.into(),
-                base_fee: 1.into(),
-                ..Default::default()
-            },
-        };
-
-        upgrades.insert(
-            <MySequencerVersions as Versions>::Upgrade::VERSION,
-            Upgrade { mode, upgrade_type },
-        );
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_fee_upgrade_time_based() {
-        setup_test();
-
-        let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
-
-        let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<V0_1, FeeVersion>;
-
-        let mode = UpgradeMode::Time(TimeBasedUpgrade {
-            start_proposing_time: Timestamp::from_integer(now).unwrap(),
-            stop_proposing_time: Timestamp::from_integer(now + 500).unwrap(),
-            start_voting_time: None,
-            stop_voting_time: None,
-        });
-
-        let upgrade_type = UpgradeType::Fee {
-            chain_config: ChainConfig {
-                max_block_size: 300.into(),
-                base_fee: 1.into(),
-                ..Default::default()
-            },
-        };
-
-        upgrades.insert(
-            <MySequencerVersions as Versions>::Upgrade::VERSION,
-            Upgrade { mode, upgrade_type },
-        );
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
+    async fn test_pos_upgrade_view_based() {
+        type PosUpgrade = SequencerVersions<FeeVersion, EpochVersion>;
+        test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
     }
 
     #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_marketplace_upgrade_view_based() {
-        setup_test();
-
-        let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<EpochVersion, MarketplaceVersion>;
-
-        let mode = UpgradeMode::View(ViewBasedUpgrade {
-            start_voting_view: None,
-            stop_voting_view: None,
-            start_proposing_view: 1,
-            stop_proposing_view: 10,
-        });
-
-        let upgrade_type = UpgradeType::Marketplace {
-            chain_config: ChainConfig {
-                max_block_size: 400.into(),
-                base_fee: 2.into(),
-                bid_recipient: Some(Default::default()),
-                ..Default::default()
-            },
-        };
-
-        upgrades.insert(
-            <MySequencerVersions as Versions>::Upgrade::VERSION,
-            Upgrade { mode, upgrade_type },
-        );
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
+        type MarketplaceUpgrade = SequencerVersions<EpochVersion, MarketplaceVersion>;
+        test_upgrade_helper::<MarketplaceUpgrade>(MarketplaceUpgrade::new()).await;
     }
 
     #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_marketplace_upgrade_time_based() {
-        setup_test();
-
-        let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
-
-        let mut upgrades = std::collections::BTreeMap::new();
-        type MySequencerVersions = SequencerVersions<EpochVersion, MarketplaceVersion>;
-
-        let mode = UpgradeMode::Time(TimeBasedUpgrade {
-            start_proposing_time: Timestamp::from_integer(now).unwrap(),
-            stop_proposing_time: Timestamp::from_integer(now + 500).unwrap(),
-            start_voting_time: None,
-            stop_voting_time: None,
-        });
-
-        let upgrade_type = UpgradeType::Marketplace {
-            chain_config: ChainConfig {
-                max_block_size: 400.into(),
-                base_fee: 2.into(),
-                bid_recipient: Some(Default::default()),
-                ..Default::default()
-            },
-        };
-
-        upgrades.insert(
-            <MySequencerVersions as Versions>::Upgrade::VERSION,
-            Upgrade { mode, upgrade_type },
-        );
-        test_upgrade_helper::<MySequencerVersions>(upgrades, MySequencerVersions::new()).await;
+        type MarketplaceUpgrade = SequencerVersions<EpochVersion, MarketplaceVersion>;
+        test_upgrade_helper::<MarketplaceUpgrade>(MarketplaceUpgrade::new()).await;
     }
 
-    async fn test_upgrade_helper<MockSeqVersions: Versions>(
-        upgrades: BTreeMap<Version, Upgrade>,
-        bind_version: MockSeqVersions,
-    ) {
-        let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-
-        let chain_config_upgrade = upgrades
-            .get(&<MockSeqVersions as Versions>::Upgrade::VERSION)
-            .unwrap()
-            .upgrade_type
-            .chain_config()
-            .unwrap();
-
+    async fn test_upgrade_helper<V: Versions>(version: V) {
+        setup_test();
+        // wait this number of views beyond the configured first view
+        // before asserting anything.
+        let wait_extra_views = 10;
+        // Number of nodes running in the test network.
         const NUM_NODES: usize = 5;
+        let upgrade_version = <V as Versions>::Upgrade::VERSION;
+        let port = pick_unused_port().expect("No ports free");
+        let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1 = anvil.endpoint_url();
+        let signer = LocalSigner::from(anvil.keys()[0].clone());
+
+        let test_config = TestConfigBuilder::default()
+            .epoch_height(200)
+            .epoch_start_block(321)
+            .l1_url(l1)
+            .signer(signer.clone())
+            .set_upgrades(upgrade_version)
+            .await
+            .build();
+
+        let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
+        tracing::debug!(?chain_config_upgrade);
+
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::from(options::Http {
                 port,
@@ -2798,75 +2645,56 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .network_config(
-                TestConfigBuilder::default()
-                    .l1_url(l1)
-                    .upgrades::<MockSeqVersions>(upgrades)
-                    .build(),
-            )
+            .network_config(test_config)
             .build();
 
-        let mut network = TestNetwork::new(config, bind_version).await;
-
+        let mut network = TestNetwork::new(config, version).await;
         let mut events = network.server.event_stream().await;
 
         // First loop to get an `UpgradeProposal`. Note that the
-        // actual upgrade will take several subsequent views for
+        // actual upgrade will take several to many subsequent views for
         // voting and finally the actual upgrade.
-        let new_version_first_view = loop {
+        let upgrade = loop {
             let event = events.next().await.unwrap();
             match event.event {
                 EventType::UpgradeProposal { proposal, .. } => {
+                    tracing::info!(?proposal, "proposal");
                     let upgrade = proposal.data.upgrade_proposal;
                     let new_version = upgrade.new_version;
-                    assert_eq!(new_version, <MockSeqVersions as Versions>::Upgrade::VERSION);
-                    break upgrade.new_version_first_view;
+                    tracing::info!(?new_version, "upgrade proposal new version");
+                    assert_eq!(new_version, <V as Versions>::Upgrade::VERSION);
+                    break upgrade;
                 },
                 _ => continue,
             }
         };
-        tracing::info!(?new_version_first_view, "seen upgrade proposal");
 
-        let client: Client<ServerError, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{port}").parse().unwrap());
-        client.connect(None).await;
-        tracing::info!(port, "server running");
-
-        // Loop to wait on the upgrade itself.
+        let wanted_view = upgrade.new_version_first_view + wait_extra_views;
+        // Loop until we get the `new_version_first_view`, then test the upgrade.
         loop {
-            // Get height as a proxy for view number. Height is always
-            // >= to view. Especially when using Anvil, there should be little
-            // difference. As a possible alternative we might loop on
-            // hotshot events here again and pull the view number off
-            // the event.
-            let height = client
-                .get::<ViewNumber>("status/block-height")
-                .send()
-                .await
-                .unwrap();
+            let event = events.next().await.unwrap();
+            let view_number = event.view_number;
 
-            let states: Vec<_> = network
-                .peers
-                .iter()
-                .map(|peer| async { peer.consensus().read().await.decided_state().await })
-                .collect();
+            tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
+            if view_number > wanted_view {
+                let states: Vec<_> = network
+                    .peers
+                    .iter()
+                    .map(|peer| async { peer.consensus().read().await.decided_state().await })
+                    .collect();
 
-            let configs: Option<Vec<ChainConfig>> = join_all(states)
-                .await
-                .iter()
-                .map(|state| state.chain_config.resolve())
-                .collect();
+                let configs: Option<Vec<ChainConfig>> = join_all(states)
+                    .await
+                    .iter()
+                    .map(|state| state.chain_config.resolve())
+                    .collect();
 
-            tracing::info!(?height, ?new_version_first_view, "checking config");
-
-            // ChainConfigs will eventually be resolved
-            if let Some(configs) = configs {
-                tracing::info!(?configs, "configs");
-                if height > new_version_first_view + 10 {
+                tracing::debug!(?configs, "`ChainConfig`s for nodes");
+                if let Some(configs) = configs {
                     for config in configs {
                         assert_eq!(config, chain_config_upgrade);
                     }
-                    break; // if assertion did not panic, we need to exit the loop
+                    break; // if assertion did not panic, the test was successful, so we exit the loop
                 }
             }
             sleep(Duration::from_millis(200)).await;
@@ -3121,7 +2949,6 @@ mod test {
         let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
         let l1_url = instance.endpoint_url();
         let secret_key = instance.keys()[0].clone();
-
         let signer = LocalSigner::from(secret_key);
 
         let network_config = TestConfigBuilder::default()
