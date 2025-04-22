@@ -214,41 +214,35 @@ impl CatchupStorage for SqlStorage {
         let mut chain = vec![last_leaf.clone()];
         let mut h = height + 1;
 
-        let mut found = false;
-        while !found {
-            for leaf in tx.get_leaves(h).await? {
-                let leaf = leaf.leaf();
+        loop {
+            let lqd = tx.get_leaf((h as usize).into()).await?;
+            let leaf = lqd.leaf();
 
-                if leaf.justify_qc().view_number() == last_leaf.view_number() {
-                    chain.push(leaf.clone());
-                } else {
-                    h += 1;
-                    continue;
-                }
-
-                // just one away from deciding
-                if leaf.view_number() == last_leaf.view_number() + 1 {
-                    last_leaf = leaf.clone();
-                    h += 1;
-                    found = true;
-                    break;
-                }
+            if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                chain.push(leaf.clone());
+            } else {
                 h += 1;
-                last_leaf = leaf.clone();
+                continue;
             }
+
+            // just one away from deciding
+            if leaf.view_number() == last_leaf.view_number() + 1 {
+                last_leaf = leaf.clone();
+                h += 1;
+                break;
+            }
+            h += 1;
+            last_leaf = leaf.clone();
         }
 
-        found = false;
-        while !found {
-            for leaf in tx.get_leaves(h).await? {
-                let leaf = leaf.leaf();
-                if leaf.justify_qc().view_number() == last_leaf.view_number() {
-                    chain.push(leaf.clone());
-                    found = true;
-                    break;
-                }
-                h += 1;
+        loop {
+            let lqd = tx.get_leaf((h as usize).into()).await?;
+            let leaf = lqd.leaf();
+            if leaf.justify_qc().view_number() == last_leaf.view_number() {
+                chain.push(leaf.clone());
+                break;
             }
+            h += 1;
         }
 
         Ok(chain)

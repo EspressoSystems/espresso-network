@@ -16,6 +16,7 @@ on:
   # Run the audit job once a day on main.
   schedule:
     - cron: "0 0 * * *"
+
 jobs:
   security_audit:
     runs-on: ubuntu-latest
