@@ -10125,6 +10125,8 @@ dependencies = [
  "futures-util",
  "git-version",
  "hotshot-contract-adapter",
+ "hotshot-stake-table",
+ "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.2.0",
  "portpicker",

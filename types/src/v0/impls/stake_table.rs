@@ -451,7 +451,7 @@ impl StakeTableFetcher {
                         .clone()
                         .ValidatorRegistered_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
@@ -475,7 +475,7 @@ impl StakeTableFetcher {
                     match stake_table_contract
                         .ValidatorExit_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
@@ -499,7 +499,7 @@ impl StakeTableFetcher {
                     match stake_table_contract
                         .Delegated_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
@@ -522,7 +522,7 @@ impl StakeTableFetcher {
                     match stake_table_contract
                         .Undelegated_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
@@ -546,7 +546,7 @@ impl StakeTableFetcher {
                     match stake_table_contract
                         .ConsensusKeysUpdated_filter()
                         .from_block(from)
-                        .to_block(to_block)
+                        .to_block(to)
                         .query()
                         .await
                     {
