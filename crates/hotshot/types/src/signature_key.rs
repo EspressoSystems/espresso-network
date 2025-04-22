@@ -30,10 +30,11 @@ use crate::{
     },
 };
 
-/// BLS private key used to sign a message
+/// BLS private key used to sign a consensus message
 pub type BLSPrivKey = SignKey;
-/// BLS public key used to verify a signature
+/// BLS public key used to verify a consensus signature
 pub type BLSPubKey = VerKey;
+/// BLS key pair used to sign and verify a consensus message
 pub type BLSKeyPair = KeyPair;
 /// Public parameters for BLS signature scheme
 pub type BLSPublicParam = ();

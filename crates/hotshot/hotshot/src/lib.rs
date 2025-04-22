@@ -10,7 +10,6 @@
 // Documentation module
 #[cfg(feature = "docs")]
 pub mod documentation;
-
 use committable::Committable;
 use futures::future::{select, Either};
 use hotshot_types::{
@@ -26,6 +25,7 @@ use hotshot_types::{
 };
 use rand::Rng;
 use url::Url;
+use vbs::version::StaticVersionType;
 
 /// Contains traits consumed by [`SystemContext`]
 pub mod traits;
@@ -268,12 +268,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     ) -> Arc<Self> {
         debug!("Creating a new hotshot");
 
+        tracing::warn!("Starting consensus with HotShotConfig:\n\n {:?}", config);
+
         let consensus_metrics = Arc::new(metrics);
         let anchored_leaf = initializer.anchor_leaf;
         let instance_state = initializer.instance_state;
 
         let (internal_tx, mut internal_rx) = internal_channel;
         let (mut external_tx, mut external_rx) = external_channel;
+
+        tracing::warn!(
+            "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
+            V::Base::VERSION,
+            V::Upgrade::VERSION,
+        );
+        tracing::warn!(
+            "Loading previously decided upgrade certificate from storage: {:?}",
+            initializer.decided_upgrade_certificate
+        );
 
         let upgrade_lock =
             UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
