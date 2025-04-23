@@ -121,7 +121,7 @@ impl StakeTableEvents {
 }
 
 /// Extract all validators from L1 stake table events.
-pub(crate) fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
     let mut validators = IndexMap::new();
