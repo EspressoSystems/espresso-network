@@ -3264,6 +3264,9 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_stake_table_duplicate_events_from_contract() -> anyhow::Result<()> {
+        // TODO(abdul): This test currently uses TestNetwork only for contract deployment and for L1 block number.
+        // Once the stake table deployment logic is refactored and isolated, TestNetwork here will be unnecessary
+
         setup_test();
         let epoch_height = 20;
 
