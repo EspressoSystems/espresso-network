@@ -475,7 +475,12 @@ impl StakeTableFetcher {
         // which are stored directly in persistence as is.
         // However, this step is taken as a precaution.
         // The vector is already sorted above, so this should be fast.
+        let len_before_dedup = events.len();
         events.dedup();
+        let len_after_dedup = events.len();
+        if len_before_dedup != len_after_dedup {
+            tracing::warn!("Duplicate events found and removed. This should not normally happen.")
+        }
 
         Ok(events)
     }
