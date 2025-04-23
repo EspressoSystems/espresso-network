@@ -158,7 +158,7 @@ pub struct L1ClientOptions {
     #[clap(
         long,
         env = "ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL",
-        default_value = "2m",
+        default_value = "60m",
         value_parser = parse_duration,
     )]
     pub stake_table_update_interval: Duration,
