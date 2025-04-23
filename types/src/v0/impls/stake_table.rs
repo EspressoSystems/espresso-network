@@ -384,7 +384,7 @@ impl StakeTableFetcher {
                 match chain_config.lock().await.stake_table_contract {
                     Some(addr) => break addr,
                     None => {
-                        tracing::info!(
+                        tracing::debug!(
                             "Stake table contract address not found. Retrying in {l1_retry:?}...",
                         );
                     },
@@ -404,7 +404,7 @@ impl StakeTableFetcher {
                     sleep(l1_retry).await;
                 };
 
-                tracing::info!(
+                tracing::debug!(
                     "Attempting to fetch stake table at L1 block {finalized_block:?}",
                 );
 
@@ -415,7 +415,7 @@ impl StakeTableFetcher {
                         .await
                     {
                         Ok(_) => {
-                            tracing::info!("Successfully fetched and stored stake table.");
+                            tracing::info!("Successfully fetched and stored stake table at block={finalized_block:?}");
                             break;
                         },
                         Err(e) => {
@@ -427,7 +427,7 @@ impl StakeTableFetcher {
                     }
                 }
 
-                tracing::info!(
+                tracing::debug!(
                     "Waiting {update_delay:?} before next stake table update...",
                 );
                 sleep(update_delay).await;
