@@ -26,3 +26,25 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  audit_fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Run cargo audit fix
+        uses: simonhyll/cargo-audit@v1
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: bot/cargo-audit
+          title: "[Bot] Audit fixes"
+          commit-message: Cargo audit fixes
+          body: >
+            Updates to Cargo.toml and/or Cargo.lock with security fixes.
+          labels: automated pr
+

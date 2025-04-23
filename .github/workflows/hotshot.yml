@@ -45,7 +45,7 @@ jobs:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' && matrix.test_suites == 'test-ci-rest' }}
-          prefix-key: v0-hotshot
+          prefix-key: v1-hotshot
 
       - uses: taiki-e/install-action@just
 
@@ -59,9 +59,14 @@ jobs:
         with:
           comment_on_pr: false
 
-      - name: Unit and integration tests for all crates in workspace
+      - name: Build integration tests
         run: |
-          just hotshot::${{ matrix.test_suites }}
+          just hotshot::${{ matrix.test_suites }} --no-run
+        timeout-minutes: 60
+
+      - name: Run integration tests
+        run: |
+          just hotshot::${{ matrix.test_suites }} --no-fail-fast
         timeout-minutes: 60
         env:
           RUST_BACKTRACE: full
