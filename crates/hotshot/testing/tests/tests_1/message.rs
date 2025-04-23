@@ -107,6 +107,10 @@ async fn test_certificate2_validity() {
     let membership_stake_table = epoch_mem.stake_table().await;
     let membership_success_threshold = epoch_mem.success_threshold().await;
 
+    let membership_stake_table = membership_stake_table
+        .into_iter()
+        .map(|config| config.stake_table_entry)
+        .collect::<Vec<_>>();
     assert!(qc
         .is_valid_cert(
             membership_stake_table.clone(),
