@@ -381,8 +381,7 @@ impl StakeTableFetcher {
             // It keeps retrying until the chain config is upgraded
             // after a successful upgrade to an epoch version.
             let stake_contract_address = loop {
-                let config = chain_config.lock().await;
-                match config.stake_table_contract {
+                match chain_config.lock().await.stake_table_contract {
                     Some(addr) => break addr,
                     None => {
                         tracing::info!(
@@ -390,7 +389,6 @@ impl StakeTableFetcher {
                         );
                     },
                 }
-                drop(config);
                 sleep(l1_retry).await;
             };
 
@@ -401,15 +399,13 @@ impl StakeTableFetcher {
                         break block;
                     }
                     tracing::debug!(
-                        "Finalized block not yet available. Retrying in {:?}",
-                        l1_retry
+                        "Finalized block not yet available. Retrying in {l1_retry:?}",
                     );
                     sleep(l1_retry).await;
                 };
 
                 tracing::info!(
-                    "Attempting to fetch stake table at L1 block {:?}",
-                    finalized_block
+                    "Attempting to fetch stake table at L1 block {finalized_block:?}",
                 );
 
                 // Retry stake table fetch until it succeeds
@@ -431,9 +427,8 @@ impl StakeTableFetcher {
                     }
                 }
 
-                tracing::debug!(
-                    "Waiting {:?} before next stake table update...",
-                    update_delay
+                tracing::info!(
+                    "Waiting {update_delay:?} before next stake table update...",
                 );
                 sleep(update_delay).await;
             }
