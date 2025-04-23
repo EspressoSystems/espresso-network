@@ -365,7 +365,7 @@ impl StakeTableFetcher {
 
     /// Periodically updates the stake table from the L1 contract.
     /// This function polls the finalized block number from the L1 client at an interval
-    /// and fetches stake table from contract + persistence
+    /// and fetches stake table from contract
     /// and updates the persistence
     fn update_loop(&self) -> impl Future<Output = ()> {
         let span = tracing::warn_span!("Stake table update loop");
@@ -379,7 +379,7 @@ impl StakeTableFetcher {
             // Get the stake table contract address from the chain config.
             // This may not contain a stake table address if we are on a pre-epoch version.
             // It keeps retrying until the chain config is upgraded
-            // after a successful upgrade to an epoch version.            let stake_contract_address = loop {
+            // after a successful upgrade to an epoch version.
             let stake_contract_address = loop {
                 let config = chain_config.lock().await;
                 match config.stake_table_contract {
