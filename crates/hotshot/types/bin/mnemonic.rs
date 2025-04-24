@@ -7,19 +7,19 @@ pub fn main() {
 
     let keys: Vec<_> = args[1..].to_vec();
 
-    print!("\nKeys:\n\n");
+    println!("\nKeys:\n");
 
     for key in &keys {
-        print!("{}\n", key);
+        println!("{}", key);
     }
 
-    print!("\nMnemonics:\n\n");
+    println!("\nMnemonics:\n");
 
     for key in keys {
         let mnemonic = mnemonic(
             BLSPubKey::try_from(&tagged_base64::TaggedBase64::parse(&key).unwrap()).unwrap(),
         );
 
-        print!("{}\n", mnemonic);
+        println!("{}", mnemonic);
     }
 }
