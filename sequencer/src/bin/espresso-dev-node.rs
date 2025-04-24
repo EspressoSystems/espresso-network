@@ -751,7 +751,7 @@ mod tests {
     };
     use committable::{Commitment, Committable};
     use escargot::CargoBuild;
-    use espresso_types::{BlockMerkleTree, Header, SeqTypes, Transaction};
+    use espresso_types::{BlockMerkleTree, Header, NamespaceProofQueryData, SeqTypes, Transaction};
     use futures::{StreamExt, TryStreamExt};
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use hotshot_query_service::availability::{
@@ -760,7 +760,7 @@ mod tests {
     use jf_merkle_tree::MerkleTreeScheme;
     use portpicker::pick_unused_port;
     use rand::Rng;
-    use sequencer::{api::endpoints::NamespaceProofQueryData, SequencerApiVersion};
+    use sequencer::SequencerApiVersion;
     use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
     use tide_disco::error::ServerError;

@@ -390,7 +390,14 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     }
 
     if with_epochs && res.new_decided_view_number.is_some() {
+        let Some(first_leaf) = res.leaf_views.first() else {
+            return res;
+        };
         let epoch_height = consensus_reader.epoch_height;
+        consensus_reader
+            .metrics
+            .last_synced_block_height
+            .set(usize::try_from(first_leaf.leaf.height()).unwrap_or(0));
         drop(consensus_reader);
 
         for decided_leaf_info in &res.leaf_views {
