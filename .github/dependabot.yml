@@ -15,29 +15,14 @@ updates:
     groups:
       # The `all` group should include mainly updates from crates.io which are
       # more likely to succeed without intervention.
-      all:
-        patterns:
-          - "*"
-        exclude-patterns:
-          - "ark-*"
-          - "cdn-*"
-          - "hotshot-*"
-          - "jf-*"
-          - "marketplace-*"
       ark:
         patterns:
           - "ark-*"
       cdn:
         patterns:
           - "cdn-*"
-      hotshot:
-        patterns:
-          - "hotshot-*"
       jf:
         patterns:
           - "jf-*"
-      marketplace:
-        patterns:
-          - "marketplace-*"
     schedule:
       interval: "daily"

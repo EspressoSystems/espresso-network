@@ -1919,8 +1919,10 @@ mod test {
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
         v0_1::{block_reward, RewardAmount},
-        BackoffParams, EpochVersion, FeeAmount, FeeVersion, Header, MarketplaceVersion,
-        MockSequencerVersions, SequencerVersions, ValidatedState,
+        v0_3::StakeTableFetcher,
+        validators_from_l1_events, BackoffParams, EpochVersion, FeeAmount, FeeVersion, Header,
+        L1ClientOptions, MarketplaceVersion, MockSequencerVersions, SequencerVersions,
+        ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -3255,6 +3257,127 @@ mod test {
             assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward().0);
             tracing::info!("cumulative_amount is correct for block={block}");
             prev_cumulative_amount = cumulative_amount;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_stake_table_duplicate_events_from_contract() -> anyhow::Result<()> {
+        // TODO(abdul): This test currently uses TestNetwork only for contract deployment and for L1 block number.
+        // Once the stake table deployment logic is refactored and isolated, TestNetwork here will be unnecessary
+
+        setup_test();
+        let epoch_height = 20;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new()
+            .args(["--slots-in-an-epoch", "0", "--block-time", "1"])
+            .spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 5;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(true)
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, PosVersion::new()).await;
+
+        let mut prev_st = None;
+        let state = network.server.decided_state().await;
+        let chain_config = state.chain_config.resolve().expect("resolve chain config");
+        let stake_table = chain_config.stake_table_contract.unwrap();
+
+        let l1_client = L1ClientOptions::default()
+            .connect(vec![l1_url])
+            .expect("failed to connect to l1");
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let mut headers = client
+            .socket("availability/stream/headers/0")
+            .subscribe::<Header>()
+            .await
+            .unwrap();
+
+        let mut target_bh = 0;
+        while let Some(header) = headers.next().await {
+            let header = header.unwrap();
+            if header.height() == 0 {
+                continue;
+            }
+            let l1_block = header.l1_finalized().expect("l1 block not found");
+
+            let events = StakeTableFetcher::fetch_events_from_contract(
+                l1_client.clone(),
+                stake_table,
+                None,
+                l1_block.number(),
+            )
+            .await
+            .expect("failed to get stake table from contract");
+            let sorted_events = events.sort_events().expect("failed to sort");
+
+            let mut sorted_dedup_removed = sorted_events.clone();
+            sorted_dedup_removed.dedup();
+
+            assert_eq!(
+                sorted_events.len(),
+                sorted_dedup_removed.len(),
+                "duplicates found"
+            );
+
+            // This also checks if there is a duplicate registration
+            let stake_table =
+                validators_from_l1_events(sorted_events.into_iter().map(|(_, e)| e)).unwrap();
+            if let Some(prev_st) = prev_st {
+                assert_eq!(stake_table, prev_st);
+            }
+
+            prev_st = Some(stake_table);
+
+            if target_bh == 100 {
+                break;
+            }
+
+            target_bh = header.height();
         }
 
         Ok(())

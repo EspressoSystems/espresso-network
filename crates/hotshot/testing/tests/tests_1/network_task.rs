@@ -65,6 +65,7 @@ async fn test_network_task() {
     let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height);
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
+            id: node_id,
             network: network.clone(),
             view: ViewNumber::new(0),
             epoch: None,
@@ -92,6 +93,7 @@ async fn test_network_task() {
         upgrade_lock,
         network.clone(),
         public_key,
+        node_id,
     )
     .await;
 
@@ -239,6 +241,7 @@ async fn test_network_storage_fail() {
     let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height);
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
+            id: node_id,
             network: network.clone(),
             view: ViewNumber::new(0),
             epoch: None,
@@ -267,6 +270,7 @@ async fn test_network_storage_fail() {
         upgrade_lock,
         network.clone(),
         public_key,
+        node_id,
     )
     .await;
 

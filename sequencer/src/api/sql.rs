@@ -432,6 +432,16 @@ async fn load_chain_config<Mode: TransactionMode>(
     bincode::deserialize(&data[..]).context("failed to deserialize")
 }
 
+/// Reconstructs the `ValidatedState` from a specific block height up to a given view.
+///
+/// This loads all required fee and reward accounts into the Merkle tree before applying the
+/// State Transition Function (STF), preventing recursive catchup during STF replay.
+///
+/// Note: Even if the primary goal is to catch up the block Merkle tree,
+/// fee and reward header dependencies must still be present beforehand
+/// This is because reconstructing the `ValidatedState` involves replaying the STF over a
+/// range of leaves, and the STF requires all associated data to be present in the `ValidatedState`;
+/// otherwise, it will attempt to trigger catchup itself.
 #[tracing::instrument(skip(instance, tx))]
 async fn reconstruct_state<Mode: TransactionMode>(
     instance: &NodeState,
@@ -485,7 +495,6 @@ async fn reconstruct_state<Mode: TransactionMode>(
     let mut fee_accounts = fee_accounts.iter().copied().collect::<HashSet<_>>();
     // Add in all the accounts we will need to replay any of the headers, to ensure that we don't
     // need to do catchup recursively.
-
     tracing::info!(
         "reconstructing fee accounts state for from height {} to view {}",
         from_height,
@@ -513,10 +522,13 @@ async fn reconstruct_state<Mode: TransactionMode>(
 
     let mut reward_accounts = reward_accounts.iter().copied().collect::<HashSet<_>>();
 
+    // Collect all reward account dependencies needed for replaying the STF.
+    // These accounts must be preloaded into the reward Merkle tree to prevent recursive catchups.
     let dependencies = reward_header_dependencies(instance, &leaves).await?;
     reward_accounts.extend(dependencies);
     let reward_accounts = reward_accounts.into_iter().collect::<Vec<_>>();
 
+    // Load all required reward accounts and update the reward Merkle tree.
     state.reward_merkle_tree = load_reward_accounts(tx, from_height, &reward_accounts)
         .await
         .context("unable to reconstruct state because reward accounts are not available at origin")?
@@ -622,6 +634,9 @@ async fn fee_header_dependencies<Mode: TransactionMode>(
     Ok(accounts)
 }
 
+/// Identifies all reward accounts required to replay the State Transition Function
+/// for the given leaf proposals. These accounts should be present in the Merkle tree
+/// *before* applying the STF to avoid recursive catchup (i.e., STF triggering another catchup).
 async fn reward_header_dependencies(
     instance: &NodeState,
     leaves: impl IntoIterator<Item = &Leaf2>,
@@ -634,6 +649,10 @@ async fn reward_header_dependencies(
         return Ok(HashSet::new());
     };
 
+    let coordinator = instance.coordinator.clone();
+    let membership_lock = coordinator.membership().read().await;
+    let first_epoch = membership_lock.first_epoch();
+    drop(membership_lock);
     // add all the chain configs needed to apply STF to headers to the catchup
     for proposal in leaves {
         let header = proposal.block_header();
@@ -648,15 +667,33 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let epoch = epoch_from_block_number(height, epoch_height);
+        let first_epoch = first_epoch.context("first epoch not found")?;
 
-        let coordinator = instance.coordinator.clone();
-        let epoch_membership = coordinator
-            .membership_for_epoch(Some(EpochNumber::new(epoch)))
-            .await?;
-        let membership = coordinator.membership().read().await;
+        let proposal_epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+
+        // reward distribution starts third epoch onwards
+        if proposal_epoch <= first_epoch + 1 {
+            continue;
+        }
+
+        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)).await {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::info!(
+                    "failed to get membership for epoch={proposal_epoch:?}. err={err:#}"
+                );
+
+                coordinator
+                    .wait_for_catchup(proposal_epoch)
+                    .await
+                    .context(format!("failed to catchup for epoch={proposal_epoch:?}"))?
+            },
+        };
+
         let leader = epoch_membership.leader(proposal.view_number()).await?;
-        let validator = membership.get_validator_config(&EpochNumber::new(epoch), leader)?;
+        let membership_lock = coordinator.membership().read().await;
+        let validator = membership_lock.get_validator_config(&proposal_epoch, leader)?;
+        drop(membership_lock);
 
         reward_accounts.insert(RewardAccount(validator.account));
 

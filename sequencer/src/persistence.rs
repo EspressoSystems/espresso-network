@@ -1286,4 +1286,101 @@ mod persistence_tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    pub async fn test_stake_table_background_fetching<P: TestablePersistence>() -> anyhow::Result<()>
+    {
+        setup_test();
+
+        let epoch_height = 30;
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let anvil_instance = Anvil::new()
+            .args(["--slots-in-an-epoch", "0", "--block-time", "1"])
+            .spawn();
+        let l1_rpc_url = anvil_instance.endpoint_url();
+        let l1_signer_key = anvil_instance.keys()[0].clone();
+        let signer = LocalSigner::from(l1_signer_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_rpc_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_api_options = Options::with_port(query_service_port);
+
+        const NODE_COUNT: usize = 2;
+
+        let storage = join_all((0..NODE_COUNT).map(|_| P::tmp_storage())).await;
+        let persistence_options: [_; NODE_COUNT] = storage
+            .iter()
+            .map(P::options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // Build the config with PoS hook
+        let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(query_api_options)
+            .network_config(network_config.clone())
+            .persistences(persistence_options.clone())
+            .pos_hook::<PosVersion>(true)
+            .await
+            .expect("Pos deployment failed")
+            .build();
+
+        //start the network
+        let _test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
+
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(
+            format!("http://localhost:{query_service_port}")
+                .parse()
+                .unwrap(),
+        );
+        client.connect(None).await;
+        tracing::info!(query_service_port, "server running");
+
+        // wait until we enter in epoch 3
+        let _initial_blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(60)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        // Load initial persisted events and validate they exist.
+        let persistence = persistence_options[0].clone().create().await.unwrap();
+        let res1 = persistence
+            .load_events()
+            .await
+            .expect("failed to load events");
+        assert!(res1.is_some());
+
+        let (mut prev_l1, prev_events) = res1.unwrap();
+        assert!(!prev_events.is_empty());
+
+        for _i in 0..10 {
+            // Wait for more than update interval to assert that persistence was updated
+            // L1 update interval is 5s for testing
+            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+
+            let res = persistence
+                .load_events()
+                .await
+                .expect("failed to load events");
+
+            let (l1, events) = res.unwrap();
+            assert!(!events.is_empty());
+
+            assert!(l1 > prev_l1, "events not updated");
+            prev_l1 = l1;
+        }
+
+        Ok(())
+    }
 }

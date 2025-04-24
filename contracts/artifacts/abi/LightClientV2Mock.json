@@ -512,6 +512,19 @@
   },
   {
     "type": "function",
+    "name": "getFirstEpoch",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getHotShotCommitment",
     "inputs": [
       {
@@ -1659,6 +1672,19 @@
         "name": "newOwner",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "updateEpochStartBlock",
+    "inputs": [
+      {
+        "name": "newEpochStartBlock",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "outputs": [],
