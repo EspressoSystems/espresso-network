@@ -60,22 +60,24 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
+
+    /// Node's id
+    pub id: u64,
 }
 
 impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
-    #[instrument(skip_all, name = "Network message task", level = "trace")]
+    #[instrument(skip_all, name = "Network message task", fields(id = self.id), level = "trace")]
     /// Handles a (deserialized) message from the network
     pub async fn handle_message(&mut self, message: Message<TYPES>) {
         match &message.kind {
-            MessageKind::Consensus(_) => tracing::debug!(
-                "Received consensus message from network:\n\n{:?}\n",
-                message
-            ),
+            MessageKind::Consensus(_) => {
+                tracing::debug!("Received consensus message from network: {:?}", message)
+            },
             MessageKind::Data(_) => {
-                tracing::trace!("Received data message from network:\n\n{:?}\n", message)
+                tracing::trace!("Received data message from network: {:?}", message)
             },
             MessageKind::External(_) => {
-                tracing::trace!("Received external message from network:\n\n{:?}\n", message)
+                tracing::trace!("Received external message from network: {:?}", message)
             },
         }
 
@@ -528,6 +530,9 @@ pub struct NetworkEventTaskState<
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Node's id
+    pub id: u64,
 }
 
 #[async_trait]
@@ -564,7 +569,7 @@ impl<
     /// Handle the given event.
     ///
     /// Returns the completion status.
-    #[instrument(skip_all, fields(view = *self.view), name = "Network Task", level = "error")]
+    #[instrument(skip_all, fields(id = self.id, view = *self.view), name = "Network Task", level = "error")]
     pub async fn handle(&mut self, event: Arc<HotShotEvent<TYPES>>) {
         let mut maybe_action = None;
         if let Some((sender, message_kind, transmit)) =

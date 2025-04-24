@@ -17,11 +17,12 @@ use std::sync::Arc;
 
 use alloy::primitives::U256;
 use anyhow::Context;
-use async_lock::RwLock;
+use async_lock::{Mutex, RwLock};
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
+    v0_3::StakeTableFetcher,
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes,
     SolverAuctionResultsProvider, ValidatedState,
 };
@@ -500,14 +501,18 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         },
     };
 
+    let fetcher = StakeTableFetcher::new(
+        Arc::new(state_catchup_providers.clone()),
+        Arc::new(Mutex::new(persistence.clone())),
+        l1_client.clone(),
+        genesis.chain_config,
+    );
+    fetcher.spawn_update_loop().await;
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
         network_config.config.known_nodes_with_stake.clone(),
         network_config.config.known_da_nodes.clone(),
-        l1_client.clone(),
-        genesis.chain_config,
-        Arc::new(state_catchup_providers.clone()),
-        persistence.clone(),
+        fetcher,
     );
     membership.reload_stake(50).await;
 
@@ -618,8 +623,8 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade, UpgradeMap,
+        EpochVersion, Event, FeeAccount, MarketplaceVersion, NetworkConfig, PubKey, SeqTypes,
+        Transaction, Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -1179,8 +1184,6 @@ pub mod testing {
             let persistence = persistence_opt.create().await.unwrap();
 
             let chain_config = state.chain_config.resolve().unwrap_or_default();
-            let l1_client =
-                L1Client::new(vec![self.l1_url.clone()]).expect("failed to create L1 client");
 
             // Create an empty list of catchup providers
             let catchup_providers = ParallelStateCatchup::new(&[], Duration::from_secs(1));
@@ -1205,14 +1208,30 @@ pub mod testing {
                 },
             };
 
-            // Create the HotShot membership
+            let l1_opt = L1ClientOptions {
+                stake_table_update_interval: Duration::from_secs(5),
+                l1_events_max_block_range: 1,
+                l1_polling_interval: Duration::from_secs(1),
+                subscription_timeout: Duration::from_secs(5),
+                ..Default::default()
+            };
+            let l1_client = l1_opt
+                .connect(vec![self.l1_url.clone()])
+                .expect("failed to create L1 client");
+            l1_client.spawn_tasks().await;
+
+            let fetcher = StakeTableFetcher::new(
+                Arc::new(catchup_providers.clone()),
+                Arc::new(Mutex::new(persistence)),
+                l1_client.clone(),
+                chain_config,
+            );
+            fetcher.spawn_update_loop().await;
+
             let mut membership = EpochCommittees::new_stake(
                 config.known_nodes_with_stake.clone(),
                 config.known_da_nodes.clone(),
-                l1_client.clone(),
-                chain_config,
-                Arc::new(catchup_providers.clone()),
-                persistence.clone(),
+                fetcher,
             );
             membership.reload_stake(50).await;
 

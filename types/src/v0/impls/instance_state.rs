@@ -129,6 +129,8 @@ impl NodeState {
     pub fn mock() -> Self {
         use vbs::version::StaticVersion;
 
+        use crate::v0_3::StakeTableFetcher;
+
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -136,10 +138,7 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            l1.clone(),
-            chain_config,
-            Arc::new(mock::MockStateCatchup::default()),
-            NoStorage,
+            StakeTableFetcher::mock(),
         )));
 
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
@@ -157,6 +156,8 @@ impl NodeState {
     pub fn mock_v2() -> Self {
         use vbs::version::StaticVersion;
 
+        use crate::v0_3::StakeTableFetcher;
+
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -164,10 +165,7 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            l1.clone(),
-            chain_config,
-            Arc::new(mock::MockStateCatchup::default()),
-            NoStorage,
+            StakeTableFetcher::mock(),
         )));
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
 
@@ -185,17 +183,14 @@ impl NodeState {
     pub fn mock_v3() -> Self {
         use vbs::version::StaticVersion;
 
-        let chain_config = ChainConfig::default();
+        use crate::v0_3::StakeTableFetcher;
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            l1.clone(),
-            chain_config,
-            Arc::new(mock::MockStateCatchup::default()),
-            NoStorage,
+            StakeTableFetcher::mock(),
         )));
 
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
@@ -212,6 +207,8 @@ impl NodeState {
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v99() -> Self {
         use vbs::version::StaticVersion;
+
+        use crate::v0_3::StakeTableFetcher;
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -219,10 +216,7 @@ impl NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            l1.clone(),
-            chain_config,
-            Arc::new(mock::MockStateCatchup::default()),
-            NoStorage,
+            StakeTableFetcher::mock(),
         )));
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
 
@@ -292,6 +286,8 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 impl Default for NodeState {
     fn default() -> Self {
         use vbs::version::StaticVersion;
+
+        use crate::v0_3::StakeTableFetcher;
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -299,10 +295,7 @@ impl Default for NodeState {
         let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            l1.clone(),
-            chain_config,
-            Arc::new(mock::MockStateCatchup::default()),
-            NoStorage,
+            StakeTableFetcher::mock(),
         )));
         let coordinator = EpochMembershipCoordinator::new(membership, 100);
 

@@ -553,24 +553,30 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             );
             return Ok(());
         }
-        let is_high_qc_for_last_block = parent_qc
+        let is_high_qc_for_transition_block = parent_qc
             .data
             .block_number
             .is_some_and(|block_number| is_epoch_transition(block_number, self.epoch_height));
         let next_epoch_qc = if self.upgrade_lock.epochs_enabled(self.view_number).await
-            && is_high_qc_for_last_block
+            && is_high_qc_for_transition_block
         {
             if maybe_next_epoch_qc.is_some() {
                 maybe_next_epoch_qc
             } else {
-                wait_for_next_epoch_qc(
-                    &parent_qc,
-                    &self.consensus,
-                    self.timeout,
-                    self.view_start_time,
-                    &self.receiver,
+                Some(
+                    wait_for_next_epoch_qc(
+                        &parent_qc,
+                        &self.consensus,
+                        self.timeout,
+                        self.view_start_time,
+                        &self.receiver,
+                    )
+                    .await
+                    .context(
+                        "Jusify QC on our proposal is for an epoch transition block \
+                    but we don't have the corresponding next epoch QC. Do not propose.",
+                    )?,
                 )
-                .await
             }
         } else {
             None
