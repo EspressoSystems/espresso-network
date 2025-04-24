@@ -90,7 +90,7 @@ base64 = "0.22"
 base64-bytes = "0.1"
 bincode = "1.3.3"
 bitvec = { version = "1", features = ["serde"] }
-blake3 = "1.5"
+blake3 = "1.8"
 circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
