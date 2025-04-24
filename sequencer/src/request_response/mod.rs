@@ -1,8 +1,8 @@
 use data_source::DataSource;
 use derive_more::derive::Deref;
-use espresso_types::{PubKey, SeqTypes};
+use espresso_types::{traits::SequencerPersistence, PubKey, SeqTypes};
 use hotshot::{traits::NodeImplementation, types::BLSPrivKey};
-use hotshot_types::traits::node_implementation::Versions;
+use hotshot_types::traits::{network::ConnectedNetwork, node_implementation::Versions};
 use network::Sender;
 use recipient_source::RecipientSource;
 use request::Request;
@@ -18,7 +18,12 @@ pub mod request;
 /// A concrete type wrapper around `RequestResponse`. We need this so that we can implement
 /// local traits like `StateCatchup`. It also helps with readability.
 #[derive(Clone, Deref)]
-pub struct RequestResponseProtocol<I: NodeImplementation<SeqTypes>, V: Versions> {
+pub struct RequestResponseProtocol<
+    I: NodeImplementation<SeqTypes>,
+    V: Versions,
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+> {
     #[deref]
     #[allow(clippy::type_complexity)]
     /// The actual inner request response protocol
@@ -27,7 +32,7 @@ pub struct RequestResponseProtocol<I: NodeImplementation<SeqTypes>, V: Versions>
         Receiver<Bytes>,
         Request,
         RecipientSource<I, V>,
-        DataSource<I, V>,
+        DataSource<I, V, N, P>,
         PubKey,
     >,
 
@@ -41,7 +46,13 @@ pub struct RequestResponseProtocol<I: NodeImplementation<SeqTypes>, V: Versions>
     private_key: BLSPrivKey,
 }
 
-impl<I: NodeImplementation<SeqTypes>, V: Versions> RequestResponseProtocol<I, V> {
+impl<
+        I: NodeImplementation<SeqTypes>,
+        V: Versions,
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    > RequestResponseProtocol<I, V, N, P>
+{
     /// Create a new RequestResponseProtocol from the inner
     pub fn new(
         // The configuration for the protocol
@@ -55,7 +66,7 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> RequestResponseProtocol<I, V>
         recipient_source: RecipientSource<I, V>,
         // The [response] data source that [`RequestResponseProtocol`] will use to derive the
         // response data for a specific request
-        data_source: DataSource<I, V>,
+        data_source: DataSource<I, V, N, P>,
         // The public key of this node
         public_key: PubKey,
         // The private key of this node

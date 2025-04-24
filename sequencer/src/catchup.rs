@@ -13,11 +13,12 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     config::PublicNetworkConfig,
+    traits::SequencerPersistence,
     v0::traits::StateCatchup,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     v0_99::ChainConfig,
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, SeqTypes,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
@@ -25,12 +26,18 @@ use futures::{
     StreamExt,
 };
 use hotshot_types::{
+    consensus::Consensus,
+    traits::{node_implementation::NodeType, ValidatedState as ValidatedStateTrait},
+};
+use hotshot_types::{
     data::ViewNumber,
     network::NetworkConfig,
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
-        node_implementation::ConsensusTime as _,
+        network::ConnectedNetwork,
+        node_implementation::{ConsensusTime as _, Versions},
     },
+    utils::{View, ViewInner},
     PeerConfig, ValidatorConfig,
 };
 use itertools::Itertools;
@@ -1007,6 +1014,122 @@ impl StateCatchup for ParallelStateCatchup {
     fn is_local(&self) -> bool {
         self.providers.lock().iter().all(|p| p.is_local())
     }
+}
+
+/// Add accounts to the in-memory consensus state.
+/// We use this during catchup after receiving verified accounts.
+#[allow(clippy::type_complexity)]
+pub async fn add_fee_accounts_to_state<
+    N: ConnectedNetwork<PubKey>,
+    V: Versions,
+    P: SequencerPersistence,
+>(
+    consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
+    view: &<SeqTypes as NodeType>::View,
+    accounts: &[FeeAccount],
+    tree: &FeeMerkleTree,
+    leaf: Leaf2,
+) -> anyhow::Result<()> {
+    // Get the consensus handle
+    let mut consensus = consensus.write().await;
+
+    let (state, delta) = match consensus.validated_state_map().get(view) {
+        Some(View {
+            view_inner: ViewInner::Leaf { state, delta, .. },
+        }) => {
+            let mut state = (**state).clone();
+
+            // Add the fetched accounts to the state.
+            for account in accounts {
+                if let Some((proof, _)) = FeeAccountProof::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.fee_merkle_tree) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+
+            (Arc::new(state), delta.clone())
+        },
+        _ => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
+            let mut state = ValidatedState::from_header(leaf.block_header());
+            state.fee_merkle_tree = tree.clone();
+            (Arc::new(state), None)
+        },
+    };
+
+    consensus
+        .update_leaf(leaf, Arc::clone(&state), delta)
+        .with_context(|| "failed to update leaf")?;
+
+    Ok(())
+}
+
+/// Add accounts to the in-memory consensus state.
+/// We use this during catchup after receiving verified accounts.
+#[allow(clippy::type_complexity)]
+pub async fn add_reward_accounts_to_state<
+    N: ConnectedNetwork<PubKey>,
+    V: Versions,
+    P: SequencerPersistence,
+>(
+    consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
+    view: &<SeqTypes as NodeType>::View,
+    accounts: &[RewardAccount],
+    tree: &RewardMerkleTree,
+    leaf: Leaf2,
+) -> anyhow::Result<()> {
+    // Get the consensus handle
+    let mut consensus = consensus.write().await;
+
+    let (state, delta) = match consensus.validated_state_map().get(view) {
+        Some(View {
+            view_inner: ViewInner::Leaf { state, delta, .. },
+        }) => {
+            let mut state = (**state).clone();
+
+            // Add the fetched accounts to the state.
+            for account in accounts {
+                if let Some((proof, _)) = RewardAccountProof::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+
+            (Arc::new(state), delta.clone())
+        },
+        _ => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
+            let mut state = ValidatedState::from_header(leaf.block_header());
+            state.reward_merkle_tree = tree.clone();
+            (Arc::new(state), None)
+        },
+    };
+
+    consensus
+        .update_leaf(leaf, Arc::clone(&state), delta)
+        .with_context(|| "failed to update leaf")?;
+
+    Ok(())
 }
 
 #[cfg(test)]

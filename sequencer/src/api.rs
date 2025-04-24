@@ -14,11 +14,11 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardMerkleTree},
     v0_3::Validator,
     v0_99::ChainConfig,
-    AccountQueryData, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2,
-    NodeState, PubKey, Transaction, ValidatedState,
+    AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
+    Transaction,
 };
 use futures::{
     future::{BoxFuture, Future, FutureExt},
@@ -37,9 +37,7 @@ use hotshot_types::{
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
-        ValidatedState as _,
     },
-    utils::{View, ViewInner},
     vote::HasViewNumber,
     PeerConfig,
 };
@@ -52,8 +50,10 @@ use jf_merkle_tree::{
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
-    catchup::CatchupStorage, context::Consensus, state_signature::StateSigner, SeqTypes,
-    SequencerApiVersion, SequencerContext,
+    catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, CatchupStorage},
+    context::Consensus,
+    state_signature::StateSigner,
+    SeqTypes, SequencerApiVersion, SequencerContext,
 };
 
 pub mod data_source;
@@ -335,44 +335,18 @@ impl<
             .context("accounts not in memory, and could not fetch from storage")?;
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
-        let handle = self.as_ref().consensus().await;
-        let handle = handle.read().await;
-        let consensus = handle.consensus();
-        let mut consensus = consensus.write().await;
-        let (state, delta) = match consensus.validated_state_map().get(&view) {
-            Some(View {
-                view_inner: ViewInner::Leaf { state, delta, .. },
-            }) => {
-                let mut state = (**state).clone();
 
-                // Add the fetched accounts to the state.
-                for account in accounts {
-                    if let Some((proof, _)) = FeeAccountProof::prove(&tree, (*account).into()) {
-                        if let Err(err) = proof.remember(&mut state.fee_merkle_tree) {
-                            tracing::warn!(
-                                ?view,
-                                %account,
-                                "cannot update fetched account state: {err:#}"
-                            );
-                        }
-                    } else {
-                        tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
-                    };
-                }
-
-                (Arc::new(state), delta.clone())
-            },
-            _ => {
-                // If we don't already have a leaf for this view, or if we don't have the view
-                // at all, we can create a new view based on the recovered leaf and add it to
-                // our state map. In this case, we must also add the leaf to the saved leaves
-                // map to ensure consistency.
-                let mut state = ValidatedState::from_header(leaf.block_header());
-                state.fee_merkle_tree = tree.clone();
-                (Arc::new(state), None)
-            },
-        };
-        if let Err(err) = consensus.update_leaf(leaf, Arc::clone(&state), delta) {
+        let consensus = self
+            .as_ref()
+            .consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .clone();
+        if let Err(err) =
+            add_fee_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf).await
+        {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
         tracing::info!(?view, "updated with fetched account state");
@@ -453,46 +427,20 @@ impl<
             .get_reward_accounts(instance, height, view, accounts)
             .await
             .context("accounts not in memory, and could not fetch from storage")?;
+
         // If we successfully fetched accounts from storage, try to add them back into the in-memory
         // state.
-        let handle = self.as_ref().consensus().await;
-        let handle = handle.read().await;
-        let consensus = handle.consensus();
-        let mut consensus = consensus.write().await;
-        let (state, delta) = match consensus.validated_state_map().get(&view) {
-            Some(View {
-                view_inner: ViewInner::Leaf { state, delta, .. },
-            }) => {
-                let mut state = (**state).clone();
-
-                // Add the fetched accounts to the state.
-                for account in accounts {
-                    if let Some((proof, _)) = RewardAccountProof::prove(&tree, (*account).into()) {
-                        if let Err(err) = proof.remember(&mut state.reward_merkle_tree) {
-                            tracing::warn!(
-                                ?view,
-                                %account,
-                                "cannot update fetched account state: {err:#}"
-                            );
-                        }
-                    } else {
-                        tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
-                    };
-                }
-
-                (Arc::new(state), delta.clone())
-            },
-            _ => {
-                // If we don't already have a leaf for this view, or if we don't have the view
-                // at all, we can create a new view based on the recovered leaf and add it to
-                // our state map. In this case, we must also add the leaf to the saved leaves
-                // map to ensure consistency.
-                let mut state = ValidatedState::from_header(leaf.block_header());
-                state.reward_merkle_tree = tree.clone();
-                (Arc::new(state), None)
-            },
-        };
-        if let Err(err) = consensus.update_leaf(leaf, Arc::clone(&state), delta) {
+        let consensus = self
+            .as_ref()
+            .consensus()
+            .await
+            .read()
+            .await
+            .consensus()
+            .clone();
+        if let Err(err) =
+            add_reward_accounts_to_state::<N, V, P>(&consensus, &view, accounts, &tree, leaf).await
+        {
             tracing::warn!(?view, "cannot update fetched account state: {err:#}");
         }
         tracing::info!(?view, "updated with fetched account state");
@@ -1361,7 +1309,7 @@ mod api_tests {
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
-        Header, Leaf2, MockSequencerVersions, NamespaceId,
+        Header, Leaf2, MockSequencerVersions, NamespaceId, ValidatedState,
     };
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};

@@ -2,20 +2,24 @@
 //! to calculate/derive a response for a specific request. In the confirmation layer the implementer
 //! would be something like a [`FeeMerkleTree`] for fee catchup
 
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use espresso_types::{
     retain_accounts,
+    traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardMerkleTree},
-    NodeState, SeqTypes,
+    NodeState, PubKey, SeqTypes,
 };
 use hotshot::{traits::NodeImplementation, SystemContext};
 use hotshot_query_service::data_source::storage::SqlStorage;
 use hotshot_types::{
     data::ViewNumber,
-    traits::node_implementation::{ConsensusTime, Versions},
+    traits::{
+        network::ConnectedNetwork,
+        node_implementation::{ConsensusTime, Versions},
+    },
     vote::HasViewNumber,
 };
 use itertools::Itertools;
@@ -26,7 +30,10 @@ use jf_merkle_tree::{
 use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
-use crate::{api::BlocksFrontier, catchup::CatchupStorage};
+use crate::{
+    api::BlocksFrontier,
+    catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, CatchupStorage},
+};
 
 /// A type alias for SQL storage
 type Storage = Arc<SqlStorage>;
@@ -35,18 +42,31 @@ type Storage = Arc<SqlStorage>;
 type Consensus<I, V> = Arc<SystemContext<SeqTypes, I, V>>;
 
 #[derive(Clone)]
-pub struct DataSource<I: NodeImplementation<SeqTypes>, V: Versions> {
+pub struct DataSource<
+    I: NodeImplementation<SeqTypes>,
+    V: Versions,
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+> {
     /// The consensus handle
     pub consensus: Consensus<I, V>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
     pub storage: Option<Storage>,
+    /// Phantom data
+    pub phantom: PhantomData<(N, P)>,
 }
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, V: Versions> DataSourceTrait<Request> for DataSource<I, V> {
+impl<
+        I: NodeImplementation<SeqTypes>,
+        V: Versions,
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    > DataSourceTrait<Request> for DataSource<I, V, N, P>
+{
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {
             Request::Accounts(height, view, accounts) => {
@@ -60,16 +80,29 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> DataSourceTrait<Request> for 
                 }
 
                 // Fall back to storage
-                let accounts = self
+                let (merkle_tree, leaf) = self
                     .storage
                     .as_ref()
                     .with_context(|| "storage was not initialized")?
                     .get_accounts(&self.node_state, *height, ViewNumber::new(*view), accounts)
                     .await
-                    .with_context(|| "failed to get accounts from sql storage")?
-                    .0;
+                    .with_context(|| "failed to get accounts from sql storage")?;
 
-                Ok(Response::Accounts(accounts))
+                // If we successfully fetched accounts from storage, try to add them back into the in-memory
+                // state.
+                if let Err(err) = add_fee_accounts_to_state::<N, V, P>(
+                    &self.consensus.consensus(),
+                    &ViewNumber::new(*view),
+                    accounts,
+                    &merkle_tree,
+                    leaf,
+                )
+                .await
+                {
+                    tracing::warn!(?view, "Cannot update fetched account state: {err:#}");
+                }
+
+                Ok(Response::Accounts(merkle_tree))
             },
 
             Request::Leaf(height) => {
@@ -175,7 +208,7 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> DataSourceTrait<Request> for 
                 }
 
                 // Fall back to storage
-                let reward_accounts = self
+                let (merkle_tree, leaf) = self
                     .storage
                     .as_ref()
                     .with_context(|| "storage was not initialized")?
@@ -186,10 +219,23 @@ impl<I: NodeImplementation<SeqTypes>, V: Versions> DataSourceTrait<Request> for 
                         accounts,
                     )
                     .await
-                    .with_context(|| "failed to get accounts from sql storage")?
-                    .0;
+                    .with_context(|| "failed to get accounts from sql storage")?;
 
-                Ok(Response::RewardAccounts(reward_accounts))
+                // If we successfully fetched accounts from storage, try to add them back into the in-memory
+                // state.
+                if let Err(err) = add_reward_accounts_to_state::<N, V, P>(
+                    &self.consensus.consensus(),
+                    &ViewNumber::new(*view),
+                    accounts,
+                    &merkle_tree,
+                    leaf,
+                )
+                .await
+                {
+                    tracing::warn!(?view, "Cannot update fetched account state: {err:#}");
+                }
+
+                Ok(Response::RewardAccounts(merkle_tree))
             },
         }
     }

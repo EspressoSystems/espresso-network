@@ -1,5 +1,6 @@
 use std::{
     fmt::{Debug, Display},
+    marker::PhantomData,
     sync::Arc,
     time::Duration,
 };
@@ -63,7 +64,7 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    request_response_protocol: RequestResponseProtocol<Node<N, P>, V>,
+    request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
 
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
@@ -196,6 +197,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
                 node_state: instance_state.clone(),
                 storage,
                 consensus: handle.hotshot.clone(),
+                phantom: PhantomData,
             },
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -244,7 +246,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler<V>,
-        request_response_protocol: RequestResponseProtocol<Node<N, P>, V>,
+        request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
         event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,

@@ -3,16 +3,19 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    traits::StateCatchup,
+    traits::{SequencerPersistence, StateCatchup},
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     v0_99::ChainConfig,
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, SeqTypes, SequencerVersions,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
-    data::ViewNumber, message::UpgradeLock, traits::node_implementation::Versions,
-    utils::verify_leaf_chain, PeerConfig,
+    data::ViewNumber,
+    message::UpgradeLock,
+    traits::{network::ConnectedNetwork, node_implementation::Versions},
+    utils::verify_leaf_chain,
+    PeerConfig,
 };
 use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
@@ -22,7 +25,13 @@ use crate::request_response::{
 };
 
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, V: Versions> StateCatchup for RequestResponseProtocol<I, V> {
+impl<
+        I: NodeImplementation<SeqTypes>,
+        V: Versions,
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    > StateCatchup for RequestResponseProtocol<I, V, N, P>
+{
     async fn try_fetch_leaves(&self, _retry: usize, _height: u64) -> anyhow::Result<Vec<Leaf2>> {
         unreachable!()
     }
