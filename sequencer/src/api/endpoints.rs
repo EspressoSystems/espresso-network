@@ -9,9 +9,15 @@ use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
     v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
-    ADVZNamespaceProofQueryData, FeeAccount, FeeMerkleTree, NamespaceId, NamespaceProofQueryData,
-    NsProof, PubKey, Transaction,
+    FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
+// re-exported here to avoid breaking changes in consumers
+// "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
+#[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]
+pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryData;
+#[deprecated(note = "use espresso_types::NamespaceProofQueryData")]
+pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
+
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
@@ -198,13 +204,13 @@ where
                         },
                     )?;
 
-                    Ok(NamespaceProofQueryData {
+                    Ok(espresso_types::NamespaceProofQueryData {
                         transactions: proof.export_all_txs(&ns_id),
                         proof: Some(proof),
                     })
                 } else {
                     // ns_id not found in ns_table
-                    Ok(NamespaceProofQueryData {
+                    Ok(espresso_types::NamespaceProofQueryData {
                         proof: None,
                         transactions: Vec::new(),
                     })
@@ -255,13 +261,13 @@ where
                         },
                     )?;
 
-                    Ok(ADVZNamespaceProofQueryData {
+                    Ok(espresso_types::ADVZNamespaceProofQueryData {
                         transactions: proof.export_all_txs(&ns_id),
                         proof: Some(proof),
                     })
                 } else {
                     // ns_id not found in ns_table
-                    Ok(ADVZNamespaceProofQueryData {
+                    Ok(espresso_types::ADVZNamespaceProofQueryData {
                         proof: None,
                         transactions: Vec::new(),
                     })
