@@ -19,8 +19,9 @@ use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},
 };
-use hotshot::traits::implementations::derive_libp2p_peer_id;
+use hotshot::traits::{implementations::derive_libp2p_peer_id, ValidatedState as _};
 use hotshot_orchestrator::run_orchestrator;
+use hotshot_query_service::Leaf2;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
     test_builder::BuilderChange,
@@ -380,7 +381,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
     async fn get_validated_state(&self) -> anyhow::Result<Arc<ValidatedState>> {
         let Some(context) = &self.context else {
-            tracing::info!("skipping check on stopped node");
             bail!("context not available");
         };
 
@@ -434,6 +434,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let node_id = context.node_id();
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
+        let node_state = context.node_state();
+
         // Wait for a block proposed by this node. This proves that the node is tracking consensus
         // (getting Decide events) and participating (able to propose).
         let mut events = context.event_stream().await;
@@ -442,7 +444,22 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 continue;
             };
             for leaf in leaf_chain.iter() {
-                // Leader rotation means that `node_id` will be proposing every `num_nodes`.
+                let state = leaf.state.clone();
+                let header = leaf.leaf.block_header();
+                let view_number = leaf.leaf.view_number();
+
+                // TODO need to get parent leaf somehow, also version
+                // question can we depend on it being in state?
+                // let consensus_reader = consensus.read().await;
+
+                // let mut maybe_parent = consensus_reader
+                //     .saved_leaves()
+                //     .get(&justify_qc.data.leaf_commit)
+                //     .cloned();
+
+                // state.validate_and_apply_header(&node_state, _, header, version, view_number);
+
+                // Leader rotation dictates that `node_id` will be proposing every `num_nodes`.
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
                     tracing::info!(
                         node_id,
