@@ -378,6 +378,15 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         }
     }
 
+    async fn get_validated_state(&self) -> anyhow::Result<Arc<ValidatedState>> {
+        let Some(context) = &self.context else {
+            tracing::info!("skipping check on stopped node");
+            bail!("context not available");
+        };
+
+        Ok(context.decided_state().await)
+    }
+
     fn check_progress_with_timeout(&self) -> BoxFuture<anyhow::Result<()>> {
         async {
             let Some(context) = &self.context else {
@@ -433,6 +442,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 continue;
             };
             for leaf in leaf_chain.iter() {
+                // Leader rotation means that `node_id` will be proposing every `num_nodes`.
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
                     tracing::info!(
                         node_id,
@@ -645,6 +655,20 @@ impl TestNetwork {
         .unwrap();
     }
 
+    async fn check_state_integrity(&self) {
+        let v: Vec<_> = try_join_all(
+            self.da_nodes
+                .iter()
+                .map(TestNode::get_validated_state)
+                .chain(self.regular_nodes.iter().map(TestNode::get_validated_state)),
+        )
+        .await
+        .unwrap();
+
+        let first = v.first().unwrap();
+        v.iter().for_each(|i| assert_eq!(i, first));
+    }
+
     async fn check_builder(&self) {
         self.da_nodes[0].check_builder(self.builder_port).await;
     }
@@ -658,6 +682,7 @@ impl TestNetwork {
         self.restart_helper(0..da_nodes, 0..regular_nodes, false)
             .await;
         self.check_progress().await;
+        self.check_state_integrity().await;
     }
 
     /// Restart indicated nodes, ensuring progress is maintained at all times.
