@@ -526,11 +526,11 @@ async fn test_reference_ns_proof_legacy() {
 // "V0" does not refer to the version scheme used in this crate but to the NSProof::VO variant.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_reference_ns_proof_enum_advz() {
-    reference_test_without_committable("v1", "ns_proof_V0", &reference_ns_proof_enum_advz().await);
+    reference_test_without_committable("v3", "ns_proof_V0", &reference_ns_proof_enum_advz().await);
 }
 
 // "V1" does not refer to the version scheme used in this crate but to the NSProof::V1 variant.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_reference_ns_proof_enum_avidm() {
-    reference_test_without_committable("v1", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
+    reference_test_without_committable("v3", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
 }
