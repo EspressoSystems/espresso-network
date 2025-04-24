@@ -47,9 +47,9 @@ use vbs::{
 };
 
 use crate::{
-    v0_1, v0_2, v0_3, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo,
-    NamespaceId, NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction,
-    ValidatedState,
+    v0_1::{self, ADVZNsProof},
+    v0_2, v0_3, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
+    NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -94,14 +94,13 @@ async fn reference_ns_proof_legacy() -> ADVZNamespaceProofQueryData {
     let mut scheme = advz_scheme(10);
     let disperse = VidScheme::disperse(&mut scheme, &enc).unwrap();
 
-    let ns_proof = NsProof::new(&payload, &ns_index, &VidCommon::V0(disperse.common)).unwrap();
-    let transactions = ns_proof.export_all_txs(&REFERENCE_NAMESPACE_ID.into());
-    let legacy_proof = match ns_proof {
-        NsProof::V0(proof) => proof,
-        NsProof::V1(_) => unreachable!("legacy proof is not V1"),
-    };
+    let proof = ADVZNsProof::new(&payload, &ns_index, &disperse.common);
+    let transactions = proof
+        .as_ref()
+        .unwrap()
+        .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
     ADVZNamespaceProofQueryData {
-        proof: Some(legacy_proof),
+        proof,
         transactions,
     }
 }
