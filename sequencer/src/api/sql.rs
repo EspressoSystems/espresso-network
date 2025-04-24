@@ -669,28 +669,30 @@ async fn reward_header_dependencies(
 
         let first_epoch = first_epoch.context("first epoch not found")?;
 
-        let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+        let proposal_epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
 
         // reward distribution starts third epoch onwards
-        if epoch <= first_epoch + 1 {
+        if proposal_epoch <= first_epoch + 1 {
             continue;
         }
 
-        let epoch_membership = match coordinator.membership_for_epoch(Some(epoch)).await {
+        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)).await {
             Ok(e) => e,
             Err(err) => {
-                tracing::info!("failed to get membership for epoch={epoch:?}. err={err:#}");
+                tracing::info!(
+                    "failed to get membership for epoch={proposal_epoch:?}. err={err:#}"
+                );
 
                 coordinator
-                    .wait_for_catchup(epoch)
+                    .wait_for_catchup(proposal_epoch)
                     .await
-                    .context(format!("failed to catchup for epoch={epoch:?}"))?
+                    .context(format!("failed to catchup for epoch={proposal_epoch:?}"))?
             },
         };
 
         let leader = epoch_membership.leader(proposal.view_number()).await?;
         let membership_lock = coordinator.membership().read().await;
-        let validator = membership_lock.get_validator_config(&epoch, leader)?;
+        let validator = membership_lock.get_validator_config(&proposal_epoch, leader)?;
         drop(membership_lock);
 
         reward_accounts.insert(RewardAccount(validator.account));
