@@ -2,10 +2,10 @@ use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_broadcast::broadcast;
-use async_lock::RwLock;
+use async_lock::{Mutex, RwLock};
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_99::ChainConfig, EpochCommittees, FeeAmount,
-    NodeState, Payload, SeqTypes, ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::StakeTableFetcher, v0_99::ChainConfig,
+    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_builder_core::{
@@ -54,14 +54,17 @@ pub fn build_instance_state<V: Versions>(
         &NoMetrics,
     ));
 
+    let fetcher = StakeTableFetcher::new(
+        peers.clone(),
+        Arc::new(Mutex::new(NoStorage)),
+        l1_client.clone(),
+        chain_config,
+    );
     let coordinator = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
-            l1_client.clone(),
-            chain_config,
-            peers.clone(),
-            NoStorage,
+            fetcher,
         ))),
         100,
     );
