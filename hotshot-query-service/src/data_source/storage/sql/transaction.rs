@@ -126,7 +126,7 @@ impl TransactionMode for Write {
         //
         // The proper way to begin a write transaction in SQLite is with `BEGIN IMMEDIATE`. However,
         // sqlx does not expose any way to customize the `BEGIN` statement that starts a
-        // transaction. A servicable workaround is to perform some write statement before performing
+        // transaction. A serviceable workaround is to perform some write statement before performing
         // any read statement, ensuring that the first lock we acquire is exclusive. A write
         // statement that has no actual effect on the database is suitable for this purpose, hence
         // the `WHERE false`.
