@@ -1533,6 +1533,19 @@
   },
   {
     "type": "function",
+    "name": "updateEpochStartBlock",
+    "inputs": [
+      {
+        "name": "newEpochStartBlock",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "upgradeToAndCall",
     "inputs": [
       {
