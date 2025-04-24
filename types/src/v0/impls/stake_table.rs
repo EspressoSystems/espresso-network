@@ -879,7 +879,7 @@ impl EpochCommittees {
             .clone();
 
         Ok(*mapping.get(&bls_key).context(format!(
-            "failed to get ethereum address for bls key {bls_key:?}"
+            "failed to get ethereum address for bls key {bls_key}. epoch={epoch:?}"
         ))?)
     }
 

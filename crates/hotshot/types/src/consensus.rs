@@ -31,6 +31,7 @@ use crate::{
         DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
         QuorumCertificate2,
     },
+    simple_vote::HasEpoch,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
@@ -49,10 +50,13 @@ use crate::{
 /// A type alias for `HashMap<Commitment<T>, T>`
 pub type CommitmentMap<T> = HashMap<Commitment<T>, T>;
 
-/// A type alias for `BTreeMap<T::Time, HashMap<T::SignatureKey, Proposal<T, VidDisperseShare<T>>>>`
+/// A type alias for `BTreeMap<T::Time, HashMap<T::SignatureKey, BTreeMap<T::Epoch, Proposal<T, VidDisperseShare<T>>>>>`
 pub type VidShares<TYPES> = BTreeMap<
     <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare<TYPES>>>,
+    HashMap<
+        <TYPES as NodeType>::SignatureKey,
+        BTreeMap<Option<<TYPES as NodeType>::Epoch>, Proposal<TYPES, VidDisperseShare<TYPES>>>,
+    >,
 >;
 
 /// Type alias for consensus state wrapped in a lock.
@@ -619,12 +623,15 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     /// Get the parent Leaf Info from a given leaf and our public key.
     /// Returns None if we don't have the data in out state
-    pub fn parent_leaf_info(
+    pub async fn parent_leaf_info(
         &self,
         leaf: &Leaf2<TYPES>,
         public_key: &TYPES::SignatureKey,
+        membership: &EpochMembershipCoordinator<TYPES>,
     ) -> Option<LeafInfo<TYPES>> {
         let parent_view_number = leaf.justify_qc().view_number();
+        let parent_epoch = leaf.justify_qc().epoch();
+        let next_epoch = parent_epoch.map(|e| e + 1);
         let parent_leaf = self
             .saved_leaves
             .get(&leaf.justify_qc().data().leaf_commit)?;
@@ -632,10 +639,25 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let (Some(state), delta) = parent_state_and_delta else {
             return None;
         };
+
+        let is_epoch_transition = is_epoch_transition(parent_leaf.height(), self.epoch_height);
+        let target_epoch = if is_epoch_transition
+            && membership
+                .stake_table_for_epoch(next_epoch)
+                .await
+                .ok()?
+                .has_stake(public_key)
+                .await
+        {
+            next_epoch
+        } else {
+            parent_epoch
+        };
         let parent_vid = self
             .vid_shares()
             .get(&parent_view_number)
-            .and_then(|inner_map| inner_map.get(public_key).cloned())
+            .and_then(|key_map| key_map.get(public_key).cloned())
+            .and_then(|epoch_map| epoch_map.get(&target_epoch).cloned())
             .map(|prop| prop.data);
 
         let state_cert = if parent_leaf.with_epoch
@@ -975,7 +997,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.vid_shares
             .entry(view_number)
             .or_default()
-            .insert(disperse.data.recipient_key().clone(), disperse);
+            .entry(disperse.data.recipient_key().clone())
+            .or_default()
+            .insert(disperse.data.target_epoch(), disperse);
     }
 
     /// Add a new entry to the da_certs map.

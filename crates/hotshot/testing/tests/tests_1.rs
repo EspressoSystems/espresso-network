@@ -5,6 +5,5 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 mod tests_1 {
-    // These tests are temporarily disabled for the following issue: <https://github.com/EspressoSystems/espresso-sequencer/issues/2664>
-    // automod::dir!("tests/tests_1");
+    automod::dir!("tests/tests_1");
 }
