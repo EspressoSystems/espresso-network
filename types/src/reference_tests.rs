@@ -47,8 +47,9 @@ use vbs::{
 };
 
 use crate::{
-    v0_1, v0_2, v0_3, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction, ValidatedState,
+    v0_1, v0_2, v0_3, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo,
+    NamespaceId, NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction,
+    ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -83,7 +84,29 @@ async fn reference_payload() -> Payload {
         .0
 }
 
-async fn reference_ns_proof_advz() -> NamespaceProofQueryData {
+async fn reference_ns_proof_legacy() -> ADVZNamespaceProofQueryData {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+    let enc = payload.encode();
+    let mut scheme = advz_scheme(10);
+    let disperse = VidScheme::disperse(&mut scheme, &enc).unwrap();
+
+    let ns_proof = NsProof::new(&payload, &ns_index, &VidCommon::V0(disperse.common)).unwrap();
+    let transactions = ns_proof.export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+    let legacy_proof = match ns_proof {
+        NsProof::V0(proof) => proof,
+        NsProof::V1(_) => unreachable!("legacy proof is not V1"),
+    };
+    ADVZNamespaceProofQueryData {
+        proof: Some(legacy_proof),
+        transactions,
+    }
+}
+
+async fn reference_ns_proof_enum_advz() -> NamespaceProofQueryData {
     let payload = reference_payload().await;
     let ns_index = payload
         .ns_table()
@@ -104,7 +127,7 @@ async fn reference_ns_proof_advz() -> NamespaceProofQueryData {
     }
 }
 
-async fn reference_ns_proof_avidm() -> NamespaceProofQueryData {
+async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
     let payload = reference_payload().await;
     let ns_index = payload
         .ns_table()
@@ -494,14 +517,20 @@ fn test_reference_transaction() {
     );
 }
 
-// NOTE: V0 does not refer to the version scheme used in this crate but to the NSProof::VO variant.
+// "legacy" refers to the proof type used before it was an enum.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_reference_ns_proof_advz() {
-    reference_test_without_committable("v1", "ns_proof_V0", &reference_ns_proof_advz().await);
+async fn test_reference_ns_proof_legacy() {
+    reference_test_without_committable("v1", "ns_proof_legacy", &reference_ns_proof_legacy().await);
 }
 
-// NOTE: V1 does not refer to the version scheme used in this crate but to the NSProof::V1 variant.
+// "V0" does not refer to the version scheme used in this crate but to the NSProof::VO variant.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_reference_ns_proof_avidm() {
-    reference_test_without_committable("v1", "ns_proof_V1", &reference_ns_proof_avidm().await);
+async fn test_reference_ns_proof_enum_advz() {
+    reference_test_without_committable("v1", "ns_proof_V0", &reference_ns_proof_enum_advz().await);
+}
+
+// "V1" does not refer to the version scheme used in this crate but to the NSProof::V1 variant.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_ns_proof_enum_avidm() {
+    reference_test_without_committable("v1", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
 }
