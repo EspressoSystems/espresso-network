@@ -1186,7 +1186,7 @@ pub mod testing {
             let chain_config = state.chain_config.resolve().unwrap_or_default();
 
             // Create an empty list of catchup providers
-            let catchup_providers = ParallelStateCatchup::new(&[], Duration::from_secs(1));
+            let catchup_providers = ParallelStateCatchup::new(&[], Duration::from_millis(500));
 
             // If we have the state peers, add them
             if let Some(state_peers) = state_peers {
