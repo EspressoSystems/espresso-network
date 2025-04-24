@@ -3019,6 +3019,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb402b8d4c85569410425650ce3eddc7d698ed96d39a73f941b08fb63082f1e7"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3415,7 +3424,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18e4fdb82bd54a12e42fb58a800dcae6b9e13982238ce2296dc3570b92148e1f"
 dependencies = [
  "data-encoding",
- "syn 2.0.100",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3554,7 +3563,6 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7330aeadfbe296029522e6c40f315320aba36fc43a5b3632f3795348f3bd22"
 dependencies = [
- "convert_case 0.6.0",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -3567,6 +3575,7 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
 dependencies = [
+ "convert_case 0.7.1",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -3908,7 +3917,7 @@ dependencies = [
  "clap 4.5.34",
  "cld",
  "committable",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "espresso-types",
  "ethers-core",
  "fluent-asserter",
@@ -4866,7 +4875,7 @@ dependencies = [
  "chrono",
  "committable",
  "dashmap",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "either",
  "futures",
  "hotshot-libp2p-networking",
@@ -4898,7 +4907,7 @@ dependencies = [
  "async-trait",
  "clap 4.5.34",
  "committable",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "futures",
  "hotshot-types",
  "serde",
@@ -4923,7 +4932,7 @@ dependencies = [
  "bytemuck",
  "coarsetime",
  "committable",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "futures",
  "hotshot",
  "hotshot-builder-api",
@@ -4961,7 +4970,7 @@ dependencies = [
  "bytemuck",
  "coarsetime",
  "committable",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "futures",
  "hotshot",
  "hotshot-builder-api",
@@ -5020,7 +5029,7 @@ dependencies = [
  "async-lock 3.4.0",
  "async-trait",
  "clap 4.5.34",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "futures",
  "hotshot-example-types",
  "hotshot-types",
@@ -5126,7 +5135,7 @@ dependencies = [
  "cbor4ii 1.0.0",
  "delegate",
  "derive_builder",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "futures",
  "hotshot-example-types",
  "hotshot-types",
@@ -5196,7 +5205,7 @@ dependencies = [
  "committable",
  "custom_debug",
  "derivative",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "either",
  "espresso-macros",
  "futures",
@@ -5410,7 +5419,7 @@ dependencies = [
  "blake3",
  "clap 4.5.34",
  "committable",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "digest 0.10.7",
  "displaydoc",
  "dyn-clone",
@@ -7296,7 +7305,7 @@ dependencies = [
  "async-lock 3.4.0",
  "async-trait",
  "committable",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "futures",
  "hotshot",
  "hotshot-builder-api",
@@ -7328,7 +7337,7 @@ dependencies = [
  "bincode",
  "chrono",
  "committable",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "either",
  "futures",
  "hex",
@@ -9212,7 +9221,7 @@ dependencies = [
  "bincode",
  "blake3",
  "byteorder",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "hotshot-types",
  "parking_lot",
  "rand 0.8.5",
@@ -9958,7 +9967,7 @@ dependencies = [
  "committable",
  "csv",
  "derivative",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "dotenvy",
  "escargot",
  "espresso-macros",
@@ -10034,7 +10043,7 @@ dependencies = [
  "async-trait",
  "clap 4.5.34",
  "committable",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "hotshot",
  "hotshot-contract-adapter",
  "hotshot-example-types",
@@ -10704,7 +10713,7 @@ dependencies = [
  "clap 4.5.34",
  "clap-serde",
  "clap-serde-derive",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "directories 6.0.0",
  "dotenvy",
  "espresso-types",
