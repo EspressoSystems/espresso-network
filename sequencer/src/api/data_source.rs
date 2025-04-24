@@ -128,10 +128,12 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn get_stake_table(
         &self,
         epoch: Option<<T as NodeType>::Epoch>,
-    ) -> impl Send + Future<Output = Vec<PeerConfig<T>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
 
     /// Get the stake table for the current epoch if not provided
-    fn get_stake_table_current(&self) -> impl Send + Future<Output = StakeTableWithEpochNumber<T>>;
+    fn get_stake_table_current(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<StakeTableWithEpochNumber<T>>>;
 
     /// Get all the validators
     fn get_validators(
