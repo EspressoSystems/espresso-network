@@ -64,3 +64,7 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 [features]
 gpu-vid = ["jf-vid/gpu-vid"]
 test-srs = ["jf-vid/test-srs"]
+
+[[bin]]
+name = "mnemonic"
+path = "bin/mnemonic.rs"
