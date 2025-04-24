@@ -23,7 +23,7 @@ pub use impls::{
     get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
     EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
-pub use nsproof::NsProof;
+pub use nsproof::*;
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
 

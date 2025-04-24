@@ -47,8 +47,8 @@ use vbs::{
 };
 
 use crate::{
-    v0_1, v0_2, v0_3, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId, NsProof, NsTable,
-    Payload, SeqTypes, Transaction, ValidatedState,
+    v0_1, v0_2, v0_3, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
+    NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -83,20 +83,28 @@ async fn reference_payload() -> Payload {
         .0
 }
 
-async fn reference_ns_proof_advz() -> NsProof {
+async fn reference_ns_proof_advz() -> NamespaceProofQueryData {
     let payload = reference_payload().await;
     let ns_index = payload
         .ns_table()
         .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
         .unwrap();
     let enc = payload.encode();
-    let mut scheme_v1 = advz_scheme(10);
-    let vid_disperse_v1 = VidScheme::disperse(&mut scheme_v1, &enc).unwrap();
+    let mut scheme = advz_scheme(10);
+    let disperse = VidScheme::disperse(&mut scheme, &enc).unwrap();
 
-    NsProof::new(&payload, &ns_index, &VidCommon::V0(vid_disperse_v1.common)).unwrap()
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V0(disperse.common));
+    let transactions = proof
+        .as_ref()
+        .unwrap()
+        .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+    NamespaceProofQueryData {
+        proof,
+        transactions,
+    }
 }
 
-async fn reference_ns_proof_avidm() -> NsProof {
+async fn reference_ns_proof_avidm() -> NamespaceProofQueryData {
     let payload = reference_payload().await;
     let ns_index = payload
         .ns_table()
@@ -104,8 +112,15 @@ async fn reference_ns_proof_avidm() -> NsProof {
         .unwrap();
 
     let avid_m_param = init_avidm_param(10).unwrap();
-    let ns_proof_v2 = NsProof::new(&payload, &ns_index, &VidCommon::V1(avid_m_param)).unwrap();
-    ns_proof_v2
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avid_m_param));
+    let transactions = proof
+        .as_ref()
+        .unwrap()
+        .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+    NamespaceProofQueryData {
+        proof,
+        transactions,
+    }
 }
 
 async fn reference_ns_table() -> NsTable {
@@ -226,7 +241,7 @@ fn reference_test_without_committable<T: Serialize + DeserializeOwned + Eq + Deb
     let file_path = data_dir.join(format!("{name}.json"));
 
     let expected_bytes =
-        std::fs::read(&file_path).expect(&format!("file {} exists", file_path.display()));
+        std::fs::read(&file_path).unwrap_or_else(|_| panic!("file {} exists", file_path.display()));
     let expected: Value = serde_json::from_slice(&expected_bytes).unwrap();
 
     // Check that the reference object matches the expected serialized form.
@@ -268,7 +283,7 @@ change in the serialization of this data structure.
     // Check that the reference object matches the expected binary form.
     let file_path = data_dir.join(format!("{name}.bin"));
     let expected =
-        std::fs::read(&file_path).expect(&format!("file {} exists", file_path.display()));
+        std::fs::read(&file_path).unwrap_or_else(|_| panic!("file {} exists", file_path.display()));
     // todo (ab) : cleanup
     let actual = match version {
         "v1" => V1Serializer::serialize(&reference).unwrap(),

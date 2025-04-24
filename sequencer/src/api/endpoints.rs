@@ -9,7 +9,8 @@ use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
     v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
-    FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
+    ADVZNamespaceProofQueryData, FeeAccount, FeeMerkleTree, NamespaceId, NamespaceProofQueryData,
+    NsProof, PubKey, Transaction,
 };
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
@@ -29,7 +30,7 @@ use hotshot_types::{
     },
 };
 use jf_merkle_tree::MerkleTreeScheme;
-use serde::{de::Error as _, Deserialize, Serialize};
+use serde::de::Error as _;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
 use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
@@ -43,18 +44,6 @@ use super::{
     StorageState,
 };
 use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NamespaceProofQueryData {
-    pub proof: Option<NsProof>,
-    pub transactions: Vec<Transaction>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ADVZNamespaceProofQueryData {
-    pub proof: Option<ADVZNsProof>,
-    pub transactions: Vec<Transaction>,
-}
 
 pub(super) fn fee<State, Ver>() -> Result<Api<State, merklized_state::Error, Ver>>
 where

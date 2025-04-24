@@ -1378,7 +1378,7 @@ mod api_tests {
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
         traits::{EventConsumer, PersistenceOptions},
-        Header, Leaf2, MockSequencerVersions, NamespaceId,
+        Header, Leaf2, MockSequencerVersions, NamespaceId, NamespaceProofQueryData,
     };
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
@@ -1409,7 +1409,6 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
-        api::endpoints::NamespaceProofQueryData,
         network,
         persistence::no_storage::NoStorage,
         testing::{wait_for_decide_on_handle, TestConfigBuilder},
