@@ -643,7 +643,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let is_epoch_transition = is_epoch_transition(parent_leaf.height(), self.epoch_height);
         let target_epoch = if is_epoch_transition
             && membership
-                .membership_for_epoch(next_epoch)
+                .stake_table_for_epoch(next_epoch)
                 .await
                 .ok()?
                 .has_stake(public_key)

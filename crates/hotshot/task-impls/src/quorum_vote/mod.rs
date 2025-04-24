@@ -246,7 +246,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
 
             let Ok(current_epoch_membership) = self
                 .membership_coordinator
-                .membership_for_epoch(current_epoch)
+                .stake_table_for_epoch(current_epoch)
                 .await
             else {
                 tracing::warn!("Couldn't acquire current epoch membership. Do not vote!");
@@ -254,7 +254,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             };
             let Ok(next_epoch_membership) = self
                 .membership_coordinator
-                .membership_for_epoch(next_epoch)
+                .stake_table_for_epoch(next_epoch)
                 .await
             else {
                 tracing::warn!("Couldn't acquire next epoch membership. Do not vote!");
