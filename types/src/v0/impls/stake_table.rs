@@ -1,6 +1,7 @@
 use std::{
     cmp::{max, min},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    future::Future,
     sync::Arc,
 };
 
@@ -9,7 +10,7 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{bail, Context};
-use async_lock::RwLock;
+use async_lock::{Mutex, RwLock};
 use committable::Committable;
 use futures::stream::{self, StreamExt};
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
@@ -34,13 +35,14 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use thiserror::Error;
-use tokio::time::sleep;
+use tokio::{spawn, time::sleep};
+use tracing::Instrument;
 
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{EventKey, StakeTableEvent, StakeTableFetcher, Validator},
+    v0_3::{EventKey, StakeTableEvent, StakeTableFetcher, StakeTableUpdateTask, Validator},
     v0_99::ChainConfig,
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
@@ -335,13 +337,13 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
-    fetcher: StakeTableFetcher,
+    fetcher: Arc<StakeTableFetcher>,
 }
 
 impl StakeTableFetcher {
     pub fn new(
         peers: Arc<dyn StateCatchup>,
-        persistence: Arc<dyn MembershipPersistence>,
+        persistence: Arc<Mutex<dyn MembershipPersistence>>,
         l1_client: L1Client,
         chain_config: ChainConfig,
     ) -> Self {
@@ -349,8 +351,89 @@ impl StakeTableFetcher {
             peers,
             persistence,
             l1_client,
-            chain_config,
+            chain_config: Arc::new(Mutex::new(chain_config)),
+            update_task: StakeTableUpdateTask(Mutex::new(None)).into(),
         }
+    }
+
+    pub async fn spawn_update_loop(&self) {
+        let mut update_task = self.update_task.0.lock().await;
+        if update_task.is_none() {
+            *update_task = Some(spawn(self.update_loop()));
+        }
+    }
+
+    /// Periodically updates the stake table from the L1 contract.
+    /// This function polls the finalized block number from the L1 client at an interval
+    /// and fetches stake table from contract
+    /// and updates the persistence
+    fn update_loop(&self) -> impl Future<Output = ()> {
+        let span = tracing::warn_span!("Stake table update loop");
+        let self_clone = self.clone();
+        let state = self.l1_client.state.clone();
+        let l1_retry = self.l1_client.options().l1_retry_delay;
+        let update_delay = self.l1_client.options().stake_table_update_interval;
+        let chain_config = self.chain_config.clone();
+
+        async move {
+            // Get the stake table contract address from the chain config.
+            // This may not contain a stake table address if we are on a pre-epoch version.
+            // It keeps retrying until the chain config is upgraded
+            // after a successful upgrade to an epoch version.
+            let stake_contract_address = loop {
+                match chain_config.lock().await.stake_table_contract {
+                    Some(addr) => break addr,
+                    None => {
+                        tracing::debug!(
+                            "Stake table contract address not found. Retrying in {l1_retry:?}...",
+                        );
+                    },
+                }
+                sleep(l1_retry).await;
+            };
+
+            // Begin the main polling loop
+            loop {
+                let finalized_block = loop {
+                    if let Some(block) = state.lock().await.last_finalized {
+                        break block;
+                    }
+                    tracing::debug!(
+                        "Finalized block not yet available. Retrying in {l1_retry:?}",
+                    );
+                    sleep(l1_retry).await;
+                };
+
+                tracing::debug!(
+                    "Attempting to fetch stake table at L1 block {finalized_block:?}",
+                );
+
+                // Retry stake table fetch until it succeeds
+                loop {
+                    match self_clone
+                        .fetch_and_store_stake_table(stake_contract_address, finalized_block)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!("Successfully fetched and stored stake table at block={finalized_block:?}");
+                            break;
+                        },
+                        Err(e) => {
+                            tracing::error!(
+                                "Error fetching stake table at block {finalized_block:?}. err= {e:#}",
+                            );
+                            sleep(l1_retry).await;
+                        },
+                    }
+                }
+
+                tracing::debug!(
+                    "Waiting {update_delay:?} before next stake table update...",
+                );
+                sleep(update_delay).await;
+            }
+        }
+        .instrument(span)
     }
 
     pub async fn fetch_events(
@@ -358,9 +441,14 @@ impl StakeTableFetcher {
         contract: Address,
         to_block: u64,
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
-        let res = self.persistence.load_events().await?;
+        let persistence_lock = self.persistence.lock().await;
+        let res = persistence_lock.load_events().await?;
+        drop(persistence_lock);
 
-        let from_block = res.as_ref().map(|(block, _)| block + 1);
+        let from_block = res
+            .as_ref()
+            .map(|(block, _)| block + 1)
+            .filter(|from| *from <= to_block); // Only use from_block if it's less than to_block
 
         tracing::info!("loaded events from storage from_block={from_block:?}");
 
@@ -372,23 +460,27 @@ impl StakeTableFetcher {
         )
         .await?;
 
-        tracing::info!("loading events from contract");
+        tracing::info!("loading events from contract to_block={to_block:?}");
 
         let contract_events = contract_events.sort_events()?;
-        let mut events = if let Some((_, persistence_events)) = res {
-            persistence_events
+        let mut events = match (from_block, res) {
+            (Some(_), Some((_, persistence_events))) => persistence_events
                 .into_iter()
                 .chain(contract_events)
-                .collect()
-        } else {
-            contract_events
+                .collect(),
+            _ => contract_events,
         };
 
         // There are no duplicates because the RPC returns all events,
         // which are stored directly in persistence as is.
         // However, this step is taken as a precaution.
         // The vector is already sorted above, so this should be fast.
-        events.dedup_by_key(|(k, _)| (k.0, k.1));
+        let len_before_dedup = events.len();
+        events.dedup();
+        let len_after_dedup = events.len();
+        if len_before_dedup != len_after_dedup {
+            tracing::warn!("Duplicate events found and removed. This should not normally happen.")
+        }
 
         Ok(events)
     }
@@ -580,7 +672,7 @@ impl StakeTableFetcher {
     /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
     /// contract's initialization block to the provided `to_block` value.
     /// Events are fetched in chunks to and retries are implemented for failed requests.
-    pub async fn fetch_stake_table(
+    pub async fn fetch_and_store_stake_table(
         &self,
         contract: Address,
         to_block: u64,
@@ -588,10 +680,14 @@ impl StakeTableFetcher {
         let events = self.fetch_events(contract, to_block).await?;
 
         tracing::info!("storing events in storage to_block={to_block:?}");
-        self.persistence
-            .store_events(to_block, events.clone())
-            .await
-            .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
+
+        {
+            let persistence_lock = self.persistence.lock().await;
+            persistence_lock
+                .store_events(to_block, events.clone())
+                .await
+                .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
+        }
 
         active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
     }
@@ -614,6 +710,8 @@ impl StakeTableFetcher {
         header: Header,
     ) -> Option<IndexMap<Address, Validator<BLSPubKey>>> {
         let chain_config = self.get_chain_config(&header).await.ok()?;
+        // update chain config
+        *self.chain_config.lock().await = chain_config;
 
         let Some(address) = chain_config.stake_table_contract else {
             tracing::error!("No stake table contract address found in Chain config");
@@ -626,7 +724,7 @@ impl StakeTableFetcher {
         };
 
         match self
-            .fetch_stake_table(address, l1_finalized_block_info.number())
+            .fetch_and_store_stake_table(address, l1_finalized_block_info.number())
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
         {
@@ -641,11 +739,11 @@ impl StakeTableFetcher {
     /// Retrieve and verify `ChainConfig`
     // TODO move to appropriate object (Header?)
     pub(crate) async fn get_chain_config(&self, header: &Header) -> anyhow::Result<ChainConfig> {
-        let chain_config = self.chain_config;
+        let chain_config = self.chain_config.lock().await;
         let peers = self.peers.clone();
         let header_cf = header.chain_config();
         if chain_config.commit() == header_cf.commit() {
-            return Ok(chain_config);
+            return Ok(*chain_config);
         }
 
         let cf = match header_cf.resolve() {
@@ -660,6 +758,19 @@ impl StakeTableFetcher {
         };
 
         Ok(cf)
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn mock() -> Self {
+        use crate::{mock, v0_1::NoStorage};
+        let chain_config = ChainConfig::default();
+        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+            .expect("Failed to create L1 client");
+
+        let peers = Arc::new(mock::MockStateCatchup::default());
+        let persistence = NoStorage;
+
+        Self::new(peers, Arc::new(Mutex::new(persistence)), l1, chain_config)
     }
 }
 /// Holds Stake table and da stake
@@ -791,10 +902,7 @@ impl EpochCommittees {
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
-        l1_client: L1Client,
-        chain_config: ChainConfig,
-        peers: Arc<dyn StateCatchup>,
-        persistence: impl MembershipPersistence,
+        fetcher: StakeTableFetcher,
     ) -> Self {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
@@ -861,18 +969,21 @@ impl EpochCommittees {
             state: map,
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
-            fetcher: StakeTableFetcher {
-                peers,
-                persistence: Arc::new(persistence),
-                l1_client,
-                chain_config,
-            },
+            fetcher: Arc::new(fetcher),
         }
     }
 
     pub async fn reload_stake(&mut self, limit: u64) {
         // Load the 50 latest stored stake tables
-        let loaded_stake = match self.fetcher.persistence.load_latest_stake(limit).await {
+
+        let loaded_stake = match self
+            .fetcher
+            .persistence
+            .lock()
+            .await
+            .load_latest_stake(limit)
+            .await
+        {
             Ok(Some(loaded)) => loaded,
             Ok(None) => {
                 tracing::warn!("No stake table history found in persistence!");
@@ -1103,14 +1214,15 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let stake_tables = self.fetcher.fetch(epoch, block_header).await?;
-
-        if let Err(e) = self
-            .fetcher
-            .persistence
-            .store_stake(epoch, stake_tables.clone())
-            .await
+        // Store stake table in persistence
         {
-            tracing::error!(?e, "`add_epoch_root`, error storing stake table");
+            let persistence_lock = self.fetcher.persistence.lock().await;
+            if let Err(e) = persistence_lock
+                .store_stake(epoch, stake_tables.clone())
+                .await
+            {
+                tracing::error!(?e, "`add_epoch_root`, error storing stake table");
+            }
         }
 
         Some(Box::new(move |committee: &mut Self| {

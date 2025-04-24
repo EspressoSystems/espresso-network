@@ -34,8 +34,13 @@ jobs:
       pull-requests: write
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: install cargo audit fix
+        run: cargo install cargo-audit --locked --features=fix
+
       - name: Run cargo audit fix
-        uses: simonhyll/cargo-audit@v1
+        run: cargo audit fix
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v4
