@@ -69,6 +69,11 @@ contract LightClientV2 is LightClient {
         setstateHistoryRetentionPeriod(historySeconds);
     }
 
+    function updateEpochStartBlock(uint64 newEpochStartBlock) public virtual onlyOwner {
+        epochStartBlock = newEpochStartBlock;
+        firstEpoch = epochFromBlockNumber(epochStartBlock, blocksPerEpoch);
+    }
+
     /// @dev See detailed doc in `LightClient.sol`
     /// @param nextStakeTable the stake table to use in the next block (same as the current except
     function newFinalizedState(

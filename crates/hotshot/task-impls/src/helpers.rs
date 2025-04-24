@@ -666,8 +666,8 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         .block_number
         .is_some_and(|bn| {
             !is_transition_block(bn, validation_info.epoch_height)
-                && bn % validation_info.epoch_height != 0
                 && is_epoch_transition(bn, validation_info.epoch_height)
+                && bn % validation_info.epoch_height != 0
         });
     let justify_qc = proposal.data.justify_qc();
     let maybe_next_epoch_justify_qc = proposal.data.next_epoch_justify_qc();

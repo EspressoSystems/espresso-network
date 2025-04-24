@@ -244,4 +244,8 @@ contract LightClientV2Mock is LCV2 {
             )
         }
     }
+
+    function getFirstEpoch() public view returns (uint64) {
+        return epochFromBlockNumber(epochStartBlock, blocksPerEpoch);
+    }
 }
