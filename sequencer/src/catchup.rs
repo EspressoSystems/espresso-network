@@ -27,15 +27,13 @@ use futures::{
 };
 use hotshot_types::{
     consensus::Consensus,
-    traits::{node_implementation::NodeType, ValidatedState as ValidatedStateTrait},
-};
-use hotshot_types::{
     data::ViewNumber,
     network::NetworkConfig,
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime as _, Versions},
+        node_implementation::{ConsensusTime as _, NodeType, Versions},
+        ValidatedState as ValidatedStateTrait,
     },
     utils::{View, ViewInner},
     PeerConfig, ValidatorConfig,
