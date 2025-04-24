@@ -1,0 +1,35 @@
+{
+  "V0": {
+    "ns_index": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "ns_payload": "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",
+    "ns_proof": {
+      "prefix_bytes": [],
+      "prefix_elems": "FIELD~AAAAAAAAAAD7",
+      "suffix_bytes": [
+        8,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        0
+      ],
+      "suffix_elems": "FIELD~BQAAAAAAAAAEAAAABQAAAAYAAAAHAAAACAAAz2TAmN6iLQQAnpS3ANv7a_RueDt-T9TdqgR8o_fpx1WCUgOMGSTcPkOnP2MAZLgthi81fsxCGod7uMTy40NZUWR69skwH9gd67REzwCmq9ivTrlT8Chtxd1YPe90yK8Ckz96ZWOC7uoVuhJdAICBPmr2qqCZndfCcilnWV9sAgns2CfpFFNcWxr6O0sAxA"
+    }
+  }
+}

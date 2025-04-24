@@ -25,12 +25,16 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::U256;
 use committable::Committable;
-use hotshot_query_service::{availability::QueryablePayload, testing::mocks::MockVersions};
+use hotshot_query_service::{
+    availability::QueryablePayload, testing::mocks::MockVersions, VidCommon,
+};
 use hotshot_types::{
     data::vid_commitment,
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
+    vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
 use jf_merkle_tree::MerkleTreeScheme;
+use jf_vid::VidScheme;
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::{commitment_to_u256, test_utils::setup_test};
@@ -43,8 +47,8 @@ use vbs::{
 };
 
 use crate::{
-    v0_1, v0_2, v0_3, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId, NsTable, Payload,
-    SeqTypes, Transaction, ValidatedState,
+    v0_1, v0_2, v0_3, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId, NsProof, NsTable,
+    Payload, SeqTypes, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -52,10 +56,12 @@ type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
 type V99Serializer = vbs::Serializer<StaticVersion<0, 99>>;
 
+const REFERENCE_NAMESPACE_ID: u32 = 12648430;
+
 async fn reference_payload() -> Payload {
     const NUM_NS_IDS: usize = 3;
     let ns_ids: [NamespaceId; NUM_NS_IDS] = [
-        12648430_u32.into(),
+        REFERENCE_NAMESPACE_ID.into(),
         314159265_u32.into(),
         2718281828_u32.into(),
     ];
@@ -75,6 +81,31 @@ async fn reference_payload() -> Payload {
         .await
         .unwrap()
         .0
+}
+
+async fn reference_ns_proof_advz() -> NsProof {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+    let enc = payload.encode();
+    let mut scheme_v1 = advz_scheme(10);
+    let vid_disperse_v1 = VidScheme::disperse(&mut scheme_v1, &enc).unwrap();
+
+    NsProof::new(&payload, &ns_index, &VidCommon::V0(vid_disperse_v1.common)).unwrap()
+}
+
+async fn reference_ns_proof_avidm() -> NsProof {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+
+    let avid_m_param = init_avidm_param(10).unwrap();
+    let ns_proof_v2 = NsProof::new(&payload, &ns_index, &VidCommon::V1(avid_m_param)).unwrap();
+    ns_proof_v2
 }
 
 async fn reference_ns_table() -> NsTable {
@@ -194,7 +225,8 @@ fn reference_test_without_committable<T: Serialize + DeserializeOwned + Eq + Deb
 
     let file_path = data_dir.join(format!("{name}.json"));
 
-    let expected_bytes = std::fs::read(file_path).unwrap();
+    let expected_bytes =
+        std::fs::read(&file_path).expect(&format!("file {} exists", file_path.display()));
     let expected: Value = serde_json::from_slice(&expected_bytes).unwrap();
 
     // Check that the reference object matches the expected serialized form.
@@ -234,7 +266,9 @@ change in the serialization of this data structure.
     );
 
     // Check that the reference object matches the expected binary form.
-    let expected = std::fs::read(data_dir.join(format!("{name}.bin"))).unwrap();
+    let file_path = data_dir.join(format!("{name}.bin"));
+    let expected =
+        std::fs::read(&file_path).expect(&format!("file {} exists", file_path.display()));
     // todo (ab) : cleanup
     let actual = match version {
         "v1" => V1Serializer::serialize(&reference).unwrap(),
@@ -443,4 +477,16 @@ fn test_reference_transaction() {
         reference_transaction(12648430_u32.into(), &mut jf_utils::test_rng()),
         REFERENCE_TRANSACTION_COMMITMENT,
     );
+}
+
+// NOTE: V0 does not refer to the version scheme used in this crate but to the NSProof::VO variant.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_ns_proof_advz() {
+    reference_test_without_committable("v1", "ns_proof_V0", &reference_ns_proof_advz().await);
+}
+
+// NOTE: V1 does not refer to the version scheme used in this crate but to the NSProof::V1 variant.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_ns_proof_avidm() {
+    reference_test_without_committable("v1", "ns_proof_V1", &reference_ns_proof_avidm().await);
 }
