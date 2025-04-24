@@ -29,7 +29,7 @@ name = "espresso-dev-node"
 required-features = ["testing", "embedded-db"]
 
 [dev-dependencies]
-escargot = "0.5.10"
+escargot = "0.5.14"
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
