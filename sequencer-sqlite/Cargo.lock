@@ -5847,8 +5847,8 @@ dependencies = [
 
 [[package]]
 name = "jf-merkle-tree"
-version = "0.2.1"
-source = "git+https://github.com/EspressoSystems/jellyfish?rev=bd6098da2c4a53bf7f4042c96630e2d3cb1d844b#bd6098da2c4a53bf7f4042c96630e2d3cb1d844b"
+version = "0.2.2"
+source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.2.2#ab298f4ca35253a1e83f62e2a76bbf3f86560bc0"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -11594,7 +11594,7 @@ dependencies = [
  "ark-std 0.4.0",
  "displaydoc",
  "jf-crhf 0.1.1",
- "jf-merkle-tree 0.2.1",
+ "jf-merkle-tree 0.2.2",
  "jf-poseidon2",
  "jf-utils",
  "p3-maybe-rayon",
