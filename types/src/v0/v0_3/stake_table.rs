@@ -1,24 +1,25 @@
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{traits::{MembershipPersistence, StateCatchup}, SeqTypes};
 use alloy::primitives::{Address, U256};
 use async_lock::Mutex;
 use derive_more::derive::{From, Into};
 use hotshot::types::{BLSPubKey, SignatureKey};
-use hotshot_contract_adapter::sol_types::StakeTable::{ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered};
+use hotshot_contract_adapter::sol_types::StakeTable::{
+    ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
+};
 use hotshot_types::{
-    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys,
-    traits::node_implementation::NodeType, PeerConfig,
+    data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
-use crate::v0::ChainConfig;
-use super::L1Client;
 
-#[derive(Debug, Clone, Serialize, Deserialize, From)]
-#[serde(bound = "TYPES: NodeType")]
-pub struct PermissionedStakeTableEntry<TYPES: NodeType>(PeerConfigKeys<TYPES>);
+use super::L1Client;
+use crate::{
+    traits::{MembershipPersistence, StateCatchup},
+    v0::ChainConfig,
+    SeqTypes,
+};
 
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
@@ -66,18 +67,18 @@ pub type IndexedStake = (
 pub struct StakeTableFetcher {
     /// Peers for catching up the stake table
     #[debug(skip)]
-    pub(crate) peers: Arc<dyn StateCatchup>, 
+    pub(crate) peers: Arc<dyn StateCatchup>,
     /// Methods for stake table persistence.
     #[debug(skip)]
-    pub(crate)  persistence: Arc<Mutex<dyn MembershipPersistence>>,
+    pub(crate) persistence: Arc<Mutex<dyn MembershipPersistence>>,
     /// L1 provider
-    pub(crate)  l1_client: L1Client,
+    pub(crate) l1_client: L1Client,
     /// Verifiable `ChainConfig` holding contract address
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
 }
 
-#[derive( Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct StakeTableUpdateTask(pub(crate) Mutex<Option<JoinHandle<()>>>);
 
 impl Drop for StakeTableUpdateTask {
