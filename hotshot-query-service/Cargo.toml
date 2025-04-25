@@ -138,7 +138,7 @@ backtrace-on-stack-overflow = { version = "0.3", optional = true }
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive", "env"] }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
-generic-array = "0.14"
+generic-array = "1.2"
 portpicker = "0.1"
 rand = "0.8"
 reqwest = "0.12.3"
