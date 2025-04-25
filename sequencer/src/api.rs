@@ -206,6 +206,21 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         &self,
         epoch: Option<<SeqTypes as NodeType>::Epoch>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
+        let highest_epoch = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .cur_epoch()
+            .await
+            .map(|e| e + 1);
+        if epoch > highest_epoch {
+            return Err(anyhow::anyhow!(
+                "requested stake table for epoch {:?} is beyond the current epoch + 1 {:?}",
+                epoch,
+                highest_epoch
+            ));
+        }
         let mem = self
             .consensus()
             .await
