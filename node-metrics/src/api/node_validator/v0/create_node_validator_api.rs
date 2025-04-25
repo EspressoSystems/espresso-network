@@ -6,20 +6,26 @@ use futures::{
     channel::mpsc::{self, Receiver, SendError, Sender},
     Sink, SinkExt,
 };
+use hotshot_types::utils::epoch_from_block_number;
 use tokio::{spawn, task::JoinHandle};
 use url::Url;
 
-use super::{get_stake_table_from_sequencer, LeafAndBlock, ProcessNodeIdentityUrlStreamTask};
-use crate::service::{
-    client_id::ClientId,
-    client_message::InternalClientMessage,
-    client_state::{
-        ClientThreadState, InternalClientMessageProcessingTask,
-        ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
-        ProcessDistributeVotersHandlingTask,
+use super::{
+    get_config_stake_table_from_sequencer, LeafAndBlock, ProcessNodeIdentityUrlStreamTask,
+};
+use crate::{
+    api::node_validator::v0::get_node_stake_table_from_sequencer,
+    service::{
+        client_id::ClientId,
+        client_message::InternalClientMessage,
+        client_state::{
+            ClientThreadState, InternalClientMessageProcessingTask,
+            ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
+            ProcessDistributeVotersHandlingTask,
+        },
+        data_state::{DataState, ProcessLeafAndBlockPairStreamTask, ProcessNodeIdentityStreamTask},
+        server_message::ServerMessage,
     },
-    data_state::{DataState, ProcessLeafAndBlockPairStreamTask, ProcessNodeIdentityStreamTask},
-    server_message::ServerMessage,
 };
 
 pub struct NodeValidatorAPI<K> {
@@ -37,6 +43,7 @@ pub struct NodeValidatorAPI<K> {
 pub struct NodeValidatorConfig {
     pub stake_table_url_base: Url,
     pub initial_node_public_base_urls: Vec<Url>,
+    pub starting_block_height: u64,
 }
 
 #[derive(Debug)]
@@ -111,11 +118,39 @@ pub async fn create_node_validator_processing(
         ClientId::from_count(1),
     );
 
-    let client_stake_table = surf_disco::Client::new(config.stake_table_url_base.clone());
+    let hotshot_client = surf_disco::Client::new(config.stake_table_url_base.clone());
 
-    let stake_table = get_stake_table_from_sequencer(client_stake_table)
-        .await
-        .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
+    let (hotshot_config, mut stake_table) =
+        get_config_stake_table_from_sequencer(hotshot_client.clone())
+            .await
+            .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
+
+    if let (Some(epoch_starting_block), Some(num_blocks_per_epoch)) = (
+        hotshot_config.epoch_start_block,
+        hotshot_config.epoch_height,
+    ) {
+        tracing::info!(
+            "epoch starting block: {}, num blocks per epoch: {}",
+            epoch_starting_block,
+            num_blocks_per_epoch
+        );
+        let epoch = epoch_from_block_number(config.starting_block_height, num_blocks_per_epoch);
+        if epoch > 1 {
+            // Let's fetch our initial stake table that is not derived from the
+            // initial configuration.
+
+            let node_stake_table =
+                get_node_stake_table_from_sequencer(hotshot_client.clone(), epoch)
+                    .await
+                    .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
+
+            stake_table = node_stake_table;
+        }
+    } else {
+        tracing::warn!(
+            "epoch starting block or num blocks per epoch not found in retrieved hotshot config"
+        );
+    }
 
     let data_state = DataState::new(Default::default(), Default::default(), stake_table);
 
@@ -149,6 +184,8 @@ pub async fn create_node_validator_processing(
     let process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
         leaf_and_block_pair_receiver,
         data_state.clone(),
+        hotshot_client,
+        hotshot_config,
         block_detail_sender,
         voters_sender,
     );
