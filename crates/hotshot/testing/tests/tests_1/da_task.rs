@@ -42,15 +42,16 @@ async fn test_da_task() {
     // later calls. We need the VID commitment to be able to propose later.
     let transactions = vec![TestTransaction::new(vec![0])];
     let encoded_transactions: Arc<[u8]> = Arc::from(TestTransaction::encode(&transactions));
+    let num_storage_node = membership
+        .membership_for_epoch(None)
+        .await
+        .unwrap()
+        .total_nodes()
+        .await;
     let payload_commit = hotshot_types::data::vid_commitment::<TestVersions>(
         &encoded_transactions,
         &[],
-        membership
-            .membership_for_epoch(None)
-            .await
-            .unwrap()
-            .total_nodes()
-            .await,
+        num_storage_node,
         default_version,
     );
 
@@ -113,6 +114,7 @@ async fn test_da_task() {
                 ViewNumber::new(2),
                 None,
                 vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+                    num_storage_node,
                     <TestVersions as Versions>::Base::VERSION,
                     *ViewNumber::new(2),
                 )
@@ -158,15 +160,16 @@ async fn test_da_task_storage_failure() {
     // later calls. We need the VID commitment to be able to propose later.
     let transactions = vec![TestTransaction::new(vec![0])];
     let encoded_transactions: Arc<[u8]> = Arc::from(TestTransaction::encode(&transactions));
+    let num_storage_node = membership
+        .membership_for_epoch(None)
+        .await
+        .unwrap()
+        .total_nodes()
+        .await;
     let payload_commit = hotshot_types::data::vid_commitment::<TestVersions>(
         &encoded_transactions,
         &[],
-        membership
-            .membership_for_epoch(None)
-            .await
-            .unwrap()
-            .total_nodes()
-            .await,
+        num_storage_node,
         default_version,
     );
 
@@ -175,6 +178,9 @@ async fn test_da_task_storage_failure() {
 
     let mut dacs = Vec::new();
     let mut vids = Vec::new();
+    let mut proposals = Vec::new();
+    let mut leaders = Vec::new();
+    let mut votes = Vec::new();
 
     for view in (&mut generator).take(1).collect::<Vec<_>>().await {
         proposals.push(view.da_proposal.clone());
@@ -226,6 +232,7 @@ async fn test_da_task_storage_failure() {
                 ViewNumber::new(2),
                 None,
                 vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+                    num_storage_node,
                     <TestVersions as Versions>::Base::VERSION,
                     *ViewNumber::new(2),
                 )

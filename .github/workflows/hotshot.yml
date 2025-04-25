@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         test_suites:
-          # - test-ci-1 temporarily disabled for (https://github.com/EspressoSystems/espresso-sequencer/issues/2664)
+          - test-ci-1
           - test-ci-2
           - test-ci-3
           - test-ci-4
