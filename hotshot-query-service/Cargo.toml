@@ -141,5 +141,5 @@ espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.gi
 generic-array = "0.14"
 portpicker = "0.1"
 rand = "0.8"
-reqwest = "0.12.3"
+reqwest = "0.12.15"
 tempfile = "3.10"
