@@ -74,7 +74,7 @@ pub trait UpdateSolverState {
     async fn calculate_auction_results_permissioned(
         &self,
         view_number: ViewNumber,
-        _signauture: <SeqTypes as NodeType>::SignatureKey,
+        _signature: <SeqTypes as NodeType>::SignatureKey,
     ) -> SolverResult<SolverAuctionResults>;
 }
 
@@ -282,7 +282,7 @@ impl UpdateSolverState for GlobalState {
     async fn calculate_auction_results_permissioned(
         &self,
         view_number: ViewNumber,
-        _signauture: <SeqTypes as NodeType>::SignatureKey,
+        _signature: <SeqTypes as NodeType>::SignatureKey,
     ) -> SolverResult<SolverAuctionResults> {
         // todo (ab): actual logic needs to implemented
         // for we, we just return some default results
