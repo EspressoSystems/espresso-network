@@ -28,13 +28,26 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   audit_fix:
+    needs: security_audit
     runs-on: ubuntu-latest
+    # Run audit fix only if `cargo audit` failed and if we're not building a
+    # tag. For a tag it's unclear what branch to target with the PR.
+    if: ( failure() && github.ref_type != 'tag' ) || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
       pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name != 'pull_request'
+
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          # By default github will checkout a ref of the HEAD merged into the
+          # base branch but we would like to make a PR with the fix to the base
+          # branch directly to fix cargo audit in the base branch.
+          ref: ${{ github.base_ref }}
 
       - name: install cargo audit fix
         run: cargo install cargo-audit --locked --features=fix
@@ -43,6 +56,7 @@ jobs:
         run: cargo audit fix
 
       - name: Create Pull Request
+        id: create-pull-request
         uses: peter-evans/create-pull-request@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -51,5 +65,41 @@ jobs:
           commit-message: Cargo audit fixes
           body: >
             Updates to Cargo.toml and/or Cargo.lock with security fixes.
-          labels: automated pr
 
+      - name: Comment about audit fix PR on original PR
+        if: github.event_name == 'pull_request' && steps.create-pull-request.outputs.pull-request-number
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const issue_number = context.issue.number;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const commentTitle = "Created new PR to fix cargo audit"
+            const commentBody = `${commentTitle}.
+
+            PR: ${{ steps.create-pull-request.outputs.pull-request-url }}
+
+            Please merge that PR first to fix cargo-audit.
+            `;
+
+            // Fetch existing comments
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+            });
+
+            // Find existing comment
+            const existingComment = comments.find(c => c.body.startsWith(commentTitle));
+            if (!existingComment) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: commentBody
+              });
+            } else {
+              console.log("Already commented.")
+            }
