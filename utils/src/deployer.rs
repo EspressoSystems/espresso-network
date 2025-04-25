@@ -47,10 +47,6 @@ pub struct DeployedContracts {
     #[clap(long, env = Contract::FeeContractProxy)]
     fee_contract_proxy: Option<Address>,
 
-    /// Use an already-deployed PermissonedStakeTable.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::PermissonedStakeTable)]
-    permissioned_stake_table: Option<Address>,
-
     /// Use an already-deployed EspToken.sol instead of deploying a new one.
     #[clap(long, env = Contract::EspToken)]
     esp_token: Option<Address>,
@@ -85,8 +81,6 @@ pub enum Contract {
     FeeContract,
     #[display("ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS")]
     FeeContractProxy,
-    #[display("ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS")]
-    PermissonedStakeTable,
     #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS")]
     EspToken,
     #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS")]
@@ -130,9 +124,6 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.fee_contract_proxy {
             m.insert(Contract::FeeContractProxy, addr);
-        }
-        if let Some(addr) = deployed.permissioned_stake_table {
-            m.insert(Contract::PermissonedStakeTable, addr);
         }
         if let Some(addr) = deployed.esp_token {
             m.insert(Contract::EspToken, addr);
@@ -443,23 +434,6 @@ pub async fn deploy_fee_contract_proxy(
     Ok(fee_proxy_addr)
 }
 
-/// The primary logic for deploying permissioned stake table contract.
-/// Return the contract address.
-pub async fn deploy_permissioned_stake_table(
-    provider: impl Provider,
-    contracts: &mut Contracts,
-    init_stake_table: Vec<NodeInfoSol>,
-) -> Result<Address> {
-    // deploy the permissioned stake table contract, with initStakers constructor
-    let stake_table_addr = contracts
-        .deploy(
-            Contract::PermissonedStakeTable,
-            PermissionedStakeTable::deploy_builder(&provider, init_stake_table),
-        )
-        .await?;
-    Ok(stake_table_addr)
-}
-
 /// The primary logic for deploying and initializing an upgradable Espresso Token contract.
 pub async fn deploy_token_proxy(
     provider: impl Provider,
@@ -547,15 +521,6 @@ pub async fn transfer_ownership(
                 .get_receipt()
                 .await?
         },
-        Contract::PermissonedStakeTable => {
-            tracing::info!(%addr, %new_owner, "Transfer PermissionedStakeTable ownership");
-            let st = PermissionedStakeTable::new(addr, &provider);
-            st.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
         Contract::EspToken | Contract::EspTokenProxy => {
             tracing::info!(%addr, %new_owner, "Transfer EspToken ownership");
             let token = EspToken::new(addr, &provider);
@@ -599,7 +564,6 @@ pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result
 #[cfg(test)]
 mod tests {
     use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
-    use hotshot::rand::{rngs::StdRng, SeedableRng};
 
     use super::*;
     use crate::test_utils::setup_test;
@@ -766,40 +730,6 @@ mod tests {
         )
         .await?;
         assert_eq!(fee.owner().call().await?._0, multisig);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_deploy_permissioned_stake_table() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
-        let mut contracts = Contracts::new();
-        let mut rng = StdRng::from_seed([42u8; 32]);
-
-        let mut init_stake_table = vec![];
-        for _ in 0..5 {
-            init_stake_table.push(NodeInfoSol::rand(&mut rng));
-        }
-        let st_addr =
-            deploy_permissioned_stake_table(&provider, &mut contracts, init_stake_table.clone())
-                .await?;
-
-        // check initialization is correct
-        let st = PermissionedStakeTable::new(st_addr, &provider);
-        for staker in init_stake_table {
-            assert!(st.isStaker(staker.blsVK).call().await?._0);
-        }
-
-        // test transfer ownership to multisig
-        let multisig = Address::random();
-        let _receipt = transfer_ownership(
-            &provider,
-            Contract::PermissonedStakeTable,
-            st_addr,
-            multisig,
-        )
-        .await?;
-        assert_eq!(st.owner().call().await?._0, multisig);
 
         Ok(())
     }

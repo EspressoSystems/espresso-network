@@ -25,9 +25,11 @@ processes:
     # The contract addresses are implicitly inherited from .env. We need to unset these or else the
     # script will think they're already deployed.
     command:
-      unset ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS
-      ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
-      && deploy --deploy-fee --deploy-permissioned-stake-table --deploy-esp-token --deploy-stake-table
+      unset
+      ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
+      ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+      ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
+      && deploy --deploy-fee --deploy-esp-token --deploy-stake-table
     namespace: setup
     depends_on:
       demo-l1-network:

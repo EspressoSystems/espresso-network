@@ -1445,8 +1445,8 @@ mod tests {
         let mut events: Vec<StakeTableEvent> = [
             ValidatorRegistered {
                 account: val.account,
-                blsVk: val.bls_vk.clone().into(),
-                schnorrVk: val.schnorr_vk.clone().into(),
+                blsVk: val.bls_vk.clone(),
+                schnorrVk: val.schnorr_vk.clone(),
                 commission: val.commission,
             }
             .into(),
@@ -1458,8 +1458,8 @@ mod tests {
             .into(),
             ConsensusKeysUpdated {
                 account: val.account,
-                blsVK: val_new_keys.bls_vk.clone().into(),
-                schnorrVK: val_new_keys.schnorr_vk.clone().into(),
+                blsVK: val_new_keys.bls_vk.clone(),
+                schnorrVK: val_new_keys.schnorr_vk.clone(),
             }
             .into(),
             Undelegated {
@@ -1507,8 +1507,8 @@ mod tests {
 
         let register: StakeTableEvent = ValidatorRegistered {
             account: val.account,
-            blsVk: val.bls_vk.clone().into(),
-            schnorrVk: val.schnorr_vk.clone().into(),
+            blsVk: val.bls_vk.clone(),
+            schnorrVk: val.schnorr_vk.clone(),
             commission: val.commission,
         }
         .into();
@@ -1520,8 +1520,8 @@ mod tests {
         .into();
         let key_update: StakeTableEvent = ConsensusKeysUpdated {
             account: val.account,
-            blsVK: val.bls_vk.clone().into(),
-            schnorrVK: val.schnorr_vk.clone().into(),
+            blsVK: val.bls_vk.clone(),
+            schnorrVK: val.schnorr_vk.clone(),
         }
         .into();
         let undelegate: StakeTableEvent = Undelegated {
