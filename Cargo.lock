@@ -3415,7 +3415,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18e4fdb82bd54a12e42fb58a800dcae6b9e13982238ce2296dc3570b92148e1f"
 dependencies = [
  "data-encoding",
- "syn 2.0.100",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -5253,7 +5253,7 @@ dependencies = [
  "jf-rescue",
  "jf-signature 0.2.0",
  "jf-utils",
- "rand_chacha 0.3.1",
+ "rand_chacha 0.9.0",
  "serde",
  "tagged-base64",
  "workspace-hack",
@@ -5429,7 +5429,7 @@ dependencies = [
  "mnemonic",
  "multiaddr",
  "rand 0.8.5",
- "rand_chacha 0.3.1",
+ "rand_chacha 0.9.0",
  "serde",
  "serde-inline-default",
  "serde_bytes",
@@ -9993,7 +9993,7 @@ dependencies = [
  "pretty_assertions",
  "priority-queue",
  "rand 0.8.5",
- "rand_chacha 0.3.1",
+ "rand_chacha 0.9.0",
  "rand_distr",
  "request-response",
  "reqwest 0.12.15",
@@ -10717,7 +10717,7 @@ dependencies = [
  "jf-signature 0.2.0",
  "portpicker",
  "rand 0.8.5",
- "rand_chacha 0.3.1",
+ "rand_chacha 0.9.0",
  "rust_decimal",
  "sequencer-utils",
  "serde",

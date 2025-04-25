@@ -208,7 +208,7 @@ tracing = "0.1"
 bytesize = "1.3"
 itertools = "0.12"
 priority-queue = "2"
-rand_chacha = "0.3"
+rand_chacha = "0.9"
 rand_distr = "0.4"
 reqwest = "0.12"
 serde = { version = "1.0.195", features = ["derive"] }
