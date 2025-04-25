@@ -162,7 +162,9 @@ impl NsAvidMScheme {
         Ok(result)
     }
 
-    /// Recover the payload for a given namespace
+    /// Recover the payload for a given namespace.
+    /// Given namespace ID should be valid for all shares, i.e. `ns_commits` and `content` have
+    /// at least `ns_id` elements for all shares.
     pub fn ns_recover(
         param: &NsAvidMParam,
         ns_id: usize,
