@@ -65,7 +65,6 @@ jobs:
           commit-message: Cargo audit fixes
           body: >
             Updates to Cargo.toml and/or Cargo.lock with security fixes.
-          labels: automated pr
 
       - name: Comment about audit fix PR on original PR
         if: github.event_name == 'pull_request' && steps.create-pull-request.outputs.pull-request-number
