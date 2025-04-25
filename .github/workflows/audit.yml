@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     # Run audit fix only if `cargo audit` failed and if we're not building a
     # tag. For a tag it's unclear what branch to target with the PR.
-    if: failure() && github.ref_type != 'tag'
+    if: ( failure() && github.ref_type != 'tag' ) || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
       pull-requests: write
