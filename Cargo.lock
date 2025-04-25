@@ -3415,7 +3415,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18e4fdb82bd54a12e42fb58a800dcae6b9e13982238ce2296dc3570b92148e1f"
 dependencies = [
  "data-encoding",
- "syn 2.0.100",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3922,7 +3922,7 @@ dependencies = [
  "jf-merkle-tree 0.1.0",
  "jf-utils",
  "jf-vid",
- "lru 0.12.5",
+ "lru 0.13.0",
  "num-traits",
  "parking_lot",
  "paste",
@@ -4875,7 +4875,7 @@ dependencies = [
  "hotshot-types",
  "hotshot-utils",
  "libp2p-identity",
- "lru 0.12.5",
+ "lru 0.13.0",
  "num_enum",
  "parking_lot",
  "portpicker",
@@ -4932,7 +4932,7 @@ dependencies = [
  "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
- "lru 0.12.5",
+ "lru 0.13.0",
  "marketplace-builder-shared",
  "num_cpus",
  "portpicker",
@@ -4971,7 +4971,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "jf-vid",
- "lru 0.12.5",
+ "lru 0.13.0",
  "marketplace-builder-shared",
  "num_cpus",
  "portpicker",
@@ -5332,7 +5332,7 @@ dependencies = [
  "hotshot-types",
  "hotshot-utils",
  "jf-vid",
- "lru 0.12.5",
+ "lru 0.13.0",
  "rand 0.8.5",
  "serde",
  "sha2 0.10.8",
@@ -5373,7 +5373,7 @@ dependencies = [
  "hotshot-utils",
  "itertools 0.14.0",
  "jf-vid",
- "lru 0.12.5",
+ "lru 0.13.0",
  "portpicker",
  "rand 0.8.5",
  "reqwest 0.12.15",
