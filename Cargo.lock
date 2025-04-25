@@ -2143,7 +2143,7 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-lock 3.4.0",
- "clap 4.5.34",
+ "clap 4.5.37",
  "committable",
  "espresso-types",
  "futures",
@@ -2333,7 +2333,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.34",
+ "clap 4.5.37",
  "console-subscriber 0.3.0",
  "dashmap",
  "derivative",
@@ -2356,7 +2356,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.34",
+ "clap 4.5.37",
  "console-subscriber 0.4.1",
  "derivative",
  "jf-signature 0.2.0",
@@ -2378,7 +2378,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.34",
+ "clap 4.5.37",
  "derive_more 1.0.0",
  "jf-signature 0.2.0",
  "parking_lot",
@@ -2394,7 +2394,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.34",
+ "clap 4.5.37",
  "jf-signature 0.1.0",
  "tokio",
  "tracing",
@@ -2407,7 +2407,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.34",
+ "clap 4.5.37",
  "jf-signature 0.2.0",
  "tokio",
  "tracing",
@@ -2585,9 +2585,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.34"
+version = "4.5.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e958897981290da2a852763fe9cdb89cd36977a5d729023127095fa94d95e2ff"
+checksum = "eccb054f56cbd38340b380d4a8e69ef1f02f1af43db2f0cc817a4774d80ae071"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -2609,7 +2609,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4b7d643cbdc3a4eb0b5db8b9844ab2002bc4be44c1244db5cd27df8e594c125"
 dependencies = [
- "clap 4.5.34",
+ "clap 4.5.37",
  "clap-serde-proc",
  "serde",
 ]
@@ -2627,9 +2627,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.34"
+version = "4.5.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83b0f35019843db2160b5bb19ae09b4e6411ac33fc6a712003c33e03090e2489"
+checksum = "efd9466fac8543255d3b1fcad4762c5e116ffe808c8a3043d4263cd4fd4862a2"
 dependencies = [
  "anstream",
  "anstyle",
@@ -3114,7 +3114,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.5.34",
+ "clap 4.5.37",
  "criterion-plot",
  "is-terminal",
  "itertools 0.10.5",
@@ -3590,7 +3590,7 @@ dependencies = [
  "ark-ff 0.4.2",
  "ark-poly",
  "ark-std 0.4.0",
- "clap 4.5.34",
+ "clap 4.5.37",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
@@ -3905,7 +3905,7 @@ dependencies = [
  "bincode",
  "blake3",
  "bytesize",
- "clap 4.5.34",
+ "clap 4.5.37",
  "cld",
  "committable",
  "derive_more 1.0.0",
@@ -4395,7 +4395,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "ark-srs",
- "clap 4.5.34",
+ "clap 4.5.37",
  "hotshot-contract-adapter",
  "hotshot-stake-table",
  "hotshot-state-prover",
@@ -4896,7 +4896,7 @@ name = "hotshot-builder-api"
 version = "0.1.7"
 dependencies = [
  "async-trait",
- "clap 4.5.34",
+ "clap 4.5.37",
  "committable",
  "derive_more 1.0.0",
  "futures",
@@ -5019,7 +5019,7 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
- "clap 4.5.34",
+ "clap 4.5.37",
  "derive_more 1.0.0",
  "futures",
  "hotshot-example-types",
@@ -5072,7 +5072,7 @@ dependencies = [
  "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
  "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
  "chrono",
- "clap 4.5.34",
+ "clap 4.5.37",
  "futures",
  "hotshot",
  "hotshot-example-types",
@@ -5162,7 +5162,7 @@ dependencies = [
  "anyhow",
  "async-lock 3.4.0",
  "blake3",
- "clap 4.5.34",
+ "clap 4.5.37",
  "csv",
  "futures",
  "hotshot-types",
@@ -5192,7 +5192,7 @@ dependencies = [
  "backtrace-on-stack-overflow",
  "bincode",
  "chrono",
- "clap 4.5.34",
+ "clap 4.5.37",
  "committable",
  "custom_debug",
  "derivative",
@@ -5271,7 +5271,7 @@ dependencies = [
  "ark-ff 0.4.2",
  "ark-srs",
  "ark-std 0.4.0",
- "clap 4.5.34",
+ "clap 4.5.37",
  "displaydoc",
  "espresso-types",
  "futures",
@@ -5408,7 +5408,7 @@ dependencies = [
  "bincode",
  "bitvec",
  "blake3",
- "clap 4.5.34",
+ "clap 4.5.37",
  "committable",
  "derive_more 1.0.0",
  "digest 0.10.7",
@@ -7258,7 +7258,7 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
- "clap 4.5.34",
+ "clap 4.5.37",
  "committable",
  "espresso-types",
  "futures",
@@ -7367,7 +7367,7 @@ dependencies = [
  "async-lock 3.4.0",
  "async-trait",
  "bincode",
- "clap 4.5.34",
+ "clap 4.5.37",
  "committable",
  "espresso-types",
  "futures",
@@ -7767,7 +7767,7 @@ dependencies = [
  "bincode",
  "bitvec",
  "circular-buffer",
- "clap 4.5.34",
+ "clap 4.5.37",
  "espresso-types",
  "futures",
  "hotshot",
@@ -9953,7 +9953,7 @@ dependencies = [
  "byteorder",
  "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
  "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.34",
+ "clap 4.5.37",
  "client",
  "committable",
  "csv",
@@ -10032,7 +10032,7 @@ dependencies = [
  "anyhow",
  "ark-serialize 0.4.2",
  "async-trait",
- "clap 4.5.34",
+ "clap 4.5.37",
  "committable",
  "derive_more 1.0.0",
  "hotshot",
@@ -10701,7 +10701,7 @@ dependencies = [
  "anyhow",
  "ark-ec",
  "ark-ed-on-bn254",
- "clap 4.5.34",
+ "clap 4.5.37",
  "clap-serde",
  "clap-serde-derive",
  "derive_more 1.0.0",
@@ -11258,7 +11258,7 @@ dependencies = [
  "async-lock 3.4.0",
  "async-std",
  "async-trait",
- "clap 4.5.34",
+ "clap 4.5.37",
  "config",
  "derivative",
  "derive_more 0.99.19",
