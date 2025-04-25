@@ -990,7 +990,7 @@ contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest {
         );
         // upgrade V1 to V2 and initialize LCV2Mock
         admin = LC(proxy).owner();
-        vm.prank(admin);
+        vm.startPrank(admin);
         LC(proxy).upgradeToAndCall(address(lcv2), lcv2InitData);
 
         // test LCV2Mock is successfully in effect
@@ -1009,5 +1009,18 @@ contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest {
         assertEq(blsKeyComm, genesisBlsKeyComm);
         assertEq(schnorrKeyComm, genesisSchnorrKeyComm);
         assertEq(amountComm, genesisAmountComm);
+
+        // test updateEpochStartBlock()
+        LCV2Mock lcv2MockProxy = LCV2Mock(proxy);
+        uint64 genesisFirstEpoch = lcv2MockProxy.getFirstEpoch();
+        uint64 newEpochStartBlock = 100;
+        lcv2MockProxy.updateEpochStartBlock(newEpochStartBlock);
+        assertEq(lcv2MockProxy.epochStartBlock(), newEpochStartBlock);
+        assertNotEq(lcv2MockProxy.getFirstEpoch(), genesisFirstEpoch);
+        assertEq(
+            lcv2MockProxy.getFirstEpoch(),
+            lcv2MockProxy.epochFromBlockNumber(newEpochStartBlock, BLOCKS_PER_EPOCH)
+        );
+        vm.stopPrank();
     }
 }

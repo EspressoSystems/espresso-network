@@ -37,14 +37,12 @@ pub use crate::bindings::{
     lightclientmock::{self, LightClientMock},
     lightclientv2::{self, LightClientV2},
     lightclientv2mock::{self, LightClientV2Mock},
-    permissionedstaketable::{
-        EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
-        PermissionedStakeTable::{self, NodeInfo as NodeInfoSol, StakersUpdated},
-        BN254::G2Point as G2PointSol,
-    },
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
-    staketable::{self, StakeTable},
+    staketable::{
+        self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTable,
+        BN254::G2Point as G2PointSol,
+    },
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
@@ -170,28 +168,6 @@ impl From<PlonkProofSol> for lightclientv2::IPlonkVerifier::PlonkProof {
 
 impl From<LightClientV2Mock::votingStakeTableStateReturn> for StakeTableStateSol {
     fn from(v: LightClientV2Mock::votingStakeTableStateReturn) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
-impl From<staketable::BN254::G2Point> for G2PointSol {
-    fn from(v: staketable::BN254::G2Point) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-impl From<G2PointSol> for staketable::BN254::G2Point {
-    fn from(v: G2PointSol) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
-impl From<staketable::EdOnBN254::EdOnBN254Point> for EdOnBN254PointSol {
-    fn from(v: staketable::EdOnBN254::EdOnBN254Point) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-impl From<EdOnBN254PointSol> for staketable::EdOnBN254::EdOnBN254Point {
-    fn from(v: EdOnBN254PointSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }

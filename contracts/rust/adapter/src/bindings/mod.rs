@@ -13,7 +13,6 @@ pub mod r#lightclientarbitrumv2;
 pub mod r#lightclientmock;
 pub mod r#lightclientv2;
 pub mod r#lightclientv2mock;
-pub mod r#permissionedstaketable;
 pub mod r#plonkverifier;
 pub mod r#plonkverifierv2;
 pub mod r#staketable;
