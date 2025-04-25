@@ -247,8 +247,14 @@ fn spawn_catchup<T: NodeType>(coordinator: EpochMembershipCoordinator<T>, epoch:
             tx
         };
         // do catchup
-        let ret = coordinator.catchup(epoch).await;
-        let _ = tx.broadcast_direct(ret).await;
+
+        let result = coordinator.clone().catchup(epoch).await;
+        let _ = tx.broadcast_direct(result.clone()).await;
+
+        if let Err(err) = result {
+            tracing::warn!("failed to catchup for epoch={epoch:?}. err={err:#}");
+            coordinator.catchup_map.lock().await.remove(&epoch);
+        }
     });
 }
 /// Wrapper around a membership that guarantees that the epoch
