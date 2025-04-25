@@ -180,12 +180,12 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     async fn get_stake_table(
         &self,
         epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    ) -> Vec<PeerConfig<SeqTypes>> {
+    ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         self.as_ref().get_stake_table(epoch).await
     }
 
     /// Get the stake table for the current epoch if not provided
-    async fn get_stake_table_current(&self) -> StakeTableWithEpochNumber<SeqTypes> {
+    async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         self.as_ref().get_stake_table_current().await
     }
 
@@ -205,29 +205,27 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     async fn get_stake_table(
         &self,
         epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    ) -> Vec<PeerConfig<SeqTypes>> {
-        let Ok(mem) = self
+    ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
+        let mem = self
             .consensus()
             .await
             .read()
             .await
             .membership_coordinator
             .stake_table_for_epoch(epoch)
-            .await
-        else {
-            return vec![];
-        };
-        mem.stake_table().await
+            .await?;
+
+        Ok(mem.stake_table().await)
     }
 
     /// Get the stake table for the current epoch and return it along with the epoch number
-    async fn get_stake_table_current(&self) -> StakeTableWithEpochNumber<SeqTypes> {
+    async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
         let epoch = self.consensus().await.read().await.cur_epoch().await;
 
-        StakeTableWithEpochNumber {
+        Ok(StakeTableWithEpochNumber {
             epoch,
-            stake_table: self.get_stake_table(epoch).await,
-        }
+            stake_table: self.get_stake_table(epoch).await?,
+        })
     }
 
     /// Get the whole validators map

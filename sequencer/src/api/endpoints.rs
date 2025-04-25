@@ -324,7 +324,11 @@ where
 
             Ok(state
                 .read(|state| state.get_stake_table(epoch).boxed())
-                .await)
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get stake table for epoch={epoch:?}. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                }))
         }
         .boxed()
     })?
@@ -332,7 +336,11 @@ where
         async move {
             Ok(state
                 .read(|state| state.get_stake_table_current().boxed())
-                .await)
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get current stake table. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                }))
         }
         .boxed()
     })?

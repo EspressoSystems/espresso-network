@@ -15,9 +15,8 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-fee --deploy-permissioned-stake-table --deploy-esp-token --deploy-stake-table
+    command: deploy --deploy-fee --deploy-esp-token --deploy-stake-table
     environment:
-      - ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH=/data/initial_stake_table.toml
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
@@ -28,8 +27,6 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
-    volumes:
-      - "./data/initial_stake_table.toml:/data/initial_stake_table.toml"
     depends_on:
       demo-l1-network:
         condition: service_healthy

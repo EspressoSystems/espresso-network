@@ -45,7 +45,6 @@ env:
     target/release/state-prover
     target/release/state-relay-server
     target/release/submit-transactions
-    target/release/update-permissioned-stake-table
     target/release/utils
 
 jobs:
@@ -143,7 +142,6 @@ jobs:
           - staking-cli
           - state-relay-server
           - submit-transactions
-          - update-permissioned-stake-table
 
     needs: [build, build-arm]
     # if build_arm is skipped, run this job anyway

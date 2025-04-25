@@ -23,7 +23,6 @@ use url::Url;
 pub mod deployer;
 pub mod logging;
 pub mod ser;
-pub mod stake_table;
 pub mod test_utils;
 
 /// Type alias that connects to providers with recommended fillers and wallet
