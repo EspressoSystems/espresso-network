@@ -14,7 +14,7 @@ ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 displaydoc = "0.2"
 jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.1.1" }
-jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", rev = "bd6098da2c4a53bf7f4042c96630e2d3cb1d844b" }
+jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.2.2" }
 jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-poseidon2-v0.1.0", features = ["bn254"] }
 jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5" }
 p3-maybe-rayon = "0.2"

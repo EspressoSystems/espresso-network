@@ -411,11 +411,11 @@ impl StakeTableFetcher {
                 // Retry stake table fetch until it succeeds
                 loop {
                     match self_clone
-                        .fetch_and_store_stake_table(stake_contract_address, finalized_block)
+                        .fetch_and_store_stake_table_events(stake_contract_address, finalized_block)
                         .await
                     {
                         Ok(_) => {
-                            tracing::info!("Successfully fetched and stored stake table at block={finalized_block:?}");
+                            tracing::info!("Successfully fetched and stored stake table events at block={finalized_block:?}");
                             break;
                         },
                         Err(e) => {
@@ -672,11 +672,11 @@ impl StakeTableFetcher {
     /// Delegated, Undelegated, and ConsensusKeysUpdated) within the block range from the
     /// contract's initialization block to the provided `to_block` value.
     /// Events are fetched in chunks to and retries are implemented for failed requests.
-    pub async fn fetch_and_store_stake_table(
+    pub async fn fetch_and_store_stake_table_events(
         &self,
         contract: Address,
         to_block: u64,
-    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
         let events = self.fetch_events(contract, to_block).await?;
 
         tracing::info!("storing events in storage to_block={to_block:?}");
@@ -689,7 +689,7 @@ impl StakeTableFetcher {
                 .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
         }
 
-        active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+        Ok(events)
     }
 
     // Only used by staking CLI which doesn't have persistence
@@ -723,14 +723,22 @@ impl StakeTableFetcher {
             return None;
         };
 
-        match self
-            .fetch_and_store_stake_table(address, l1_finalized_block_info.number())
+        let events = match self
+            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
             .await
             .map_err(GetStakeTablesError::L1ClientFetchError)
         {
-            Ok(st) => Some(st),
+            Ok(events) => events,
             Err(e) => {
-                tracing::error!("failed to fetch stake table {e:?}");
+                tracing::error!("failed to fetch stake table events {e:?}");
+                return None;
+            },
+        };
+
+        match active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
+            Ok(validators) => Some(validators),
+            Err(e) => {
+                tracing::error!("failed to construct stake table {e:?}");
                 None
             },
         }
