@@ -2326,13 +2326,6 @@ mod test {
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().l1_url(l1).build())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
-                    Default::default(),
-                    &NoMetrics,
-                )
-            }))
             .build();
         let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
 
@@ -2429,13 +2422,6 @@ mod test {
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(network_config)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
-                    Default::default(),
-                    &NoMetrics,
-                )
-            }))
             .build();
         let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
 
