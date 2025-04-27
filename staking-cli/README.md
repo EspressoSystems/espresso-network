@@ -10,7 +10,7 @@ This CLI helps users interact with the Espresso staking contract, either as a de
 
 - [Espresso staking CLI](#espresso-staking-cli)
   - [Getting Started](#getting-started)
-    - [Getting Help](#getting-help)
+    - [Overview](#overview)
     - [Choose your type of wallet (mnemonic based or Ledger)](#choose-your-type-of-wallet-mnemonic-based-or-ledger)
     - [Initialize the configuration file](#initialize-the-configuration-file)
     - [Inspect the configuration](#inspect-the-configuration)
