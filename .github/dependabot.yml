@@ -11,7 +11,9 @@ updates:
       interval: "daily"
 
   - package-ecosystem: "cargo"
-    directory: "/"
+    directories:
+      - "/"
+      - "/sequencer-sqlite"
     groups:
       # The `all` group should include mainly updates from crates.io which are
       # more likely to succeed without intervention.
