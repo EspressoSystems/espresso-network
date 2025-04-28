@@ -23,7 +23,7 @@ use hotshot_types::{
 };
 use jf_vid::VidScheme;
 use surf_disco::{Client, Url};
-use vbs::version::StaticVersionType;
+use vbs::{version::StaticVersionType, BinarySerializer};
 
 use super::Provider;
 use crate::{
@@ -103,20 +103,16 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
 
     async fn fetch_legacy_vid_common<Types: NodeType>(
         &self,
+        bytes: Vec<u8>,
         req: VidCommonRequest,
     ) -> Option<VidCommon> {
         let VidCommonRequest(VidCommitment::V0(advz_commit)) = req else {
             return None;
         };
 
-        match self
-            .client
-            .get::<ADVZCommonQueryData<Types>>(&format!(
-                "availability/vid/common/payload-hash/{}",
-                advz_commit
-            ))
-            .send()
-            .await
+        match vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+            ADVZCommonQueryData<Types>,
+        >(&bytes)
         {
             Ok(res) => {
                 if ADVZScheme::is_consistent(&advz_commit, &res.common).is_ok() {
@@ -127,20 +123,19 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
                 }
             },
             Err(err) => {
-                tracing::error!("failed to fetch VID common {} : {err}", req.0);
+                tracing::error!("failed to fetch ADVZCommonQueryData {} : {err}", req.0);
                 None
             },
         }
     }
-    async fn fetch_legacy_leaf<Types: NodeType>(
+    async fn try_get_legacy_leaf<Types: NodeType>(
         &self,
+        bytes: Vec<u8>,
         req: LeafRequest<Types>,
     ) -> Option<LeafQueryData<Types>> {
-        match self
-            .client
-            .get::<LeafQueryDataLegacy<Types>>(&format!("availability/leaf/{}", req.height))
-            .send()
-            .await
+        match vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+            LeafQueryDataLegacy<Types>,
+        >(&bytes)
         {
             Ok(mut leaf) => {
                 if leaf.height() != req.height {
@@ -171,7 +166,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
                 Some(leaf.into())
             },
             Err(err) => {
-                tracing::error!("failed to fetch leaf {req:?}: {err}");
+                tracing::error!("failed to deserialize as LeafQueryDataLegacy {req:?}: {err}");
                 None
             },
         }
@@ -286,11 +281,22 @@ where
     Types: NodeType,
 {
     async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
-        match self
+        let bytes = self
             .client
-            .get::<LeafQueryData<Types>>(&format!("availability/leaf/{}", req.height))
-            .send()
-            .await
+            .get::<()>(&format!("availability/leaf/{}", req.height))
+            .bytes()
+            .await;
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::error!("failed to get bytes for leaf req={req:?}. err={err:?}");
+                return None;
+            },
+        };
+
+        match vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+            LeafQueryData<Types>,
+        >(&bytes)
         {
             Ok(mut leaf) => {
                 if leaf.height() != req.height {
@@ -315,8 +321,8 @@ where
                 Some(leaf)
             },
             Err(err) => {
-                tracing::warn!("error fetching v2 leaf {err}");
-                self.fetch_legacy_leaf(req).await
+                tracing::warn!("failed to fetch leaf req={req:?}. err={err}");
+                self.try_get_legacy_leaf(bytes, req).await
             },
         }
     }
@@ -328,14 +334,22 @@ where
     Types: NodeType,
 {
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
-        match self
+        let bytes = self
             .client
-            .get::<VidCommonQueryData<Types>>(&format!(
-                "availability/vid/common/payload-hash/{}",
-                req.0
-            ))
-            .send()
-            .await
+            .get::<()>(&format!("availability/vid/common/payload-hash/{}", req.0))
+            .bytes()
+            .await;
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::error!("failed to get bytes for leaf req={req:?}. err={err:?}");
+                return None;
+            },
+        };
+
+        match vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+            VidCommonQueryData<Types>,
+        >(&bytes)
         {
             Ok(res) => match req.0 {
                 VidCommitment::V0(commit) => {
@@ -361,8 +375,8 @@ where
                 },
             },
             Err(err) => {
-                tracing::warn!("error fetching v1 vid common {err}");
-                self.fetch_legacy_vid_common::<Types>(req).await
+                tracing::warn!("failed to fetch VidCommonQueryData. req={req:?}. err={err:?}");
+                self.fetch_legacy_vid_common::<Types>(bytes, req).await
             },
         }
     }
