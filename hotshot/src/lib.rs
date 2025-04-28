@@ -10,8 +10,6 @@
 // Documentation module
 #[cfg(feature = "docs")]
 pub mod documentation;
-use vbs::version::StaticVersionType;
-
 use committable::Committable;
 use futures::future::{select, Either};
 use hotshot_types::{
@@ -27,6 +25,7 @@ use hotshot_types::{
 };
 use rand::Rng;
 use url::Url;
+use vbs::version::StaticVersionType;
 
 /// Contains traits consumed by [`SystemContext`]
 pub mod traits;
