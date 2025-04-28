@@ -22,10 +22,7 @@ use hotshot_types::{
 };
 use jf_vid::VidScheme;
 use surf_disco::{Client, Url};
-use vbs::{
-    version::{StaticVersion, StaticVersionType},
-    BinarySerializer,
-};
+use vbs::{version::StaticVersionType, BinarySerializer};
 
 use super::Provider;
 use crate::{
@@ -66,21 +63,19 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             return None;
         };
 
-        let payload = vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<
-            ADVZPayloadQueryData<Types>,
-        >(&payload_bytes)
-        .map_err(|err| {
-            tracing::error!(%err, "deserializing ADVZ payload. req={}", req.0);
-        })
-        .ok()?;
+        let payload =
+            vbs::Serializer::<Ver>::deserialize::<ADVZPayloadQueryData<Types>>(&payload_bytes)
+                .map_err(|err| {
+                    tracing::error!(%err, "deserializing ADVZ payload. req={}", req.0);
+                })
+                .ok()?;
 
-        let common = vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<
-            ADVZCommonQueryData<Types>,
-        >(&common_bytes)
-        .map_err(|err| {
-            tracing::error!(%err, "deserializing ADVZ common. req={}", req.0);
-        })
-        .ok()?;
+        let common =
+            vbs::Serializer::<Ver>::deserialize::<ADVZCommonQueryData<Types>>(&common_bytes)
+                .map_err(|err| {
+                    tracing::error!(%err, "deserializing ADVZ common. req={}", req.0);
+                })
+                .ok()?;
 
         let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common.common()) as usize;
         let bytes = payload.data.encode();
@@ -109,9 +104,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             return None;
         };
 
-        match vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<ADVZCommonQueryData<Types>>(
-            &bytes,
-        ) {
+        match vbs::Serializer::<Ver>::deserialize::<ADVZCommonQueryData<Types>>(&bytes) {
             Ok(res) => {
                 if ADVZScheme::is_consistent(&advz_commit, &res.common).is_ok() {
                     Some(VidCommon::V0(res.common))
@@ -131,9 +124,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         bytes: Vec<u8>,
         req: LeafRequest<Types>,
     ) -> Option<LeafQueryData<Types>> {
-        match vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<LeafQueryDataLegacy<Types>>(
-            &bytes,
-        ) {
+        match vbs::Serializer::<Ver>::deserialize::<LeafQueryDataLegacy<Types>>(&bytes) {
             Ok(mut leaf) => {
                 if leaf.height() != req.height {
                     tracing::error!(?req, ?leaf, "received leaf with the wrong height");
@@ -207,25 +198,21 @@ where
             .ok()?;
 
         let payload =
-            vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<PayloadQueryData<Types>>(
-                &payload_bytes,
-            )
-            .map_err(|err| {
-                tracing::info!("error deserializing PayloadQueryData for {}: {err}", req.0);
-            })
-            .ok();
+            vbs::Serializer::<Ver>::deserialize::<PayloadQueryData<Types>>(&payload_bytes)
+                .map_err(|err| {
+                    tracing::info!("error deserializing PayloadQueryData for {}: {err}", req.0);
+                })
+                .ok();
 
         let common =
-            vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<VidCommonQueryData<Types>>(
-                &common_bytes,
-            )
-            .map_err(|err| {
-                tracing::info!(
-                    "error deserializing VidCommonQueryData for {}: {err}",
-                    req.0
-                );
-            })
-            .ok();
+            vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&common_bytes)
+                .map_err(|err| {
+                    tracing::info!(
+                        "error deserializing VidCommonQueryData for {}: {err}",
+                        req.0
+                    );
+                })
+                .ok();
 
         let (payload, common) = match (payload, common) {
             (Some(payload), Some(common)) => (payload, common),
@@ -276,13 +263,11 @@ where
                     })
                     .ok()
                     .and_then(|header_bytes| {
-                        vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<Header<Types>>(
-                            &header_bytes,
-                        )
-                        .map_err(|err| {
-                            tracing::error!(%err, "failed to deserialize header");
-                        })
-                        .ok()
+                        vbs::Serializer::<Ver>::deserialize::<Header<Types>>(&header_bytes)
+                            .map_err(|err| {
+                                tracing::error!(%err, "failed to deserialize header");
+                            })
+                            .ok()
                     })?;
 
                 if header.payload_commitment() != req.0 {
@@ -343,7 +328,7 @@ where
 
         // Attempt to deserialize using the new type
 
-        match vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<LeafQueryData<Types>>(&bytes) {
+        match vbs::Serializer::<Ver>::deserialize::<LeafQueryData<Types>>(&bytes) {
             Ok(mut leaf) => {
                 if leaf.height() != req.height {
                     tracing::error!(?req, ?leaf, "received leaf with the wrong height");
@@ -401,9 +386,7 @@ where
             },
         };
 
-        match vbs::Serializer::<StaticVersion<0, 1>>::deserialize::<VidCommonQueryData<Types>>(
-            &bytes,
-        ) {
+        match vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&bytes) {
             Ok(res) => match req.0 {
                 VidCommitment::V0(commit) => {
                     if let VidCommon::V0(common) = res.common {
@@ -456,7 +439,7 @@ mod test {
     use portpicker::pick_unused_port;
     use rand::RngCore;
     use tide_disco::{error::ServerError, App};
-    use StaticVersion;
+    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
