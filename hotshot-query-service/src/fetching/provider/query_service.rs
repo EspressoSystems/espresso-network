@@ -255,20 +255,13 @@ where
 
                 let header = self
                     .client
-                    .get::<()>(&format!("availability/header/{}", payload.height()))
-                    .bytes()
+                    .get::<Header<Types>>(&format!("availability/header/{}", payload.height()))
+                    .send()
                     .await
                     .map_err(|err| {
                         tracing::error!(%err, "failed to fetch header for payload");
                     })
-                    .ok()
-                    .and_then(|header_bytes| {
-                        vbs::Serializer::<Ver>::deserialize::<Header<Types>>(&header_bytes)
-                            .map_err(|err| {
-                                tracing::error!(%err, "failed to deserialize header");
-                            })
-                            .ok()
-                    })?;
+                    .ok()?;
 
                 if header.payload_commitment() != req.0 {
                     tracing::error!(?req, ?header, "received inconsistent payload");
