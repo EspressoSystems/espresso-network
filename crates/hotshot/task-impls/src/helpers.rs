@@ -1191,25 +1191,22 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
     epoch_height: u64,
 ) -> Result<()> {
     let mut epoch_membership = membership_coordinator
-        .membership_for_epoch(qc.data.epoch)
+        .stake_table_for_epoch(qc.data.epoch)
         .await?;
 
     let membership_stake_table = epoch_membership.stake_table().await;
     let membership_success_threshold = epoch_membership.success_threshold().await;
 
-    {
-        let consensus_reader = consensus.read().await;
-        qc.is_valid_cert(
+    if let Err(e) = qc
+        .is_valid_cert(
             StakeTableEntries::<TYPES>::from(membership_stake_table).0,
             membership_success_threshold,
             upgrade_lock,
         )
         .await
-        .context(|e| {
-            consensus_reader.metrics.invalid_qc.update(1);
-
-            warn!("Invalid certificate: {e}")
-        })?;
+    {
+        consensus.read().await.metrics.invalid_qc.update(1);
+        return Err(warn!("Invalid certificate: {e}"));
     }
 
     if upgrade_lock.epochs_enabled(qc.view_number()).await {

@@ -446,7 +446,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         let epoch_number = self.cur_epoch;
-        let epoch_transition_indicator = if self.consensus.read().await.is_high_qc_for_last_block()
+        let epoch_transition_indicator = if self
+            .consensus
+            .read()
+            .await
+            .is_high_qc_for_epoch_transition()
         {
             EpochTransitionIndicator::InTransition
         } else {
@@ -561,7 +565,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    EpochTransitionIndicator::NotInTransition,
+                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -599,7 +603,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     event_receiver,
                     event_sender,
                     event,
-                    EpochTransitionIndicator::NotInTransition,
+                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -636,7 +640,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    EpochTransitionIndicator::NotInTransition,
+                    epoch_transition_indicator,
                 )
                 .await?;
             },

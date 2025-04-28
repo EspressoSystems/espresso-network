@@ -47,7 +47,6 @@ use crate::{
     helpers::{
         broadcast_event, check_qc_state_cert_correspondence, parent_leaf_and_state,
         validate_light_client_state_update_certificate, validate_qc_and_next_epoch_qc,
-        wait_for_next_epoch_qc,
     },
     quorum_proposal::{QuorumProposalTaskState, UpgradeLock, Versions},
 };
@@ -560,24 +559,14 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let next_epoch_qc = if self.upgrade_lock.epochs_enabled(self.view_number).await
             && is_high_qc_for_transition_block
         {
-            if maybe_next_epoch_qc.is_some() {
+            ensure!(
                 maybe_next_epoch_qc
-            } else {
-                Some(
-                    wait_for_next_epoch_qc(
-                        &parent_qc,
-                        &self.consensus,
-                        self.timeout,
-                        self.view_start_time,
-                        &self.receiver,
-                    )
-                    .await
-                    .context(
-                        "Jusify QC on our proposal is for an epoch transition block \
-                    but we don't have the corresponding next epoch QC. Do not propose.",
-                    )?,
-                )
-            }
+                    .as_ref()
+                    .is_some_and(|neqc| neqc.data.leaf_commit == parent_qc.data.leaf_commit),
+                "Jusify QC on our proposal is for an epoch transition block \
+                    but we don't have the corresponding next epoch QC. Do not propose."
+            );
+            maybe_next_epoch_qc
         } else {
             None
         };
@@ -734,7 +723,7 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
         } else if version < V::Epochs::VERSION {
             (self.consensus.read().await.high_qc().clone(), None)
         } else if proposal_cert.is_some() {
-            // If we have a view change evidence, we need to wait need to propose with the transition QC
+            // If we have a view change evidence, we need to wait to propose with the transition QC
             if let Ok(Some((qc, next_epoch_qc))) = self.wait_for_transition_qc().await {
                 let Some(epoch) = maybe_epoch else {
                     tracing::error!(

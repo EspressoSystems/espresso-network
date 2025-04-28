@@ -1209,8 +1209,8 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         is_epoch_transition(block_height, self.epoch_height)
     }
 
-    /// Returns true if our high QC is for the last block in the epoch
-    pub fn is_high_qc_for_last_block(&self) -> bool {
+    /// Returns true if our high QC is for one of the epoch transition blocks
+    pub fn is_high_qc_for_epoch_transition(&self) -> bool {
         let Some(leaf) = self.saved_leaves.get(&self.high_qc().data.leaf_commit) else {
             tracing::trace!("We don't have a leaf corresponding to the high QC");
             return false;
