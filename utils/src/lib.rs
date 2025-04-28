@@ -18,9 +18,6 @@ use committable::{Commitment, Committable};
 use tokio::time::sleep;
 use url::Url;
 
-// FIXME: (alex) alloy doesn't have builtin external GasOracle support, do we still keep this?
-// pub mod blocknative;
-pub mod deployer;
 pub mod logging;
 pub mod ser;
 pub mod test_utils;

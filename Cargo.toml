@@ -12,6 +12,7 @@ members = [
     "builder",
     "client",
     "contracts/rust/adapter",
+    "contracts/rust/deployer",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/hotshot/builder-api",

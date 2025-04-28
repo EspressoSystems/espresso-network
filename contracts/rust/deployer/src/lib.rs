@@ -566,7 +566,6 @@ mod tests {
     use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
 
     use super::*;
-    use crate::test_utils::setup_test;
 
     #[tokio::test]
     async fn test_is_proxy_contract() -> Result<()> {
@@ -601,7 +600,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_deploy_mock_light_client_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
