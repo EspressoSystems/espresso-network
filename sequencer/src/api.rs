@@ -3472,7 +3472,7 @@ mod test {
         }
 
         let _st = client
-            .get::<Vec<PeerConfig<SeqTypes>>>("node/stake-table/current")
+            .get::<StakeTableWithEpochNumber<SeqTypes>>("node/stake-table/current")
             .send()
             .await
             .expect("failed to get stake table");
