@@ -12,7 +12,6 @@
 
 use async_trait::async_trait;
 use committable::Committable;
-use futures::try_join;
 use hotshot_types::{
     data::{ns_table, VidCommitment},
     traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
@@ -56,49 +55,46 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
 impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
     async fn fetch_legacy_payload<Types: NodeType>(
         &self,
+        payload_bytes: Vec<u8>,
+        common_bytes: Vec<u8>,
         req: PayloadRequest,
     ) -> Option<Payload<Types>> {
         let PayloadRequest(VidCommitment::V0(advz_commit)) = req else {
             return None;
         };
 
-        let res = try_join!(
-            self.client
-                .get::<ADVZPayloadQueryData<Types>>(&format!(
-                    "availability/payload/hash/{}",
-                    advz_commit
-                ))
-                .send(),
-            self.client
-                .get::<ADVZCommonQueryData<Types>>(&format!(
-                    "availability/vid/common/payload-hash/{}",
-                    advz_commit
-                ))
-                .send()
-        );
-        match res {
-            Ok((payload, common)) => {
-                let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common.common()) as usize;
-                let bytes = payload.data.encode();
-                let commit = match advz_scheme(num_storage_nodes).commit_only(bytes) {
-                    Ok(commit) => commit,
-                    Err(err) => {
-                        tracing::error!(%err, "unable to compute VID commitment");
-                        return None;
-                    },
-                };
-                if commit != advz_commit {
-                    tracing::error!(?req, ?commit, "received inconsistent payload");
-                    return None;
-                }
+        let payload = vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+            ADVZPayloadQueryData<Types>,
+        >(&payload_bytes)
+        .map_err(|err| {
+            tracing::error!(%err, "deserializing ADVZ payload. req={}", req.0);
+        })
+        .ok()?;
 
-                Some(payload.data)
-            },
-            Err(err) => {
-                tracing::error!("failed to fetch payload {req:?}: {err}");
-                None
-            },
+        let common = vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+            ADVZCommonQueryData<Types>,
+        >(&common_bytes)
+        .map_err(|err| {
+            tracing::error!(%err, "deserializing ADVZ common. req={}", req.0);
+        })
+        .ok()?;
+
+        let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common.common()) as usize;
+        let bytes = payload.data.encode();
+
+        let commit = advz_scheme(num_storage_nodes)
+            .commit_only(bytes)
+            .map_err(|err| {
+                tracing::error!(%err, "unable to compute VID commitment");
+            })
+            .ok()?;
+
+        if commit != advz_commit {
+            tracing::error!(?req, ?commit, "received inconsistent legacy payload");
+            return None;
         }
+
+        Some(payload.data)
     }
 
     async fn fetch_legacy_vid_common<Types: NodeType>(
@@ -182,95 +178,127 @@ where
         // Fetch the payload and the VID common data. We need the common data to recompute the VID
         // commitment, to ensure the payload we received is consistent with the commitment we
         // requested.
-        let res = try_join!(
-            self.client
-                .get::<PayloadQueryData<Types>>(&format!("availability/payload/hash/{}", req.0))
-                .send(),
-            self.client
-                .get::<VidCommonQueryData<Types>>(&format!(
-                    "availability/vid/common/payload-hash/{}",
-                    req.0
-                ))
-                .send()
-        );
+        let payload_bytes = self
+            .client
+            .get::<()>(&format!("availability/payload/hash/{}", req.0))
+            .bytes()
+            .await
+            .map_err(|err| {
+                tracing::warn!("error fetching payload bytes for {}: {err}", req.0);
+            })
+            .ok()?;
 
-        match res {
-            Ok((payload, common)) => {
-                match common.common() {
-                    VidCommon::V0(common) => {
-                        // Verify that the data we retrieved is consistent with the request we made.
-                        let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common) as usize;
-                        let bytes = payload.data().encode();
-                        let commit = VidCommitment::V0(
-                            match advz_scheme(num_storage_nodes).commit_only(bytes) {
-                                Ok(commit) => commit,
-                                Err(err) => {
-                                    tracing::error!(%err, "unable to compute VID commitment");
-                                    return None;
-                                },
-                            },
-                        );
-                        if commit != req.0 {
-                            tracing::error!(?req, ?commit, "received inconsistent payload");
-                            return None;
-                        }
-                    },
-                    VidCommon::V1(common) => {
-                        let bytes = payload.data().encode();
-                        // Initialize AVIDM parameters
-                        let avidm_param = match init_avidm_param(common.total_weights) {
-                            Ok(param) => param,
-                            Err(err) => {
-                                tracing::error!(%err, "unable to initialize AVIDM parameters");
-                                return None;
-                            },
-                        };
+        let common_bytes = self
+            .client
+            .get::<()>(&format!("availability/vid/common/payload-hash/{}", req.0))
+            .bytes()
+            .await
+            .map_err(|err| {
+                tracing::warn!("error fetching common bytes for {}: {err}", req.0);
+            })
+            .ok()?;
 
-                        let header = self
-                            .client
-                            .get::<Header<Types>>(&format!(
-                                "availability/header/{}",
-                                payload.height()
-                            ))
-                            .send()
-                            .await
-                            .ok()?;
+        let payload = vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+            PayloadQueryData<Types>,
+        >(&payload_bytes)
+        .map_err(|err| {
+            tracing::info!("error deserializing PayloadQueryData for {}: {err}", req.0);
+        })
+        .ok();
 
-                        if header.payload_commitment() != req.0 {
-                            tracing::error!(?req, ?header, "received inconsistent payload");
-                            return None;
-                        }
+        let common = vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+            VidCommonQueryData<Types>,
+        >(&common_bytes)
+        .map_err(|err| {
+            tracing::info!(
+                "error deserializing VidCommonQueryData for {}: {err}",
+                req.0
+            );
+        })
+        .ok();
 
-                        let metadata = header.metadata().encode();
+        let (payload, common) = match (payload, common) {
+            (Some(payload), Some(common)) => (payload, common),
+            _ => {
+                tracing::info!("fetching legacy payload for req={}", req.0);
+                return self
+                    .fetch_legacy_payload::<Types>(payload_bytes, common_bytes, req)
+                    .await;
+            },
+        };
 
-                        // Calculate AVIDM commitment
-                        let commit = match AvidMScheme::commit(
-                            &avidm_param,
-                            &bytes,
-                            ns_table::parse_ns_table(bytes.len(), &metadata),
-                        ) {
-                            Ok(commit) => VidCommitment::V1(commit),
-                            Err(err) => {
-                                tracing::error!(%err, "unable to compute AVIDM commitment");
-                                return None;
-                            },
-                        };
+        match common.common() {
+            VidCommon::V0(common) => {
+                let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common) as usize;
+                let bytes = payload.data().encode();
 
-                        // Compare calculated commitment with requested commitment
-                        if commit != req.0 {
-                            tracing::warn!("commitment type mismatch for AVIDM check");
-                            return None;
-                        }
-                    },
+                let commit = advz_scheme(num_storage_nodes)
+                    .commit_only(bytes)
+                    .map(VidCommitment::V0)
+                    .map_err(|err| {
+                        tracing::error!(%err, "unable to compute VID commitment");
+                    })
+                    .ok()?;
+
+                if commit != req.0 {
+                    tracing::error!(?req, ?commit, "received inconsistent payload");
+                    return None;
+                }
+            },
+            VidCommon::V1(common) => {
+                let bytes = payload.data().encode();
+
+                let avidm_param = init_avidm_param(common.total_weights)
+                    .map_err(|err| {
+                        tracing::error!(%err, "unable to initialize AVIDM parameters");
+                    })
+                    .ok()?;
+
+                let header = self
+                    .client
+                    .get::<()>(&format!("availability/header/{}", payload.height()))
+                    .bytes()
+                    .await
+                    .map_err(|err| {
+                        tracing::error!(%err, "failed to fetch header for payload");
+                    })
+                    .ok()
+                    .and_then(|header_bytes| {
+                        vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
+                            Header<Types>,
+                        >(&header_bytes)
+                        .map_err(|err| {
+                            tracing::error!(%err, "failed to deserialize header");
+                        })
+                        .ok()
+                    })?;
+
+                if header.payload_commitment() != req.0 {
+                    tracing::error!(?req, ?header, "received inconsistent payload");
+                    return None;
                 }
 
-                Some(payload.data)
-            },
-            Err(err) => {
-                tracing::warn!("error fetching block payload {err}");
-                self.fetch_legacy_payload::<Types>(req).await
+                let metadata = header.metadata().encode();
+                let commit = AvidMScheme::commit(
+                    &avidm_param,
+                    &bytes,
+                    ns_table::parse_ns_table(bytes.len(), &metadata),
+                )
+                .map(VidCommitment::V1)
+                .map_err(|err| {
+                    tracing::error!(%err, "unable to compute AVIDM commitment");
+                })
+                .ok()?;
+
+                // Compare calculated commitment with requested commitment
+                if commit != req.0 {
+                    tracing::warn!("commitment type mismatch for AVIDM check");
+                    return None;
+                }
             },
         }
+
+        Some(payload.data)
     }
 }
 
