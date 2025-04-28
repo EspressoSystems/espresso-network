@@ -1,5 +1,12 @@
-use std::{cmp::Ordering, collections::HashMap, fmt::Display, sync::Arc, time::Duration};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    fmt::{Debug, Display},
+    sync::Arc,
+    time::Duration,
+};
 
+use alloy::primitives::U256;
 use anyhow::{anyhow, bail, ensure, Context};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -11,25 +18,36 @@ use espresso_types::{
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
     v0_99::ChainConfig,
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, SeqTypes,
+    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
 };
-use futures::future::{Future, FutureExt, TryFuture, TryFutureExt};
+use futures::{
+    future::{Future, FutureExt, TryFuture, TryFutureExt},
+    stream::FuturesUnordered,
+    StreamExt,
+};
 use hotshot_types::{
+    consensus::Consensus,
     data::ViewNumber,
     network::NetworkConfig,
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
-        node_implementation::ConsensusTime as _,
+        network::ConnectedNetwork,
+        node_implementation::{ConsensusTime as _, NodeType, Versions},
+        ValidatedState as ValidatedStateTrait,
     },
-    ValidatorConfig,
+    utils::{View, ViewInner},
+    PeerConfig, ValidatorConfig,
 };
 use itertools::Itertools;
 use jf_merkle_tree::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
 use surf_disco::Request;
 use tide_disco::error::ServerError;
 use tokio::time::timeout;
+use tokio_util::task::AbortOnDropHandle;
+use tracing::warn;
 use url::Url;
 use vbs::version::StaticVersionType;
 
@@ -61,21 +79,6 @@ impl<ApiVer: StaticVersionType> Client<ServerError, ApiVer> {
 
     pub fn get<T: DeserializeOwned>(&self, route: &str) -> Request<T, ServerError, ApiVer> {
         self.inner.get(route)
-    }
-}
-
-/// A catchup implementation that falls back to a remote provider, but prefers a local provider when
-/// supported.
-pub(crate) async fn local_and_remote(
-    persistence: impl SequencerPersistence,
-    remote: impl StateCatchup + 'static,
-) -> Arc<dyn StateCatchup> {
-    match persistence.into_catchup_provider(*remote.backoff()) {
-        Ok(local) => Arc::new(vec![local, Arc::new(remote)]),
-        Err(err) => {
-            tracing::warn!("not using local catchup: {err:#}");
-            Arc::new(remote)
-        },
     }
 }
 
@@ -386,6 +389,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .join(",")
         )
     }
+
+    fn is_local(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) trait CatchupStorage: Sync {
@@ -630,6 +637,10 @@ where
     fn name(&self) -> String {
         "SqlStateCatchup".into()
     }
+
+    fn is_local(&self) -> bool {
+        true
+    }
 }
 
 /// Disable catchup entirely.
@@ -721,6 +732,402 @@ impl StateCatchup for NullStateCatchup {
     fn name(&self) -> String {
         "NullStateCatchup".into()
     }
+
+    fn is_local(&self) -> bool {
+        true
+    }
+}
+
+/// A catchup implementation that parallelizes requests to many providers.
+/// It returns the result of the first non-erroring provider to complete.
+#[derive(Clone)]
+pub struct ParallelStateCatchup {
+    providers: Arc<Mutex<Vec<Arc<dyn StateCatchup>>>>,
+    remote_request_delay: Duration,
+}
+
+impl ParallelStateCatchup {
+    /// Create a new [`ParallelStateCatchup`] with two providers.
+    ///
+    /// `remote_request_delay` is the amount of time to wait for a local response (e.g. database)
+    /// before spawning remote requests for the same data.
+    pub fn new(providers: &[Arc<dyn StateCatchup>], remote_request_delay: Duration) -> Self {
+        Self {
+            providers: Arc::new(Mutex::new(providers.to_vec())),
+            remote_request_delay,
+        }
+    }
+
+    /// Add a provider to the list of providers
+    pub fn add_provider(&self, provider: Arc<dyn StateCatchup>) {
+        self.providers.lock().push(provider);
+    }
+
+    /// Perform an async operation on all providers, returning the first result to succeed
+    pub async fn on_all_providers<C, F, RT>(&self, closure: C) -> anyhow::Result<RT>
+    where
+        C: Fn(Arc<dyn StateCatchup>) -> F + Clone + Send + Sync + 'static,
+        F: Future<Output = anyhow::Result<RT>> + Send + 'static,
+        RT: Send + Sync + 'static,
+    {
+        // Make sure we have at least one provider
+        let providers = self.providers.lock().clone();
+
+        if providers.is_empty() {
+            return Err(anyhow::anyhow!("no providers were initialized"));
+        }
+
+        // Get the remote request delay so we can throw it into the future
+        let remote_request_delay = self.remote_request_delay;
+
+        // Spawn futures for each provider
+        let mut futures = FuturesUnordered::new();
+        for provider in providers {
+            if provider.is_local() {
+                // If this is a local provider, spawn the future directly
+                let closure = closure.clone();
+                futures.push(AbortOnDropHandle::new(tokio::spawn(closure(provider))));
+            } else {
+                // If this is a remote provider, spawn a future that sleeps for the remote request delay
+                // before calling the closure. These will automatically be cancelled when this function returns
+                let closure = closure.clone();
+                futures.push(AbortOnDropHandle::new(tokio::spawn(async move {
+                    tokio::time::sleep(remote_request_delay).await;
+                    closure(provider).await
+                })));
+            }
+        }
+
+        // Return the first successful result
+        while let Some(result) = futures.next().await {
+            // Unwrap the inner (join) result
+            let result = match result {
+                Ok(res) => res,
+                Err(err) => {
+                    warn!("Failed to join on provider: {err:#}. Trying next provider...");
+                    continue;
+                },
+            };
+
+            // If a provider fails, print why
+            let result = match result {
+                Ok(res) => res,
+                Err(err) => {
+                    warn!("Failed to fetch data: {err:#}. Trying next provider...");
+                    continue;
+                },
+            };
+
+            return Ok(result);
+        }
+
+        Err(anyhow::anyhow!("no providers returned a successful result"))
+    }
+}
+
+/// A catchup implementation that parallelizes requests to a local and remote provider.
+/// It returns the result of the first provider to complete.
+#[async_trait]
+impl StateCatchup for ParallelStateCatchup {
+    async fn try_fetch_leaves(&self, _retry: usize, _height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        unreachable!()
+    }
+
+    async fn try_fetch_accounts(
+        &self,
+        _retry: usize,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _fee_merkle_tree_root: FeeMerkleCommitment,
+        _accounts: &[FeeAccount],
+    ) -> anyhow::Result<FeeMerkleTree> {
+        unreachable!()
+    }
+
+    async fn try_remember_blocks_merkle_tree(
+        &self,
+        _retry: usize,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _mt: &mut BlockMerkleTree,
+    ) -> anyhow::Result<()> {
+        unreachable!()
+    }
+
+    async fn try_fetch_chain_config(
+        &self,
+        _retry: usize,
+        _commitment: Commitment<ChainConfig>,
+    ) -> anyhow::Result<ChainConfig> {
+        unreachable!()
+    }
+
+    #[tracing::instrument(skip(self, _instance))]
+    async fn try_fetch_reward_accounts(
+        &self,
+        _retry: usize,
+        _instance: &NodeState,
+        _height: u64,
+        _view: ViewNumber,
+        _reward_merkle_tree_root: RewardMerkleCommitment,
+        _accounts: &[RewardAccount],
+    ) -> anyhow::Result<RewardMerkleTree> {
+        unreachable!()
+    }
+
+    fn backoff(&self) -> &BackoffParams {
+        unreachable!()
+    }
+
+    fn name(&self) -> String {
+        format!(
+            "[{}]",
+            self.providers
+                .lock()
+                .iter()
+                .map(|p| p.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
+    async fn fetch_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        fee_merkle_tree_root: FeeMerkleCommitment,
+        accounts: Vec<FeeAccount>,
+    ) -> anyhow::Result<Vec<FeeAccountProof>> {
+        let instance_clone = instance.clone();
+        self.on_all_providers(move |provider| {
+            // Clone things we need in the closure
+            let instance_clone = instance_clone.clone();
+            let accounts_clone = accounts.clone();
+
+            async move {
+                provider
+                    .fetch_accounts(
+                        &instance_clone,
+                        height,
+                        view,
+                        fee_merkle_tree_root,
+                        accounts_clone,
+                    )
+                    .await
+            }
+        })
+        .await
+    }
+
+    async fn fetch_leaf(
+        &self,
+        height: u64,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
+        success_threshold: U256,
+    ) -> anyhow::Result<Leaf2> {
+        self.on_all_providers(move |provider| {
+            let stake_table_clone = stake_table.clone();
+
+            async move {
+                provider
+                    .fetch_leaf(height, stake_table_clone, success_threshold)
+                    .await
+            }
+        })
+        .await
+    }
+
+    async fn fetch_chain_config(
+        &self,
+        commitment: Commitment<ChainConfig>,
+    ) -> anyhow::Result<ChainConfig> {
+        self.on_all_providers(move |provider| async move {
+            provider.fetch_chain_config(commitment).await
+        })
+        .await
+    }
+
+    async fn fetch_reward_accounts(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: Vec<RewardAccount>,
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        let instance_clone = instance.clone();
+        self.on_all_providers(move |provider| {
+            let instance_clone = instance_clone.clone();
+            let accounts_clone = accounts.clone();
+
+            async move {
+                provider
+                    .fetch_reward_accounts(
+                        &instance_clone,
+                        height,
+                        view,
+                        reward_merkle_tree_root,
+                        accounts_clone,
+                    )
+                    .await
+            }
+        })
+        .await
+    }
+
+    async fn remember_blocks_merkle_tree(
+        &self,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        mt: &mut BlockMerkleTree,
+    ) -> anyhow::Result<()> {
+        let mt_clone = mt.clone();
+        let instance_clone = instance.clone();
+
+        let merkle_tree = self
+            .on_all_providers(move |provider| {
+                let instance_clone = instance_clone.clone();
+                let mut mt_clone = mt_clone.clone();
+
+                async move {
+                    provider
+                        .remember_blocks_merkle_tree(&instance_clone, height, view, &mut mt_clone)
+                        .await?;
+                    Ok(mt_clone)
+                }
+            })
+            .await
+            .with_context(|| "failed to remember blocks merkle tree")?;
+
+        // Update the original, local merkle tree
+        *mt = merkle_tree;
+
+        Ok(())
+    }
+
+    fn is_local(&self) -> bool {
+        self.providers.lock().iter().all(|p| p.is_local())
+    }
+}
+
+/// Add accounts to the in-memory consensus state.
+/// We use this during catchup after receiving verified accounts.
+#[allow(clippy::type_complexity)]
+pub async fn add_fee_accounts_to_state<
+    N: ConnectedNetwork<PubKey>,
+    V: Versions,
+    P: SequencerPersistence,
+>(
+    consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
+    view: &<SeqTypes as NodeType>::View,
+    accounts: &[FeeAccount],
+    tree: &FeeMerkleTree,
+    leaf: Leaf2,
+) -> anyhow::Result<()> {
+    // Get the consensus handle
+    let mut consensus = consensus.write().await;
+
+    let (state, delta) = match consensus.validated_state_map().get(view) {
+        Some(View {
+            view_inner: ViewInner::Leaf { state, delta, .. },
+        }) => {
+            let mut state = (**state).clone();
+
+            // Add the fetched accounts to the state.
+            for account in accounts {
+                if let Some((proof, _)) = FeeAccountProof::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.fee_merkle_tree) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+
+            (Arc::new(state), delta.clone())
+        },
+        _ => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
+            let mut state = ValidatedState::from_header(leaf.block_header());
+            state.fee_merkle_tree = tree.clone();
+            (Arc::new(state), None)
+        },
+    };
+
+    consensus
+        .update_leaf(leaf, Arc::clone(&state), delta)
+        .with_context(|| "failed to update leaf")?;
+
+    Ok(())
+}
+
+/// Add accounts to the in-memory consensus state.
+/// We use this during catchup after receiving verified accounts.
+#[allow(clippy::type_complexity)]
+pub async fn add_reward_accounts_to_state<
+    N: ConnectedNetwork<PubKey>,
+    V: Versions,
+    P: SequencerPersistence,
+>(
+    consensus: &Arc<RwLock<Consensus<SeqTypes>>>,
+    view: &<SeqTypes as NodeType>::View,
+    accounts: &[RewardAccount],
+    tree: &RewardMerkleTree,
+    leaf: Leaf2,
+) -> anyhow::Result<()> {
+    // Get the consensus handle
+    let mut consensus = consensus.write().await;
+
+    let (state, delta) = match consensus.validated_state_map().get(view) {
+        Some(View {
+            view_inner: ViewInner::Leaf { state, delta, .. },
+        }) => {
+            let mut state = (**state).clone();
+
+            // Add the fetched accounts to the state.
+            for account in accounts {
+                if let Some((proof, _)) = RewardAccountProof::prove(tree, (*account).into()) {
+                    if let Err(err) = proof.remember(&mut state.reward_merkle_tree) {
+                        tracing::warn!(
+                            ?view,
+                            %account,
+                            "cannot update fetched account state: {err:#}"
+                        );
+                    }
+                } else {
+                    tracing::warn!(?view, %account, "cannot update fetched account state because account is not in the merkle tree");
+                };
+            }
+
+            (Arc::new(state), delta.clone())
+        },
+        _ => {
+            // If we don't already have a leaf for this view, or if we don't have the view
+            // at all, we can create a new view based on the recovered leaf and add it to
+            // our state map. In this case, we must also add the leaf to the saved leaves
+            // map to ensure consistency.
+            let mut state = ValidatedState::from_header(leaf.block_header());
+            state.reward_merkle_tree = tree.clone();
+            (Arc::new(state), None)
+        },
+    };
+
+    consensus
+        .update_leaf(leaf, Arc::clone(&state), delta)
+        .with_context(|| "failed to update leaf")?;
+
+    Ok(())
 }
 
 #[cfg(test)]

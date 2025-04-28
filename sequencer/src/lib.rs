@@ -18,7 +18,7 @@ use std::sync::Arc;
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::{Mutex, RwLock};
-use catchup::StatePeers;
+use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
@@ -29,6 +29,7 @@ use espresso_types::{
 use genesis::L1Finalized;
 // Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
+use hotshot_query_service::data_source::storage::SqlStorage;
 use hotshot_stake_table::vec_based::StakeTable;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
@@ -200,6 +201,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     metrics: &dyn Metrics,
     persistence: P,
     l1_params: L1Params,
+    storage: Option<Arc<SqlStorage>>,
     seq_versions: V,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
@@ -473,18 +475,34 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         genesis_state.prefund_account(address, amount);
     }
 
-    let peers = catchup::local_and_remote(
-        persistence.clone(),
-        StatePeers::<SequencerApiVersion>::from_urls(
-            network_params.state_peers,
-            network_params.catchup_backoff,
-            metrics,
-        ),
-    )
-    .await;
+    // Create the list of parallel catchup providers
+    let state_catchup_providers = ParallelStateCatchup::new(&[], Duration::from_secs(1));
+
+    // Add the state peers to the list
+    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+        network_params.state_peers,
+        network_params.catchup_backoff,
+        metrics,
+    );
+    state_catchup_providers.add_provider(Arc::new(state_peers));
+
+    // Add the local (persistence) catchup provider to the list (if we can)
+    match persistence
+        .clone()
+        .into_catchup_provider(network_params.catchup_backoff)
+    {
+        Ok(catchup) => {
+            state_catchup_providers.add_provider(Arc::new(catchup));
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+            );
+        },
+    };
 
     let fetcher = StakeTableFetcher::new(
-        peers.clone(),
+        Arc::new(state_catchup_providers.clone()),
         Arc::new(Mutex::new(persistence.clone())),
         l1_client.clone(),
         genesis.chain_config,
@@ -512,7 +530,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         upgrades: genesis.upgrades,
         current_version: V::Base::VERSION,
         epoch_height: Some(epoch_height),
-        peers,
+        state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
     };
 
@@ -562,6 +580,8 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         validator_config,
         coordinator,
         instance_state,
+        storage,
+        state_catchup_providers,
         persistence,
         network,
         Some(network_params.state_relay_server_url),
@@ -648,7 +668,10 @@ pub mod testing {
     use vbs::version::Version;
 
     use super::*;
-    use crate::persistence::no_storage::{self, NoStorage};
+    use crate::{
+        catchup::ParallelStateCatchup,
+        persistence::no_storage::{self, NoStorage},
+    };
 
     const STAKE_TABLE_CAPACITY_FOR_TEST: u64 = 10;
     const BUILDER_CHANNEL_CAPACITY_FOR_TEST: usize = 128;
@@ -1089,7 +1112,8 @@ pub mod testing {
                     i,
                     ValidatedState::default(),
                     no_storage::Options,
-                    NullStateCatchup::default(),
+                    Some(NullStateCatchup::default()),
+                    None,
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
                     NullEventConsumer,
@@ -1116,7 +1140,8 @@ pub mod testing {
             i: usize,
             mut state: ValidatedState,
             mut persistence_opt: P,
-            catchup: impl StateCatchup + 'static,
+            state_peers: Option<impl StateCatchup + 'static>,
+            storage: Option<Arc<SqlStorage>>,
             metrics: &dyn Metrics,
             stake_table_capacity: u64,
             event_consumer: impl EventConsumer + 'static,
@@ -1160,6 +1185,29 @@ pub mod testing {
 
             let chain_config = state.chain_config.resolve().unwrap_or_default();
 
+            // Create an empty list of catchup providers
+            let catchup_providers = ParallelStateCatchup::new(&[], Duration::from_millis(500));
+
+            // If we have the state peers, add them
+            if let Some(state_peers) = state_peers {
+                catchup_providers.add_provider(Arc::new(state_peers));
+            }
+
+            // If we have a working local catchup provider, add it
+            match persistence
+                .clone()
+                .into_catchup_provider(BackoffParams::default())
+            {
+                Ok(local_catchup) => {
+                    catchup_providers.add_provider(local_catchup);
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to create local catchup provider: {e:#}. Only using remote catchup."
+                    );
+                },
+            };
+
             let l1_opt = L1ClientOptions {
                 stake_table_update_interval: Duration::from_secs(5),
                 l1_events_max_block_range: 1,
@@ -1172,11 +1220,8 @@ pub mod testing {
                 .expect("failed to create L1 client");
             l1_client.spawn_tasks().await;
 
-            let peers = catchup::local_and_remote(persistence.clone(), catchup).await;
-            // Create the HotShot membership
-
             let fetcher = StakeTableFetcher::new(
-                peers.clone(),
+                Arc::new(catchup_providers.clone()),
                 Arc::new(Mutex::new(persistence)),
                 l1_client.clone(),
                 chain_config,
@@ -1198,7 +1243,7 @@ pub mod testing {
                 i as u64,
                 chain_config,
                 l1_client,
-                peers,
+                Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
             )
@@ -1225,6 +1270,8 @@ pub mod testing {
                 validator_config,
                 coordinator,
                 node_state,
+                storage,
+                catchup_providers,
                 persistence,
                 network,
                 self.state_relay_url.clone(),

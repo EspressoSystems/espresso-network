@@ -465,7 +465,7 @@ pub async fn find_validator_info(
         );
 
         let missing_account_proofs = instance_state
-            .peers
+            .state_catchup
             .fetch_reward_accounts(
                 instance_state,
                 parent_height,

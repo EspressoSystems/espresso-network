@@ -104,6 +104,7 @@ es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch
 dotenvy = "0.15"
 ethers = { version = "2.0", features = ["solc", "ws"] }
 futures = "0.3"
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread",
     "macros",
