@@ -3394,4 +3394,90 @@ mod test {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_node_stake_table_api() -> anyhow::Result<()> {
+        // TODO(abdul): This test currently uses TestNetwork only for contract deployment and for L1 block number.
+        // Once the stake table deployment logic is refactored and isolated, TestNetwork here will be unnecessary
+
+        setup_test();
+        let epoch_height = 20;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let instance = Anvil::new()
+            .args(["--slots-in-an-epoch", "0", "--block-time", "1"])
+            .spawn();
+        let l1_url = instance.endpoint_url();
+        let secret_key = instance.keys()[0].clone();
+
+        let signer = LocalSigner::from(secret_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 5;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(true)
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, PosVersion::new()).await;
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // wait for atleast 2 epochs
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(40)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        for i in 1..=3 {
+            let _st = client
+                .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", i as u64))
+                .send()
+                .await
+                .expect("failed to get stake table");
+        }
+
+        let _st = client
+            .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/current"))
+            .send()
+            .await
+            .expect("failed to get stake table");
+    }
 }
