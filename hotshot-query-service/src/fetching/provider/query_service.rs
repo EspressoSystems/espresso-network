@@ -124,7 +124,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             },
         }
     }
-    async fn try_get_legacy_leaf<Types: NodeType>(
+    async fn fetch_legacy_leaf<Types: NodeType>(
         &self,
         bytes: Vec<u8>,
         req: LeafRequest<Types>,
@@ -221,6 +221,14 @@ where
             (Some(payload), Some(common)) => (payload, common),
             _ => {
                 tracing::info!("fetching legacy payload for req={}", req.0);
+
+                // --- Fallback Deserialization ---
+                //
+                // If deserialization into the new type fails (e.g., because the provider is still
+                // returning legacy data), attempt to deserialize using an older, legacy format instead.
+                // This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
+                //
+                // If the fallback also fails, the fetch will fail and return `None`.
                 return self
                     .fetch_legacy_payload::<Types>(payload_bytes, common_bytes, req)
                     .await;
@@ -322,6 +330,8 @@ where
             },
         };
 
+        // Attempt to deserialize using the new type
+
         match vbs::Serializer::<vbs::version::StaticVersion<0, 1>>::deserialize::<
             LeafQueryData<Types>,
         >(&bytes)
@@ -350,7 +360,14 @@ where
             },
             Err(err) => {
                 tracing::warn!("failed to fetch leaf req={req:?}. err={err}");
-                self.try_get_legacy_leaf(bytes, req).await
+                // --- Fallback Deserialization ---
+                //
+                // If deserialization into the new format fails (e.g., because the provider is still
+                // returning legacy data), attempt to deserialize using an older, legacy format instead.
+                // This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
+                //
+                // If the fallback also fails, the fetch will fail and return `None`.
+                self.fetch_legacy_leaf(bytes, req).await
             },
         }
     }
@@ -403,7 +420,18 @@ where
                 },
             },
             Err(err) => {
-                tracing::warn!("failed to fetch VidCommonQueryData. req={req:?}. err={err:?}");
+                tracing::warn!(
+                    "failed to fetch VidCommonQueryData. req={}. err={err:#}",
+                    req.0
+                );
+
+                // --- Fallback Deserialization ---
+                //
+                // If deserialization into the new format fails (e.g., because the provider is still
+                // returning legacy data), attempt to deserialize using an older, legacy format instead.
+                // This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
+                //
+                // If the fallback also fails, the fetch will fail and return `None`.
                 self.fetch_legacy_vid_common::<Types>(bytes, req).await
             },
         }
@@ -426,6 +454,7 @@ mod test {
     use portpicker::pick_unused_port;
     use rand::RngCore;
     use tide_disco::{error::ServerError, App};
+    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
@@ -2368,5 +2397,211 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_metadata_stream_begin_failure_vid() {
         test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fallback_deserialization_for_fetch_requests() {
+        setup_test();
+
+        async fn run_test_helper<V: Versions>(provider_url: String) {
+            let mut network = MockNetwork::<MockDataSource, V>::init().await;
+
+            let port = pick_unused_port().unwrap();
+            let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+
+            // Register availability APIs for two versions: v0 and v1
+            app.register_module(
+                "availability",
+                define_api(
+                    &Default::default(),
+                    StaticVersion::<0, 1> {},
+                    "0.0.1".parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            app.register_module(
+                "availability",
+                define_api(
+                    &Default::default(),
+                    StaticVersion::<0, 1> {},
+                    "1.0.0".parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            network.spawn(
+                "server",
+                app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
+            );
+
+            let db = TmpDb::init().await;
+
+            let provider = Provider::new(QueryServiceProvider::new(
+                provider_url.parse().unwrap(),
+                StaticVersion::<0, 1> {},
+            ));
+
+            let ds = data_source(&db, &provider).await;
+            network.start().await;
+
+            let leaves = network.data_source().subscribe_leaves(1).await;
+            let leaves = leaves.take(5).collect::<Vec<_>>().await;
+            let test_leaf = &leaves[0];
+            let test_payload = &leaves[2];
+            let test_common = &leaves[3];
+
+            let mut fetches = vec![];
+            // Issue requests for missing data (these should initially remain unresolved):
+            fetches.push(ds.get_leaf(test_leaf.height() as usize).await.map(ignore));
+            fetches.push(ds.get_payload(test_payload.block_hash()).await.map(ignore));
+            fetches.push(
+                ds.get_vid_common(test_common.block_hash())
+                    .await
+                    .map(ignore),
+            );
+
+            // Even if we give data extra time to propagate, these requests will not resolve, since we
+            // didn't trigger any active fetches.
+            sleep(Duration::from_secs(1)).await;
+            for (i, fetch) in fetches.into_iter().enumerate() {
+                tracing::info!("checking fetch {i} is unresolved");
+                fetch.try_resolve().unwrap_err();
+            }
+
+            // Append the latest known leaf to the local store
+
+            ds.append(leaves.last().cloned().unwrap().into())
+                .await
+                .unwrap();
+
+            // This should now fetch from the provider
+            let leaf = ds.get_leaf(test_leaf.height() as usize).await;
+            let payload = ds.get_payload(test_payload.height() as usize).await;
+            let common = ds.get_vid_common(test_common.height() as usize).await;
+
+            {
+                let truth = network.data_source();
+                assert_eq!(
+                    leaf.await,
+                    truth.get_leaf(test_leaf.height() as usize).await.await
+                );
+                assert_eq!(
+                    payload.await,
+                    truth
+                        .get_payload(test_payload.height() as usize)
+                        .await
+                        .await
+                );
+                assert_eq!(
+                    common.await,
+                    truth
+                        .get_vid_common(test_common.height() as usize)
+                        .await
+                        .await
+                );
+            }
+        }
+
+        // Run the test helper with different setups:
+
+        // This run will call v0 availalbilty api for fetch requests.
+        // The fetch initially attempts deserialization with new types,
+        // which fails because the v0 provider returns legacy types.
+        // It then falls back to deserializing as legacy types,
+        // which succeeds, allowing the test to pass.
+        run_test_helper::<MockVersions>(format!(
+            "http://localhost:{}/v0",
+            pick_unused_port().unwrap()
+        ))
+        .await;
+        // Fetch from the v1 availability API using MockVersions.
+        // Even though the previous setup targets v0, this one fetches from the v1 provider.
+        // which would correctly deserialize the bytes in the first attempt, so no deserialization is needed
+        run_test_helper::<MockVersions>(format!(
+            "http://localhost:{}/v1",
+            pick_unused_port().unwrap()
+        ))
+        .await;
+
+        run_test_helper::<MockVersions>(format!(
+            "http://localhost:{}/v1",
+            pick_unused_port().unwrap()
+        ))
+        .await;
+        // Fetch Proof-of-Stake (PoS) data using the v1 availability API.
+        // This is the same as previous run, but with proof of stake version
+        run_test_helper::<EpochsTestVersions>(format!(
+            "http://localhost:{}/v1",
+            pick_unused_port().unwrap()
+        ))
+        .await;
+
+        // Run with the Proof-of-Stake (PoS) version against a v0 provider.
+        // Fetch requests are expected to fail because PoS commitments differ from the legacy commitments
+        // returned by the v0 provider.
+        // For example: a PoS Leaf2 commitment will not match the downgraded commitment from a legacy Leaf1.
+
+        {
+            let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+
+            let port = pick_unused_port().unwrap();
+            let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+
+            app.register_module(
+                "availability",
+                define_api(
+                    &Default::default(),
+                    StaticVersion::<0, 1> {},
+                    "0.0.1".parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            app.register_module(
+                "availability",
+                define_api(
+                    &Default::default(),
+                    StaticVersion::<0, 1> {},
+                    "1.0.0".parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            network.spawn(
+                "server",
+                app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
+            );
+
+            let db = TmpDb::init().await;
+            let provider = Provider::new(QueryServiceProvider::new(
+                format!("http://localhost:{}/v0", port).parse().unwrap(),
+                StaticVersion::<0, 1> {},
+            ));
+            let ds = data_source(&db, &provider).await;
+
+            network.start().await;
+
+            let leaves = network.data_source().subscribe_leaves(1).await;
+            let leaves = leaves.take(5).collect::<Vec<_>>().await;
+            let test_leaf = &leaves[0];
+            let test_payload = &leaves[2];
+            let test_common = &leaves[3];
+
+            let leaf = ds.get_leaf(test_leaf.height() as usize).await;
+            let payload = ds.get_payload(test_payload.height() as usize).await;
+            let common = ds.get_vid_common(test_common.height() as usize).await;
+
+            sleep(Duration::from_secs(3)).await;
+
+            // Try to resolve (should error)
+            leaf.try_resolve().unwrap_err();
+            payload.try_resolve().unwrap_err();
+            common.try_resolve().unwrap_err();
+        }
     }
 }
