@@ -2381,10 +2381,9 @@ mod test {
     async fn test_fallback_deserialization_for_fetch_requests() {
         setup_test();
 
-        async fn run_test_helper<V: Versions>(provider_url: String) {
+        async fn run_test_helper<V: Versions>(port: u16, version: &str) {
             let mut network = MockNetwork::<MockDataSource, V>::init().await;
 
-            let port = pick_unused_port().unwrap();
             let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
 
             // Register availability APIs for two versions: v0 and v1
@@ -2417,8 +2416,12 @@ mod test {
 
             let db = TmpDb::init().await;
 
+            let provider_url = format!("http://localhost:{port}/{version}")
+                .parse()
+                .expect("Invalid URL");
+
             let provider = Provider::new(QueryServiceProvider::new(
-                provider_url.parse().unwrap(),
+                provider_url,
                 StaticVersion::<0, 1> {},
             ));
 
@@ -2483,6 +2486,7 @@ mod test {
             }
         }
 
+        let port = pick_unused_port().unwrap();
         // Run the test helper with different setups:
 
         // This run will call v0 availalbilty api for fetch requests.
@@ -2490,26 +2494,14 @@ mod test {
         // which fails because the v0 provider returns legacy types.
         // It then falls back to deserializing as legacy types,
         // and the fetch passes
-        run_test_helper::<MockVersions>(format!(
-            "http://localhost:{}/v0",
-            pick_unused_port().unwrap()
-        ))
-        .await;
+        run_test_helper::<MockVersions>(port, "v0").await;
         // Fetch from the v1 availability API using MockVersions.
         // Even though the previous setup targets v0, this one fetches from the v1 provider.
         // which would correctly deserialize the bytes in the first attempt, so no deserialization is needed
-        run_test_helper::<MockVersions>(format!(
-            "http://localhost:{}/v1",
-            pick_unused_port().unwrap()
-        ))
-        .await;
+        run_test_helper::<MockVersions>(port, "v1").await;
         // Fetch Proof of Stake (PoS) data using the v1 availability API.
         // This is the same as previous run, but with proof of stake version
-        run_test_helper::<EpochsTestVersions>(format!(
-            "http://localhost:{}/v1",
-            pick_unused_port().unwrap()
-        ))
-        .await;
+        run_test_helper::<EpochsTestVersions>(port, "v1").await;
 
         // Run with the PoS version against a v0 provider.
         // Fetch requests are expected to fail because PoS commitments differ from the legacy commitments
