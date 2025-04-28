@@ -174,6 +174,13 @@ impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest> for QuerySer
 where
     Types: NodeType,
 {
+    /// Fetches the `Payload` for a given request.
+    ///
+    /// Attempts to fetch and deserialize the requested data using the new type first.
+    /// If deserialization into the new type fails (e.g., because the provider is still returning
+    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
+    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
+    ///
     async fn fetch(&self, req: PayloadRequest) -> Option<Payload<Types>> {
         // Fetch the payload and the VID common data. We need the common data to recompute the VID
         // commitment, to ensure the payload we received is consistent with the commitment we
@@ -222,13 +229,7 @@ where
             _ => {
                 tracing::info!("fetching legacy payload for req={}", req.0);
 
-                // --- Fallback Deserialization ---
-                //
-                // If deserialization into the new type fails (e.g., because the provider is still
-                // returning legacy data), attempt to deserialize using an older, legacy format instead.
-                // This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-                //
-                // If the fallback also fails, the fetch will fail and return `None`.
+                // fallback deserialization
                 return self
                     .fetch_legacy_payload::<Types>(payload_bytes, common_bytes, req)
                     .await;
@@ -316,6 +317,13 @@ impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest<Types>>
 where
     Types: NodeType,
 {
+    /// Fetches the `Leaf` for a given request.
+    ///
+    /// Attempts to fetch and deserialize the requested data using the new type first.
+    /// If deserialization into the new type fails (e.g., because the provider is still returning
+    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
+    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
+    ///
     async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
         let bytes = self
             .client
@@ -360,13 +368,7 @@ where
             },
             Err(err) => {
                 tracing::warn!("failed to fetch leaf req={req:?}. err={err}");
-                // --- Fallback Deserialization ---
-                //
-                // If deserialization into the new type fails (e.g., because the provider is still
-                // returning legacy data), attempt to deserialize using an older, legacy format instead.
-                // This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-                //
-                // If the fallback also fails, the fetch will fail and return `None`.
+                // Fallback deserialization
                 self.fetch_legacy_leaf(bytes, req).await
             },
         }
@@ -378,6 +380,13 @@ impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRequest> for QueryS
 where
     Types: NodeType,
 {
+    /// Fetches the `VidCommon` for a given request.
+    ///
+    /// Attempts to fetch and deserialize the requested data using the new type first.
+    /// If deserialization into the new type fails (e.g., because the provider is still returning
+    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
+    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
+    ///
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
         let bytes = self
             .client
@@ -425,13 +434,7 @@ where
                     req.0
                 );
 
-                // --- Fallback Deserialization ---
-                //
-                // If deserialization into the new type fails (e.g., because the provider is still
-                // returning legacy data), attempt to deserialize using an older, legacy format instead.
-                // This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-                //
-                // If the fallback also fails, the fetch will fail and return `None`.
+                // Fallback deserialization
                 self.fetch_legacy_vid_common::<Types>(bytes, req).await
             },
         }
