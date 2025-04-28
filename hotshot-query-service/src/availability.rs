@@ -145,6 +145,7 @@ pub enum Error {
     FetchStateCert {
         epoch: u64,
     },
+    #[snafu(display("error {status}: {message}"))]
     Custom {
         message: String,
         status: StatusCode,

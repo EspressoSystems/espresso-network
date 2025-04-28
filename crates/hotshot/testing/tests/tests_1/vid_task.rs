@@ -45,15 +45,13 @@ async fn test_vid_task() {
     let pub_key = handle.public_key();
 
     let membership = handle.hotshot.membership_coordinator.clone();
+    let num_storage_nodes = membership
+        .membership_for_epoch(None)
+        .await
+        .unwrap()
+        .total_nodes()
+        .await;
 
-    let default_version = Version { major: 0, minor: 0 };
-
-    let mut vid = vid_scheme_from_view_number::<TestTypes, TestVersions>(
-        &membership.membership_for_epoch(None).await.unwrap(),
-        ViewNumber::new(0),
-        default_version,
-    )
-    .await;
     let upgrade_lock = UpgradeLock::<TestTypes, TestVersions>::new();
     let transactions = vec![TestTransaction::new(vec![0])];
 
@@ -117,6 +115,7 @@ async fn test_vid_task() {
                 ViewNumber::new(2),
                 None,
                 vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+                    num_storage_nodes,
                     <TestVersions as Versions>::Base::VERSION,
                     *ViewNumber::new(2),
                 )
@@ -137,6 +136,7 @@ async fn test_vid_task() {
                 },
                 ViewNumber::new(2),
                 vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+                    num_storage_nodes,
                     <TestVersions as Versions>::Base::VERSION,
                     *ViewNumber::new(2),
                 )

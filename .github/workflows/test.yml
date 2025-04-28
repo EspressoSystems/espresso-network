@@ -136,7 +136,6 @@ jobs:
             target/debug/keygen
             target/debug/permissionless-builder
             target/debug/nasty-client
-            target/debug/update-permissioned-stake-table
             target/debug/espresso-dev-node
             target/debug/pub-key
             target/debug/espresso-bridge

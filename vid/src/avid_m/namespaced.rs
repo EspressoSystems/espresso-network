@@ -54,6 +54,8 @@ impl NsAvidMScheme {
     }
 
     /// Commit to a payload given namespace table.
+    /// WARN: it assumes that the namespace table is well formed, i.e. ranges
+    /// are non-overlapping and cover the whole payload.
     pub fn commit(
         param: &NsAvidMParam,
         payload: &[u8],
@@ -160,7 +162,9 @@ impl NsAvidMScheme {
         Ok(result)
     }
 
-    /// Recover the payload for a given namespace
+    /// Recover the payload for a given namespace.
+    /// Given namespace ID should be valid for all shares, i.e. `ns_commits` and `content` have
+    /// at least `ns_id` elements for all shares.
     pub fn ns_recover(
         param: &NsAvidMParam,
         ns_id: usize,
@@ -168,6 +172,12 @@ impl NsAvidMScheme {
     ) -> VidResult<Vec<u8>> {
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
+        }
+        if shares
+            .iter()
+            .any(|share| ns_id >= share.ns_lens.len() || ns_id >= share.content.len())
+        {
+            return Err(VidError::IndexOutOfBound);
         }
         let ns_commit = shares[0].ns_commits[ns_id];
         let shares: Vec<_> = shares

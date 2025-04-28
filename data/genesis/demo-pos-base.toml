@@ -11,7 +11,7 @@ max_block_size = '1mb'
 base_fee = '1 wei'
 fee_recipient = "0x0000000000000000000000000000000000000000"
 fee_contract = "0xa15bb66138824a1c7167f5e85b957d04dd34e468"
-stake_table_contract = "0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d"
+stake_table_contract = "0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba"
 
 [header]
 timestamp = "1970-01-01T00:00:00Z"

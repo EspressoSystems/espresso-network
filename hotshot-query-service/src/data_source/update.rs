@@ -271,7 +271,7 @@ pub trait VersionedDataSource: Send + Sync {
 /// underlying storage, and are saved if the process restarts. It also allows pending changes to be
 /// rolled back ([revert](Self::revert)) so that they are never written back to storage and are no
 /// longer reflected even through the data source object which was used to make the changes.
-pub trait Transaction: Send + Sync {
+pub trait Transaction: Send + Sync + Sized {
     fn commit(self) -> impl Future<Output = anyhow::Result<()>> + Send;
     fn revert(self) -> impl Future + Send;
 }

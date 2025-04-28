@@ -11,6 +11,13 @@ use espresso_types::{
     v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
     FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
+// re-exported here to avoid breaking changes in consumers
+// "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
+#[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]
+pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryData;
+#[deprecated(note = "use espresso_types::NamespaceProofQueryData")]
+pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
+
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
@@ -29,7 +36,7 @@ use hotshot_types::{
     },
 };
 use jf_merkle_tree::MerkleTreeScheme;
-use serde::{de::Error as _, Deserialize, Serialize};
+use serde::de::Error as _;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
 use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
@@ -43,18 +50,6 @@ use super::{
     StorageState,
 };
 use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NamespaceProofQueryData {
-    pub proof: Option<NsProof>,
-    pub transactions: Vec<Transaction>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ADVZNamespaceProofQueryData {
-    pub proof: Option<ADVZNsProof>,
-    pub transactions: Vec<Transaction>,
-}
 
 pub(super) fn fee<State, Ver>() -> Result<Api<State, merklized_state::Error, Ver>>
 where
@@ -209,13 +204,13 @@ where
                         },
                     )?;
 
-                    Ok(NamespaceProofQueryData {
+                    Ok(espresso_types::NamespaceProofQueryData {
                         transactions: proof.export_all_txs(&ns_id),
                         proof: Some(proof),
                     })
                 } else {
                     // ns_id not found in ns_table
-                    Ok(NamespaceProofQueryData {
+                    Ok(espresso_types::NamespaceProofQueryData {
                         proof: None,
                         transactions: Vec::new(),
                     })
@@ -266,13 +261,13 @@ where
                         },
                     )?;
 
-                    Ok(ADVZNamespaceProofQueryData {
+                    Ok(espresso_types::ADVZNamespaceProofQueryData {
                         transactions: proof.export_all_txs(&ns_id),
                         proof: Some(proof),
                     })
                 } else {
                     // ns_id not found in ns_table
-                    Ok(ADVZNamespaceProofQueryData {
+                    Ok(espresso_types::ADVZNamespaceProofQueryData {
                         proof: None,
                         transactions: Vec::new(),
                     })
@@ -327,17 +322,25 @@ where
                 })?
                 .map(EpochNumber::new);
 
-            Ok(state
+            state
                 .read(|state| state.get_stake_table(epoch).boxed())
-                .await)
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get stake table for epoch={epoch:?}. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?
     .at("stake_table_current", |_, state| {
         async move {
-            Ok(state
+            state
                 .read(|state| state.get_stake_table_current().boxed())
-                .await)
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get current stake table. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?

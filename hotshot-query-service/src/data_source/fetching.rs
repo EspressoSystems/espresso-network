@@ -576,6 +576,11 @@ where
 
         Ok(ds)
     }
+
+    /// Get a copy of the (shared) inner storage
+    pub fn inner(&self) -> Arc<S> {
+        self.fetcher.storage.clone()
+    }
 }
 
 impl<Types, S, P> AsRef<S> for FetchingDataSource<Types, S, P>

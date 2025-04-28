@@ -8,13 +8,12 @@ use alloy::{
 };
 use anyhow::Context;
 use clap::Parser;
-use espresso_types::{config::PublicNetworkConfig, parse_duration, SeqTypes};
+use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::light_client_genesis;
 use sequencer_utils::{
     deployer::{self, transfer_ownership, Contract, Contracts, DeployedContracts},
     logging,
-    stake_table::PermissionedStakeTableConfig,
 };
 use tide_disco::error::ServerError;
 use url::Url;
@@ -27,7 +26,7 @@ use vbs::version::StaticVersion;
 ///
 /// This script can also be used to do incremental deployments. The only contract addresses
 /// needed to configure the sequencer network are ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS,
-/// ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS and (soon) PERMISSIONED_STAKE_TABLE_ADDRESS.
+/// ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS and ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS.
 /// These contracts, however, have dependencies, and a full deployment involves several
 /// contracts. Some of these contracts, especially libraries may already have been deployed, or
 /// perhaps one of the top-level contracts has been deployed and we only need to deploy the other
@@ -105,9 +104,6 @@ struct Options {
     /// Option to deploy fee contracts
     #[clap(long, default_value = "false")]
     deploy_fee: bool,
-    /// Option to deploy permissioned stake table contracts
-    #[clap(long, default_value = "false")]
-    deploy_permissioned_stake_table: bool,
     /// Option to deploy LightClient V1 and proxy
     #[clap(long, default_value = "false")]
     deploy_light_client_v1: bool,
@@ -136,8 +132,6 @@ struct Options {
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
-
-    /// Permissioned prover address for light client contract.
     ///
     /// If the light client contract is being deployed and this is set, the prover will be
     /// permissioned so that only this address can update the light client state. Otherwise, proving
@@ -146,21 +140,6 @@ struct Options {
     /// If the light client contract is not being deployed, this option is ignored.
     #[clap(long, env = "ESPRESSO_SEQUENCER_PERMISSIONED_PROVER")]
     permissioned_prover: Option<Address>,
-
-    /// A toml file with the initial stake table.
-    ///
-    /// Schema:
-    ///
-    /// public_keys = [
-    ///   {
-    ///     stake_table_key = "BLS_VER_KEY~...",
-    ///     state_ver_key = "SCHNORR_VER_KEY~...",
-    ///     da = true,
-    ///     stake = 1, # this value is ignored, but needs to be set
-    ///   },
-    /// ]
-    #[clap(long, env = "ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH")]
-    initial_stake_table_path: Option<PathBuf>,
 
     /// Exit escrow period for the stake table contract.
     ///
@@ -205,31 +184,6 @@ async fn main() -> anyhow::Result<()> {
         };
         let _fee_proxy_addr =
             deployer::deploy_fee_contract_proxy(&provider, &mut contracts, owner).await?;
-    }
-
-    if opt.deploy_permissioned_stake_table {
-        let initial_stake_table = if let Some(path) = opt.initial_stake_table_path {
-            tracing::info!("Loading initial stake table from {:?}", path);
-            PermissionedStakeTableConfig::<SeqTypes>::from_toml_file(&path)?.into()
-        } else {
-            vec![]
-        };
-
-        let stake_table_addr = deployer::deploy_permissioned_stake_table(
-            &provider,
-            &mut contracts,
-            initial_stake_table,
-        )
-        .await?;
-        if let Some(multisig) = opt.multisig_address {
-            transfer_ownership(
-                &provider,
-                Contract::PermissonedStakeTable,
-                stake_table_addr,
-                multisig,
-            )
-            .await?;
-        }
     }
 
     if opt.deploy_light_client_v1 {
