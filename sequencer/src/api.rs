@@ -3396,10 +3396,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_node_stake_table_api() -> anyhow::Result<()> {
-        // TODO(abdul): This test currently uses TestNetwork only for contract deployment and for L1 block number.
-        // Once the stake table deployment logic is refactored and isolated, TestNetwork here will be unnecessary
-
+    async fn test_node_stake_table_api() {
         setup_test();
         let epoch_height = 20;
 
