@@ -2513,7 +2513,7 @@ mod test {
         // The fetch initially attempts deserialization with new types,
         // which fails because the v0 provider returns legacy types.
         // It then falls back to deserializing as legacy types,
-        // which succeeds, allowing the test to pass.
+        // and the fetch passes
         run_test_helper::<MockVersions>(format!(
             "http://localhost:{}/v0",
             pick_unused_port().unwrap()
@@ -2527,13 +2527,7 @@ mod test {
             pick_unused_port().unwrap()
         ))
         .await;
-
-        run_test_helper::<MockVersions>(format!(
-            "http://localhost:{}/v1",
-            pick_unused_port().unwrap()
-        ))
-        .await;
-        // Fetch Proof-of-Stake (PoS) data using the v1 availability API.
+        // Fetch Proof of Stake (PoS) data using the v1 availability API.
         // This is the same as previous run, but with proof of stake version
         run_test_helper::<EpochsTestVersions>(format!(
             "http://localhost:{}/v1",
@@ -2541,7 +2535,7 @@ mod test {
         ))
         .await;
 
-        // Run with the Proof-of-Stake (PoS) version against a v0 provider.
+        // Run with the PoS version against a v0 provider.
         // Fetch requests are expected to fail because PoS commitments differ from the legacy commitments
         // returned by the v0 provider.
         // For example: a PoS Leaf2 commitment will not match the downgraded commitment from a legacy Leaf1.
@@ -2558,17 +2552,6 @@ mod test {
                     &Default::default(),
                     StaticVersion::<0, 1> {},
                     "0.0.1".parse().unwrap(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-            app.register_module(
-                "availability",
-                define_api(
-                    &Default::default(),
-                    StaticVersion::<0, 1> {},
-                    "1.0.0".parse().unwrap(),
                 )
                 .unwrap(),
             )
@@ -2600,7 +2583,7 @@ mod test {
 
             sleep(Duration::from_secs(3)).await;
 
-            // Try to resolve (should error)
+            // fetches fail because of different commitments
             leaf.try_resolve().unwrap_err();
             payload.try_resolve().unwrap_err();
             common.try_resolve().unwrap_err();
