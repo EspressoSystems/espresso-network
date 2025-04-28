@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Unlicensed
 
-/* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file */
+/* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file, no-console */
 
 pragma solidity ^0.8.0;
 
