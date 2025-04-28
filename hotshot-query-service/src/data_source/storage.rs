@@ -63,7 +63,6 @@ use futures::future::Future;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 use jf_merkle_tree::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
-use vec1::Vec1;
 
 use crate::{
     availability::{
@@ -120,7 +119,6 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>>;
-    async fn get_leaves(&mut self, height: u64) -> QueryResult<Vec1<LeafQueryData<Types>>>;
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>>;
     async fn get_header(&mut self, id: BlockId<Types>) -> QueryResult<Header<Types>>;
     async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>>;

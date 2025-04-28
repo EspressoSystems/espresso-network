@@ -54,6 +54,7 @@ pub enum Error {
     Query {
         source: QueryError,
     },
+    #[snafu(display("error {status}: {message}"))]
     Custom {
         message: String,
         status: StatusCode,

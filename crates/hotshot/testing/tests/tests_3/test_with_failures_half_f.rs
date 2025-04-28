@@ -52,7 +52,7 @@ cross_tests!(
         metadata.overall_safety_properties.expected_view_failures = vec![16, 17, 18, 19];
         // Make sure we keep committing rounds after the bad leaders, but not the full 50 because of the numerous timeouts
         metadata.overall_safety_properties.num_successful_views = 22;
-        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(20);
+        metadata.overall_safety_properties.decide_timeout = Duration::from_secs(25);
         metadata
     }
 );

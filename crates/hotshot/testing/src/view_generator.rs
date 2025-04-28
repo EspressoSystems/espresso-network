@@ -13,7 +13,7 @@ use std::{
 };
 
 use committable::Committable;
-use futures::{FutureExt, Stream};
+use futures::{future::BoxFuture, FutureExt, Stream};
 use hotshot::types::{BLSPubKey, SignatureKey, SystemContextHandle};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
@@ -264,7 +264,7 @@ impl TestView {
         let quorum_data = QuorumData2 {
             leaf_commit: old.leaf.commit(),
             epoch: old_epoch,
-            block_number: Some(old.leaf.height()),
+            block_number: old_epoch.is_some().then(|| old.leaf.height()),
         };
 
         //let (old_private_key, old_public_key) = key_pair_for_id::<TestTypes>(*old_view);
@@ -579,6 +579,7 @@ pub struct TestViewGenerator<V: Versions> {
     pub membership: EpochMembershipCoordinator<TestTypes>,
     pub node_key_map: Arc<TestNodeKeyMap>,
     pub _pd: PhantomData<fn(V)>,
+    pub task: Option<BoxFuture<'static, TestView>>,
 }
 
 impl<V: Versions> TestViewGenerator<V> {
@@ -591,6 +592,7 @@ impl<V: Versions> TestViewGenerator<V> {
             membership,
             node_key_map,
             _pd: PhantomData,
+            task: None,
         }
     }
 
@@ -667,19 +669,21 @@ impl<V: Versions> Stream for TestViewGenerator<V> {
     type Item = TestView;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let epoch_membership = self.membership.clone();
-        let nkm = Arc::clone(&self.node_key_map);
-        let curr_view = &self.current_view.clone();
+        if self.task.is_none() {
+            let cur_view = self.current_view.clone();
+            self.task = Some(if let Some(view) = cur_view {
+                async move { TestView::next_view(&view).await }.boxed()
+            } else {
+                let epoch_membership = self.membership.clone();
+                let nkm = Arc::clone(&self.node_key_map);
+                async move { TestView::genesis::<V>(&epoch_membership, nkm).await }.boxed()
+            });
+        }
 
-        let mut fut = if let Some(ref view) = curr_view {
-            async move { TestView::next_view(view).await }.boxed()
-        } else {
-            async move { TestView::genesis::<V>(&epoch_membership, nkm).await }.boxed()
-        };
-
-        match fut.as_mut().poll(cx) {
+        match self.task.as_mut().unwrap().as_mut().poll(cx) {
             Poll::Ready(test_view) => {
                 self.current_view = Some(test_view.clone());
+                self.task = None;
                 Poll::Ready(Some(test_view))
             },
             Poll::Pending => Poll::Pending,

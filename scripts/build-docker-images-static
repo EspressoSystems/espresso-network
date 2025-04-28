@@ -44,7 +44,6 @@ binaries=(
   marketplace-builder
   marketplace-solver
   nasty-client
-  update-permissioned-stake-table
   node-metrics
   orchestrator
   permissionless-builder
@@ -105,7 +104,6 @@ images=(
  state-relay-server
  staking-cli
  submit-transactions
- update-permissioned-stake-table
 )
 for image in "${images[@]}"; do
   docker build --platform $PLATFORM -t ghcr.io/espressosystems/espresso-sequencer/$image:main -f docker/$image.Dockerfile ${WORKDIR}

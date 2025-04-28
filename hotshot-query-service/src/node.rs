@@ -86,6 +86,7 @@ pub enum Error {
         start: String,
         end: u64,
     },
+    #[snafu(display("error {status}: {message}"))]
     Custom {
         message: String,
         status: StatusCode,

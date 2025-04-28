@@ -276,6 +276,7 @@ pub async fn run_standalone_service(options: Options) {
         NodeValidatorConfig {
             stake_table_url_base: options.stake_table_source_base_url().clone(),
             initial_node_public_base_urls: options.initial_node_public_base_urls().to_vec(),
+            starting_block_height: block_height,
         },
         internal_client_message_receiver,
         leaf_and_block_pair_receiver,

@@ -92,6 +92,33 @@ Once successful, all signers will see a transaction request on the SAFE UI e.g.
 Once the transaction has been signed by all signers and executed by one, you should be able to go to the light client
 proxy and read the state history retention period on etherscan.
 
+## Set the epoch start block
+
+To update the epoch start block in the light client v2 contract, ensure that the following environment variables are set
+in the `.env` file:
+
+- `RPC_URL`
+- `SAFE_ORCHESTRATOR_PRIVATE_KEY` (if not using a hardware wallet)
+- `SAFE_MULTISIG_ADDRESS`
+- `LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS`
+- `EPOCH_START_BLOCK`
+- `USE_HARDWARE_WALLET` (if yes, put "true", otherwise "false")
+
+Assuming you're in the root folder, run the following command:
+
+```bash
+source .env.contracts && \
+ts-node contracts/script/multisigTransactionProposals/safeSDK/modifyEpochStartBlock.ts
+```
+
+Open the URL shown in the console to sign the transaction in the Safe UI.
+
+Once successful, all signers will see a transaction request on the SAFE UI e.g.
+`https://app.safe.global/transactions/queue?safe=$SAFE_MULTISIG_ADDRESS`
+
+Once the transaction has been signed by all signers and executed by one, you should be able to go to the light client
+proxy and read the state history retention period on etherscan.
+
 ## Demonstrating the setPermissionedProver workflow
 
 1. Follow the steps in the deployment script [readme](../../contracts/script/README.md) to set up a Multisig Wallet and

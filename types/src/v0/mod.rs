@@ -20,10 +20,10 @@ pub use header::Header;
 #[cfg(any(test, feature = "testing"))]
 pub use impls::mock;
 pub use impls::{
-    get_l1_deposits, retain_accounts, BuilderValidationError, EpochCommittees, FeeError,
-    ProposalValidationError, StateValidationError,
+    get_l1_deposits, retain_accounts, validators_from_l1_events, BuilderValidationError,
+    EpochCommittees, FeeError, ProposalValidationError, StateValidationError,
 };
-pub use nsproof::NsProof;
+pub use nsproof::*;
 pub use utils::*;
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -191,7 +191,7 @@ pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 
 pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
-pub use self::impls::{NodeState, SolverAuctionResultsProvider, ValidatedState};
+pub use self::impls::{NodeState, SolverAuctionResultsProvider, UpgradeMap, ValidatedState};
 pub use crate::v0_1::{
     BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
     NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,

@@ -1,3 +1,4 @@
+use anyhow::Result;
 use async_trait::async_trait;
 use hotshot_types::traits::signature_key::SignatureKey;
 
@@ -9,5 +10,5 @@ use super::request::Request;
 #[async_trait]
 pub trait RecipientSource<R: Request, K: SignatureKey + 'static>: Send + Sync + 'static {
     /// Get all the recipients that the specific request should expect responses from
-    async fn get_expected_responders(&self, request: &R) -> Vec<K>;
+    async fn get_expected_responders(&self, request: &R) -> Result<Vec<K>>;
 }
