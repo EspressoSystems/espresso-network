@@ -12,8 +12,8 @@ use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use derivative::Derivative;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, FeeAccount,
-    MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, Delta,
+    FeeAccount, MockSequencerVersions, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -27,7 +27,7 @@ use hotshot_testing::{
     test_builder::BuilderChange,
 };
 use hotshot_types::{
-    event::{Event, EventType},
+    event::{Event, EventType, LeafInfo},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
@@ -64,6 +64,17 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
     network.check_progress().await;
     // Restart some combination of nodes and ensure progress resumes.
     network.restart(restart.0, restart.1).await;
+
+    network.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_restart_replay_blocks() {
+    setup_test();
+
+    let network = TestNetwork::new(2, 2, true).await;
+
+    network.check_replay_blocks().await;
 
     network.shut_down().await;
 }
@@ -416,7 +427,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
-    async fn check_progress(&self) -> anyhow::Result<()> {
+    async fn replay_blocks(&self) -> anyhow::Result<()> {
         let Some(context) = &self.context else {
             tracing::info!("skipping progress check on stopped node");
             return Ok(());
@@ -435,18 +446,35 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
         let node_state = context.node_state();
+        let validated_state = context.decided_state().await; // or .state(view)
 
         // Wait for a block proposed by this node. This proves that the node is tracking consensus
         // (getting Decide events) and participating (able to propose).
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+        let leaf = Leaf2::genesis::<PosVersion>(&*validated_state, &node_state).await;
+        let mut parent_leaf = LeafInfo::new(leaf, validated_state, None, None, None);
+
+        let version = <PosVersion as Versions>::Upgrade::version();
+
         let mut events = context.event_stream().await;
         while let Some(event) = events.next().await {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
+
+            tracing::error!(
+                "got decide height {}, parent height: {}",
+                leaf_chain[0].leaf.height(),
+                parent_leaf.leaf.height()
+            );
+
             for leaf in leaf_chain.iter() {
+                tracing::error!("parent height: {}", parent_leaf.leaf.height());
+
                 let state = leaf.state.clone();
                 let header = leaf.leaf.block_header();
                 let view_number = leaf.leaf.view_number();
+                let payload = leaf.leaf.block_payload().unwrap();
 
                 // TODO need to get parent leaf somehow, also version
                 // question can we depend on it being in state?
@@ -457,8 +485,52 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 //     .get(&justify_qc.data.leaf_commit)
                 //     .cloned();
 
-                // state.validate_and_apply_header(&node_state, _, header, version, view_number);
+                state
+                    .validate_and_apply_header(
+                        &node_state,
+                        &parent_leaf.leaf,
+                        header,
+                        payload.byte_len().as_usize() as u32,
+                        version,
+                        view_number.u64(),
+                    )
+                    .await
+                    .unwrap();
 
+                // state.apply_proposal();
+                parent_leaf = leaf.clone();
+            }
+        }
+
+        bail!("node {node_id} event stream ended unexpectedly");
+    }
+
+    async fn check_progress(&self) -> anyhow::Result<()> {
+        let Some(context) = &self.context else {
+            tracing::info!("skipping progress check on stopped node");
+            return Ok(());
+        };
+
+        let num_nodes = {
+            context
+                .consensus()
+                .read()
+                .await
+                .hotshot
+                .config
+                .num_nodes_with_stake
+        };
+        let node_id = context.node_id();
+        tracing::info!(node_id, num_nodes, "waiting for progress from node");
+
+        // Wait for a block proposed by this node. This proves that the node is tracking consensus
+        // (getting Decide events) and participating (able to propose).
+        let mut events = context.event_stream().await;
+        while let Some(event) = events.next().await {
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+            for leaf in leaf_chain.iter() {
                 // Leader rotation dictates that `node_id` will be proposing every `num_nodes`.
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
                     tracing::info!(
@@ -667,6 +739,17 @@ impl TestNetwork {
                         .iter()
                         .map(TestNode::check_progress_with_timeout),
                 ),
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn check_replay_blocks(&self) {
+        let v: Vec<_> = try_join_all(
+            self.da_nodes
+                .iter()
+                .map(TestNode::replay_blocks)
+                .chain(self.regular_nodes.iter().map(TestNode::replay_blocks)),
         )
         .await
         .unwrap();
