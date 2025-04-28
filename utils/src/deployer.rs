@@ -564,8 +564,11 @@ pub async fn deploy_stake_table_proxy(
         .await?;
     let stake_table = StakeTable::new(stake_table_addr, &provider);
 
-    // verify light client and token addresses are contracts
-    assert!(is_contract(&provider, light_client_addr).await?);
+    // TODO: verify the light client address contains a contract
+    // See #3163, it's a cyclic dependency in the demo environment
+    // assert!(is_contract(&provider, light_client_addr).await?);
+
+    // verify the token address contains a contract
     assert!(is_contract(&provider, token_addr).await?);
 
     let init_data = stake_table
