@@ -23,7 +23,7 @@ pub const LOOK_AHEAD: u64 = 5;
 pub const KAD_DEFAULT_REPUB_INTERVAL_SEC: u64 = 28800;
 
 /// the number of messages to cache in the combined network
-pub const COMBINED_NETWORK_CACHE_SIZE: usize = 200_000;
+pub const COMBINED_NETWORK_CACHE_SIZE: usize = 5_000;
 
 /// the number of messages to attempt to send over the primary network before switching to prefer the secondary network
 pub const COMBINED_NETWORK_MIN_PRIMARY_FAILURES: u64 = 5;
