@@ -233,12 +233,14 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
             .as_ref()
             .is_some_and(|cert| V::Base::VERSION >= cert.data.new_version)
         {
+            tracing::warn!("Discarding loaded upgrade certificate due to version configuration.");
             *upgrade_certificate_lock = None;
         }
     }
 
     // only spawn the upgrade task if we are actually configured to perform an upgrade.
     if V::Base::VERSION < V::Upgrade::VERSION {
+        tracing::warn!("Consensus was started with an upgrade configured. Spawning upgrade task.");
         handle.add_task(UpgradeTaskState::<TYPES, V>::create_from(handle).await);
     }
 

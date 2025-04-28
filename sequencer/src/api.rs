@@ -191,6 +191,22 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         &self,
         epoch: Option<<SeqTypes as NodeType>::Epoch>,
     ) -> Vec<PeerConfig<SeqTypes>> {
+        let highest_epoch = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .cur_epoch()
+            .await
+            .map(|e| e + 1);
+        if epoch > highest_epoch {
+            tracing::warn!(
+                "requested stake table for epoch {:?} is beyond the current epoch + 1 {:?}",
+                epoch,
+                highest_epoch
+            );
+            return vec![];
+        }
         let Ok(mem) = self
             .consensus()
             .await
