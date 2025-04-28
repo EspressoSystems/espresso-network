@@ -3418,7 +3418,7 @@ mod test {
 
         let api_port = pick_unused_port().expect("No ports free for query service");
 
-        const NUM_NODES: usize = 5;
+        const NUM_NODES: usize = 2;
         // Initialize nodes.
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -3447,7 +3447,7 @@ mod test {
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
 
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -3472,7 +3472,7 @@ mod test {
         }
 
         let _st = client
-            .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/current"))
+            .get::<Vec<PeerConfig<SeqTypes>>>("node/stake-table/current")
             .send()
             .await
             .expect("failed to get stake table");
