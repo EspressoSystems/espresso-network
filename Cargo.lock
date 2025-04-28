@@ -3883,10 +3883,14 @@ dependencies = [
  "anyhow",
  "clap 4.5.34",
  "derive_more 1.0.0",
+ "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-types",
+ "surf-disco",
+ "tide-disco",
  "tokio",
  "tracing",
+ "vbs",
 ]
 
 [[package]]
@@ -5287,6 +5291,7 @@ dependencies = [
  "ark-std 0.4.0",
  "clap 4.5.34",
  "displaydoc",
+ "espresso-contract-deployer",
  "espresso-types",
  "futures",
  "hotshot-contract-adapter",

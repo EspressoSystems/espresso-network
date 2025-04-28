@@ -13,6 +13,8 @@ use clap::{builder::OsStr, Parser};
 use derive_more::Display;
 use hotshot_contract_adapter::sol_types::*;
 
+pub mod network_config;
+
 // We pass this during `forge bind --libraries` as a placeholder for the actual deployed library address
 const LIBRARY_PLACEHOLDER_ADDRESS: &str = "ffffffffffffffffffffffffffffffffffffffff";
 /// `stateHistoryRetentionPeriod` in LightClient.sol as the maximum retention period in seconds

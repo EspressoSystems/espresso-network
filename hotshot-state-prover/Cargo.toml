@@ -16,6 +16,7 @@ ark-srs = { workspace = true }
 ark-std = { workspace = true }
 clap = { workspace = true }
 displaydoc = { version = "0.2.3", default-features = false }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
