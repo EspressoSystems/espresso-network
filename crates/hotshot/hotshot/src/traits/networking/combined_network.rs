@@ -544,7 +544,8 @@ impl MessageDeduplicationCache {
             )
         };
 
-        // Check if we've seen this message from the other source
+        // Check if we've seen this message from the other source. We want to use `pop` because we
+        // still want to process the message if it gets received again from the same source.
         if other_cache.pop(&message_hash).is_some() {
             // We've seen this message from the other source, don't process it again
             false
@@ -567,24 +568,24 @@ mod tests {
         // Process one message from both. Only the first one should be unique
         let mut cache = MessageDeduplicationCache::new();
         assert!(cache.is_unique(message, true));
-        assert!(cache.is_unique(message, false) == false);
+        assert!(!cache.is_unique(message, false));
 
         // Since we've already received it once on both, it should continue to be unique
         // on the second receive
         assert!(cache.is_unique(message, true));
-        assert!(cache.is_unique(message, false) == false);
+        assert!(!cache.is_unique(message, false));
 
         // Try both of the above tests the other way around
         assert!(cache.is_unique(message, false));
-        assert!(cache.is_unique(message, true) == false);
+        assert!(!cache.is_unique(message, true));
         assert!(cache.is_unique(message, false));
-        assert!(cache.is_unique(message, true) == false);
+        assert!(!cache.is_unique(message, true));
 
         // The same message from the same source a few times should always be treated as unique
         assert!(cache.is_unique(message, true));
         assert!(cache.is_unique(message, true));
         assert!(cache.is_unique(message, true));
-        assert!(cache.is_unique(message, false) == false);
+        assert!(!cache.is_unique(message, false));
         assert!(cache.is_unique(message, false));
     }
 }
