@@ -198,7 +198,7 @@ libp2p = { package = "libp2p", version = "0.54", default-features = false, featu
 ] }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
 lru = "0.12"
-strum = { version = "0.26", features = ["derive"] }
+strum = { version = "0.27", features = ["derive"] }
 surf-disco = "0.9"
 sqlx = "=0.8.3"
 tagged-base64 = "0.4"
