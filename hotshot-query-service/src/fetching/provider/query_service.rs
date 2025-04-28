@@ -362,7 +362,7 @@ where
                 tracing::warn!("failed to fetch leaf req={req:?}. err={err}");
                 // --- Fallback Deserialization ---
                 //
-                // If deserialization into the new format fails (e.g., because the provider is still
+                // If deserialization into the new type fails (e.g., because the provider is still
                 // returning legacy data), attempt to deserialize using an older, legacy format instead.
                 // This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
                 //
@@ -427,7 +427,7 @@ where
 
                 // --- Fallback Deserialization ---
                 //
-                // If deserialization into the new format fails (e.g., because the provider is still
+                // If deserialization into the new type fails (e.g., because the provider is still
                 // returning legacy data), attempt to deserialize using an older, legacy format instead.
                 // This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
                 //
