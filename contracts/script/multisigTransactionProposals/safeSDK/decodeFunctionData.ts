@@ -37,6 +37,7 @@ async function decodeProposalData() {
       console.error("Error Message:", error);
     }
     console.error("Ensure the contract name is correct and the encoded data is valid e.g. it must start with 0x");
+    process.exit(1);
   }
 }
 
