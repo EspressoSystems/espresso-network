@@ -290,8 +290,8 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
                 bail!("We don't have a transition QC");
             };
             ensure!(
-                next_epoch_qc.data.leaf_commit == high_qc.data.leaf_commit,
-                "We've seen an extended QC but we don't have a corresponding next epoch extended QC"
+                next_epoch_qc.data.leaf_commit == qc.data.leaf_commit,
+                "Transition QC is invalid because leaf commits are not equal."
             );
             (qc, Some(next_epoch_qc))
         } else {
