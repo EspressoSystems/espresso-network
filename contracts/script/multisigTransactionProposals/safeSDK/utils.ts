@@ -131,3 +131,28 @@ export async function createAndSignSafeTransaction(
 
   return { safeTransaction, safeTxHash, senderSignature };
 }
+
+export async function decodeProposalData() {
+  try {
+    let contractName = process.argv[2];
+    const encodedData = process.argv[3];
+
+    if (!contractName || !encodedData) {
+      throw new Error("Contract name and encoded data are required");
+    }
+
+    contractName = contractName.replace(".sol", "");
+
+    const contractAbi = require(`../../../out/${contractName}.sol/${contractName}.json`).abi;
+
+    const contractInterface = new ethers.Interface(contractAbi);
+
+    const decodedData = contractInterface.parseTransaction({ data: encodedData });
+
+    console.log("Function Name:", decodedData?.name);
+    console.log("Arguments:", decodedData?.args);
+  } catch (error: any) {
+    console.error("Error Message:", error.shortMessage);
+    console.error("Ensure the contract name is correct and the encoded data is valid e.g. it must start with 0x");
+  }
+}
