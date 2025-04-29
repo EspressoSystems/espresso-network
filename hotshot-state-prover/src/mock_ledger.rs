@@ -75,8 +75,9 @@ pub struct MockLedger {
     pub rng: StdRng,
     pub(crate) epoch: u64,
     pub(crate) state: GenericLightClientState<F>,
-    pub(crate) st: Vec<PeerConfig<SeqTypes>>,
-    pub(crate) next_st: Vec<PeerConfig<SeqTypes>>,
+    pub(crate) voting_st: Vec<PeerConfig<SeqTypes>>,
+    pub(crate) next_voting_st: Vec<PeerConfig<SeqTypes>>,
+    pub(crate) pending_st: Vec<PeerConfig<SeqTypes>>,
     pub(crate) qc_keys: Vec<BLSVerKey>,
     pub(crate) state_keys: Vec<(SchnorrSignKey, SchnorrVerKey)>,
     key_archive: HashMap<BLSVerKey, SchnorrSignKey>,
@@ -92,8 +93,9 @@ impl MockLedger {
         for i in 0..qc_keys.len() {
             key_archive.insert(qc_keys[i], state_keys[i].0.clone());
         }
-        let st = stake_table_for_testing(&qc_keys, &state_keys);
-        let next_st = st.clone();
+        let voting_st = stake_table_for_testing(&qc_keys, &state_keys);
+        let next_voting_st = voting_st.clone();
+        let pending_st = voting_st.clone();
 
         // arbitrary commitment values as they don't affect logic being tested
         let block_comm_root = F::from(1234);
@@ -108,8 +110,9 @@ impl MockLedger {
             rng,
             epoch: 0,
             state: genesis,
-            st,
-            next_st,
+            voting_st,
+            next_voting_st,
+            pending_st,
             qc_keys,
             state_keys,
             key_archive,
@@ -166,7 +169,8 @@ impl MockLedger {
                 // simulate 2 new registration, 1 exit, this snapshot only take effect another 1 epoch later
                 self.sync_stake_table(2, 1);
                 self.epoch += 1;
-                self.st = self.next_st.clone();
+                self.voting_st = self.next_voting_st.clone();
+                self.next_voting_st = self.pending_st.clone();
             }
         } else {
             // before epoch activation, only advance at the end/last block of each epoch
@@ -192,7 +196,7 @@ impl MockLedger {
         self.state.view_number += 1;
     }
 
-    /// Update the next stake table with `num_reg` number of new registrations and `num_exit` number of exits on L1
+    /// Update the pending stake table with `num_reg` number of new registrations and `num_exit` number of exits on L1
     pub fn sync_stake_table(&mut self, num_reg: usize, num_exit: usize) {
         if !self.epoch_activated() {
             return;
@@ -202,7 +206,7 @@ impl MockLedger {
         assert!(self.qc_keys.len() + num_reg - num_exit <= self.pp.st_cap);
 
         let mut st_map: HashMap<_, _> = self
-            .st
+            .pending_st
             .iter()
             .map(|config| (config.stake_table_entry.stake_key, config.clone()))
             .collect();
@@ -243,7 +247,7 @@ impl MockLedger {
             self.state_keys.push(schnorr_key);
         }
 
-        self.next_st = st_map.into_values().collect();
+        self.pending_st = st_map.into_values().collect();
 
         assert!(self.qc_keys.len() == self.state_keys.len());
         assert!(self.qc_keys.len() == before_st_size + num_reg - num_exit);
@@ -261,7 +265,7 @@ impl MockLedger {
         msg.extend_from_slice(&next_stake_msg);
 
         let st: Vec<(BLSVerKey, U256, SchnorrVerKey)> = self
-            .st
+            .voting_st
             .iter()
             .map(|config| {
                 (
@@ -407,14 +411,14 @@ impl MockLedger {
 
     /// Returns the stake table state for current voting
     pub fn voting_stake_table_state(&self) -> GenericStakeTableState<F> {
-        compute_stake_table_commitment(&self.st, STAKE_TABLE_CAPACITY_FOR_TEST)
+        compute_stake_table_commitment(&self.voting_st, STAKE_TABLE_CAPACITY_FOR_TEST)
     }
 
     /// Returns epoch-aware stake table state for the next block.
     /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
         if self.epoch_activated() && self.is_ge_epoch_root() {
-            compute_stake_table_commitment(&self.next_st, STAKE_TABLE_CAPACITY_FOR_TEST)
+            compute_stake_table_commitment(&self.next_voting_st, STAKE_TABLE_CAPACITY_FOR_TEST)
         } else {
             self.voting_stake_table_state()
         }
