@@ -53,7 +53,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
 }
 
 impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
-    async fn fetch_legacy_payload<Types: NodeType>(
+    async fn deserialize_legacy_payload<Types: NodeType>(
         &self,
         payload_bytes: Vec<u8>,
         common_bytes: Vec<u8>,
@@ -95,7 +95,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         Some(payload.data)
     }
 
-    async fn fetch_legacy_vid_common<Types: NodeType>(
+    async fn deserialize_legacy_vid_common<Types: NodeType>(
         &self,
         bytes: Vec<u8>,
         req: VidCommonRequest,
@@ -119,7 +119,7 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             },
         }
     }
-    async fn fetch_legacy_leaf<Types: NodeType>(
+    async fn deserialize_legacy_leaf<Types: NodeType>(
         &self,
         bytes: Vec<u8>,
         req: LeafRequest<Types>,
@@ -221,7 +221,7 @@ where
 
                 // fallback deserialization
                 return self
-                    .fetch_legacy_payload::<Types>(payload_bytes, common_bytes, req)
+                    .deserialize_legacy_payload::<Types>(payload_bytes, common_bytes, req)
                     .await;
             },
         };
@@ -347,7 +347,7 @@ where
             Err(err) => {
                 tracing::warn!("failed to fetch leaf req={req:?}. err={err}");
                 // Fallback deserialization
-                self.fetch_legacy_leaf(bytes, req).await
+                self.deserialize_legacy_leaf(bytes, req).await
             },
         }
     }
@@ -410,7 +410,8 @@ where
                 );
 
                 // Fallback deserialization
-                self.fetch_legacy_vid_common::<Types>(bytes, req).await
+                self.deserialize_legacy_vid_common::<Types>(bytes, req)
+                    .await
             },
         }
     }
