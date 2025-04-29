@@ -758,7 +758,7 @@ pub mod test_helpers {
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use staking_cli::demo::stake_in_contract_for_test;
+    use staking_cli::demo::setup_stake_contract_for_test;
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -937,7 +937,7 @@ pub mod test_helpers {
             let token_addr = contracts
                 .address(Contract::EspTokenProxy)
                 .expect("EspTokenProxy address not found");
-            stake_in_contract_for_test(
+            setup_stake_contract_for_test(
                 l1_url.clone(),
                 &deployer,
                 stake_table_address,

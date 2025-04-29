@@ -36,7 +36,7 @@ pub type StakeTableVecBased = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
 
 /// Setup validator by sending them tokens and ethers, and registering them on stake table
 // TODO: rename to `setup_contract_for_test()`?
-pub async fn stake_in_contract_for_test(
+pub async fn setup_stake_table_contract_for_test(
     rpc_url: Url,
     token_holder: &HttpProviderWithWallet,
     stake_table_address: Address,
@@ -284,7 +284,7 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
         ));
     }
 
-    stake_in_contract_for_test(
+    setup_stake_table_contract_for_test(
         config.rpc_url.clone(),
         &grant_recipient,
         config.stake_table_address,

@@ -43,7 +43,7 @@ use sequencer_utils::{
     logging, HttpProviderWithWallet,
 };
 use serde::{Deserialize, Serialize};
-use staking_cli::demo::stake_in_contract_for_test;
+use staking_cli::demo::setup_stake_contract_for_test;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
 use tokio::spawn;
 use url::Url;
@@ -417,7 +417,7 @@ async fn main() -> anyhow::Result<()> {
             client_states.l1_chain_id = chain_id;
 
             let staking_priv_keys = network_config.staking_priv_keys();
-            stake_in_contract_for_test(
+            setup_stake_contract_for_test(
                 l1_url.clone(),
                 signer,
                 l1_contracts
