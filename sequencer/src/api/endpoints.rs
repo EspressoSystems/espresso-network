@@ -322,25 +322,25 @@ where
                 })?
                 .map(EpochNumber::new);
 
-            Ok(state
+            state
                 .read(|state| state.get_stake_table(epoch).boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
                     message: format!("failed to get stake table for epoch={epoch:?}. err={err:#}"),
                     status: StatusCode::NOT_FOUND,
-                }))
+                })
         }
         .boxed()
     })?
     .at("stake_table_current", |_, state| {
         async move {
-            Ok(state
+            state
                 .read(|state| state.get_stake_table_current().boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
                     message: format!("failed to get current stake table. err={err:#}"),
                     status: StatusCode::NOT_FOUND,
-                }))
+                })
         }
         .boxed()
     })?

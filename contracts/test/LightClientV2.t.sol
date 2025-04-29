@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Unlicensed
 
-/* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file */
+/* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file, no-console */
 
 pragma solidity ^0.8.0;
 
@@ -964,10 +964,16 @@ contract LightClient_LivenessDetectionTest is LightClientCommonTest {
 
 /// @dev Ensure production-deployed V1 can be upgraded to V2 properly
 contract LightClient_V1ToV2UpgradeTest is LightClientCommonTest {
-    string sepoliaRpcUrl = "https://0xrpc.io/sep";
     address proxy = 0x303872BB82a191771321d4828888920100d0b3e4;
 
     function test_ForkTest_UpgradeToV2() public {
+        string memory defaultStr = "";
+        string memory sepoliaRpcUrl = vm.envOr("SEPOLIA_RPC_URL", defaultStr);
+        if (bytes(sepoliaRpcUrl).length == 0) {
+            console.log("WARN: Skipping fork test: SEPOLIA_RPC_URL not set");
+            vm.skip(true);
+        }
+
         // create fork on Sepolia on which we have deployed LightClient
         // proxy: https://sepolia.etherscan.io/address/0x303872bb82a191771321d4828888920100d0b3e4
         vm.createSelectFork(sepoliaRpcUrl, 7844940); // March 6th, 2025

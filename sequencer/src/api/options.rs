@@ -14,7 +14,7 @@ use futures::{
 };
 use hotshot_events_service::events::Error as EventStreamingError;
 use hotshot_query_service::{
-    data_source::{ExtensibleDataSource, MetricsDataSource},
+    data_source::{storage::SqlStorage, ExtensibleDataSource, MetricsDataSource},
     fetching::provider::QueryServiceProvider,
     status::{self, UpdateStatusData},
     ApiState as AppState, Error,
@@ -151,6 +151,7 @@ impl Options {
         F: FnOnce(
             Box<dyn Metrics>,
             Box<dyn EventConsumer>,
+            Option<Arc<SqlStorage>>,
         ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P, V>>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
@@ -166,80 +167,85 @@ impl Options {
 
         // The server state type depends on whether we are running a query or status API or not, so
         // we handle the two cases differently.
-        let (metrics, consumer): (Box<dyn Metrics>, Box<dyn EventConsumer>) =
-            if let Some(query_opt) = self.query.take() {
-                if let Some(opt) = self.storage_sql.take() {
-                    self.init_with_query_module_sql(
-                        query_opt,
-                        opt,
-                        state,
-                        &mut tasks,
-                        SequencerApiVersion::instance(),
-                    )
-                    .await?
-                } else if let Some(opt) = self.storage_fs.take() {
-                    self.init_with_query_module_fs(
-                        query_opt,
-                        opt,
-                        state,
-                        &mut tasks,
-                        SequencerApiVersion::instance(),
-                    )
-                    .await?
-                } else {
-                    bail!("query module requested but not storage provided");
-                }
-            } else if self.status.is_some() {
-                // If a status API is requested but no availability API, we use the
-                // `MetricsDataSource`, which allows us to run the status API with no persistent
-                // storage.
-                let ds = MetricsDataSource::default();
-                let metrics = ds.populate_metrics();
-                let mut app = App::<_, Error>::with_state(AppState::from(
-                    ExtensibleDataSource::new(ds, state.clone()),
-                ));
-
-                // Initialize status API.
-                let status_api =
-                    status::define_api(&Default::default(), SequencerApiVersion::instance())?;
-                app.register_module("status", status_api)?;
-
-                self.init_hotshot_modules(&mut app)?;
-
-                if self.hotshot_events.is_some() {
-                    self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
-                }
-
-                tasks.spawn(
-                    "API server",
-                    self.listen(self.http.port, app, SequencerApiVersion::instance()),
-                );
-
-                (metrics, Box::new(NullEventConsumer))
+        #[allow(clippy::type_complexity)]
+        let (metrics, consumer, storage): (
+            Box<dyn Metrics>,
+            Box<dyn EventConsumer>,
+            Option<Arc<SqlStorage>>,
+        ) = if let Some(query_opt) = self.query.take() {
+            if let Some(opt) = self.storage_sql.take() {
+                self.init_with_query_module_sql(
+                    query_opt,
+                    opt,
+                    state,
+                    &mut tasks,
+                    SequencerApiVersion::instance(),
+                )
+                .await?
+            } else if let Some(opt) = self.storage_fs.take() {
+                self.init_with_query_module_fs(
+                    query_opt,
+                    opt,
+                    state,
+                    &mut tasks,
+                    SequencerApiVersion::instance(),
+                )
+                .await?
             } else {
-                // If no status or availability API is requested, we don't need metrics or a query
-                // service data source. The only app state is the HotShot handle, which we use to
-                // submit transactions.
-                //
-                // If we have no availability API, we cannot load a saved leaf from local storage,
-                // so we better have been provided the leaf ahead of time if we want it at all.
-                let mut app = App::<_, Error>::with_state(AppState::from(state.clone()));
+                bail!("query module requested but not storage provided");
+            }
+        } else if self.status.is_some() {
+            // If a status API is requested but no availability API, we use the
+            // `MetricsDataSource`, which allows us to run the status API with no persistent
+            // storage.
+            let ds = MetricsDataSource::default();
+            let metrics = ds.populate_metrics();
+            let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
+                ds,
+                state.clone(),
+            )));
 
-                self.init_hotshot_modules(&mut app)?;
+            // Initialize status API.
+            let status_api =
+                status::define_api(&Default::default(), SequencerApiVersion::instance())?;
+            app.register_module("status", status_api)?;
 
-                if self.hotshot_events.is_some() {
-                    self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
-                }
+            self.init_hotshot_modules(&mut app)?;
 
-                tasks.spawn(
-                    "API server",
-                    self.listen(self.http.port, app, SequencerApiVersion::instance()),
-                );
+            if self.hotshot_events.is_some() {
+                self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
+            }
 
-                (Box::new(NoMetrics), Box::new(NullEventConsumer))
-            };
+            tasks.spawn(
+                "API server",
+                self.listen(self.http.port, app, SequencerApiVersion::instance()),
+            );
 
-        let ctx = init_context(metrics, consumer).await?;
+            (metrics, Box::new(NullEventConsumer), None)
+        } else {
+            // If no status or availability API is requested, we don't need metrics or a query
+            // service data source. The only app state is the HotShot handle, which we use to
+            // submit transactions.
+            //
+            // If we have no availability API, we cannot load a saved leaf from local storage,
+            // so we better have been provided the leaf ahead of time if we want it at all.
+            let mut app = App::<_, Error>::with_state(AppState::from(state.clone()));
+
+            self.init_hotshot_modules(&mut app)?;
+
+            if self.hotshot_events.is_some() {
+                self.init_and_spawn_hotshot_event_streaming_module(state, &mut tasks)?;
+            }
+
+            tasks.spawn(
+                "API server",
+                self.listen(self.http.port, app, SequencerApiVersion::instance()),
+            );
+
+            (Box::new(NoMetrics), Box::new(NullEventConsumer), None)
+        };
+
+        let ctx = init_context(metrics, consumer, storage).await?;
         send_ctx
             .send(super::ConsensusState::from(&ctx))
             .ok()
@@ -322,7 +328,11 @@ impl Options {
         state: ApiState<N, P, V>,
         tasks: &mut TaskList,
         bind_version: SequencerApiVersion,
-    ) -> anyhow::Result<(Box<dyn Metrics>, Box<dyn EventConsumer>)>
+    ) -> anyhow::Result<(
+        Box<dyn Metrics>,
+        Box<dyn EventConsumer>,
+        Option<Arc<SqlStorage>>,
+    )>
     where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
@@ -343,7 +353,7 @@ impl Options {
         }
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
-        Ok((metrics, Box::new(ApiEventConsumer::from(ds))))
+        Ok((metrics, Box::new(ApiEventConsumer::from(ds)), None))
     }
 
     async fn init_with_query_module_sql<N, P, V: Versions + 'static>(
@@ -353,7 +363,11 @@ impl Options {
         state: ApiState<N, P, V>,
         tasks: &mut TaskList,
         bind_version: SequencerApiVersion,
-    ) -> anyhow::Result<(Box<dyn Metrics>, Box<dyn EventConsumer>)>
+    ) -> anyhow::Result<(
+        Box<dyn Metrics>,
+        Box<dyn EventConsumer>,
+        Option<Arc<SqlStorage>>,
+    )>
     where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
@@ -370,6 +384,7 @@ impl Options {
         }
 
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
+        let inner_storage = ds.inner();
         let (metrics, ds, mut app) = self
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;
@@ -407,7 +422,11 @@ impl Options {
             "API server",
             self.listen(self.http.port, app, SequencerApiVersion::instance()),
         );
-        Ok((metrics, Box::new(ApiEventConsumer::from(ds))))
+        Ok((
+            metrics,
+            Box::new(ApiEventConsumer::from(ds)),
+            Some(inner_storage),
+        ))
     }
 
     /// Initialize the modules for interacting with HotShot.
