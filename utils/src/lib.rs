@@ -2,13 +2,8 @@ use std::time::Duration;
 
 use alloy::{
     contract::SolCallBuilder,
-    network::{Ethereum, EthereumWallet},
     primitives::U256,
-    providers::{
-        fillers::{FillProvider, JoinFill, WalletFiller},
-        utils::JoinedRecommendedFillers,
-        Provider, ProviderBuilder, RootProvider,
-    },
+    providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
     sol_types::{GenericContractError, SolCall},
 };
@@ -21,13 +16,6 @@ use url::Url;
 pub mod logging;
 pub mod ser;
 pub mod test_utils;
-
-/// Type alias that connects to providers with recommended fillers and wallet
-pub type HttpProviderWithWallet = FillProvider<
-    JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
-    RootProvider,
-    Ethereum,
->;
 
 pub async fn wait_for_http(
     url: &Url,

@@ -14,15 +14,14 @@ use alloy::{
 };
 use async_trait::async_trait;
 use clap::Parser;
+use espresso_contract_deployer::light_client_genesis_from_stake_table;
 use espresso_types::{
     parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_stake_table::utils::one_honest_threshold;
-use hotshot_state_prover::service::{
-    legacy_light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
-};
+use hotshot_state_prover::service::{run_prover_service, StateProverConfig};
 use hotshot_types::{
     light_client::StateVerKey,
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
@@ -237,10 +236,10 @@ async fn main() -> anyhow::Result<()> {
         .build();
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
-
     let initial_stake_table = network_config.stake_table();
+
     let (genesis_state, genesis_stake) =
-        legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+        light_client_genesis_from_stake_table(network_config.known_nodes_with_stake())?;
 
     let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];

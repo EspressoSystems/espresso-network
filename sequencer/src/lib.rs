@@ -591,7 +591,9 @@ pub mod testing {
     };
 
     use alloy::{
+        network::EthereumWallet,
         primitives::U256,
+        providers::ProviderBuilder,
         signers::{
             k256::ecdsa::SigningKey,
             local::{LocalSigner, PrivateKeySigner},
@@ -600,6 +602,7 @@ pub mod testing {
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
+    use espresso_contract_deployer::builder::DeployerArgs;
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
@@ -889,6 +892,11 @@ pub mod testing {
                     let staking_private_keys =
                         staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
 
+                    let deployer = ProviderBuilder::new()
+                        .wallet(EthereumWallet::from(self.signer.clone()))
+                        .on_http(self.l1_url.clone());
+
+                    let args = DeployerArgs::builder().deployer(deployer).build();
                     let address = pos_deploy_routine(
                         &self.l1_url,
                         &self.signer,
@@ -1108,6 +1116,10 @@ pub mod testing {
 
         pub fn stake_table(&self) -> StakeTableVecBased {
             stake_table(self.config.known_nodes_with_stake.clone())
+        }
+
+        pub fn known_nodes_with_stake(&self) -> &[PeerConfig<SeqTypes>] {
+            &self.config.known_nodes_with_stake
         }
 
         #[allow(clippy::too_many_arguments)]
