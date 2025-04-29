@@ -269,8 +269,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             query: Some(Default::default()),
             storage_fs: opt.storage_fs,
             storage_sql: opt.storage_sql,
+            catchup: opt.catchup,
             ..Default::default()
         };
+        let x = modules.catchup.unwrap();
+
         if node.is_da {
             modules.query = Some(Query {
                 peers: network
@@ -382,6 +385,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
+    fn get_storage(&self) {
+        // self.storage.get_leaf_chain();
+    }
+
     async fn event_stream(&self) -> Option<BoxStream<Event<SeqTypes>>> {
         if let Some(ctx) = &self.context {
             Some(ctx.event_stream().await.boxed())
@@ -442,6 +449,31 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .config
                 .num_nodes_with_stake
         };
+        // Question : since blocks production in test must be
+        // deterministic... so we could probably just math the final
+        // state.  On the other hand apparently we can get leaves from
+        // `saved_leaves` like so:
+        // https://github.com/EspressoSystems/espresso-network/blob/main/crates/hotshot/types/src/consensus.rs#L1113-L1120
+        // no, ^ that won't work b/c state held in memory won't
+        // persist beyond restart. So we need to get from persistence.
+        // If real persistence is working we can use that, if not we
+        // can attach state to the test network.
+
+        // TODO Load saved consensus state from storage.
+        // let (initializer, anchor_view) = persistence
+        //     .load_consensus_state::<V>(instance_state.clone())
+        //     .await?;
+
+        let saved_leaves = {
+            context
+                .consensus()
+                .read()
+                .await
+                .hotshot
+                .config
+                .num_nodes_with_stake
+        };
+
         let node_id = context.node_id();
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
@@ -451,12 +483,21 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         // Wait for a block proposed by this node. This proves that the node is tracking consensus
         // (getting Decide events) and participating (able to propose).
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+        // genesis doesn't work be b/c by the time we get the first
+        // leaf we are already many blocks in.
         let leaf = Leaf2::genesis::<PosVersion>(&*validated_state, &node_state).await;
         let mut parent_leaf = LeafInfo::new(leaf, validated_state, None, None, None);
 
         let version = <PosVersion as Versions>::Upgrade::version();
 
         let mut events = context.event_stream().await;
+        // let x = context.saved_leaves();
+
+        // let mut maybe_parent = consensus_reader
+        //     .saved_leaves()
+        //     .get(&justify_qc.data.leaf_commit)
+        //     .cloned();
+
         while let Some(event) = events.next().await {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
@@ -479,11 +520,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 // TODO need to get parent leaf somehow, also version
                 // question can we depend on it being in state?
                 // let consensus_reader = consensus.read().await;
-
-                // let mut maybe_parent = consensus_reader
-                //     .saved_leaves()
-                //     .get(&justify_qc.data.leaf_commit)
-                //     .cloned();
 
                 state
                     .validate_and_apply_header(

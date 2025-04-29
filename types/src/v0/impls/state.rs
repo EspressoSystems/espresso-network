@@ -1017,6 +1017,12 @@ impl HotShotState<SeqTypes> for ValidatedState {
             .await
             .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
+        tracing::error!(
+            "validate proposal: {:?}, parent: {:?}",
+            proposed_header,
+            parent_leaf.block_header()
+        );
+
         // Validate the proposal.
         let validated_state = ValidatedTransition::new(
             validated_state,

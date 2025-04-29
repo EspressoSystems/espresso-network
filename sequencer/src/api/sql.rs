@@ -200,7 +200,7 @@ impl CatchupStorage for SqlStorage {
         ))?;
         load_chain_config(&mut tx, commitment).await
     }
-
+    // useful
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         let mut tx = self
             .read()
@@ -431,7 +431,7 @@ async fn load_chain_config<Mode: TransactionMode>(
 
     bincode::deserialize(&data[..]).context("failed to deserialize")
 }
-
+// useful
 /// Reconstructs the `ValidatedState` from a specific block height up to a given view.
 ///
 /// This loads all required fee and reward accounts into the Merkle tree before applying the
