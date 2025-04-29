@@ -14,7 +14,6 @@ use alloy::primitives::U256;
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
-use either::Either;
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -1120,64 +1119,6 @@ pub async fn broadcast_event<E: Clone + std::fmt::Debug>(event: E, sender: &Send
             tracing::warn!("Event: {e:?}\n Sending failed, event stream probably shutdown");
         },
     }
-}
-
-/// Gets the next epoch QC corresponding to this epoch QC from the shared consensus state;
-/// if it's not yet available, waits for it with a given timeout.
-pub async fn wait_for_next_epoch_qc<TYPES: NodeType>(
-    high_qc: &QuorumCertificate2<TYPES>,
-    consensus: &OuterConsensus<TYPES>,
-    timeout: u64,
-    view_start_time: Instant,
-    receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
-) -> Result<NextEpochQuorumCertificate2<TYPES>> {
-    tracing::debug!("getting the next epoch QC");
-    if let Some(next_epoch_qc) = consensus.read().await.next_epoch_high_qc() {
-        if next_epoch_qc.data.leaf_commit == high_qc.data.leaf_commit {
-            // We have it already, no reason to wait
-            return Ok(next_epoch_qc.clone());
-        }
-    };
-
-    let wait_duration = Duration::from_millis(timeout / 2);
-
-    // TODO configure timeout
-    let Some(time_spent) = Instant::now().checked_duration_since(view_start_time) else {
-        // Shouldn't be possible, now must be after the start
-        return Err(warn!(
-            "Now is earlier than the view start time. Shouldn't be possible."
-        ));
-    };
-    let Some(time_left) = wait_duration.checked_sub(time_spent) else {
-        // No time left
-        return Err(warn!("Run out of time waiting for the next epoch QC."));
-    };
-    let receiver = receiver.clone();
-    let Ok(Some(event)) = tokio::time::timeout(time_left, async move {
-        let this_epoch_high_qc = high_qc.clone();
-        EventDependency::new(
-            receiver,
-            Box::new(move |event| {
-                let event = event.as_ref();
-                if let HotShotEvent::NextEpochQc2Formed(Either::Left(qc)) = event {
-                    qc.data.leaf_commit == this_epoch_high_qc.data.leaf_commit
-                } else {
-                    false
-                }
-            }),
-        )
-        .completed()
-        .await
-    })
-    .await
-    else {
-        return Err(warn!("Error while waiting for the next epoch QC."));
-    };
-    let HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) = event.as_ref() else {
-        // this shouldn't happen
-        return Err(warn!("Received event is not NextEpochQc2Formed but we checked it earlier. Shouldn't be possible."));
-    };
-    Ok(next_epoch_qc.clone())
 }
 
 /// Validates qc's signatures and, if provided, validates next_epoch_qc's signatures and whether it
