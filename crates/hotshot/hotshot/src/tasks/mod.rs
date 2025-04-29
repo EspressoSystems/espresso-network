@@ -198,7 +198,7 @@ pub fn add_network_event_task<
         view: TYPES::View::genesis(),
         epoch: genesis_epoch_from_version::<V, TYPES>(),
         membership_coordinator: handle.membership_coordinator.clone(),
-        storage: Arc::clone(&handle.storage()),
+        storage: handle.storage(),
         consensus: OuterConsensus::new(handle.consensus()),
         upgrade_lock: handle.hotshot.upgrade_lock.clone(),
         transmit_tasks: BTreeMap::new(),
@@ -331,7 +331,7 @@ where
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
-        storage: Arc<RwLock<I::Storage>>,
+        storage: I::Storage,
         marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> SystemContextHandle<TYPES, I, V> {
         let epoch_height = config.epoch_height;
@@ -362,7 +362,7 @@ where
             output_event_stream: output_event_stream.clone(),
             internal_event_stream: internal_event_stream.clone(),
             hotshot: Arc::clone(&hotshot),
-            storage: Arc::clone(&hotshot.storage),
+            storage: hotshot.storage.clone(),
             network: Arc::clone(&hotshot.network),
             membership_coordinator: memberships.clone(),
             epoch_height,

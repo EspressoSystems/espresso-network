@@ -216,20 +216,18 @@ where
             let mut drb_seed_input = [0u8; 32];
             let len = drb_seed_input_vec.len().min(32);
             drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
-            let drb =
-                tokio::task::spawn_blocking(move || compute_drb_result::<TYPES>(drb_seed_input))
-                    .await
-                    .unwrap();
 
-            if let Some(cb) = &self.storage_add_drb_result_fn {
-                tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
-                if let Err(e) = cb(epoch, drb).await {
-                    tracing::warn!("Failed to add drb result to storage: {e}");
-                }
-            }
-
-            drb
+            tokio::task::spawn_blocking(move || compute_drb_result::<TYPES>(drb_seed_input))
+                .await
+                .unwrap()
         };
+
+        if let Some(cb) = &self.storage_add_drb_result_fn {
+            tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
+            if let Err(e) = cb(epoch, drb).await {
+                tracing::warn!("Failed to add drb result to storage: {e}");
+            }
+        }
 
         self.membership.write().await.add_drb_result(epoch, drb);
         Ok(EpochMembership {

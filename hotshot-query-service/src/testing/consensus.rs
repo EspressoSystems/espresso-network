@@ -194,15 +194,14 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             None,
                         ));
 
-                        let hs_storage: Arc<RwLock<TestStorage<MockTypes>>> =
-                            Arc::new(RwLock::new(TestStorage::default()));
+                        let hs_storage: TestStorage<MockTypes> = TestStorage::default();
                         membership
                             .write()
                             .await
                             .set_first_epoch(ViewNumber::new(0), INITIAL_DRB_RESULT);
                         let memberships = EpochMembershipCoordinator::new(
                             membership,
-                            Some(storage_add_drb_result(Arc::clone(&hs_storage))),
+                            Some(storage_add_drb_result(hs_storage.clone())),
                             config.epoch_height,
                         );
 

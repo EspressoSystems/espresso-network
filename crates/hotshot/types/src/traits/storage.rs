@@ -12,7 +12,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 
@@ -163,19 +162,19 @@ pub type StorageAddDrbResultFn<TYPES> = Arc<
 >;
 
 async fn storage_add_drb_result_impl<TYPES: NodeType>(
-    storage: Arc<RwLock<impl Storage<TYPES>>>,
+    storage: impl Storage<TYPES>,
     epoch: TYPES::Epoch,
     drb_result: DrbResult,
 ) -> Result<()> {
-    storage.read().await.add_drb_result(epoch, drb_result).await
+    storage.add_drb_result(epoch, drb_result).await
 }
 
 /// Helper function to create a callback to add a drb result to storage
 pub fn storage_add_drb_result<TYPES: NodeType>(
-    storage: Arc<RwLock<impl Storage<TYPES> + 'static>>,
+    storage: impl Storage<TYPES> + 'static,
 ) -> StorageAddDrbResultFn<TYPES> {
     Arc::new(Box::new(move |epoch, drb_result| {
-        let st = Arc::clone(&storage);
+        let st = storage.clone();
         Box::pin(storage_add_drb_result_impl(st, epoch, drb_result))
     }))
 }

@@ -389,7 +389,7 @@ pub trait RunDa<
         };
         let epoch_height = config.config.epoch_height;
 
-        let storage = Arc::new(RwLock::new(TestStorage::<TYPES>::default()));
+        let storage = TestStorage::<TYPES>::default();
 
         SystemContext::init(
             pk,
@@ -399,7 +399,7 @@ pub trait RunDa<
             config.config,
             EpochMembershipCoordinator::new(
                 membership,
-                Some(storage_add_drb_result(Arc::clone(&storage))),
+                Some(storage_add_drb_result(storage.clone())),
                 epoch_height,
             ),
             Arc::from(network),

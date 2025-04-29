@@ -242,11 +242,10 @@ async fn init_consensus(
                     None,
                 ));
 
-                let storage: Arc<RwLock<TestStorage<MockTypes>>> =
-                    Arc::new(RwLock::new(TestStorage::default()));
+                let storage: TestStorage<MockTypes> = TestStorage::default();
                 let coordinator = EpochMembershipCoordinator::new(
                     Arc::new(RwLock::new(membership)),
-                    Some(storage_add_drb_result(Arc::clone(&storage))),
+                    Some(storage_add_drb_result(storage.clone())),
                     config.epoch_height,
                 );
 

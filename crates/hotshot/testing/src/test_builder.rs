@@ -258,14 +258,13 @@ pub async fn create_test_handle<
     let validator_config: ValidatorConfig<TYPES> =
         ValidatorConfig::generated_from_seed_indexed([0u8; 32], node_id, U256::from(1), is_da);
 
-    let storage = Arc::new(RwLock::new(storage));
     // Get key pair for certificate aggregation
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();
     let membership_coordinator = EpochMembershipCoordinator::new(
         memberships,
-        Some(storage_add_drb_result(Arc::clone(&storage))),
+        Some(storage_add_drb_result(storage.clone())),
         config.epoch_height,
     );
 

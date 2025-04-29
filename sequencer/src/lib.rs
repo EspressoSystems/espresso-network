@@ -519,7 +519,7 @@ where
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
-    let persistence = Arc::new(RwLock::new(Arc::new(persistence)));
+    let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
         Some(storage_add_drb_result(persistence.clone())),
@@ -1242,7 +1242,7 @@ pub mod testing {
 
             let fetcher = StakeTableFetcher::new(
                 Arc::new(catchup_providers.clone()),
-                Arc::new(Mutex::new(persistence)),
+                Arc::new(Mutex::new(persistence.clone())),
                 l1_client.clone(),
                 chain_config,
             );
@@ -1256,7 +1256,7 @@ pub mod testing {
             membership.reload_stake(50).await;
 
             let membership = Arc::new(RwLock::new(membership));
-            let persistence = Arc::new(RwLock::new(Arc::new(persistence)));
+            let persistence = Arc::new(persistence);
 
             let coordinator = EpochMembershipCoordinator::new(
                 membership,

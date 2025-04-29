@@ -6,7 +6,10 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use anyhow::{bail, Result};
@@ -89,7 +92,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
 pub struct TestStorage<TYPES: NodeType> {
     inner: Arc<RwLock<TestStorageState<TYPES>>>,
     /// `should_return_err` is a testing utility to validate negative cases.
-    pub should_return_err: bool,
+    pub should_return_err: Arc<AtomicBool>,
     pub delay_config: DelayConfig,
     pub decided_upgrade_certificate: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
 }
@@ -98,7 +101,7 @@ impl<TYPES: NodeType> Default for TestStorage<TYPES> {
     fn default() -> Self {
         Self {
             inner: Arc::new(RwLock::new(TestStorageState::default())),
-            should_return_err: false,
+            should_return_err: Arc::new(AtomicBool::new(false)),
             delay_config: DelayConfig::default(),
             decided_upgrade_certificate: Arc::new(RwLock::new(None)),
         }
@@ -159,7 +162,7 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
 #[async_trait]
 impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
     async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append VID proposal to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -176,7 +179,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         &self,
         proposal: &Proposal<TYPES, VidDisperseShare2<TYPES>>,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append VID proposal to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -194,7 +197,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         proposal: &Proposal<TYPES, DaProposal<TYPES>>,
         _vid_commit: VidCommitment,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append DA proposal to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -210,7 +213,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         proposal: &Proposal<TYPES, DaProposal2<TYPES>>,
         _vid_commit: VidCommitment,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append DA proposal (2) to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -225,7 +228,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         &self,
         proposal: &Proposal<TYPES, QuorumProposal<TYPES>>,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append Quorum proposal (1) to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -240,7 +243,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         &self,
         proposal: &Proposal<TYPES, QuorumProposal2<TYPES>>,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append Quorum proposal (2) to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -255,7 +258,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         &self,
         proposal: &Proposal<TYPES, QuorumProposalWrapper<TYPES>>,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append Quorum proposal (wrapped) to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -272,7 +275,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         epoch: Option<TYPES::Epoch>,
         action: hotshot_types::event::HotShotAction,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to append Action to storage");
         }
         let mut inner = self.inner.write().await;
@@ -292,7 +295,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         &self,
         new_high_qc: hotshot_types::simple_certificate::QuorumCertificate<TYPES>,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to update high qc to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -311,7 +314,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         &self,
         new_high_qc: hotshot_types::simple_certificate::QuorumCertificate2<TYPES>,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to update high qc to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -330,7 +333,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         &self,
         state_cert: LightClientStateUpdateCertificate<TYPES>,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to update state_cert to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
@@ -348,7 +351,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             TYPES,
         >,
     ) -> Result<()> {
-        if self.should_return_err {
+        if self.should_return_err.load(Ordering::Relaxed) {
             bail!("Failed to update next epoch high qc to storage");
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;

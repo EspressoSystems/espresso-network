@@ -606,7 +606,6 @@ where
         let public_key = validator_config.public_key.clone();
         let state_private_key = validator_config.state_private_key.clone();
         let epoch_height = config.epoch_height;
-        let storage = Arc::new(RwLock::new(storage));
 
         SystemContext::new(
             public_key,
@@ -616,7 +615,7 @@ where
             config,
             EpochMembershipCoordinator::new(
                 Arc::new(RwLock::new(memberships)),
-                Some(storage_add_drb_result(Arc::clone(&storage))),
+                Some(storage_add_drb_result(storage.clone())),
                 epoch_height,
             ),
             network,
@@ -652,7 +651,6 @@ where
         let public_key = validator_config.public_key.clone();
         let state_private_key = validator_config.state_private_key.clone();
         let epoch_height = config.epoch_height;
-        let storage = Arc::new(RwLock::new(storage));
 
         SystemContext::new_from_channels(
             public_key,
@@ -662,7 +660,7 @@ where
             config,
             EpochMembershipCoordinator::new(
                 memberships,
-                Some(storage_add_drb_result(Arc::clone(&storage))),
+                Some(storage_add_drb_result(storage.clone())),
                 epoch_height,
             ),
             network,

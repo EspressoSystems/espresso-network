@@ -7,7 +7,6 @@
 use std::{sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use handlers::handle_epoch_root_quorum_vote_recv;
 use hotshot_task::task::TaskState;
@@ -100,7 +99,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub consensus: OuterConsensus<TYPES>,
 
     /// A reference to the storage trait.
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// The node's id
     pub id: u64,
@@ -241,14 +240,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 drop(consensus_writer);
 
                 self.storage
-                    .write()
-                    .await
                     .update_high_qc2(high_qc.clone())
                     .await
                     .map_err(|_| warn!("Failed to update high QC"))?;
                 self.storage
-                    .write()
-                    .await
                     .update_next_epoch_high_qc2(next_epoch_high_qc.clone())
                     .await
                     .map_err(|_| warn!("Failed to update next epoch high QC"))?;
