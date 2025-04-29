@@ -2454,17 +2454,19 @@ mod test {
             }
 
             // Append the latest known leaf to the local store
-
+            // This would trigger fetches for the corresponding missing data
+            // such as header, vid and payload
+            // This would also trigger fetches for the parent data
             ds.append(leaves.last().cloned().unwrap().into())
                 .await
                 .unwrap();
 
-            // This should now fetch from the provider
-            let leaf = ds.get_leaf(test_leaf.height() as usize).await;
-            let payload = ds.get_payload(test_payload.height() as usize).await;
-            let common = ds.get_vid_common(test_common.height() as usize).await;
-
+            // check that the data has been fetches and matches the network data source
             {
+                let leaf = ds.get_leaf(test_leaf.height() as usize).await;
+                let payload = ds.get_payload(test_payload.height() as usize).await;
+                let common = ds.get_vid_common(test_common.height() as usize).await;
+
                 let truth = network.data_source();
                 assert_eq!(
                     leaf.await,
