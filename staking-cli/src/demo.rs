@@ -35,7 +35,6 @@ use crate::{
 pub type StakeTableVecBased = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
 
 /// Setup validator by sending them tokens and ethers, and registering them on stake table
-// TODO: rename to `setup_contract_for_test()`?
 pub async fn setup_stake_table_contract_for_test(
     rpc_url: Url,
     token_holder: &HttpProviderWithWallet,
@@ -47,7 +46,7 @@ pub async fn setup_stake_table_contract_for_test(
     tracing::info!(%stake_table_address, "staking to stake table contract for demo");
 
     let token_holder_addr =
-        <HttpProviderWithWallet as WalletProvider>::default_signer_address(&token_holder);
+        <HttpProviderWithWallet as WalletProvider>::default_signer_address(token_holder);
 
     tracing::info!("ESP token address: {token_address}");
     let token = EspToken::new(token_address, token_holder);

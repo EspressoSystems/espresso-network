@@ -669,7 +669,7 @@ pub mod testing {
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::setup_stake_contract_for_test;
+    use staking_cli::demo::setup_stake_table_contract_for_test;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -945,7 +945,7 @@ pub mod testing {
                     let token_addr = contracts
                         .address(Contract::EspTokenProxy)
                         .expect("EspTokenProxy address not found");
-                    setup_stake_contract_for_test(
+                    setup_stake_table_contract_for_test(
                         self.l1_url.clone(),
                         &deployer,
                         st_addr,

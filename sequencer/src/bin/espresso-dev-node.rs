@@ -14,7 +14,10 @@ use alloy::{
 };
 use async_trait::async_trait;
 use clap::Parser;
-use espresso_contract_deployer::light_client_genesis_from_stake_table;
+use espresso_contract_deployer::{
+    self as deployer, network_config::light_client_genesis_from_stake_table, Contract, Contracts,
+    HttpProviderWithWallet,
+};
 use espresso_types::{
     parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
 };
@@ -38,12 +41,9 @@ use sequencer::{
     testing::TestConfigBuilder,
     SequencerApiVersion,
 };
-use sequencer_utils::{
-    deployer::{self, Contract, Contracts},
-    logging, HttpProviderWithWallet,
-};
+use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
-use staking_cli::demo::setup_stake_contract_for_test;
+use staking_cli::demo::setup_stake_table_contract_for_test;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
 use tokio::spawn;
 use url::Url;
@@ -238,8 +238,10 @@ async fn main() -> anyhow::Result<()> {
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
     let initial_stake_table = network_config.stake_table();
 
-    let (genesis_state, genesis_stake) =
-        light_client_genesis_from_stake_table(network_config.known_nodes_with_stake())?;
+    let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+        network_config.known_nodes_with_stake(),
+        STAKE_TABLE_CAPACITY_FOR_TEST as usize,
+    )?;
 
     let mut l1_contracts = Contracts::new();
     let mut light_client_addresses = vec![];
@@ -417,9 +419,9 @@ async fn main() -> anyhow::Result<()> {
             client_states.l1_chain_id = chain_id;
 
             let staking_priv_keys = network_config.staking_priv_keys();
-            setup_stake_contract_for_test(
+            setup_stake_table_contract_for_test(
                 l1_url.clone(),
-                signer,
+                &provider,
                 l1_contracts
                     .address(Contract::StakeTableProxy)
                     .expect("stake table deployed"),

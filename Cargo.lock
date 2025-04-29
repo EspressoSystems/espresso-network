@@ -3928,6 +3928,7 @@ dependencies = [
  "cld",
  "committable",
  "derive_more 1.0.0",
+ "espresso-contract-deployer",
  "espresso-types",
  "ethers-core",
  "fluent-asserter",

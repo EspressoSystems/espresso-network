@@ -72,10 +72,10 @@ csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
 indexmap = { workspace = true }
-espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 
 hotshot = { workspace = true }
 hotshot-builder-core-refactored = { path = "../hotshot-builder-core-refactored" }
