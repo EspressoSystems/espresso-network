@@ -32,7 +32,6 @@ use hotshot_types::{
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StateSignatureKey,
-        stake_table::StakeTableError,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
@@ -238,38 +237,6 @@ pub fn light_client_genesis_from_stake_table(
             schnorrKeyComm: field_to_u256(st_state.schnorr_key_comm),
             amountComm: field_to_u256(st_state.amount_comm),
             threshold: field_to_u256(st_state.threshold),
-        },
-    ))
-}
-
-use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::{
-    light_client::one_honest_threshold,
-    signature_key::BLSPubKey,
-    traits::stake_table::{SnapshotVersion, StakeTableScheme},
-};
-
-#[inline]
-// We'll get rid of it someday
-pub fn legacy_light_client_genesis_from_stake_table(
-    st: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
-) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let (bls_comm, schnorr_comm, stake_comm) = st
-        .commitment(SnapshotVersion::LastEpochStart)
-        .expect("Commitment computation shouldn't fail.");
-    let threshold = one_honest_threshold(st.total_stake(SnapshotVersion::LastEpochStart)?);
-
-    Ok((
-        LightClientStateSol {
-            viewNum: 0,
-            blockHeight: 0,
-            blockCommRoot: U256::from(0u32),
-        },
-        StakeTableStateSol {
-            blsKeyComm: field_to_u256(bls_comm),
-            schnorrKeyComm: field_to_u256(schnorr_comm),
-            amountComm: field_to_u256(stake_comm),
-            threshold,
         },
     ))
 }
@@ -777,8 +744,6 @@ pub enum ProverError {
     ContractError(anyhow::Error),
     /// Error when communicating with the state relay server: {0}
     RelayServerError(ServerError),
-    /// Internal error with the stake table: {0}
-    StakeTableError(StakeTableError),
     /// Internal error when generating the SNARK proof: {0}
     PlonkError(PlonkError),
     /// Internal error: {0}
@@ -796,12 +761,6 @@ impl From<ServerError> for ProverError {
 impl From<PlonkError> for ProverError {
     fn from(err: PlonkError) -> Self {
         Self::PlonkError(err)
-    }
-}
-
-impl From<StakeTableError> for ProverError {
-    fn from(err: StakeTableError) -> Self {
-        Self::StakeTableError(err)
     }
 }
 

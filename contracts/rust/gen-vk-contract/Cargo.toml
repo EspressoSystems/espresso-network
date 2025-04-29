@@ -10,6 +10,6 @@ alloy = { workspace = true }
 ark-srs = { workspace = true }
 clap = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
-hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }
+hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }

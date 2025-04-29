@@ -8,7 +8,7 @@ use std::{fs::OpenOptions, io::Write, path::PathBuf, process::Command};
 use alloy::hex::ToHexExt;
 use clap::Parser;
 use hotshot_contract_adapter::sol_types::VerifyingKeySol;
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
+use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
 use jf_pcs::prelude::UnivariateUniversalParams;
 
 #[derive(Parser)]

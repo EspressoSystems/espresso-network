@@ -20,7 +20,6 @@ espresso-types = { version = "0.1.0", path = "../types" }
 futures-util = "0.3.31"
 git-version = "0.3.9"
 hotshot-contract-adapter = { workspace = true }
-hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }

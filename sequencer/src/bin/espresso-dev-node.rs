@@ -19,12 +19,11 @@ use espresso_types::{
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
     legacy_light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
 };
 use hotshot_types::{
-    light_client::StateVerKey,
+    light_client::{one_honest_threshold, StateVerKey},
     traits::stake_table::{SnapshotVersion, StakeTableScheme},
     utils::epoch_from_block_number,
 };

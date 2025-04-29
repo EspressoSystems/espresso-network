@@ -83,7 +83,6 @@ hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }
 
 # Dependencies for feature `testing`

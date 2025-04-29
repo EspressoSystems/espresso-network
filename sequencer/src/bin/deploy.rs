@@ -9,8 +9,8 @@ use alloy::{
 use anyhow::Context;
 use clap::Parser;
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::light_client_genesis;
+use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
 use sequencer_utils::{
     deployer::{self, transfer_ownership, Contract, Contracts, DeployedContracts},
     logging,

@@ -1,5 +1,5 @@
 use clap::Parser;
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
+use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
 use sequencer::{state_signature::relay_server::run_relay_server, SequencerApiVersion};
 use sequencer_utils::logging;
 use url::Url;

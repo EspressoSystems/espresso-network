@@ -22,7 +22,6 @@ members = [
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
     "crates/hotshot/orchestrator",
-    "crates/hotshot/stake-table",
     "crates/hotshot/task",
     "crates/hotshot/task-impls",
     "crates/hotshot/testing",
@@ -145,7 +144,6 @@ hotshot-events-service = { path = "hotshot-events-service" }
 hotshot-utils = { path = "crates/hotshot/utils" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
-hotshot-stake-table = { path = "crates/hotshot/stake-table" }
 hotshot-state-prover = { version = "0.1.0", path = "hotshot-state-prover" }
 hotshot-task = { path = "crates/hotshot/task" }
 hotshot-testing = { path = "crates/hotshot/testing" }

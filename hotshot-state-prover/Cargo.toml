@@ -20,7 +20,6 @@ espresso-types = { path = "../types" }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-stake-table = { workspace = true }
 hotshot-types = { workspace = true }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
