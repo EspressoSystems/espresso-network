@@ -2378,186 +2378,205 @@ mod test {
         test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_fallback_deserialization_for_fetch_requests() {
-        setup_test();
+    // This helper function starts up a mock network
+    // with v0 and v1 availability query modules,
+    // trigger fetches for a datasource from the provider,
+    // and asserts that the fetched data is correct
+    async fn run_fallback_deserialization_test_helper<V: Versions>(port: u16, version: &str) {
+        let mut network = MockNetwork::<MockDataSource, V>::init().await;
 
-        async fn run_test_helper<V: Versions>(port: u16, version: &str) {
-            let mut network = MockNetwork::<MockDataSource, V>::init().await;
+        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
 
-            let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-
-            // Register availability APIs for two versions: v0 and v1
-            app.register_module(
-                "availability",
-                define_api(
-                    &Default::default(),
-                    StaticVersion::<0, 1> {},
-                    "0.0.1".parse().unwrap(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-            app.register_module(
-                "availability",
-                define_api(
-                    &Default::default(),
-                    StaticVersion::<0, 1> {},
-                    "1.0.0".parse().unwrap(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-            network.spawn(
-                "server",
-                app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
-            );
-
-            let db = TmpDb::init().await;
-
-            let provider_url = format!("http://localhost:{port}/{version}")
-                .parse()
-                .expect("Invalid URL");
-
-            let provider = Provider::new(QueryServiceProvider::new(
-                provider_url,
+        // Register availability APIs for two versions: v0 and v1
+        app.register_module(
+            "availability",
+            define_api(
+                &Default::default(),
                 StaticVersion::<0, 1> {},
-            ));
+                "0.0.1".parse().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
-            let ds = data_source(&db, &provider).await;
-            network.start().await;
+        app.register_module(
+            "availability",
+            define_api(
+                &Default::default(),
+                StaticVersion::<0, 1> {},
+                "1.0.0".parse().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
-            let leaves = network.data_source().subscribe_leaves(1).await;
-            let leaves = leaves.take(5).collect::<Vec<_>>().await;
-            let test_leaf = &leaves[0];
-            let test_payload = &leaves[2];
-            let test_common = &leaves[3];
+        network.spawn(
+            "server",
+            app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
+        );
 
-            let mut fetches = vec![];
-            // Issue requests for missing data (these should initially remain unresolved):
-            fetches.push(ds.get_leaf(test_leaf.height() as usize).await.map(ignore));
-            fetches.push(ds.get_payload(test_payload.block_hash()).await.map(ignore));
-            fetches.push(
-                ds.get_vid_common(test_common.block_hash())
-                    .await
-                    .map(ignore),
-            );
+        let db = TmpDb::init().await;
 
-            // Even if we give data extra time to propagate, these requests will not resolve, since we
-            // didn't trigger any active fetches.
-            sleep(Duration::from_secs(1)).await;
-            for (i, fetch) in fetches.into_iter().enumerate() {
-                tracing::info!("checking fetch {i} is unresolved");
-                fetch.try_resolve().unwrap_err();
-            }
+        let provider_url = format!("http://localhost:{port}/{version}")
+            .parse()
+            .expect("Invalid URL");
 
-            // Append the latest known leaf to the local store
-            // This would trigger fetches for the corresponding missing data
-            // such as header, vid and payload
-            // This would also trigger fetches for the parent data
-            ds.append(leaves.last().cloned().unwrap().into())
+        let provider = Provider::new(QueryServiceProvider::new(
+            provider_url,
+            StaticVersion::<0, 1> {},
+        ));
+
+        let ds = data_source(&db, &provider).await;
+        network.start().await;
+
+        let leaves = network.data_source().subscribe_leaves(1).await;
+        let leaves = leaves.take(5).collect::<Vec<_>>().await;
+        let test_leaf = &leaves[0];
+        let test_payload = &leaves[2];
+        let test_common = &leaves[3];
+
+        let mut fetches = vec![];
+        // Issue requests for missing data (these should initially remain unresolved):
+        fetches.push(ds.get_leaf(test_leaf.height() as usize).await.map(ignore));
+        fetches.push(ds.get_payload(test_payload.block_hash()).await.map(ignore));
+        fetches.push(
+            ds.get_vid_common(test_common.block_hash())
                 .await
-                .unwrap();
+                .map(ignore),
+        );
 
-            // check that the data has been fetches and matches the network data source
-            {
-                let leaf = ds.get_leaf(test_leaf.height() as usize).await;
-                let payload = ds.get_payload(test_payload.height() as usize).await;
-                let common = ds.get_vid_common(test_common.height() as usize).await;
-
-                let truth = network.data_source();
-                assert_eq!(
-                    leaf.await,
-                    truth.get_leaf(test_leaf.height() as usize).await.await
-                );
-                assert_eq!(
-                    payload.await,
-                    truth
-                        .get_payload(test_payload.height() as usize)
-                        .await
-                        .await
-                );
-                assert_eq!(
-                    common.await,
-                    truth
-                        .get_vid_common(test_common.height() as usize)
-                        .await
-                        .await
-                );
-            }
+        // Even if we give data extra time to propagate, these requests will not resolve, since we
+        // didn't trigger any active fetches.
+        sleep(Duration::from_secs(1)).await;
+        for (i, fetch) in fetches.into_iter().enumerate() {
+            tracing::info!("checking fetch {i} is unresolved");
+            fetch.try_resolve().unwrap_err();
         }
 
+        // Append the latest known leaf to the local store
+        // This would trigger fetches for the corresponding missing data
+        // such as header, vid and payload
+        // This would also trigger fetches for the parent data
+        ds.append(leaves.last().cloned().unwrap().into())
+            .await
+            .unwrap();
+
+        // check that the data has been fetches and matches the network data source
+        {
+            let leaf = ds.get_leaf(test_leaf.height() as usize).await;
+            let payload = ds.get_payload(test_payload.height() as usize).await;
+            let common = ds.get_vid_common(test_common.height() as usize).await;
+
+            let truth = network.data_source();
+            assert_eq!(
+                leaf.await,
+                truth.get_leaf(test_leaf.height() as usize).await.await
+            );
+            assert_eq!(
+                payload.await,
+                truth
+                    .get_payload(test_payload.height() as usize)
+                    .await
+                    .await
+            );
+            assert_eq!(
+                common.await,
+                truth
+                    .get_vid_common(test_common.height() as usize)
+                    .await
+                    .await
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fallback_deserialization_for_fetch_requests_v0() {
+        setup_test();
+
         let port = pick_unused_port().unwrap();
-        // Run the test helper with different setups:
 
         // This run will call v0 availalbilty api for fetch requests.
         // The fetch initially attempts deserialization with new types,
         // which fails because the v0 provider returns legacy types.
         // It then falls back to deserializing as legacy types,
         // and the fetch passes
-        run_test_helper::<MockVersions>(port, "v0").await;
+        run_fallback_deserialization_test_helper::<MockVersions>(port, "v0").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fallback_deserialization_for_fetch_requests_v1() {
+        setup_test();
+        let port = pick_unused_port().unwrap();
+
         // Fetch from the v1 availability API using MockVersions.
-        // Even though the previous setup targets v0, this one fetches from the v1 provider.
-        // which would correctly deserialize the bytes in the first attempt, so no deserialization is needed
-        run_test_helper::<MockVersions>(port, "v1").await;
-        // Fetch Proof of Stake (PoS) data using the v1 availability API.
-        // This is the same as previous run, but with proof of stake version
-        run_test_helper::<EpochsTestVersions>(port, "v1").await;
+        // this one fetches from the v1 provider.
+        // which would correctly deserialize the bytes in the first attempt, so no fallback deserialization is needed
+        run_fallback_deserialization_test_helper::<MockVersions>(port, "v1").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fallback_deserialization_for_fetch_requests_pos() {
+        setup_test();
+        let port = pick_unused_port().unwrap();
+
+        // Fetch Proof of Stake (PoS) data using the v1 availability API
+        // with proof of stake version
+        run_fallback_deserialization_test_helper::<EpochsTestVersions>(port, "v1").await;
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fallback_deserialization_for_fetch_requests_v0_pos() {
+        setup_test();
 
         // Run with the PoS version against a v0 provider.
         // Fetch requests are expected to fail because PoS commitments differ from the legacy commitments
         // returned by the v0 provider.
         // For example: a PoS Leaf2 commitment will not match the downgraded commitment from a legacy Leaf1.
 
-        {
-            let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
 
-            let port = pick_unused_port().unwrap();
-            let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
+        let port = pick_unused_port().unwrap();
+        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
 
-            app.register_module(
-                "availability",
-                define_api(
-                    &Default::default(),
-                    StaticVersion::<0, 1> {},
-                    "0.0.1".parse().unwrap(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
-
-            network.spawn(
-                "server",
-                app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
-            );
-
-            let db = TmpDb::init().await;
-            let provider = Provider::new(QueryServiceProvider::new(
-                format!("http://localhost:{}/v0", port).parse().unwrap(),
+        app.register_module(
+            "availability",
+            define_api(
+                &Default::default(),
                 StaticVersion::<0, 1> {},
-            ));
-            let ds = data_source(&db, &provider).await;
+                "0.0.1".parse().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
-            network.start().await;
+        network.spawn(
+            "server",
+            app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
+        );
 
-            let leaves = network.data_source().subscribe_leaves(1).await;
-            let leaves = leaves.take(5).collect::<Vec<_>>().await;
-            let test_leaf = &leaves[0];
-            let test_payload = &leaves[2];
-            let test_common = &leaves[3];
+        let db = TmpDb::init().await;
+        let provider = Provider::new(QueryServiceProvider::new(
+            format!("http://localhost:{}/v0", port).parse().unwrap(),
+            StaticVersion::<0, 1> {},
+        ));
+        let ds = data_source(&db, &provider).await;
 
-            let leaf = ds.get_leaf(test_leaf.height() as usize).await;
-            let payload = ds.get_payload(test_payload.height() as usize).await;
-            let common = ds.get_vid_common(test_common.height() as usize).await;
+        network.start().await;
 
-            sleep(Duration::from_secs(3)).await;
+        let leaves = network.data_source().subscribe_leaves(1).await;
+        let leaves = leaves.take(5).collect::<Vec<_>>().await;
+        let test_leaf = &leaves[0];
+        let test_payload = &leaves[2];
+        let test_common = &leaves[3];
 
-            // fetches fail because of different commitments
-            leaf.try_resolve().unwrap_err();
-            payload.try_resolve().unwrap_err();
-            common.try_resolve().unwrap_err();
-        }
+        let leaf = ds.get_leaf(test_leaf.height() as usize).await;
+        let payload = ds.get_payload(test_payload.height() as usize).await;
+        let common = ds.get_vid_common(test_common.height() as usize).await;
+
+        sleep(Duration::from_secs(3)).await;
+
+        // fetches fail because of different commitments
+        leaf.try_resolve().unwrap_err();
+        payload.try_resolve().unwrap_err();
+        common.try_resolve().unwrap_err();
     }
 }
