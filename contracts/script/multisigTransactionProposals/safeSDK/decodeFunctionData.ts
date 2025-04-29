@@ -5,7 +5,7 @@ export function decodeFunctionCall(contractAbi: any, encodedData: string) {
   return iface.parseTransaction({ data: encodedData });
 }
 
-async function decodeProposalData() {
+function decodeProposalData() {
   try {
     let contractName = process.argv[2];
     const encodedData = process.argv[3];
