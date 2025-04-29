@@ -27,7 +27,6 @@ use espresso_types::{
     SolverAuctionResultsProvider, ValidatedState,
 };
 use genesis::L1Finalized;
-// Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 use hotshot_query_service::data_source::storage::SqlStorage;
 use libp2p::Multiaddr;
@@ -915,6 +914,7 @@ pub mod testing {
                         staking_private_keys.clone(),
                         None,
                         false,
+                        STAKE_TABLE_CAPACITY_FOR_TEST,
                     )
                     .await
                     .expect("deployed pos contracts");

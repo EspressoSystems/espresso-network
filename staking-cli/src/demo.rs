@@ -331,6 +331,7 @@ pub async fn pos_deploy_routine(
     private_keys: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
     _multisig: Option<Address>,
     multiple_delegators: bool,
+    stake_table_capacity: usize,
 ) -> anyhow::Result<Address> {
     let contracts = &mut Contracts::new();
 
@@ -341,7 +342,7 @@ pub async fn pos_deploy_routine(
     let admin = provider.get_accounts().await?[0];
 
     let (genesis_state, genesis_stake) =
-        light_client_genesis_from_stake_table(&initial_stake_table, STAKE_TABLE_CAPACITY_FOR_TEST)?;
+        light_client_genesis_from_stake_table(&initial_stake_table, stake_table_capacity)?;
 
     // deploy EspToken, proxy
     let token_proxy_addr = deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
@@ -442,9 +443,19 @@ mod test {
         let st = mock_stake(num_nodes);
 
         let priv_keys = staking_priv_keys();
-        let _address = pos_deploy_routine(&l1, &signer, 50, 1, st, priv_keys, None, false)
-            .await
-            .unwrap();
+        let _address = pos_deploy_routine(
+            &l1,
+            &signer,
+            50,
+            1,
+            st,
+            priv_keys,
+            None,
+            false,
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .await
+        .unwrap();
 
         Ok(())
     }

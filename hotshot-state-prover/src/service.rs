@@ -100,7 +100,8 @@ impl ProverServiceState {
         let stake_table = fetch_stake_table_from_sequencer(&config.sequencer_url, None)
             .await
             .with_context(|| "Failed to initialize stake table")?;
-        let st_state = compute_stake_table_commitment(&stake_table, config.stake_table_capacity);
+        let st_state = compute_stake_table_commitment(&stake_table, config.stake_table_capacity)
+            .with_context(|| "Failed to compute stake table commitment")?;
         Ok(Self {
             config,
             epoch: None,
@@ -118,7 +119,8 @@ impl ProverServiceState {
                 .await
                 .with_context(|| format!("Failed to update stake table for epoch: {:?}", epoch))?;
             self.st_state =
-                compute_stake_table_commitment(&self.stake_table, self.config.stake_table_capacity);
+                compute_stake_table_commitment(&self.stake_table, self.config.stake_table_capacity)
+                    .with_context(|| "Failed to compute stake table commitment")?;
             self.epoch = epoch;
         }
         Ok(())
@@ -225,7 +227,8 @@ pub fn light_client_genesis_from_stake_table(
     st: &[PeerConfig<SeqTypes>],
     stake_table_capacity: usize,
 ) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let st_state = compute_stake_table_commitment(st, stake_table_capacity);
+    let st_state = compute_stake_table_commitment(st, stake_table_capacity)
+        .with_context(|| "Failed to compute stake table commitment")?;
     Ok((
         LightClientStateSol {
             viewNum: 0,

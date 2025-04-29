@@ -355,7 +355,8 @@ impl MockLedger {
         let (adv_qc_keys, adv_state_keys) =
             key_pairs_for_testing(STAKE_TABLE_CAPACITY_FOR_TEST, &mut self.rng);
         let adv_st = stake_table_for_testing(&adv_qc_keys, &adv_state_keys);
-        let adv_st_state = compute_stake_table_commitment(&adv_st, STAKE_TABLE_CAPACITY_FOR_TEST);
+        let adv_st_state =
+            compute_stake_table_commitment(&adv_st, STAKE_TABLE_CAPACITY_FOR_TEST).unwrap();
 
         // replace new state with adversarial stake table commitment
         let mut msg = Vec::with_capacity(7);
@@ -412,6 +413,7 @@ impl MockLedger {
     /// Returns the stake table state for current voting
     pub fn voting_stake_table_state(&self) -> GenericStakeTableState<F> {
         compute_stake_table_commitment(&self.voting_st, STAKE_TABLE_CAPACITY_FOR_TEST)
+            .expect("Failed to compute stake table commitment")
     }
 
     /// Returns epoch-aware stake table state for the next block.
@@ -419,6 +421,7 @@ impl MockLedger {
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
         if self.epoch_activated() && self.is_ge_epoch_root() {
             compute_stake_table_commitment(&self.next_voting_st, STAKE_TABLE_CAPACITY_FOR_TEST)
+                .expect("Failed to compute stake table commitment")
         } else {
             self.voting_stake_table_state()
         }

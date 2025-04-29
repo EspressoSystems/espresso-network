@@ -132,11 +132,19 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         );
                         return;
                     };
-                    self.voting_stake_table_epoch = option_state_epoch;
-                    self.voting_stake_table = compute_stake_table_commitment(
+                    match compute_stake_table_commitment(
                         &membership.stake_table().await,
                         self.stake_table_capacity,
-                    );
+                    ) {
+                        Ok(stake_table_state) => {
+                            self.voting_stake_table_epoch = option_state_epoch;
+                            self.voting_stake_table = stake_table_state;
+                        },
+                        Err(err) => {
+                            tracing::error!("Failed to compute stake table commitment: {:?}", err);
+                            return;
+                        },
+                    }
                 }
 
                 let signature = self.sign_new_state(&state, self.voting_stake_table).await;

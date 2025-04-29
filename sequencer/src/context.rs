@@ -127,7 +127,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             .await?;
 
         let stake_table_commit =
-            compute_stake_table_commitment(&config.known_nodes_with_stake, stake_table_capacity);
+            compute_stake_table_commitment(&config.known_nodes_with_stake, stake_table_capacity)?;
         let stake_table_epoch = None;
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(

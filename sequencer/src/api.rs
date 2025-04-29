@@ -847,6 +847,7 @@ pub mod test_helpers {
                 network_config.staking_priv_keys(),
                 None,
                 multiple_delegators,
+                STAKE_TABLE_CAPACITY_FOR_TEST,
             )
             .await
             .expect("deployed pos contracts");

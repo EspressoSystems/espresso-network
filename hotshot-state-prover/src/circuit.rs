@@ -363,8 +363,7 @@ mod tests {
 
         let (qc_keys, state_keys) = key_pairs_for_testing(num_validators, &mut prng);
         let st = stake_table_for_testing(&qc_keys, &state_keys);
-        let st_state = compute_stake_table_commitment(&st, ST_CAPACITY);
-        // let st_state = st.voting_state().unwrap();
+        let st_state = compute_stake_table_commitment(&st, ST_CAPACITY).unwrap();
         let next_st_state = st_state;
 
         let entries = st
