@@ -528,7 +528,7 @@ async fn main() -> anyhow::Result<()> {
             retry_interval,
             sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}/")).unwrap(),
             port: Some(prover_port),
-            stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST as usize,
+            stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
             provider_endpoint: url.clone(),
             light_client_address: *lc_proxy_addr,
             signer: signer.clone(),
