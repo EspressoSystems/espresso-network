@@ -683,6 +683,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 struct TestNetworkState {
     /// All events.
     events: Arc<Mutex<Vec<Event<SeqTypes>>>>,
+    /// Task to listen for hostshot events and push them into `events` Vec.
     task: Option<JoinHandle<()>>,
     /// Just in case we need it.
     test_node: Arc<TestNode<api::sql::DataSource>>,
@@ -690,17 +691,20 @@ struct TestNetworkState {
 
 impl TestNetworkState {
     async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
-        // This is just an easy way getting an event stream;
-        let mut fake_node = TestNode::new(network, node).await;
-        fake_node.non_participating_init().await;
+        let test_node = {
+            // This is just an easy way getting an event stream;
+            let mut fake_node = TestNode::new(network, node).await;
+            fake_node.non_participating_init().await;
+            Arc::new(fake_node)
+        };
 
-        let test_node = Arc::new(fake_node);
         Self {
             events: Arc::new(Mutex::new(Vec::new())),
             task: None,
             test_node,
         }
     }
+
     async fn start(mut self) -> Self {
         let test_node = Arc::clone(&self.test_node);
         let event_state = Arc::clone(&self.events);
