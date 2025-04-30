@@ -123,7 +123,13 @@ impl DeployerArgs {
                     let lc_proxy = contracts
                         .address(Contract::LightClientProxy)
                         .expect("fail to get LightClientProxy address");
-                    crate::transfer_ownership(provider, target, lc_proxy, multisig).await?;
+                    crate::transfer_ownership(
+                        provider,
+                        Contract::LightClientProxy,
+                        lc_proxy,
+                        multisig,
+                    )
+                    .await?;
                 }
             },
             Contract::StakeTableProxy => {
