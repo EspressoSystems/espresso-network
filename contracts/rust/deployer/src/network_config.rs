@@ -48,7 +48,7 @@ pub async fn fetch_stake_table_from_sequencer(
             {
                 Ok(resp) => break Ok(resp),
                 Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
+                    tracing::error!("Failed to fetch the stake table: {e}");
                     sleep(Duration::from_secs(5)).await;
                 },
             }
