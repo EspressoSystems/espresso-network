@@ -685,28 +685,29 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 #[derivative(Debug)]
 /// State to facilitate testing. We listen to hotshot event stream for example.
 struct TestNetworkState {
-    /// All events indexed by node_id
-    events: HashMap<u8, Event<SeqTypes>>,
+    /// All events.
+    events: Arc<Mutex<Vec<Event<SeqTypes>>>>,
     task: Option<JoinHandle<()>>,
-    /// Test
+    /// Just in case we need it.
     test_node: Arc<TestNode<api::sql::DataSource>>,
 }
 
 impl TestNetworkState {
     async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
         // This is just an easy way getting an event stream;
-        let mut fake_node = TestNode::new(network, &node).await;
+        let mut fake_node = TestNode::new(network, node).await;
         fake_node.non_participating_init().await;
 
         let test_node = Arc::new(fake_node);
         Self {
-            events: HashMap::new(),
+            events: Arc::new(Mutex::new(Vec::new())),
             task: None,
             test_node,
         }
     }
     async fn start(mut self) -> Self {
-        let test_node = self.test_node.clone();
+        let test_node = Arc::clone(&self.test_node);
+        let event_state = Arc::clone(&self.events);
         let task = spawn(async move {
             let mut events = test_node.event_stream().await.unwrap();
             loop {
@@ -714,11 +715,8 @@ impl TestNetworkState {
                     .next()
                     .await
                     .expect("event stream terminated unexpectedly");
-                let EventType::Decide { leaf_chain, .. } = event.event else {
-                    continue;
-                };
-                tracing::info!(?leaf_chain, "got decide, chain is progressing");
-                break;
+                let mut event_state = event_state.lock().await;
+                event_state.push(event);
             }
         });
         self.task = Some(task);
