@@ -585,7 +585,11 @@ contract StakeTable_register_Test is LightClientCommonTest {
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
         assertEq(token.balanceOf(address(stakeTable)), 3 ether);
 
+        (uint256 delegatedAmountBefore,) = stakeTable.validators(validator);
         stakeTable.undelegate(validator, 2 ether);
+        (uint256 delegatedAmountAfter,) = stakeTable.validators(validator);
+        assertEq(delegatedAmountAfter, delegatedAmountBefore - 2 ether);
+
         vm.expectRevert(S.UndelegationAlreadyExists.selector);
         stakeTable.undelegate(validator, 1 ether);
 
