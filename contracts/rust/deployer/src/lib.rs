@@ -33,14 +33,12 @@ pub type HttpProviderWithWallet = FillProvider<
 
 /// a handy thin wrapper around wallet builder and provider builder that directly
 /// returns an instantiated `Provider` with default fillers with wallet, ready to send tx
-#[inline]
 pub fn build_provider(mnemonic: String, account_index: u32, url: Url) -> HttpProviderWithWallet {
     let signer = build_signer(mnemonic, account_index);
     let wallet = EthereumWallet::from(signer);
     ProviderBuilder::new().wallet(wallet).on_http(url)
 }
 
-#[inline]
 pub fn build_signer(mnemonic: String, account_index: u32) -> PrivateKeySigner {
     MnemonicBuilder::<English>::default()
         .phrase(mnemonic)
@@ -51,7 +49,6 @@ pub fn build_signer(mnemonic: String, account_index: u32) -> PrivateKeySigner {
 }
 
 /// similar to [`build_provider()`] but using a random wallet
-#[inline]
 pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
     let signer = MnemonicBuilder::<English>::default()
         .build_random()
