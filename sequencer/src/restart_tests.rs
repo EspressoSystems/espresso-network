@@ -432,10 +432,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
-    fn get_storage(&self) {
-        // self.storage.get_leaf_chain();
-    }
-
     async fn event_stream(&self) -> Option<BoxStream<Event<SeqTypes>>> {
         if let Some(ctx) = &self.context {
             Some(ctx.event_stream().await.boxed())
