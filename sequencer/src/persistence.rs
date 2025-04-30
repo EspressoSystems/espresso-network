@@ -1430,6 +1430,7 @@ mod persistence_tests {
         assert_eq!(Some(&(EpochNumber::new(18), st2.clone())), iter.next());
         assert_eq!(Some(&(EpochNumber::new(17), st2.clone())), iter.next());
         assert_eq!(Some(&(EpochNumber::new(16), st2)), iter.next());
+        assert_eq!(None, iter.next());
 
         Ok(())
     }

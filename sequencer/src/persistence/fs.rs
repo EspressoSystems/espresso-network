@@ -1403,8 +1403,8 @@ impl MembershipPersistence for Persistence {
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
         let sorted = epoch_files(&path)?
-        .sorted_by(|(e1, _), (e2, _)| e2.cmp(e1))
-        .take(limit);
+            .sorted_by(|(e1, _), (e2, _)| e2.cmp(e1))
+            .take(limit);
 
         sorted
             .map(|(epoch, path)| -> anyhow::Result<Option<IndexedStake>> {
