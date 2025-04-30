@@ -54,7 +54,7 @@ mod persistence_tests {
     use committable::{Commitment, Committable};
     use espresso_types::{
         traits::{EventConsumer, NullEventConsumer, PersistenceOptions},
-        v0_3::StakeTableFetcher,
+        v0_3::{StakeTableFetcher, Validator},
         Event, L1Client, Leaf, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
         ValidatedState,
     };
@@ -86,6 +86,7 @@ mod persistence_tests {
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
     };
+    use indexmap::IndexMap;
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
@@ -1385,7 +1386,7 @@ mod persistence_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_membership_persistence<P: TestablePersistence>() -> anyhow::Result<()> {
+    pub async fn test_membership_persistence<P: TestablePersistence>() -> anyhow::Result<()> {
         setup_test();
 
         let tmp = P::tmp_storage().await;
