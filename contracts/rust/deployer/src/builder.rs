@@ -21,17 +21,27 @@ use crate::{Contract, Contracts, HttpProviderWithWallet};
 /// - `epoch_start_block`: block height for the first *activated* epoch
 /// - `exit_escrow_period`: exit escrow period for stake table (in seconds)
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
-#[derive(Builder)]
+#[derive(Builder, Clone)]
+#[builder(setter(strip_option))]
 pub struct DeployerArgs {
     deployer: HttpProviderWithWallet,
+    #[builder(default)]
     token_recipient: Option<Address>,
+    #[builder(default)]
     mock_light_client: bool,
+    #[builder(default)]
     genesis_lc_state: Option<LightClientStateSol>,
+    #[builder(default)]
     genesis_st_state: Option<StakeTableStateSol>,
+    #[builder(default)]
     permissioned_prover: Option<Address>,
+    #[builder(default)]
     blocks_per_epoch: Option<u64>,
+    #[builder(default)]
     epoch_start_block: Option<u64>,
+    #[builder(default)]
     exit_escrow_period: Option<U256>,
+    #[builder(default)]
     multisig: Option<Address>,
 }
 

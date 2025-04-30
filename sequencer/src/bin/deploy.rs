@@ -164,17 +164,23 @@ async fn main() -> anyhow::Result<()> {
     let mut args_builder = DeployerArgsBuilder::default();
     args_builder
         .deployer(provider)
-        .multisig(opt.multisig_address)
-        .token_recipient(opt.initial_token_grant_recipient)
         .mock_light_client(opt.use_mock);
+    if let Some(multisig) = opt.multisig_address {
+        args_builder.multisig(multisig);
+    }
+    if let Some(token_recipient) = opt.initial_token_grant_recipient {
+        args_builder.token_recipient(token_recipient);
+    }
 
     if opt.deploy_light_client_v1 {
         let (genesis_state, genesis_stake) =
             light_client_genesis(&opt.sequencer_url, opt.stake_table_capacity).await?;
         args_builder
-            .genesis_lc_state(Some(genesis_state))
-            .genesis_st_state(Some(genesis_stake))
-            .permissioned_prover(opt.permissioned_prover);
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake);
+        if let Some(prover) = opt.permissioned_prover {
+            args_builder.permissioned_prover(prover);
+        }
     }
     if opt.upgrade_light_client_v2 {
         // fetch epoch length from HotShot config
@@ -198,12 +204,12 @@ async fn main() -> anyhow::Result<()> {
             }
         };
         args_builder
-            .blocks_per_epoch(Some(blocks_per_epoch))
-            .epoch_start_block(Some(epoch_start_block));
+            .blocks_per_epoch(blocks_per_epoch)
+            .epoch_start_block(epoch_start_block);
     }
     if opt.deploy_stake_table {
         if let Some(escrow_period) = opt.exit_escrow_period {
-            args_builder.exit_escrow_period(Some(U256::from(escrow_period.as_secs())));
+            args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
         }
     }
 
