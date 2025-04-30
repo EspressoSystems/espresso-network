@@ -1,6 +1,10 @@
 #![cfg(test)]
 
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    time::Duration,
+};
 
 use alloy::node_bindings::{Anvil, AnvilInstance};
 use anyhow::bail;
@@ -272,7 +276,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             catchup: opt.catchup,
             ..Default::default()
         };
-        let x = modules.catchup.unwrap();
 
         if node.is_da {
             modules.query = Some(Query {
@@ -380,6 +383,50 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");
             ctx.start_consensus().await;
+            self.context = Some(ctx);
+        }
+        .boxed()
+    }
+
+    // TODO rename and call from `start`
+    fn non_participating_init(&mut self) -> BoxFuture<()>
+    where
+        S::Storage: Send,
+    {
+        async {
+            tracing::info!("starting node");
+
+            // If we are starting a node which had already been started and stopped, we may need to
+            // delay a bit for the OS to reclaim the node's P2P port. Otherwise initialization of
+            // libp2p may fail with "address already in use". Thus, retry the node initialization
+            // with a backoff.
+            let mut retries = 5;
+            let mut delay = Duration::from_secs(1);
+            let genesis = Genesis::from_file(&self.opt.genesis_file).unwrap();
+            let ctx = loop {
+                match init_with_storage(
+                    genesis.clone(),
+                    self.modules.clone(),
+                    self.opt.clone(),
+                    S::persistence_options(&self.storage),
+                    MockSequencerVersions::new(),
+                )
+                .await
+                {
+                    Ok(ctx) => break ctx,
+                    Err(err) => {
+                        tracing::error!(retries, ?delay, "initialization failed: {err:#}");
+                        if retries == 0 {
+                            panic!("initialization failed too many times");
+                        }
+
+                        sleep(delay).await;
+                        delay *= 2;
+                        retries -= 1;
+                    },
+                }
+            };
+
             self.context = Some(ctx);
         }
         .boxed()
@@ -636,6 +683,48 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
+/// State to facilitate testing. We listen to hotshot event stream for example.
+struct TestNetworkState {
+    /// All events indexed by node_id
+    events: HashMap<u8, Event<SeqTypes>>,
+    task: Option<JoinHandle<()>>,
+    /// Test
+    test_node: Arc<TestNode<api::sql::DataSource>>,
+}
+
+impl TestNetworkState {
+    async fn new(test_node: TestNode<api::sql::DataSource>) -> Self {
+        // let mut events = test_node.event_stream().await.unwrap();
+        let test_node = Arc::new(test_node);
+        Self {
+            events: HashMap::new(),
+            task: None,
+            test_node,
+        }
+    }
+    async fn start(mut self) -> Self {
+        let test_node = self.test_node.clone();
+        let task = spawn(async move {
+            let mut events = test_node.event_stream().await.unwrap();
+            loop {
+                let event = events
+                    .next()
+                    .await
+                    .expect("event stream terminated unexpectedly");
+                let EventType::Decide { leaf_chain, .. } = event.event else {
+                    continue;
+                };
+                tracing::info!(?leaf_chain, "got decide, chain is progressing");
+                break;
+            }
+        });
+        self.task = Some(task);
+        self
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
 struct TestNetwork {
     da_nodes: Vec<TestNode<api::sql::DataSource>>,
     regular_nodes: Vec<TestNode<api::sql::DataSource>>,
@@ -644,6 +733,7 @@ struct TestNetwork {
     orchestrator_task: Option<JoinHandle<()>>,
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
+    state: TestNetworkState,
     #[derivative(Debug = "ignore")]
     _anvil: AnvilInstance,
 }
@@ -735,6 +825,11 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
+        // This is just an easy way getting an event stream;
+        let mut fake_node = TestNode::new(network_params, &node_params[0]).await;
+        fake_node.non_participating_init().await;
+        let state = TestNetworkState::new(fake_node).await.start().await;
+
         let mut network = Self {
             da_nodes: join_all(
                 (0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i])),
@@ -748,8 +843,10 @@ impl TestNetwork {
             tmp,
             builder_port,
             orchestrator_task,
+
             broker_task,
             marshal_task,
+            state,
             _anvil: anvil,
         };
 
