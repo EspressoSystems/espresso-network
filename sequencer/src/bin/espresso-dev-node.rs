@@ -153,7 +153,12 @@ struct Args {
     contracts: DeployedContracts,
 
     /// L1 deployment mode
-    #[arg(value_enum, long, env = "ESPRESSO_DEV_NODE_L1_DEPLOYMENT")]
+    #[arg(
+        value_enum,
+        long,
+        env = "ESPRESSO_DEV_NODE_L1_DEPLOYMENT",
+        default_value = "deploy"
+    )]
     l1_deployment: L1Deployment,
 
     /// The frequency of updating the light client state for alt chains.
@@ -432,6 +437,7 @@ async fn main() -> anyhow::Result<()> {
 
         // append to the list of light client contract addresses
         client_states.lc_proxy_addr.insert(chain_id, lc_proxy_addr);
+        light_client_addresses.push((chain_id, lc_proxy_addr));
 
         // L1-only actions and contract deployment
         if url == l1_url {
