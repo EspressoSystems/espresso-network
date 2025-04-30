@@ -1402,22 +1402,16 @@ impl MembershipPersistence for Persistence {
         let limit = limit as usize;
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
-        let sorted: Vec<_> = epoch_files(path)?
-            .sorted_by(|(e1, _), (e2, _)| Ord::cmp(&e2, &e1))
-            .collect::<Vec<_>>();
+        let sorted = epoch_files(&path)?
+        .sorted_by(|(e1, _), (e2, _)| e2.cmp(e1))
+        .take(limit);
 
-        let len = sorted.len();
-        let mut slice = &sorted[..];
-        if len > limit {
-            slice = &sorted[len - limit..len - 1]
-        };
-        slice
-            .iter()
+        sorted
             .map(|(epoch, path)| -> anyhow::Result<Option<IndexedStake>> {
                 let bytes = fs::read(path).context("read")?;
                 let st =
                     bincode::deserialize(&bytes).context("deserialize combined stake table")?;
-                Ok(Some((*epoch, st)))
+                Ok(Some((epoch, st)))
             })
             .collect()
     }
