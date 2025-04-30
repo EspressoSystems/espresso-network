@@ -416,6 +416,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         delegations[validator][delegator] -= amount;
         undelegations[validator][delegator] =
             Undelegation({ amount: amount, unlocksAt: block.timestamp + exitEscrowPeriod });
+        validators[validator].delegatedAmount -= amount;
 
         emit Undelegated(delegator, validator, amount);
     }
