@@ -693,9 +693,12 @@ struct TestNetworkState {
 }
 
 impl TestNetworkState {
-    async fn new(test_node: TestNode<api::sql::DataSource>) -> Self {
-        // let mut events = test_node.event_stream().await.unwrap();
-        let test_node = Arc::new(test_node);
+    async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
+        // This is just an easy way getting an event stream;
+        let mut fake_node = TestNode::new(network, &node).await;
+        fake_node.non_participating_init().await;
+
+        let test_node = Arc::new(fake_node);
         Self {
             events: HashMap::new(),
             task: None,
@@ -825,10 +828,10 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
-        // This is just an easy way getting an event stream;
-        let mut fake_node = TestNode::new(network_params, &node_params[0]).await;
-        fake_node.non_participating_init().await;
-        let state = TestNetworkState::new(fake_node).await.start().await;
+        let state = TestNetworkState::new(network_params, &node_params[0])
+            .await
+            .start()
+            .await;
 
         let mut network = Self {
             da_nodes: join_all(
