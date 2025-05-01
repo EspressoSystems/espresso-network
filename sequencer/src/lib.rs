@@ -27,10 +27,8 @@ use espresso_types::{
     SolverAuctionResultsProvider, ValidatedState,
 };
 use genesis::L1Finalized;
-// Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 use hotshot_query_service::data_source::storage::SqlStorage;
-use hotshot_stake_table::vec_based::StakeTable;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -58,7 +56,7 @@ use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
-    light_client::{CircuitField, StateKeyPair, StateSignKey, StateVerKey},
+    light_client::{StateKeyPair, StateSignKey},
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -97,7 +95,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Clone for Node<N, P> 
 }
 
 pub type SequencerApiVersion = StaticVersion<0, 1>;
-pub type StakeTableVecBased = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeImplementation<SeqTypes>
     for Node<N, P>
@@ -648,11 +645,8 @@ pub mod testing {
         light_client::StateKeyPair,
         signature_key::BLSKeyPair,
         traits::{
-            block_contents::BlockHeader,
-            metrics::NoMetrics,
-            network::Topic,
-            signature_key::{BuilderSignatureKey, StakeTableEntryType},
-            stake_table::StakeTableScheme,
+            block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
+            signature_key::BuilderSignatureKey,
         },
         HotShotConfig, PeerConfig,
     };
@@ -673,7 +667,7 @@ pub mod testing {
         persistence::no_storage::{self, NoStorage},
     };
 
-    const STAKE_TABLE_CAPACITY_FOR_TEST: u64 = 10;
+    const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
     const BUILDER_CHANNEL_CAPACITY_FOR_TEST: usize = 128;
 
     struct LegacyBuilderImplementation {
@@ -906,8 +900,7 @@ pub mod testing {
                     let blocks_per_epoch = self.config.epoch_height;
                     let epoch_start_block = self.config.epoch_start_block;
 
-                    let initial_stake_table =
-                        stake_table(self.config.known_nodes_with_stake.clone());
+                    let initial_stake_table = self.config.known_nodes_with_stake.clone();
 
                     let staking_private_keys =
                         staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
@@ -921,6 +914,7 @@ pub mod testing {
                         staking_private_keys.clone(),
                         None,
                         false,
+                        STAKE_TABLE_CAPACITY_FOR_TEST,
                     )
                     .await
                     .expect("deployed pos contracts");
@@ -1047,21 +1041,6 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
-    pub fn stake_table(nodes: Vec<PeerConfig<SeqTypes>>) -> StakeTableVecBased {
-        let mut st = StakeTableVecBased::new(STAKE_TABLE_CAPACITY_FOR_TEST as usize);
-        nodes.iter().for_each(|config| {
-            st.register(
-                *config.stake_table_entry.key(),
-                config.stake_table_entry.stake(),
-                config.state_ver_key.clone(),
-            )
-            .unwrap()
-        });
-        st.advance();
-        st.advance();
-        st
-    }
-
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
         pub fn num_nodes(&self) -> usize {
             self.priv_keys.len()
@@ -1130,10 +1109,6 @@ pub mod testing {
             .await
         }
 
-        pub fn stake_table(&self) -> StakeTableVecBased {
-            stake_table(self.config.known_nodes_with_stake.clone())
-        }
-
         #[allow(clippy::too_many_arguments)]
         pub async fn init_node<V: Versions, P: PersistenceOptions>(
             &self,
@@ -1143,7 +1118,7 @@ pub mod testing {
             state_peers: Option<impl StateCatchup + 'static>,
             storage: Option<Arc<SqlStorage>>,
             metrics: &dyn Metrics,
-            stake_table_capacity: u64,
+            stake_table_capacity: usize,
             event_consumer: impl EventConsumer + 'static,
             bind_version: V,
             upgrades: BTreeMap<Version, Upgrade>,

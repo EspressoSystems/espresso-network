@@ -23,15 +23,10 @@ use espresso_types::{
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
-    legacy_light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
+    light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
 };
-use hotshot_types::{
-    light_client::StateVerKey,
-    traits::stake_table::{SnapshotVersion, StakeTableScheme},
-    utils::epoch_from_block_number,
-};
+use hotshot_types::{light_client::one_honest_threshold, utils::epoch_from_block_number};
 use itertools::izip;
 use portpicker::pick_unused_port;
 use sequencer::{
@@ -304,9 +299,16 @@ async fn main() -> anyhow::Result<()> {
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
 
-    let initial_stake_table = network_config.stake_table();
+    let initial_stake_table = network_config
+        .hotshot_config()
+        .known_nodes_with_stake
+        .clone();
+    let initial_total_stakes = initial_stake_table
+        .iter()
+        .map(|config| config.stake_table_entry.stake_amount)
+        .sum();
     let (genesis_state, genesis_stake) =
-        legacy_light_client_genesis_from_stake_table(initial_stake_table.clone())?;
+        light_client_genesis_from_stake_table(&initial_stake_table, STAKE_TABLE_CAPACITY_FOR_TEST)?;
 
     let mut l1_contracts: Contracts = contracts.into();
     let mut light_client_addresses = vec![];
@@ -526,7 +528,7 @@ async fn main() -> anyhow::Result<()> {
             retry_interval,
             sequencer_url: Url::parse(&format!("http://localhost:{sequencer_api_port}/")).unwrap(),
             port: Some(prover_port),
-            stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST as usize,
+            stake_table_capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
             provider_endpoint: url.clone(),
             light_client_address: *lc_proxy_addr,
             signer: signer.clone(),
@@ -627,17 +629,17 @@ async fn main() -> anyhow::Result<()> {
         // during `init_genesis()`, since this dev-node didn't expose those APIs.
         let first_epoch = epoch_from_block_number(epoch_start_block, blocks_per_epoch);
         let mut thresholds = HashMap::new();
-        thresholds.insert(
-            first_epoch,
-            one_honest_threshold(initial_stake_table.total_stake(SnapshotVersion::LastEpochStart)?),
-        );
+        thresholds.insert(first_epoch, one_honest_threshold(initial_total_stakes));
 
-        let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
-        for (_bls_vk, amt, schnorr_vk) in
-            initial_stake_table.try_iter(SnapshotVersion::LastEpochStart)?
-        {
-            genesis_known_nodes.insert(schnorr_vk, amt);
-        }
+        let genesis_known_nodes: HashMap<_, _> = initial_stake_table
+            .iter()
+            .map(|config| {
+                (
+                    config.state_ver_key.clone(),
+                    config.stake_table_entry.stake_amount,
+                )
+            })
+            .collect();
         let mut known_nodes = HashMap::new();
         known_nodes.insert(first_epoch, genesis_known_nodes);
 

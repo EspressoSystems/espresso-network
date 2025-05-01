@@ -369,7 +369,14 @@ fn u256_to_field(amount: U256) -> CircuitField {
 pub fn compute_stake_table_commitment<TYPES: NodeType>(
     known_nodes_with_stakes: &[PeerConfig<TYPES>],
     stake_table_capacity: usize,
-) -> StakeTableState {
+) -> Result<StakeTableState, anyhow::Error> {
+    if stake_table_capacity < known_nodes_with_stakes.len() {
+        return Err(anyhow::anyhow!(
+            "Stake table over capacity: {} < {}",
+            stake_table_capacity,
+            known_nodes_with_stakes.len(),
+        ));
+    }
     let padding_len = stake_table_capacity - known_nodes_with_stakes.len();
     let mut bls_preimage = vec![];
     let mut schnorr_preimage = vec![];
@@ -390,7 +397,7 @@ pub fn compute_stake_table_commitment<TYPES: NodeType>(
         .extend(iter::repeat_n(SchnorrPubKey::default().to_fields(), padding_len).flatten());
     amount_preimage.resize(stake_table_capacity, CircuitField::default());
     let threshold = u256_to_field(one_honest_threshold(total_stake));
-    StakeTableState {
+    Ok(StakeTableState {
         bls_key_comm: VariableLengthRescueCRHF::<CircuitField, 1>::evaluate(bls_preimage).unwrap()
             [0],
         schnorr_key_comm: VariableLengthRescueCRHF::<CircuitField, 1>::evaluate(schnorr_preimage)
@@ -398,5 +405,5 @@ pub fn compute_stake_table_commitment<TYPES: NodeType>(
         amount_comm: VariableLengthRescueCRHF::<CircuitField, 1>::evaluate(amount_preimage)
             .unwrap()[0],
         threshold,
-    }
+    })
 }

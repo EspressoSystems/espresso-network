@@ -674,7 +674,7 @@ pub mod test_helpers {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
-    use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
+    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -702,7 +702,7 @@ pub mod test_helpers {
         },
     };
 
-    pub const STAKE_TABLE_CAPACITY_FOR_TEST: u64 = 10;
+    pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 
     pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize, V: Versions> {
         pub server: SequencerContext<network::Memory, P::Persistence, V>,
@@ -833,7 +833,10 @@ pub mod test_helpers {
 
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
-            let initial_stake_table = network_config.stake_table();
+            let initial_stake_table = network_config
+                .hotshot_config()
+                .known_nodes_with_stake
+                .clone();
 
             let stake_table_address = pos_deploy_routine(
                 &l1_url,
@@ -844,6 +847,7 @@ pub mod test_helpers {
                 network_config.staking_priv_keys(),
                 None,
                 multiple_delegators,
+                STAKE_TABLE_CAPACITY_FOR_TEST,
             )
             .await
             .expect("deployed pos contracts");
@@ -1009,8 +1013,11 @@ pub mod test_helpers {
         }
 
         pub fn light_client_genesis(&self) -> (LightClientStateSol, StakeTableStateSol) {
-            let st = self.cfg.stake_table();
-            legacy_light_client_genesis_from_stake_table(st).unwrap()
+            light_client_genesis_from_stake_table(
+                &self.cfg.hotshot_config().known_nodes_with_stake,
+                STAKE_TABLE_CAPACITY_FOR_TEST,
+            )
+            .unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {

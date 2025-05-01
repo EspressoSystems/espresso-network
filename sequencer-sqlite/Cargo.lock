@@ -4895,27 +4895,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-stake-table"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "ark-bn254",
- "ark-ed-on-bn254",
- "ark-ff 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
- "digest 0.10.7",
- "hotshot-types",
- "jf-crhf 0.1.0",
- "jf-rescue",
- "jf-signature 0.2.0",
- "jf-utils",
- "serde",
- "tagged-base64",
- "workspace-hack",
-]
-
-[[package]]
 name = "hotshot-state-prover"
 version = "0.1.0"
 dependencies = [
@@ -4933,7 +4912,6 @@ dependencies = [
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
- "hotshot-stake-table",
  "hotshot-types",
  "itertools 0.12.1",
  "jf-crhf 0.1.0",
@@ -9382,7 +9360,6 @@ dependencies = [
  "hotshot-libp2p-networking",
  "hotshot-orchestrator",
  "hotshot-query-service",
- "hotshot-stake-table",
  "hotshot-state-prover",
  "hotshot-types",
  "include_dir",
@@ -10126,7 +10103,6 @@ dependencies = [
  "futures-util",
  "git-version",
  "hotshot-contract-adapter",
- "hotshot-stake-table",
  "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.2.0",

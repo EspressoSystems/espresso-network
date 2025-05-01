@@ -14,7 +14,6 @@ pub mod network;
 pub mod node_implementation;
 pub mod qc;
 pub mod signature_key;
-pub mod stake_table;
 pub mod states;
 pub mod storage;
 

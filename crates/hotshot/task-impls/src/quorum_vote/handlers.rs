@@ -555,7 +555,9 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         let next_stake_table_state = compute_stake_table_commitment(
             &next_membership.stake_table().await,
             hotshot_types::light_client::STAKE_TABLE_CAPACITY,
-        );
+        )
+        .wrap()
+        .context(error!("Failed to compute stake table commitment"))?;
         let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
             state_private_key,
             &light_client_state,
