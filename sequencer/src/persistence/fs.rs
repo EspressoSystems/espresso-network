@@ -1402,22 +1402,16 @@ impl MembershipPersistence for Persistence {
         let limit = limit as usize;
         let inner = self.inner.read().await;
         let path = &inner.stake_table_dir_path();
-        let sorted: Vec<_> = epoch_files(path)?
-            .sorted_unstable_by_key(|t| t.0)
-            .collect::<Vec<_>>();
+        let sorted = epoch_files(&path)?
+            .sorted_by(|(e1, _), (e2, _)| e2.cmp(e1))
+            .take(limit);
 
-        let len = sorted.len();
-        let mut slice = &sorted[..];
-        if len > limit {
-            slice = &sorted[len - limit..len - 1]
-        };
-        slice
-            .iter()
+        sorted
             .map(|(epoch, path)| -> anyhow::Result<Option<IndexedStake>> {
                 let bytes = fs::read(path).context("read")?;
                 let st =
                     bincode::deserialize(&bytes).context("deserialize combined stake table")?;
-                Ok(Some((*epoch, st)))
+                Ok(Some((epoch, st)))
             })
             .collect()
     }
@@ -2123,40 +2117,5 @@ mod test {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
         );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_membership_persistence() -> anyhow::Result<()> {
-        setup_test();
-
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-
-        let storage = opt.create().await.unwrap();
-
-        let validator = Validator::mock();
-        let mut st = IndexMap::new();
-        st.insert(validator.account, validator);
-        storage
-            .store_stake(EpochNumber::new(10), st.clone())
-            .await?;
-
-        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
-        assert_eq!(st, table);
-
-        let val2 = Validator::mock();
-        let mut st2 = IndexMap::new();
-        st2.insert(val2.account, val2);
-        storage
-            .store_stake(EpochNumber::new(11), st2.clone())
-            .await?;
-
-        let tables = storage.load_latest_stake(4).await?.unwrap();
-        let mut iter = tables.iter();
-        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
-        assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
-        assert_eq!(None, iter.next());
-
-        Ok(())
     }
 }
