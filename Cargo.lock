@@ -5026,6 +5026,7 @@ dependencies = [
  "hotshot-types",
  "portpicker",
  "rand 0.8.5",
+ "semver 1.0.26",
  "serde",
  "snafu 0.8.5",
  "surf-disco",

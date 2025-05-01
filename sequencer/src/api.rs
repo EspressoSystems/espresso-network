@@ -2118,37 +2118,40 @@ mod test {
             .unwrap_err();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_catchup() {
+    async fn run_catchup_test(url_suffix: &str) {
         setup_test();
-
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
         let l1 = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
+
+        let url: url::Url = format!("http://localhost:{port}{url_suffix}")
+            .parse()
+            .unwrap();
+
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().l1_url(l1).build())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    vec![url.clone()],
                     Default::default(),
                     &NoMetrics,
                 )
             }))
             .build();
+
         let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream().await;
         loop {
             let event = events.next().await.unwrap();
-            let EventType::Decide { leaf_chain, .. } = event.event else {
-                continue;
-            };
-            if leaf_chain[0].leaf.height() > 0 {
-                break;
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                if leaf_chain[0].leaf.height() > 0 {
+                    break;
+                }
             }
         }
 
@@ -2177,7 +2180,7 @@ mod test {
                 ValidatedState::default(),
                 no_storage::Options,
                 Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    vec![url],
                     Default::default(),
                     &NoMetrics,
                 )),
@@ -2190,33 +2193,48 @@ mod test {
                 "http://localhost".parse().unwrap(),
             )
             .await;
+
         let mut events = node.event_stream().await;
 
         // Wait for a (non-genesis) block proposed by each node, to prove that the lagging node has
         // caught up and all nodes are in sync.
         let mut proposers = [false; NUM_NODES];
+
         loop {
             let event = events.next().await.unwrap();
-            let EventType::Decide { leaf_chain, .. } = event.event else {
-                continue;
-            };
-            for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
-                let height = leaf.height();
-                let leaf_builder = (leaf.view_number().u64() as usize) % NUM_NODES;
-                if height == 0 {
-                    continue;
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
+                    let height = leaf.height();
+                    let leaf_builder = (leaf.view_number().u64() as usize) % NUM_NODES;
+                    if height == 0 {
+                        continue;
+                    }
+                    tracing::info!(
+                        "waiting for blocks from {proposers:?}, block {height} is from {leaf_builder}",
+                    );
+                    proposers[leaf_builder] = true;
                 }
 
-                tracing::info!(
-                    "waiting for blocks from {proposers:?}, block {height} is from {leaf_builder}",
-                );
-                proposers[leaf_builder] = true;
-            }
-
-            if proposers.iter().all(|has_proposed| *has_proposed) {
-                break;
+                if proposers.iter().all(|has_proposed| *has_proposed) {
+                    break;
+                }
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_root() {
+        run_catchup_test("").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_v0() {
+        run_catchup_test("/v0").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_v1() {
+        run_catchup_test("/v1").await;
     }
 
     #[ignore]
@@ -2937,15 +2955,14 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_hotshot_event_streaming() {
+    async fn run_hotshot_event_streaming_test(url_suffix: &str) {
         setup_test();
 
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
 
-        let url = format!("http://localhost:{hotshot_event_streaming_port}")
+        let url = format!("http://localhost:{hotshot_event_streaming_port}{url_suffix}")
             .parse()
             .unwrap();
 
@@ -2987,7 +3004,23 @@ mod test {
                 break;
             }
         }
+
         assert_eq!(receive_count, total_count + 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_v0() {
+        run_hotshot_event_streaming_test("/v0").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_v1() {
+        run_hotshot_event_streaming_test("/v1").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_root() {
+        run_hotshot_event_streaming_test("").await;
     }
 
     // TODO when `EpochVersion` becomes base version we can merge this

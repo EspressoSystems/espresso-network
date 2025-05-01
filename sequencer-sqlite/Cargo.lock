@@ -4726,6 +4726,7 @@ dependencies = [
  "futures",
  "hotshot-types",
  "rand 0.8.5",
+ "semver 1.0.26",
  "serde",
  "snafu 0.8.5",
  "tide-disco",
