@@ -253,7 +253,7 @@ mod persistence_tests {
         // Store more than the limit
         let total_epochs = RECENT_STAKE_TABLES_LIMIT + 10;
         for i in 0..total_epochs {
-            let epoch = EpochNumber::new(i as u64);
+            let epoch = EpochNumber::new(i);
             let drb = [i as u8; 32];
             storage
                 .add_drb_result(epoch, drb)
