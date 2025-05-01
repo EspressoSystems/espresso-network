@@ -310,11 +310,11 @@ impl Service<RequestPacket> for SwitchingTransport {
             let mut current_transport = self_clone.current_transport.read().clone();
 
             // Revert back to the primary transport if it's time.
-            if current_transport
+            let should_revert = current_transport
                 .status
                 .write()
-                .should_revert(current_transport.revert_at)
-            {
+                .should_revert(current_transport.revert_at);
+            if should_revert {
                 // Switch to the next generation which maps to index 0.
                 let n = self_clone.urls.len();
                 // Rounding down to a multiple of n gives us the last generation of the primary transport.
