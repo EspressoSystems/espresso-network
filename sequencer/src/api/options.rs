@@ -24,7 +24,7 @@ use hotshot_types::traits::{
     network::ConnectedNetwork,
     node_implementation::Versions,
 };
-use tide_disco::{listener::RateLimitListener, method::ReadState, App, Url};
+use tide_disco::{listener::RateLimitListener, method::ReadState, Api, App, Url};
 use vbs::version::StaticVersionType;
 
 use super::{
@@ -205,10 +205,11 @@ impl Options {
                 state.clone(),
             )));
 
-            // Initialize status API.
-            let status_api =
-                status::define_api(&Default::default(), SequencerApiVersion::instance())?;
-            app.register_module("status", status_api)?;
+            // Initialize v0 and v1 status API.
+            register_api("status", &mut app, move |ver| {
+                status::define_api(&Default::default(), SequencerApiVersion::instance(), ver)
+                    .context("failed to define status api")
+            })?;
 
             self.init_hotshot_modules(&mut app)?;
 
@@ -273,12 +274,11 @@ impl Options {
         let api_state: endpoints::AvailState<N, P, D, V> = ds.clone().into();
         let mut app = App::<_, Error>::with_state(api_state);
 
-        // Initialize status API
-        let status_api = status::define_api::<endpoints::AvailState<N, P, D, _>, _>(
-            &Default::default(),
-            bind_version,
-        )?;
-        app.register_module("status", status_api)?;
+        // Initialize v0 and v1 status API.
+        register_api("status", &mut app, move |ver| {
+            status::define_api(&Default::default(), SequencerApiVersion::instance(), ver)
+                .context("failed to define status api")
+        })?;
 
         // Initialize availability and node APIs (these both use the same data source).
 
@@ -286,37 +286,37 @@ impl Options {
         // - `availability/v0/leaf/0` returns the old `Leaf1` type for backward compatibility.
         // - `availability/v1/leaf/0` returns the new `Leaf2` type
 
-        // initialize the availability module for API version V0.
-        // This ensures compatibility for nodes that expect `Leaf1` for leaf endpoints
-        app.register_module(
-            "availability",
-            endpoints::availability("0.0.1".parse().unwrap())?,
-        )?;
+        register_api("availability", &mut app, move |ver| {
+            endpoints::availability(ver).context("failed to define availability api")
+        })?;
 
-        // initialize the availability module for API version V1.
-        // This enables support for the new `Leaf2` type
-        app.register_module(
-            "availability",
-            endpoints::availability("1.0.0".parse().unwrap())?,
-        )?;
-
-        app.register_module("node", endpoints::node()?)?;
+        register_api("node", &mut app, move |ver| {
+            endpoints::node(ver).context("failed to define node api")
+        })?;
 
         // Initialize submit API
         if self.submit.is_some() {
-            app.register_module(
-                "submit",
-                endpoints::submit::<_, _, _, SequencerApiVersion>()?,
-            )?;
+            register_api("submit", &mut app, move |ver| {
+                endpoints::submit::<_, _, _, SequencerApiVersion>(ver)
+                    .context("failed to define submit api")
+            })?;
         }
 
         tracing::info!("initializing catchup API");
-        app.register_module("catchup", endpoints::catchup(bind_version)?)?;
 
-        app.register_module("state-signature", endpoints::state_signature(bind_version)?)?;
+        register_api("catchup", &mut app, move |ver| {
+            endpoints::catchup(bind_version, ver).context("failed to define catchup api")
+        })?;
+
+        register_api("state-signature", &mut app, move |ver| {
+            endpoints::state_signature(bind_version, ver)
+                .context("failed to define state signature api")
+        })?;
 
         if self.config.is_some() {
-            app.register_module("config", endpoints::config(bind_version)?)?;
+            register_api("config", &mut app, move |ver| {
+                endpoints::config(bind_version, ver).context("failed to define config api")
+            })?;
         }
         Ok((metrics, ds, app))
     }
@@ -390,21 +390,28 @@ impl Options {
             .await?;
 
         if self.explorer.is_some() {
-            app.register_module("explorer", endpoints::explorer()?)?;
+            register_api("explorer", &mut app, move |ver| {
+                endpoints::explorer(ver).context("failed to define explorer api")
+            })?;
         }
 
         // Initialize merklized state module for block merkle tree
-        app.register_module(
-            "block-state",
-            endpoints::merklized_state::<N, P, _, BlockMerkleTree, _, 3>()?,
-        )?;
-        // Initialize merklized state module for fee merkle tree
-        app.register_module("fee-state", endpoints::fee::<_, SequencerApiVersion>()?)?;
 
-        app.register_module(
-            "reward-state",
-            endpoints::reward::<_, SequencerApiVersion>()?,
-        )?;
+        register_api("block-state", &mut app, move |ver| {
+            endpoints::merklized_state::<N, P, _, BlockMerkleTree, _, 3>(ver)
+                .context("failed to define block-state api")
+        })?;
+
+        // Initialize merklized state module for fee merkle tree
+
+        register_api("fee-state", &mut app, move |ver| {
+            endpoints::fee::<_, SequencerApiVersion>(ver).context("failed to define fee-state api")
+        })?;
+
+        register_api("reward-state", &mut app, move |ver| {
+            endpoints::reward::<_, SequencerApiVersion>(ver)
+                .context("failed to define reward-state api")
+        })?;
 
         let get_node_state = {
             let state = state.clone();
@@ -450,22 +457,30 @@ impl Options {
         let bind_version = SequencerApiVersion::instance();
         // Initialize submit API
         if self.submit.is_some() {
-            let submit_api = endpoints::submit::<_, _, _, SequencerApiVersion>()?;
-            app.register_module("submit", submit_api)?;
+            register_api("submit", app, move |ver| {
+                endpoints::submit::<_, _, _, SequencerApiVersion>(ver)
+                    .context("failed to define submit api")
+            })?;
         }
 
         // Initialize state API.
         if self.catchup.is_some() {
             tracing::info!("initializing state API");
-            let catchup_api = endpoints::catchup(bind_version)?;
-            app.register_module("catchup", catchup_api)?;
+
+            register_api("catchup", app, move |ver| {
+                endpoints::catchup(bind_version, ver).context("failed to define catchup api")
+            })?;
         }
 
-        let state_signature_api = endpoints::state_signature(bind_version)?;
-        app.register_module("state-signature", state_signature_api)?;
+        register_api("state-signature", app, move |ver| {
+            endpoints::state_signature(bind_version, ver)
+                .context("failed to define state signature api")
+        })?;
 
         if self.config.is_some() {
-            app.register_module("config", endpoints::config(bind_version)?)?;
+            register_api("config", app, move |ver| {
+                endpoints::config(bind_version, ver).context("failed to define config api")
+            })?;
         }
 
         Ok(())
@@ -492,11 +507,14 @@ impl Options {
         let mut app = App::<_, EventStreamingError>::with_state(AppState::from(state));
 
         tracing::info!("initializing hotshot events API");
-        let hotshot_events_api = hotshot_events_service::events::define_api(
-            &hotshot_events_service::events::Options::default(),
-        )?;
 
-        app.register_module::<_, SequencerApiVersion>("hotshot-events", hotshot_events_api)?;
+        register_api("hotshot-events", &mut app, move |ver| {
+            hotshot_events_service::events::define_api::<_, _, SequencerApiVersion>(
+                &hotshot_events_service::events::Options::default(),
+                ver,
+            )
+            .context("failed to define hotshot events api")
+        })?;
 
         tasks.spawn(
             "Hotshot Events Streaming API server",
@@ -603,3 +621,27 @@ pub struct HotshotEvents {
 /// Options for the explorer API module.
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct Explorer;
+
+/// Registers two versions (v0 and v1) of the same API module under the given path.
+fn register_api<E, S, F, ModuleError, ModuleVersion>(
+    path: &'static str,
+    app: &mut App<S, E>,
+    f: F,
+) -> anyhow::Result<()>
+where
+    S: 'static + Send + Sync,
+    E: Send + Sync + 'static + tide_disco::Error + From<ModuleError>,
+    ModuleError: Send + Sync + 'static,
+    ModuleVersion: StaticVersionType + 'static,
+    F: Fn(semver::Version) -> anyhow::Result<Api<S, ModuleError, ModuleVersion>>,
+{
+    let v0 = "0.0.1".parse().unwrap();
+    let v1 = "1.0.0".parse().unwrap();
+    let result1 = f(v0)?;
+    let result2 = f(v1)?;
+
+    app.register_module(path, result1)?;
+    app.register_module(path, result2)?;
+
+    Ok(())
+}

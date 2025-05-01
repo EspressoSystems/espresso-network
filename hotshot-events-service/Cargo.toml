@@ -15,6 +15,7 @@ derive_more = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
 rand = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 snafu = "0.8"
 tide-disco = "0.9"

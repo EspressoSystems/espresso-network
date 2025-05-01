@@ -57,7 +57,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
 
-use crate::{catchup::SqlStateCatchup, NodeType, SeqTypes, ViewNumber};
+use crate::{catchup::SqlStateCatchup, NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT};
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -1976,14 +1976,19 @@ impl SequencerPersistence for Persistence {
             .db
             .read()
             .await?
-            .fetch_all("SELECT * from epoch_drb_and_root ORDER BY epoch ASC")
+            .fetch_all(
+                query("SELECT * from epoch_drb_and_root ORDER BY epoch DESC LIMIT $1")
+                    .bind(RECENT_STAKE_TABLES_LIMIT as i64),
+            )
             .await?;
 
+        // reverse the rows vector to return the most recent epochs, but in ascending order
         rows.into_iter()
+            .rev()
             .map(|row| {
-                let epoch: i64 = row.get("epoch");
-                let drb_result: Option<Vec<u8>> = row.get("drb_result");
-                let block_header: Option<Vec<u8>> = row.get("block_header");
+                let epoch: i64 = row.try_get("epoch")?;
+                let drb_result: Option<Vec<u8>> = row.try_get("drb_result")?;
+                let block_header: Option<Vec<u8>> = row.try_get("block_header")?;
                 if let Some(drb_result) = drb_result {
                     let drb_result_array = drb_result
                         .try_into()
