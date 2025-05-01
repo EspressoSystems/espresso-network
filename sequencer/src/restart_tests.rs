@@ -76,7 +76,8 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
 async fn test_restart_replay_blocks() {
     setup_test();
 
-    let network = TestNetwork::new(2, 2, true).await;
+    let mut network = TestNetwork::new(2, 2, false).await;
+    network.start_event_task().await;
 
     // network.check_replay_blocks().await;
 
@@ -262,30 +263,11 @@ struct TestNode<S: TestableSequencerDataSource> {
 impl<S: TestableSequencerDataSource> TestNode<S> {
     #[tracing::instrument]
     async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
-        tracing::info!(?network, ?node, "creating node",);
+        tracing::error!(?network, "creating node",);
 
-        let opts = api::Options::from(api::options::Http::with_port(node.api_port));
         let storage = S::create_storage().await;
-        let opt = S::options(&storage, opts);
 
-        let mut modules = Modules {
-            http: Some(api::options::Http::with_port(node.api_port)),
-            query: Some(Default::default()),
-            storage_fs: opt.storage_fs,
-            storage_sql: opt.storage_sql,
-            catchup: opt.catchup,
-            ..Default::default()
-        };
-
-        if node.is_da {
-            modules.query = Some(Query {
-                peers: network
-                    .api_ports
-                    .iter()
-                    .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
-                    .collect(),
-            });
-        }
+        let modules = Default::default();
 
         let mut opt = Options::parse_from([
             "sequencer",
@@ -304,31 +286,17 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .to_string(),
             "--genesis-file",
             &network.genesis_file.display().to_string(),
-            "--orchestrator-url",
-            &format!("http://localhost:{}", network.orchestrator_port),
-            "--libp2p-bind-address",
-            &format!("0.0.0.0:{}", node.libp2p_port),
-            "--libp2p-advertise-address",
-            &format!("127.0.0.1:{}", node.libp2p_port),
-            "--cdn-endpoint",
-            &format!("127.0.0.1:{}", network.cdn_port),
-            "--state-peers",
-            &network
-                .peer_ports
-                .iter()
-                .map(|port| format!("http://127.0.0.1:{port}"))
-                .join(","),
             "--l1-provider-url",
             network.l1_provider,
             "--l1-polling-interval",
             "1s",
         ]);
-        opt.is_da = node.is_da;
+        opt.is_da = false;
         Self {
             storage,
             modules,
             opt,
-            num_nodes: network.peer_ports.len(),
+            num_nodes: 0,
             context: None,
         }
     }
@@ -677,53 +645,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     }
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
-/// State to facilitate testing. We listen to hotshot event stream for example.
-struct TestNetworkState {
-    /// All events.
-    events: Arc<Mutex<Vec<Event<SeqTypes>>>>,
-    /// Task to listen for hostshot events and push them into `events` Vec.
-    task: Option<JoinHandle<()>>,
-    /// Just in case we need it.
-    test_node: Arc<TestNode<api::sql::DataSource>>,
-}
-
-impl TestNetworkState {
-    async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
-        let test_node = {
-            // This is just an easy way getting an event stream;
-            let mut fake_node = TestNode::new(network, node).await;
-            fake_node.non_participating_init().await;
-            Arc::new(fake_node)
-        };
-
-        Self {
-            events: Arc::new(Mutex::new(Vec::new())),
-            task: None,
-            test_node,
-        }
-    }
-
-    async fn start(mut self) -> Self {
-        let test_node = Arc::clone(&self.test_node);
-        let event_state = Arc::clone(&self.events);
-        let task = spawn(async move {
-            let mut events = test_node.event_stream().await.unwrap();
-            loop {
-                let event = events
-                    .next()
-                    .await
-                    .expect("event stream terminated unexpectedly");
-                let mut event_state = event_state.lock().await;
-                tracing::error!(?event, "saw event");
-                event_state.push(event);
-            }
-        });
-        self.task = Some(task);
-        self
-    }
-}
+type LocalState = Arc<Mutex<HashMap<ViewNumber, EventType<SeqTypes>>>>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -735,7 +657,8 @@ struct TestNetwork {
     orchestrator_task: Option<JoinHandle<()>>,
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
-    state: TestNetworkState,
+    event_task: Option<JoinHandle<()>>,
+    state: LocalState,
     #[derivative(Debug = "ignore")]
     _anvil: AnvilInstance,
 }
@@ -755,6 +678,45 @@ impl Drop for TestNetwork {
 }
 
 impl TestNetwork {
+    async fn start_event_task(&mut self) {
+        // let event_state = Arc::clone(&self.events);
+        let state = Arc::clone(&self.state);
+
+        let contexts: Vec<_> = self
+            .da_nodes
+            .iter()
+            .chain(self.regular_nodes.iter())
+            // It proved easier to get the stream from `context`
+            // rather than call `event_stream()` on the node.
+            .filter_map(|node| node.context.clone())
+            .collect();
+        // .chain(self.regular_nodes)
+        // .map(|node| node.event_stream()),
+
+        let streams = join_all(contexts.iter().map(|c| c.event_stream())).await;
+        let mut stream = futures::stream::iter(streams).flatten_unordered(None);
+
+        let task = spawn(async move {
+            loop {
+                let event = stream
+                    .next()
+                    .await
+                    .expect("event stream terminated unexpectedly");
+
+                let Event { view_number, event } = event;
+
+                let EventType::Decide { .. } = event.clone() else {
+                    continue;
+                };
+
+                let mut event_state = state.lock().await;
+                tracing::error!(?view_number, "got decide event");
+                event_state.insert(view_number, event);
+            }
+        });
+        self.event_task = Some(task);
+    }
+
     async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
         let mut ports = PortPicker::default();
 
@@ -827,28 +789,27 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
-        let state = TestNetworkState::new(network_params, &node_params[0])
-            .await
-            .start()
-            .await;
+        let regular_nodes = join_all(
+            (0..regular_nodes).map(|i| TestNode::new(network_params, &node_params[i + da_nodes])),
+        )
+        .await;
+        let da_nodes =
+            join_all((0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i]))).await;
+
+        let local_state = Arc::new(Mutex::new(HashMap::new()));
+        // let event_task = start_event_task(da_nodes, regular_nodes, local_state).await;
 
         let mut network = Self {
-            da_nodes: join_all(
-                (0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i])),
-            )
-            .await,
-            regular_nodes: join_all(
-                (0..regular_nodes)
-                    .map(|i| TestNode::new(network_params, &node_params[i + da_nodes])),
-            )
-            .await,
+            da_nodes,
+            regular_nodes,
             tmp,
             builder_port,
             orchestrator_task,
 
             broker_task,
             marshal_task,
-            state,
+            state: local_state,
+            event_task: None, // Some(event_task),
             _anvil: anvil,
         };
 
@@ -1209,4 +1170,43 @@ fn select<'a, T>(nodes: &'a mut [T], is: &'a [usize]) -> impl Iterator<Item = &'
         .iter_mut()
         .enumerate()
         .filter_map(|(i, elem)| if is.contains(&i) { Some(elem) } else { None })
+}
+
+async fn start_event_task(
+    da_nodes: Vec<TestNode<api::sql::DataSource>>,
+    regular_nodes: Vec<TestNode<api::sql::DataSource>>,
+    state: LocalState,
+) -> JoinHandle<()> {
+    // let event_state = Arc::clone(&self.events);
+
+    let contexts: Vec<_> = da_nodes
+            .iter()
+            // It proved easier to get the stream from `context`
+            // rather than call `event_stream()` on the node.
+            .filter_map(|node| node.context.clone())
+            .collect();
+    // .chain(self.regular_nodes)
+    // .map(|node| node.event_stream()),
+
+    let streams = join_all(contexts.iter().map(|c| c.event_stream())).await;
+    let mut stream = futures::stream::iter(streams).flatten_unordered(None);
+
+    spawn(async move {
+        loop {
+            let event = stream
+                .next()
+                .await
+                .expect("event stream terminated unexpectedly");
+
+            let Event { view_number, event } = event; //.view_number.clone();
+
+            let EventType::Decide { .. } = event.clone() else {
+                continue;
+            };
+
+            let mut event_state = state.lock().await;
+            tracing::error!(?view_number, "got decide event");
+            event_state.insert(view_number, event);
+        }
+    })
 }
