@@ -286,9 +286,6 @@ impl Options {
         // - `availability/v0/leaf/0` returns the old `Leaf1` type for backward compatibility.
         // - `availability/v1/leaf/0` returns the new `Leaf2` type
 
-        // initialize the availability module for API version V0.
-        // This ensures compatibility for nodes that expect `Leaf1` for leaf endpoints
-
         register_api("availability", &mut app, move |ver| {
             endpoints::availability(ver).context("failed to define availability api")
         })?;
