@@ -79,6 +79,7 @@ async fn test_restart_replay_blocks() {
     let mut network = TestNetwork::new(2, 2, false).await;
     network.start_event_task().await;
 
+    network.check_progress().await;
     // network.check_replay_blocks().await;
 
     network.shut_down().await;
@@ -263,11 +264,28 @@ struct TestNode<S: TestableSequencerDataSource> {
 impl<S: TestableSequencerDataSource> TestNode<S> {
     #[tracing::instrument]
     async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
-        tracing::error!(?network, "creating node",);
+        tracing::info!(?network, ?node, "creating node",);
 
+        let opts = api::Options::from(api::options::Http::with_port(node.api_port));
         let storage = S::create_storage().await;
+        let opt = S::options(&storage, opts);
 
-        let modules = Default::default();
+        let mut modules = Modules {
+            http: Some(api::options::Http::with_port(node.api_port)),
+            query: Some(Default::default()),
+            storage_fs: opt.storage_fs,
+            storage_sql: opt.storage_sql,
+            ..Default::default()
+        };
+        if node.is_da {
+            modules.query = Some(Query {
+                peers: network
+                    .api_ports
+                    .iter()
+                    .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
+                    .collect(),
+            });
+        }
 
         let mut opt = Options::parse_from([
             "sequencer",
@@ -286,17 +304,31 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .to_string(),
             "--genesis-file",
             &network.genesis_file.display().to_string(),
+            "--orchestrator-url",
+            &format!("http://localhost:{}", network.orchestrator_port),
+            "--libp2p-bind-address",
+            &format!("0.0.0.0:{}", node.libp2p_port),
+            "--libp2p-advertise-address",
+            &format!("127.0.0.1:{}", node.libp2p_port),
+            "--cdn-endpoint",
+            &format!("127.0.0.1:{}", network.cdn_port),
+            "--state-peers",
+            &network
+                .peer_ports
+                .iter()
+                .map(|port| format!("http://127.0.0.1:{port}"))
+                .join(","),
             "--l1-provider-url",
             network.l1_provider,
             "--l1-polling-interval",
             "1s",
         ]);
-        opt.is_da = false;
+        opt.is_da = node.is_da;
         Self {
             storage,
             modules,
             opt,
-            num_nodes: 0,
+            num_nodes: network.peer_ports.len(),
             context: None,
         }
     }
@@ -351,50 +383,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");
             ctx.start_consensus().await;
-            self.context = Some(ctx);
-        }
-        .boxed()
-    }
-
-    // TODO rename and call from `start`
-    fn non_participating_init(&mut self) -> BoxFuture<()>
-    where
-        S::Storage: Send,
-    {
-        async {
-            tracing::info!("starting node");
-
-            // If we are starting a node which had already been started and stopped, we may need to
-            // delay a bit for the OS to reclaim the node's P2P port. Otherwise initialization of
-            // libp2p may fail with "address already in use". Thus, retry the node initialization
-            // with a backoff.
-            let mut retries = 5;
-            let mut delay = Duration::from_secs(1);
-            let genesis = Genesis::from_file(&self.opt.genesis_file).unwrap();
-            let ctx = loop {
-                match init_with_storage(
-                    genesis.clone(),
-                    self.modules.clone(),
-                    self.opt.clone(),
-                    S::persistence_options(&self.storage),
-                    MockSequencerVersions::new(),
-                )
-                .await
-                {
-                    Ok(ctx) => break ctx,
-                    Err(err) => {
-                        tracing::error!(retries, ?delay, "initialization failed: {err:#}");
-                        if retries == 0 {
-                            panic!("initialization failed too many times");
-                        }
-
-                        sleep(delay).await;
-                        delay *= 2;
-                        retries -= 1;
-                    },
-                }
-            };
-
             self.context = Some(ctx);
         }
         .boxed()
