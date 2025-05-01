@@ -287,9 +287,18 @@ contract have to be upgraded and should use the new PlonkVerifier contract addre
 
 ### Upgrade to Same Light Client Version (normally for a patch)
 
-In `.env.contracts` ensure the following value is updated to the desired value:
+In `.env.contracts` ensure you have the following filled out:
 
-- `EPOCH_START_BLOCK`
+```
+export ETHERSCAN_API_KEY=
+export DEPLOYER_MNEMONIC=
+export DEPLOYER_MNEMONIC_OFFSET=
+export RPC_URL=
+export PLONK_VERIFIER_ADDRESS=
+export LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS=
+export SAFE_MULTISIG_ADDRESS=
+export USE_HARDWARE_WALLET=
+```
 
 1. Run the following command in the home directory:
 
