@@ -76,6 +76,7 @@ pub mod network;
 mod run;
 pub use run::main;
 
+pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 /// The Sequencer node is generic over the hotshot CommChannel.
 #[derive(Derivative, Serialize, Deserialize)]
 #[derivative(
@@ -514,7 +515,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         network_config.config.known_da_nodes.clone(),
         fetcher,
     );
-    membership.reload_stake(50).await;
+    membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let coordinator =
