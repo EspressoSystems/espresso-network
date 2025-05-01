@@ -2120,6 +2120,7 @@ mod test {
 
     async fn run_catchup_test(url_suffix: &str) {
         setup_test();
+
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
         let anvil = Anvil::new().spawn();
@@ -2141,17 +2142,17 @@ mod test {
                 )
             }))
             .build();
-
         let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream().await;
         loop {
             let event = events.next().await.unwrap();
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                if leaf_chain[0].leaf.height() > 0 {
-                    break;
-                }
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+            if leaf_chain[0].leaf.height() > 0 {
+                break;
             }
         }
 
@@ -2193,37 +2194,37 @@ mod test {
                 "http://localhost".parse().unwrap(),
             )
             .await;
-
         let mut events = node.event_stream().await;
 
         // Wait for a (non-genesis) block proposed by each node, to prove that the lagging node has
         // caught up and all nodes are in sync.
         let mut proposers = [false; NUM_NODES];
-
         loop {
             let event = events.next().await.unwrap();
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
-                    let height = leaf.height();
-                    let leaf_builder = (leaf.view_number().u64() as usize) % NUM_NODES;
-                    if height == 0 {
-                        continue;
-                    }
-                    tracing::info!(
-                        "waiting for blocks from {proposers:?}, block {height} is from {leaf_builder}",
-                    );
-                    proposers[leaf_builder] = true;
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+            for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
+                let height = leaf.height();
+                let leaf_builder = (leaf.view_number().u64() as usize) % NUM_NODES;
+                if height == 0 {
+                    continue;
                 }
 
-                if proposers.iter().all(|has_proposed| *has_proposed) {
-                    break;
-                }
+                tracing::info!(
+                    "waiting for blocks from {proposers:?}, block {height} is from {leaf_builder}",
+                );
+                proposers[leaf_builder] = true;
+            }
+
+            if proposers.iter().all(|has_proposed| *has_proposed) {
+                break;
             }
         }
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_catchup_root() {
+    async fn test_catchup() {
         run_catchup_test("").await;
     }
 
@@ -3004,7 +3005,6 @@ mod test {
                 break;
             }
         }
-
         assert_eq!(receive_count, total_count + 1);
     }
 
@@ -3019,7 +3019,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_hotshot_event_streaming_root() {
+    async fn test_hotshot_event_streaming() {
         run_hotshot_event_streaming_test("").await;
     }
 
