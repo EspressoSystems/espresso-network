@@ -131,7 +131,7 @@ impl TransactionMode for Write {
         // statement that has no actual effect on the database is suitable for this purpose, hence
         // the `WHERE false`.
         #[cfg(feature = "embedded-db")]
-        conn.execute("UPDATE pruned_height SET id = id WHERE false")
+        conn.execute("UPDATE begin_write SET id = id WHERE false")
             .await?;
 
         // With Postgres things are much more straightforward: just tell Postgres we want a write

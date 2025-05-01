@@ -727,11 +727,12 @@ impl PruneStorage for SqlStorage {
             if height < target_height {
                 height = min(height + batch_size, target_height);
                 let mut tx = self.write().await?;
+                tracing::info!("deleting batch height={height}");
                 tx.delete_batch(state_tables, height).await?;
                 tx.commit().await.map_err(|e| QueryError::Error {
                     message: format!("failed to commit {e}"),
                 })?;
-
+                tracing::info!("batch deleted height={height}");
                 pruner.pruned_height = Some(height);
                 return Ok(Some(height));
             }
