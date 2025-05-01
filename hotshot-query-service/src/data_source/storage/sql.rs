@@ -731,7 +731,6 @@ impl PruneStorage for SqlStorage {
                 tx.commit().await.map_err(|e| QueryError::Error {
                     message: format!("failed to commit {e}"),
                 })?;
-
                 pruner.pruned_height = Some(height);
                 return Ok(Some(height));
             }
@@ -740,7 +739,9 @@ impl PruneStorage for SqlStorage {
         #[cfg(feature = "embedded-db")]
         {
             let mut conn = self.pool().acquire().await?;
-            query("VACUUM").execute(conn.as_mut()).await?;
+            query("PRAGMA incremental_vacuum(16000)")
+                .execute(conn.as_mut())
+                .await?;
             conn.close().await?;
         }
 
@@ -781,7 +782,9 @@ impl PruneStorage for SqlStorage {
                         #[cfg(feature = "embedded-db")]
                         {
                             let mut conn = self.pool().acquire().await?;
-                            query("VACUUM").execute(conn.as_mut()).await?;
+                            query("PRAGMA incremental_vacuum(16000)")
+                                .execute(conn.as_mut())
+                                .await?;
                             conn.close().await?;
                         }
 
@@ -1410,12 +1413,16 @@ mod test {
     }
 
     async fn vacuum(storage: &SqlStorage) {
+        #[cfg(feature = "embedded-db")]
+        let query = "PRAGMA incremental_vacuum(16000)";
+        #[cfg(not(feature = "embedded-db"))]
+        let query = "VACUUM";
         storage
             .pool
             .acquire()
             .await
             .unwrap()
-            .execute("VACUUM")
+            .execute(query)
             .await
             .unwrap();
     }
