@@ -351,7 +351,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 anyhow::Ok(leaf)
             })
             .await
-            .with_context(|| format!("failed to fetch leaf at height {height}"))?;
+            .with_context(|| format!("failed to fetch leaf chain at height {height}"))?;
 
         // Verify it, returning the leaf at the given height
         verify_leaf_chain(
