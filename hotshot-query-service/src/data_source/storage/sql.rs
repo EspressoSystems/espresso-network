@@ -682,17 +682,22 @@ impl PruneStorage for SqlStorage {
         Ok(size as u64)
     }
 
-    // Trigger incremental vacuum to free up space in the SQLite database.
+    /// Trigger incremental vacuum to free up space in the SQLite database.
+    /// Note: We don't vacuum the Postgres database,
+    /// as there is no manual trigger for incremental vacuum,
+    /// and a full vacuum can take a lot of time.
     #[cfg(feature = "embedded-db")]
     async fn vacuum(&self) -> anyhow::Result<()> {
         let config = self.get_pruning_config().ok_or(QueryError::Error {
             message: "Pruning config not found".to_string(),
         })?;
         let mut conn = self.pool().acquire().await?;
-        query("PRAGMA incremental_vacuum($1)")
-            .bind(config.incremental_vacuum_pages() as i64)
-            .execute(conn.as_mut())
-            .await?;
+        query(&format!(
+            "PRAGMA incremental_vacuum({})",
+            config.incremental_vacuum_pages()
+        ))
+        .execute(conn.as_mut())
+        .await?;
         conn.close().await?;
         Ok(())
     }
@@ -785,9 +790,6 @@ impl PruneStorage for SqlStorage {
                             message: format!("failed to commit {e}"),
                         })?;
 
-                        // Note: We don't vacuum the Postgres database,
-                        // as there is no manual trigger for incremental vacuum,
-                        // and a full vacuum can take a lot of time.
                         self.vacuum().await?;
 
                         pruner.pruned_height = Some(height);
