@@ -777,23 +777,20 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
-        let regular_nodes = join_all(
-            (0..regular_nodes).map(|i| TestNode::new(network_params, &node_params[i + da_nodes])),
-        )
-        .await;
-        let da_nodes =
-            join_all((0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i]))).await;
-
         let local_state = Arc::new(Mutex::new(HashMap::new()));
-        // let event_task = start_event_task(da_nodes, regular_nodes, local_state).await;
-
         let mut network = Self {
-            da_nodes,
-            regular_nodes,
+            da_nodes: join_all(
+                (0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i])),
+            )
+            .await,
+            regular_nodes: join_all(
+                (0..regular_nodes)
+                    .map(|i| TestNode::new(network_params, &node_params[i + da_nodes])),
+            )
+            .await,
             tmp,
             builder_port,
             orchestrator_task,
-
             broker_task,
             marshal_task,
             state: local_state,
