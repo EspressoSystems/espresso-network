@@ -24,6 +24,9 @@ import { OwnableUpgradeable } from
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
 
@@ -909,7 +912,7 @@ contract StakeTableTimelockTest is Test {
         stakeTable = S(proxyAddress);
     }
 
-    function test_initialize_sets_timelock_as_owner() public {
+    function test_initialize_sets_timelock_as_owner() public view {
         assertEq(stakeTable.owner(), address(timelockController));
     }
 
