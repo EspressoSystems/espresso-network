@@ -238,6 +238,7 @@ fn validate_limit(
 /// defined in the `explorer.toml` file.
 pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
     _: Ver,
+    api_ver: semver::Version,
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
@@ -252,7 +253,7 @@ where
         None,
     )?;
 
-    api.with_version("0.0.1".parse().unwrap())
+    api.with_version(api_ver)
         .get("get_block_detail", move |req, state| {
             async move {
                 let target = match (
@@ -871,8 +872,11 @@ mod test {
         // Start the web server.
         let port = pick_unused_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module("explorer", define_api(MockBase::instance()).unwrap())
-            .unwrap();
+        app.register_module(
+            "explorer",
+            define_api(MockBase::instance(), "0.0.1".parse().unwrap()).unwrap(),
+        )
+        .unwrap();
         app.register_module(
             "availability",
             availability::define_api(

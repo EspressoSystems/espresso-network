@@ -2125,8 +2125,7 @@ mod test {
             .unwrap_err();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_catchup() {
+    async fn run_catchup_test(url_suffix: &str) {
         setup_test();
 
         // Start a sequencer network, using the query service for catchup.
@@ -2134,12 +2133,17 @@ mod test {
         let anvil = Anvil::new().spawn();
         let l1 = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
+
+        let url: url::Url = format!("http://localhost:{port}{url_suffix}")
+            .parse()
+            .unwrap();
+
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().l1_url(l1).build())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    vec![url.clone()],
                     Default::default(),
                     &NoMetrics,
                 )
@@ -2184,7 +2188,7 @@ mod test {
                 ValidatedState::default(),
                 no_storage::Options,
                 Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    vec![url],
                     Default::default(),
                     &NoMetrics,
                 )),
@@ -2224,6 +2228,21 @@ mod test {
                 break;
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup() {
+        run_catchup_test("").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_v0() {
+        run_catchup_test("/v0").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_v1() {
+        run_catchup_test("/v1").await;
     }
 
     #[ignore]
@@ -2944,15 +2963,14 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_hotshot_event_streaming() {
+    async fn run_hotshot_event_streaming_test(url_suffix: &str) {
         setup_test();
 
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
 
-        let url = format!("http://localhost:{hotshot_event_streaming_port}")
+        let url = format!("http://localhost:{hotshot_event_streaming_port}{url_suffix}")
             .parse()
             .unwrap();
 
@@ -2995,6 +3013,21 @@ mod test {
             }
         }
         assert_eq!(receive_count, total_count + 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_v0() {
+        run_hotshot_event_streaming_test("/v0").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_v1() {
+        run_hotshot_event_streaming_test("/v1").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming() {
+        run_hotshot_event_streaming_test("").await;
     }
 
     // TODO when `EpochVersion` becomes base version we can merge this

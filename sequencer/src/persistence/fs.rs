@@ -40,7 +40,7 @@ use hotshot_types::{
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-use crate::ViewNumber;
+use crate::{ViewNumber, RECENT_STAKE_TABLES_LIMIT};
 
 /// Options for file system backed persistence.
 #[derive(Parser, Clone, Debug)]
@@ -1348,7 +1348,13 @@ impl SequencerPersistence for Persistence {
 
         result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
 
-        Ok(result)
+        // Keep only the most recent epochs
+        let start = result
+            .len()
+            .saturating_sub(RECENT_STAKE_TABLES_LIMIT as usize);
+        let recent = result[start..].to_vec();
+
+        Ok(recent)
     }
 
     async fn load_state_cert(
