@@ -394,7 +394,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                     .context(format!("response missing account {account}"))?;
                 proof
                     .verify(&reward_merkle_tree_root)
-                    .context(format!("invalid proof for accoujnt {account}"))?;
+                    .context(format!("invalid proof for reward account {account}"))?;
                 proofs.push(proof);
             }
 
