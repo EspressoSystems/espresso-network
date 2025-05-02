@@ -169,7 +169,7 @@ impl PrunerCfg {
 
     /// pages to remove from freelist during SQLite vacuuming
     pub fn incremental_vacuum_pages(&self) -> u64 {
-        self.incremental_vacuum_pages.clone()
+        self.incremental_vacuum_pages
     }
 
     /// State tables to prune
