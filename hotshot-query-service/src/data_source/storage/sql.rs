@@ -751,11 +751,6 @@ impl PruneStorage for SqlStorage {
             }
         }
 
-        // Note: We don't vacuum the Postgres database,
-        // as there is no manual trigger for incremental vacuum,
-        // and a full vacuum can take a lot of time.
-        self.vacuum().await?;
-
         // If threshold is set, prune data exceeding minimum retention in batches
         // This parameter is needed for SQL storage as there is no direct way to get free space.
         if let Some(threshold) = cfg.pruning_threshold() {
@@ -790,6 +785,9 @@ impl PruneStorage for SqlStorage {
                             message: format!("failed to commit {e}"),
                         })?;
 
+                        // Note: We don't vacuum the Postgres database,
+                        // as there is no manual trigger for incremental vacuum,
+                        // and a full vacuum can take a lot of time.
                         self.vacuum().await?;
 
                         pruner.pruned_height = Some(height);
