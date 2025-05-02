@@ -674,12 +674,11 @@ impl TestNetwork {
             .da_nodes
             .iter()
             .chain(self.regular_nodes.iter())
-            // It proved easier to get the stream from `context`
-            // rather than call `event_stream()` on the node.
+            // since `context` implements `Clone`, it proved easier to
+            // get the stream from there rather than call
+            // `event_stream()` on the `TestNode`.
             .filter_map(|node| node.context.clone())
             .collect();
-        // .chain(self.regular_nodes)
-        // .map(|node| node.event_stream()),
 
         let streams = join_all(contexts.iter().map(|c| c.event_stream())).await;
         let mut stream = futures::stream::iter(streams).flatten_unordered(None);
