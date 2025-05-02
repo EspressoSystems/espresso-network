@@ -23,11 +23,11 @@ pub trait QuorumCertificateScheme<
 {
     /// Public parameters for generating the QC
     /// E.g: snark proving/verifying keys, list of (or pointer to) public keys stored in the smart contract.
-    type QcProverParams: Serialize + for<'a> Deserialize<'a>;
+    type QcProverParams<'a>: Serialize + for<'b> Deserialize<'b>;
 
     /// Public parameters for validating the QC
     /// E.g: verifying keys, stake table commitment
-    type QcVerifierParams: Serialize + for<'a> Deserialize<'a>;
+    type QcVerifierParams<'a>: Serialize + for<'b> Deserialize<'b>;
 
     /// Allows to fix the size of the message at compilation time.
     type MessageLength: ArrayLength<A::MessageUnit>;
@@ -67,7 +67,7 @@ pub trait QuorumCertificateScheme<
     /// Will return error if some of the partial signatures provided are invalid or the number of
     /// partial signatures / verifications keys are different.
     fn assemble(
-        qc_pp: &Self::QcProverParams,
+        qc_pp: &Self::QcProverParams<'_>,
         signers: &BitSlice,
         sigs: &[A::Signature],
     ) -> Result<Self::Qc, SignatureError>;
@@ -83,7 +83,7 @@ pub trait QuorumCertificateScheme<
     /// Return error if the QC is invalid, either because accumulated weight didn't exceed threshold,
     /// or some partial signatures are invalid.
     fn check(
-        qc_vp: &Self::QcVerifierParams,
+        qc_vp: &Self::QcVerifierParams<'_>,
         message: &GenericArray<A::MessageUnit, Self::MessageLength>,
         qc: &Self::Qc,
     ) -> Result<Self::QuorumSize, SignatureError>;
@@ -94,7 +94,7 @@ pub trait QuorumCertificateScheme<
     ///
     /// Return error if the inputs mismatch (e.g. wrong verifier parameter or original message).
     fn trace(
-        qc_vp: &Self::QcVerifierParams,
+        qc_vp: &Self::QcVerifierParams<'_>,
         message: &GenericArray<A::MessageUnit, Self::MessageLength>,
         qc: &Self::Qc,
     ) -> Result<Vec<A::VerificationKey>, SignatureError>;

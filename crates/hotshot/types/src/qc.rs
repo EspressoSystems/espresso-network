@@ -7,6 +7,8 @@
 //! Implementation for `BitVectorQc` that uses BLS signature + Bit vector.
 //! See more details in hotshot paper.
 
+use std::borrow::Cow;
+
 use alloy::primitives::U256;
 use ark_std::{
     fmt::Debug,
@@ -36,9 +38,9 @@ pub struct BitVectorQc<A: AggregateableSignatureSchemes + Serialize + for<'a> De
 /// Public parameters of [`BitVectorQc`]
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash)]
 #[serde(bound(deserialize = ""))]
-pub struct QcParams<K: SignatureKey, P: for<'a> Deserialize<'a>> {
+pub struct QcParams<'a, K: SignatureKey, P: for<'b> Deserialize<'b>> {
     /// the stake table (snapshot) this QC is verified against
-    pub stake_entries: Vec<StakeTableEntry<K>>,
+    pub stake_entries: Cow<'a, [StakeTableEntry<K>]>,
     /// threshold for the accumulated "weight" of votes to form a QC
     pub threshold: U256,
     /// public parameter for the aggregated signature scheme
@@ -50,10 +52,10 @@ where
     A: AggregateableSignatureSchemes + Serialize + for<'a> Deserialize<'a>,
     A::VerificationKey: SignatureKey,
 {
-    type QcProverParams = QcParams<A::VerificationKey, A::PublicParameter>;
+    type QcProverParams<'a> = QcParams<'a, A::VerificationKey, A::PublicParameter>;
 
     // TODO: later with SNARKs we'll use a smaller verifier parameter
-    type QcVerifierParams = QcParams<A::VerificationKey, A::PublicParameter>;
+    type QcVerifierParams<'a> = QcParams<'a, A::VerificationKey, A::PublicParameter>;
 
     type Qc = (A::Signature, BitVec);
     type MessageLength = U32;
@@ -70,7 +72,7 @@ where
     }
 
     fn assemble(
-        qc_pp: &Self::QcProverParams,
+        qc_pp: &Self::QcProverParams<'_>,
         signers: &BitSlice,
         sigs: &[A::Signature],
     ) -> Result<Self::Qc, SignatureError> {
@@ -121,7 +123,7 @@ where
     }
 
     fn check(
-        qc_vp: &Self::QcVerifierParams,
+        qc_vp: &Self::QcVerifierParams<'_>,
         message: &GenericArray<A::MessageUnit, Self::MessageLength>,
         qc: &Self::Qc,
     ) -> Result<Self::QuorumSize, SignatureError> {
@@ -166,7 +168,7 @@ where
     }
 
     fn trace(
-        qc_vp: &Self::QcVerifierParams,
+        qc_vp: &Self::QcVerifierParams<'_>,
         message: &GenericArray<<A>::MessageUnit, Self::MessageLength>,
         qc: &Self::Qc,
     ) -> Result<Vec<<A>::VerificationKey>, SignatureError> {
@@ -223,7 +225,7 @@ mod tests {
                 stake_amount: U256::from(7u8),
             };
             let qc_pp = QcParams {
-                stake_entries: vec![entry1, entry2, entry3],
+                stake_entries: Cow::Owned(vec![entry1, entry2, entry3]),
                 threshold: U256::from(10u8),
                 agg_sig_pp,
             };

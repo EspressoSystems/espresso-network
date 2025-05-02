@@ -76,7 +76,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     /// Checks if the cert is valid in the given epoch
     fn is_valid_cert<V: Versions>(
         &self,
-        stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> impl std::future::Future<Output = Result<()>>;
@@ -215,9 +215,10 @@ impl<
 
         if *total_stake_casted >= threshold {
             // Assemble QC
-            let real_qc_pp: <<TYPES as NodeType>::SignatureKey as SignatureKey>::QcParams =
+            let stake_table_entries = StakeTableEntries::<TYPES>::from(stake_table).0;
+            let real_qc_pp: <<TYPES as NodeType>::SignatureKey as SignatureKey>::QcParams<'_> =
                 <TYPES::SignatureKey as SignatureKey>::public_parameter(
-                    StakeTableEntries::<TYPES>::from(stake_table).0,
+                    &stake_table_entries,
                     threshold,
                 );
 

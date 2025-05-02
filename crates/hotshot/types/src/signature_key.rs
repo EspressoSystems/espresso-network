@@ -6,6 +6,8 @@
 
 //! Types and structs for the hotshot signature keys
 
+use std::borrow::Cow;
+
 use alloy::primitives::U256;
 use ark_serialize::SerializationError;
 use bitvec::{slice::BitSlice, vec::BitVec};
@@ -56,8 +58,11 @@ impl PrivateSignatureKey for BLSPrivKey {
 impl SignatureKey for BLSPubKey {
     type PrivateKey = BLSPrivKey;
     type StakeTableEntry = StakeTableEntry<VerKey>;
-    type QcParams =
-        QcParams<BLSPubKey, <BLSOverBN254CurveSignatureScheme as SignatureScheme>::PublicParameter>;
+    type QcParams<'a> = QcParams<
+        'a,
+        BLSPubKey,
+        <BLSOverBN254CurveSignatureScheme as SignatureScheme>::PublicParameter,
+    >;
     type PureAssembledSignatureType =
         <BLSOverBN254CurveSignatureScheme as SignatureScheme>::Signature;
     type QcType = (Self::PureAssembledSignatureType, BitVec);
@@ -117,18 +122,18 @@ impl SignatureKey for BLSPubKey {
     }
 
     fn public_parameter(
-        stake_entries: Vec<Self::StakeTableEntry>,
+        stake_entries: &'_ [Self::StakeTableEntry],
         threshold: U256,
-    ) -> Self::QcParams {
+    ) -> Self::QcParams<'_> {
         QcParams {
-            stake_entries,
+            stake_entries: Cow::Borrowed(stake_entries),
             threshold,
             agg_sig_pp: (),
         }
     }
 
     fn check(
-        real_qc_pp: &Self::QcParams,
+        real_qc_pp: &Self::QcParams<'_>,
         data: &[u8],
         qc: &Self::QcType,
     ) -> Result<(), SignatureError> {
@@ -141,7 +146,7 @@ impl SignatureKey for BLSPubKey {
     }
 
     fn assemble(
-        real_qc_pp: &Self::QcParams,
+        real_qc_pp: &Self::QcParams<'_>,
         signers: &BitSlice,
         sigs: &[Self::PureAssembledSignatureType],
     ) -> Self::QcType {
