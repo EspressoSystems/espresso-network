@@ -1008,7 +1008,7 @@ pub mod node_tests {
             .await;
             *leaf.leaf.block_header_mut() = header.clone();
             let block = BlockQueryData::new(header, payload);
-            ds.append(BlockInfo::new(leaf, Some(block.clone()), None, None))
+            ds.append(BlockInfo::new(leaf, Some(block.clone()), None, None, None))
                 .await
                 .unwrap();
             assert_eq!(
@@ -1101,6 +1101,7 @@ pub mod node_tests {
             None,
             Some(common.clone()),
             Some(VidShare::V0(disperse.shares[0].clone())),
+            None,
         ))
         .await
         .unwrap();

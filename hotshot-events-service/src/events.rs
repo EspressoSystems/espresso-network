@@ -81,7 +81,10 @@ impl tide_disco::error::Error for Error {
     }
 }
 
-pub fn define_api<State, Types, Ver>(options: &Options) -> Result<Api<State, Error, Ver>, ApiError>
+pub fn define_api<State, Types, Ver>(
+    options: &Options,
+    api_ver: semver::Version,
+) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + EventsSource<Types>,
@@ -93,7 +96,7 @@ where
         include_str!("../api/hotshot_events.toml"),
         options.extensions.clone(),
     )?;
-    api.with_version("0.1.0".parse().unwrap())
+    api.with_version(api_ver)
         .stream("events", move |_, state| {
             async move {
                 tracing::info!("client subscribed to events");

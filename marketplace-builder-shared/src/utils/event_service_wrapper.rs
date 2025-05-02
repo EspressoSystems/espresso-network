@@ -203,7 +203,11 @@ mod tests {
         let source = MockEventsSource {
             counter: AtomicU64::new(0),
         };
-        let api = define_api::<MockEventsSource, _, MockVersion>(&Default::default()).unwrap();
+        let api = define_api::<MockEventsSource, _, MockVersion>(
+            &Default::default(),
+            "0.0.1".parse().unwrap(),
+        )
+        .unwrap();
 
         let mut app: App<MockEventsSource, hotshot_events_service::events::Error> =
             App::with_state(source);

@@ -1,6 +1,0 @@
-# TODO, use ledger for singing?
-mnemonic = "test test test test test test test test test test test junk"
-account_index = 0
-rpc_url = "http://127.0.0.1:8545"
-token_address = "0x0000000000000000000000000000000000000000"
-contract_address = "0x0000000000000000000000000000000000000000"

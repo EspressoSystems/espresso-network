@@ -54,6 +54,7 @@ pub enum Error {
     Query {
         source: QueryError,
     },
+    #[snafu(display("error {status}: {message}"))]
     Custom {
         message: String,
         status: StatusCode,
@@ -78,6 +79,7 @@ pub fn define_api<
     const ARITY: usize,
 >(
     options: &Options,
+    api_ver: semver::Version,
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
@@ -91,7 +93,7 @@ where
         options.extensions.clone(),
     )?;
 
-    api.with_version("0.0.1".parse().unwrap())
+    api.with_version(api_ver)
         .get("get_path", move |req, state| {
             async move {
                 // Determine the snapshot type based on request parameters, either index or commit

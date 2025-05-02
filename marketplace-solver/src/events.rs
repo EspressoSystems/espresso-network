@@ -71,6 +71,7 @@ pub async fn handle_events(
 pub mod mock {
     use std::{sync::Arc, time::Duration};
 
+    use alloy::primitives::U256;
     use async_lock::RwLock;
     use espresso_types::SeqTypes;
     use hotshot::rand::{self};
@@ -84,7 +85,6 @@ pub mod mock {
         PeerConfig,
     };
     use portpicker::pick_unused_port;
-    use primitive_types::U256;
     use rand::{rngs::OsRng, RngCore};
     use tide_disco::{App, Url};
     use tokio::{spawn, task::JoinHandle, time::sleep};
@@ -158,9 +158,11 @@ pub mod mock {
         let mut app =
             App::<_, hotshot_events_service::events::Error>::with_state(events_streamer.clone());
 
-        let hotshot_events_api =
-            hotshot_events_service::events::define_api::<_, _, StaticVer01>(&Default::default())
-                .expect("Failed to define hotshot eventsAPI");
+        let hotshot_events_api = hotshot_events_service::events::define_api::<_, _, StaticVer01>(
+            &Default::default(),
+            "0.0.1".parse().unwrap(),
+        )
+        .expect("Failed to define hotshot eventsAPI");
 
         app.register_module("events_api", hotshot_events_api)
             .expect("Failed to register hotshot events API");

@@ -145,6 +145,7 @@ impl SimulatedChainState {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: self.epoch,
+                state_cert: None,
             },
         };
 

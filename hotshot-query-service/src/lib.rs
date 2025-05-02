@@ -555,8 +555,10 @@ where
         "1.0.0".parse().unwrap(),
     )
     .map_err(Error::internal)?;
-    let node_api = node::define_api(&options.node, bind_version).map_err(Error::internal)?;
-    let status_api = status::define_api(&options.status, bind_version).map_err(Error::internal)?;
+    let node_api = node::define_api(&options.node, bind_version, "0.0.1".parse().unwrap())
+        .map_err(Error::internal)?;
+    let status_api = status::define_api(&options.status, bind_version, "0.0.1".parse().unwrap())
+        .map_err(Error::internal)?;
 
     // Create app.
     let data_source = Arc::new(data_source);
@@ -613,7 +615,7 @@ mod test {
     use crate::{
         availability::{
             AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-            LeafQueryData, PayloadMetadata, PayloadQueryData, TransactionHash,
+            LeafQueryData, PayloadMetadata, PayloadQueryData, StateCertQueryData, TransactionHash,
             TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
@@ -780,6 +782,9 @@ mod test {
         ) -> Fetch<TransactionQueryData<MockTypes>> {
             self.hotshot_qs.get_transaction(hash).await
         }
+        async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<MockTypes>> {
+            self.hotshot_qs.get_state_cert(epoch).await
+        }
     }
 
     // Imiplement data source trait for node API.
@@ -852,7 +857,7 @@ mod test {
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         hotshot_qs
-            .append(BlockInfo::new(leaf, Some(block), None, None))
+            .append(BlockInfo::new(leaf, Some(block), None, None, None))
             .await
             .unwrap();
 
@@ -881,19 +886,29 @@ mod test {
             availability::define_api(
                 &Default::default(),
                 MockBase::instance(),
-                "1.0.0".parse().unwrap(),
+                "0.0.1".parse().unwrap(),
             )
             .unwrap(),
         )
         .unwrap()
         .register_module(
             "node",
-            node::define_api(&Default::default(), MockBase::instance()).unwrap(),
+            node::define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "0.0.1".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap()
         .register_module(
             "status",
-            status::define_api(&Default::default(), MockBase::instance()).unwrap(),
+            status::define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "0.0.1".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap()
         .module::<Error, MockBase>("mod", module_spec)

@@ -51,7 +51,8 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        run: cargo nextest archive --locked --workspace --archive-file nextest-archive-postgres.tar.zst
+        # hotshot-testing is tested in hotshot.yml, exclude from compilation
+        run: cargo nextest archive --locked --workspace --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -86,7 +87,8 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --archive-file nextest-archive-sqlite.tar.zst
+        # hotshot-testing is tested in hotshot.yml, exclude from compilation
+        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
@@ -134,7 +136,6 @@ jobs:
             target/debug/keygen
             target/debug/permissionless-builder
             target/debug/nasty-client
-            target/debug/update-permissioned-stake-table
             target/debug/espresso-dev-node
             target/debug/pub-key
             target/debug/espresso-bridge
@@ -223,7 +224,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install Nix
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@v31
 
       - name: Configure PATH
         run: PATH="$PWD/target/debug:$PATH"
@@ -273,7 +274,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install Nix
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@v31
 
       - uses: actions/checkout@v4
 

@@ -1,15 +1,14 @@
 use std::{collections::HashSet, str::FromStr};
 
+use alloy::primitives::{
+    utils::{parse_units, ParseUnits},
+    Address, U256,
+};
 use anyhow::{bail, ensure, Context};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use committable::{Commitment, Committable, RawCommitmentBuilder};
-use ethers::{
-    prelude::{Address, U256},
-    utils::{parse_units, ParseUnits},
-};
-use ethers_conv::ToEthers;
 use hotshot::types::BLSPubKey;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
@@ -54,7 +53,7 @@ impl_to_fixed_bytes!(RewardAmount, U256);
 
 impl From<u64> for RewardAmount {
     fn from(amt: u64) -> Self {
-        Self(amt.into())
+        Self(U256::from(amt))
     }
 }
 
@@ -112,8 +111,8 @@ impl FromStringOrInteger for RewardAmount {
 
 impl RewardAmount {
     pub fn as_u64(&self) -> Option<u64> {
-        if self.0 <= u64::MAX.into() {
-            Some(self.0.as_u64())
+        if self.0 <= U256::from(u64::MAX) {
+            Some(self.0.to::<u64>())
         } else {
             None
         }
@@ -126,11 +125,11 @@ impl RewardAccount {
     }
     /// Return byte slice representation of inner `Address` type
     pub fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
+        self.0.as_slice()
     }
     /// Return array containing underlying bytes of inner `Address` type
     pub fn to_fixed_bytes(self) -> [u8; 20] {
-        self.0.to_fixed_bytes()
+        self.0.into_array()
     }
     pub fn test_key_pair() -> EthKeyPair {
         EthKeyPair::from_mnemonic(
@@ -182,7 +181,7 @@ impl CanonicalDeserialize for RewardAmount {
     ) -> Result<Self, SerializationError> {
         let mut bytes = [0u8; core::mem::size_of::<U256>()];
         reader.read_exact(&mut bytes)?;
-        let value = U256::from_little_endian(&bytes);
+        let value = U256::from_le_slice(&bytes);
         Ok(Self(value))
     }
 }
@@ -192,7 +191,7 @@ impl CanonicalSerialize for RewardAccount {
         mut writer: W,
         _compress: Compress,
     ) -> Result<(), SerializationError> {
-        Ok(writer.write_all(&self.0.to_fixed_bytes())?)
+        Ok(writer.write_all(self.0.as_slice())?)
     }
 
     fn serialized_size(&self, _compress: Compress) -> usize {
@@ -215,10 +214,10 @@ impl CanonicalDeserialize for RewardAccount {
 impl ToTraversalPath<256> for RewardAccount {
     fn to_traversal_path(&self, height: usize) -> Vec<usize> {
         self.0
-            .to_fixed_bytes()
-            .into_iter()
+            .as_slice()
+            .iter()
             .take(height)
-            .map(|i| i as usize)
+            .map(|i| *i as usize)
             .collect()
     }
 }
@@ -259,7 +258,7 @@ impl RewardAccountProof {
                     account,
                     proof: RewardMerkleProof::Absence(proof),
                 },
-                0.into(),
+                U256::ZERO,
             )),
             LookupResult::NotInMemory => None,
         }
@@ -284,7 +283,7 @@ impl RewardAccountProof {
                     tree.non_membership_verify(RewardAccount(self.account), proof)?,
                     "invalid proof"
                 );
-                Ok(0.into())
+                Ok(U256::ZERO)
             },
         }
     }
@@ -341,7 +340,8 @@ pub fn apply_rewards(
 
     let computed_rewards = compute_rewards(validator)?;
     for (address, reward) in computed_rewards {
-        update_balance(&RewardAccount(address.to_ethers()), reward)?;
+        update_balance(&RewardAccount(address), reward)?;
+        tracing::debug!("applied rewards address={address} reward={reward}",);
     }
     Ok(reward_state)
 }
@@ -365,17 +365,16 @@ pub fn compute_rewards(
         .context("overflow")?;
 
     // Distribute delegator rewards
-    let total_stake = validator.stake.to_ethers();
+    let total_stake = validator.stake;
     let mut delegators_rewards_distributed = U256::from(0);
     for (delegator_address, delegator_stake) in &validator.delegators {
         let delegator_reward = RewardAmount::from(
             (delegator_stake
-                .to_ethers()
                 .checked_mul(delegators_reward)
                 .context("overflow")?
                 .checked_div(total_stake)
                 .context("overflow")?)
-            .checked_div(COMMISSION_BASIS_POINTS.into())
+            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
             .context("overflow")?,
         );
 
@@ -391,7 +390,8 @@ pub fn compute_rewards(
 
     Ok(rewards)
 }
-/// Checks whether the given height belongs to the first or second epoch.
+/// Checks whether the given height belongs to the first or second epoch. or
+/// the Genesis epoch (EpochNumber::new(0))
 ///
 /// Rewards are not distributed for these epochs because the stake table
 /// is built from the contract only when `add_epoch_root()` is called
@@ -409,20 +409,27 @@ pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow
         .first_epoch()
         .context("The first epoch was not set.")?;
 
-    Ok(epoch == first_epoch || epoch == first_epoch + 1)
+    Ok(epoch <= first_epoch + 1)
 }
 
-pub async fn catchup_missing_accounts(
+pub async fn find_validator_info(
     instance_state: &NodeState,
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
     view: ViewNumber,
 ) -> anyhow::Result<Validator<BLSPubKey>> {
-    let height = parent_leaf.height();
+    let parent_height = parent_leaf.height();
+    let parent_view = parent_leaf.view_number();
+    let new_height = parent_height + 1;
+
     let epoch_height = instance_state
         .epoch_height
         .context("epoch height not found")?;
-    let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+    if epoch_height == 0 {
+        bail!("epoch height is 0. can not catchup reward accounts");
+    }
+    let epoch = EpochNumber::new(epoch_from_block_number(new_height, epoch_height));
+
     let coordinator = instance_state.coordinator.clone();
 
     let epoch_membership = coordinator.membership_for_epoch(Some(epoch)).await?;
@@ -435,13 +442,15 @@ pub async fn catchup_missing_accounts(
     let validator = membership
         .get_validator_config(&epoch, leader)
         .context("validator not found")?;
+    drop(membership);
+
     let mut reward_accounts = HashSet::new();
-    reward_accounts.insert(validator.account.to_ethers().into());
+    reward_accounts.insert(validator.account.into());
     let delegators = validator
         .delegators
         .keys()
         .cloned()
-        .map(|a| a.to_ethers().into())
+        .map(|a| a.into())
         .collect::<Vec<RewardAccount>>();
 
     reward_accounts.extend(delegators.clone());
@@ -449,18 +458,18 @@ pub async fn catchup_missing_accounts(
 
     if !missing_reward_accts.is_empty() {
         tracing::warn!(
-            height,
-            ?view,
+            parent_height,
+            ?parent_view,
             ?missing_reward_accts,
             "fetching missing reward accounts from peers"
         );
 
         let missing_account_proofs = instance_state
-            .peers
+            .state_catchup
             .fetch_reward_accounts(
                 instance_state,
-                height,
-                view,
+                parent_height,
+                parent_view,
                 validated_state.reward_merkle_tree.commitment(),
                 missing_reward_accts,
             )
@@ -491,7 +500,7 @@ pub mod tests {
         let validator = Validator::mock();
         let rewards = compute_rewards(validator).unwrap();
         let total = |rewards: Vec<(_, RewardAmount)>| {
-            rewards.iter().fold(U256::zero(), |acc, (_, r)| acc + r.0)
+            rewards.iter().fold(U256::ZERO, |acc, (_, r)| acc + r.0)
         };
         assert_eq!(total(rewards), block_reward().into());
 

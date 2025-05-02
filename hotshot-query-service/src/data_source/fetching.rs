@@ -120,11 +120,15 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream,
         HeaderQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
-        QueryablePayload, TransactionHash, TransactionQueryData, UpdateAvailabilityData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
+        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{self, ExplorerDataSource},
-    fetching::{self, request, Provider},
+    fetching::{
+        self,
+        request::{self, StateCertRequest},
+        Provider,
+    },
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
@@ -139,6 +143,7 @@ use crate::{
 mod block;
 mod header;
 mod leaf;
+mod state_cert;
 mod transaction;
 mod vid;
 
@@ -165,6 +170,7 @@ pub struct Builder<Types, S, P> {
     proactive_fetching: bool,
     aggregator: bool,
     aggregator_chunk_size: Option<usize>,
+    types_migration_batch_size: u64,
     leaf_only: bool,
     _types: PhantomData<Types>,
 }
@@ -202,6 +208,7 @@ impl<Types, S, P> Builder<Types, S, P> {
             proactive_fetching: true,
             aggregator: true,
             aggregator_chunk_size: None,
+            types_migration_batch_size: 10000,
             leaf_only: false,
             _types: Default::default(),
         }
@@ -364,6 +371,14 @@ impl<Types, S, P> Builder<Types, S, P> {
         self
     }
 
+    /// Sets the batch size for the types migration.
+    /// Determines how many `(leaf, vid)` rows are selected from the old types table
+    /// and migrated at once.
+    pub fn with_types_migration_batch_size(mut self, batch: u64) -> Self {
+        self.types_migration_batch_size = batch;
+        self
+    }
+
     pub fn is_leaf_only(&self) -> bool {
         self.leaf_only
     }
@@ -511,6 +526,7 @@ where
         let proactive_range_chunk_size = builder
             .proactive_range_chunk_size
             .unwrap_or(builder.range_chunk_size);
+        let migration_batch_size = builder.types_migration_batch_size;
         let scanner_metrics = ScannerMetrics::new(builder.storage.metrics());
         let aggregator_metrics = AggregatorMetrics::new(builder.storage.metrics());
 
@@ -520,7 +536,7 @@ where
         // This is a one-time operation that should be done before starting the data source
         // It migrates leaf1 storage to leaf2
         // and vid to vid2
-        fetcher.storage.migrate_types().await?;
+        fetcher.storage.migrate_types(migration_batch_size).await?;
 
         let scanner = if proactive_fetching && !leaf_only {
             Some(BackgroundTask::spawn(
@@ -559,6 +575,11 @@ where
         };
 
         Ok(ds)
+    }
+
+    /// Get a copy of the (shared) inner storage
+    pub fn inner(&self) -> Arc<S> {
+        self.fetcher.storage.clone()
     }
 }
 
@@ -782,6 +803,10 @@ where
         hash: TransactionHash<Types>,
     ) -> Fetch<TransactionQueryData<Types>> {
         self.fetcher.get(TransactionRequest::from(hash)).await
+    }
+
+    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>> {
+        self.fetcher.get(StateCertRequest::from(epoch)).await
     }
 }
 
@@ -1724,6 +1749,7 @@ where
     block: Notifier<BlockQueryData<Types>>,
     leaf: Notifier<LeafQueryData<Types>>,
     vid_common: Notifier<VidCommonQueryData<Types>>,
+    state_cert: Notifier<StateCertQueryData<Types>>,
 }
 
 impl<Types> Default for Notifiers<Types>
@@ -1735,6 +1761,7 @@ where
             block: Notifier::new(),
             leaf: Notifier::new(),
             vid_common: Notifier::new(),
+            state_cert: Notifier::new(),
         }
     }
 }
@@ -2114,6 +2141,10 @@ impl<Types: NodeType> Storable<Types> for BlockInfo<Types> {
 
         if let Some(block) = self.block {
             block.store(storage, leaf_only).await?;
+        }
+
+        if let Some(state_cert) = self.state_cert {
+            state_cert.store(storage, leaf_only).await?;
         }
 
         Ok(())

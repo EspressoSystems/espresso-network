@@ -8,9 +8,16 @@ use std::{
 use anyhow::Result;
 use committable::Committable;
 use espresso_types::{
-    v0_1::{ADVZNsProof, RewardAccount},
+    v0_1::{ADVZNsProof, RewardAccount, RewardMerkleTree},
     FeeAccount, FeeMerkleTree, NamespaceId, NsProof, PubKey, Transaction,
 };
+// re-exported here to avoid breaking changes in consumers
+// "deprecated" does not work with "pub use": https://github.com/rust-lang/rust/issues/30827
+#[deprecated(note = "use espresso_types::ADVZNamespaceProofQueryData")]
+pub type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryData;
+#[deprecated(note = "use espresso_types::NamespaceProofQueryData")]
+pub type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
+
 use futures::{try_join, FutureExt};
 use hotshot_query_service::{
     availability::{self, AvailabilityDataSource, CustomSnafu, FetchBlockSnafu},
@@ -29,7 +36,7 @@ use hotshot_types::{
     },
 };
 use jf_merkle_tree::MerkleTreeScheme;
-use serde::{de::Error as _, Deserialize, Serialize};
+use serde::de::Error as _;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
 use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
@@ -44,19 +51,9 @@ use super::{
 };
 use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NamespaceProofQueryData {
-    pub proof: Option<NsProof>,
-    pub transactions: Vec<Transaction>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ADVZNamespaceProofQueryData {
-    pub proof: Option<ADVZNsProof>,
-    pub transactions: Vec<Transaction>,
-}
-
-pub(super) fn get_balance<State, Ver>() -> Result<Api<State, merklized_state::Error, Ver>>
+pub(super) fn fee<State, Ver>(
+    api_ver: semver::Version,
+) -> Result<Api<State, merklized_state::Error, Ver>>
 where
     State: 'static + Send + Sync + ReadState,
     Ver: 'static + StaticVersionType,
@@ -66,11 +63,11 @@ where
         + MerklizedStateHeightPersistence,
 {
     let mut options = merklized_state::Options::default();
-    let extension = toml::from_str(include_str!("../../api/merklized_state.toml"))?;
+    let extension = toml::from_str(include_str!("../../api/fee.toml"))?;
     options.extensions.push(extension);
 
     let mut api =
-        merklized_state::define_api::<State, SeqTypes, FeeMerkleTree, Ver, 256>(&options)?;
+        merklized_state::define_api::<State, SeqTypes, FeeMerkleTree, Ver, 256>(&options, api_ver)?;
 
     api.get("getfeebalance", move |req, state| {
         async move {
@@ -81,6 +78,64 @@ where
                 .parse()
                 .map_err(|_| merklized_state::Error::Custom {
                     message: "failed to parse address".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+            let path = state.get_path(snapshot, key).await?;
+            Ok(path.elem().copied())
+        }
+        .boxed()
+    })?;
+    Ok(api)
+}
+
+pub(super) fn reward<State, Ver>(
+    api_ver: semver::Version,
+) -> Result<Api<State, merklized_state::Error, Ver>>
+where
+    State: 'static + Send + Sync + ReadState,
+    Ver: 'static + StaticVersionType,
+    <State as ReadState>::State: Send
+        + Sync
+        + MerklizedStateDataSource<SeqTypes, RewardMerkleTree, { RewardMerkleTree::ARITY }>
+        + MerklizedStateHeightPersistence,
+{
+    let mut options = merklized_state::Options::default();
+    let extension = toml::from_str(include_str!("../../api/reward.toml"))?;
+    options.extensions.push(extension);
+
+    let mut api = merklized_state::define_api::<
+        State,
+        SeqTypes,
+        RewardMerkleTree,
+        Ver,
+        { RewardMerkleTree::ARITY },
+    >(&options, api_ver)?;
+
+    api.get("get_latest_reward_balance", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let height = state.get_last_state_height().await?;
+            let snapshot = Snapshot::Index(height as u64);
+            let key = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: "failed to parse reward address".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                })?;
+            let path = state.get_path(snapshot, key).await?;
+            Ok(path.elem().copied())
+        }
+        .boxed()
+    })?
+    .get("get_reward_balance", move |req, state| {
+        async move {
+            let address = req.string_param("address")?;
+            let height: usize = req.integer_param("height")?;
+            let snapshot = Snapshot::Index(height as u64);
+            let key = address
+                .parse()
+                .map_err(|_| merklized_state::Error::Custom {
+                    message: "failed to parse reward address".to_string(),
                     status: StatusCode::BAD_REQUEST,
                 })?;
             let path = state.get_path(snapshot, key).await?;
@@ -153,13 +208,13 @@ where
                         },
                     )?;
 
-                    Ok(NamespaceProofQueryData {
+                    Ok(espresso_types::NamespaceProofQueryData {
                         transactions: proof.export_all_txs(&ns_id),
                         proof: Some(proof),
                     })
                 } else {
                     // ns_id not found in ns_table
-                    Ok(NamespaceProofQueryData {
+                    Ok(espresso_types::NamespaceProofQueryData {
                         proof: None,
                         transactions: Vec::new(),
                     })
@@ -210,13 +265,13 @@ where
                         },
                     )?;
 
-                    Ok(ADVZNamespaceProofQueryData {
+                    Ok(espresso_types::ADVZNamespaceProofQueryData {
                         transactions: proof.export_all_txs(&ns_id),
                         proof: Some(proof),
                     })
                 } else {
                     // ns_id not found in ns_table
-                    Ok(ADVZNamespaceProofQueryData {
+                    Ok(espresso_types::ADVZNamespaceProofQueryData {
                         proof: None,
                         transactions: Vec::new(),
                     })
@@ -232,6 +287,7 @@ where
 type ExplorerApi<N, P, D, V, ApiVer> = Api<AvailState<N, P, D, V>, explorer::Error, ApiVer>;
 
 pub(super) fn explorer<N, P, D, V: Versions>(
+    api_ver: semver::Version,
 ) -> Result<ExplorerApi<N, P, D, V, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
@@ -240,11 +296,12 @@ where
 {
     let api = explorer::define_api::<AvailState<N, P, D, V>, SeqTypes, _>(
         SequencerApiVersion::instance(),
+        api_ver,
     )?;
     Ok(api)
 }
 
-pub(super) fn node<S>() -> Result<Api<S, node::Error, StaticVersion<0, 1>>>
+pub(super) fn node<S>(api_ver: semver::Version) -> Result<Api<S, node::Error, StaticVersion<0, 1>>>
 where
     S: 'static + Send + Sync + ReadState,
     <S as ReadState>::State:
@@ -256,7 +313,8 @@ where
     options.extensions.push(extension);
 
     // Create the base API with our extensions
-    let mut api = node::define_api::<S, SeqTypes, _>(&options, SequencerApiVersion::instance())?;
+    let mut api =
+        node::define_api::<S, SeqTypes, _>(&options, SequencerApiVersion::instance(), api_ver)?;
 
     // Tack on the application logic
     api.at("stake_table", |req, state| {
@@ -271,24 +329,53 @@ where
                 })?
                 .map(EpochNumber::new);
 
-            Ok(state
+            state
                 .read(|state| state.get_stake_table(epoch).boxed())
-                .await)
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get stake table for epoch={epoch:?}. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?
     .at("stake_table_current", |_, state| {
         async move {
-            Ok(state
+            state
                 .read(|state| state.get_stake_table_current().boxed())
-                .await)
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get current stake table. err={err:#}"),
+                    status: StatusCode::NOT_FOUND,
+                })
+        }
+        .boxed()
+    })?
+    .at("get_validators", |req, state| {
+        async move {
+            let epoch = req.integer_param::<_, u64>("epoch_number").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Epoch number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
+            state
+                .read(|state| state.get_validators(EpochNumber::new(epoch)).boxed())
+                .await
+                .map_err(|err| hotshot_query_service::node::Error::Custom {
+                    message: format!("failed to get validators mapping: err: {err}"),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?;
 
     Ok(api)
 }
-pub(super) fn submit<N, P, S, ApiVer: StaticVersionType + 'static>() -> Result<Api<S, Error, ApiVer>>
+pub(super) fn submit<N, P, S, ApiVer: StaticVersionType + 'static>(
+    api_ver: semver::Version,
+) -> Result<Api<S, Error, ApiVer>>
 where
     N: ConnectedNetwork<PubKey>,
     S: 'static + Send + Sync + ReadState,
@@ -298,7 +385,7 @@ where
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/submit.toml"))?;
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
 
-    api.at("submit", |req, state| {
+    api.with_version(api_ver).at("submit", |req, state| {
         async move {
             let tx = req
                 .body_auto::<Transaction, ApiVer>(ApiVer::instance())
@@ -319,6 +406,7 @@ where
 
 pub(super) fn state_signature<N, S, ApiVer: StaticVersionType + 'static>(
     _: ApiVer,
+    api_ver: semver::Version,
 ) -> Result<Api<S, Error, ApiVer>>
 where
     N: ConnectedNetwork<PubKey>,
@@ -327,6 +415,7 @@ where
 {
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/state_signature.toml"))?;
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
+    api.with_version(api_ver);
 
     api.get("get_state_signature", |req, state| {
         async move {
@@ -349,6 +438,7 @@ where
 
 pub(super) fn catchup<S, ApiVer: StaticVersionType + 'static>(
     _: ApiVer,
+    api_ver: semver::Version,
 ) -> Result<Api<S, Error, ApiVer>>
 where
     S: 'static + Send + Sync + ReadState,
@@ -356,6 +446,7 @@ where
 {
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/catchup.toml"))?;
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
+    api.with_version(api_ver);
 
     api.get("account", |req, state| {
         async move {
@@ -531,6 +622,7 @@ where
 type MerklizedStateApi<N, P, D, V, ApiVer> =
     Api<AvailState<N, P, D, V>, merklized_state::Error, ApiVer>;
 pub(super) fn merklized_state<N, P, D, S, V: Versions, const ARITY: usize>(
+    api_ver: semver::Version,
 ) -> Result<MerklizedStateApi<N, P, D, V, SequencerApiVersion>>
 where
     N: ConnectedNetwork<PubKey>,
@@ -549,12 +641,13 @@ where
         S,
         SequencerApiVersion,
         ARITY,
-    >(&Default::default())?;
+    >(&Default::default(), api_ver)?;
     Ok(api)
 }
 
 pub(super) fn config<S, ApiVer: StaticVersionType + 'static>(
     _: ApiVer,
+    api_ver: semver::Version,
 ) -> Result<Api<S, Error, ApiVer>>
 where
     S: 'static + Send + Sync + ReadState,
@@ -562,6 +655,7 @@ where
 {
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/config.toml"))?;
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
+    api.with_version(api_ver);
 
     let env_variables = get_public_env_vars()
         .map_err(|err| Error::catch_all(StatusCode::INTERNAL_SERVER_ERROR, format!("{err:#}")))?;

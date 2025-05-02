@@ -46,13 +46,16 @@ pub mod testing {
         time::{Duration, Instant},
     };
 
+    use alloy::{
+        node_bindings::{Anvil, AnvilInstance},
+        primitives::U256,
+    };
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
         traits::SequencerPersistence, v0_99::ChainConfig, Event, FeeAccount, NamespaceId,
         NodeState, PrivKey, PubKey, Transaction, ValidatedState,
     };
-    use ethers::utils::{Anvil, AnvilInstance};
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
         traits::BlockPayload,
@@ -80,7 +83,6 @@ pub mod testing {
         },
         HotShotConfig, PeerConfig, ValidatorConfig,
     };
-    use primitive_types::U256;
     use sequencer::{context::Consensus, network, SequencerApiVersion};
     use surf_disco::Client;
     use vbs::version::StaticVersion;
@@ -214,8 +216,7 @@ pub mod testing {
                     private_key: self.priv_keys_staking_nodes[i].clone(),
                     stake_value: self.config.known_nodes_with_stake[i]
                         .stake_table_entry
-                        .stake_amount
-                        .as_u64(),
+                        .stake_amount,
                     state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
@@ -226,7 +227,7 @@ pub mod testing {
                         .stake_table_entry
                         .stake_key,
                     private_key: self.priv_keys_non_staking_nodes[i].clone(),
-                    stake_value: 0,
+                    stake_value: U256::from(0),
                     state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
@@ -256,7 +257,10 @@ pub mod testing {
                 Arc<RwLock<EventsStreamer<SeqTypes>>>,
                 SeqTypes,
                 StaticVersion<0, 1>,
-            >(&EventStreamingApiOptions::default())
+            >(
+                &EventStreamingApiOptions::default(),
+                "0.0.1".parse().unwrap(),
+            )
             .expect("Failed to define hotshot eventsAPI");
 
             let mut app = App::<_, EventStreamApiError>::with_state(source);

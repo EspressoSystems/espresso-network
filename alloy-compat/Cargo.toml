@@ -1,0 +1,15 @@
+[package]
+name = "alloy-compat"
+description = "Compatibility helpers and conversions from ethers and older alloy to newer alloy"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+alloy = { workspace = true }
+ethers-core = "2.0"
+rand = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+bincode = { workspace = true }

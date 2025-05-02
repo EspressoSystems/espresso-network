@@ -8,6 +8,18 @@ use crate::{
     v0_3::AvidMNsProof,
 };
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NamespaceProofQueryData {
+    pub proof: Option<NsProof>,
+    pub transactions: Vec<Transaction>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ADVZNamespaceProofQueryData {
+    pub proof: Option<ADVZNsProof>,
+    pub transactions: Vec<Transaction>,
+}
+
 /// Each variant represents a specific version of a namespace proof.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NsProof {

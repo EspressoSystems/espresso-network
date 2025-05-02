@@ -1,44 +1,74 @@
 use std::sync::Arc;
 
-use async_lock::RwLock;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes};
+use hotshot::{traits::NodeImplementation, SystemContext};
 use hotshot_types::{
     data::EpochNumber,
-    traits::{
-        election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    epoch_membership::EpochMembershipCoordinator,
+    traits::node_implementation::{ConsensusTime, Versions},
 };
 use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
+use tracing::warn;
 
 use super::request::Request;
 
-#[derive(Clone, Debug)]
-pub struct RecipientSource {
-    pub memberships: Arc<RwLock<<SeqTypes as NodeType>::Membership>>,
+/// A type alias for the consensus context
+type Consensus<I, V> = Arc<SystemContext<SeqTypes, I, V>>;
+
+#[derive(Clone)]
+pub struct RecipientSource<I: NodeImplementation<SeqTypes>, V: Versions> {
+    /// A copy of the consensus context
+    pub consensus: Consensus<I, V>,
+    /// A copy of the membership coordinator
+    pub memberships: EpochMembershipCoordinator<SeqTypes>,
+    /// The public key of the node
+    pub public_key: PubKey,
 }
 
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
 /// intended recipients for a given request
 #[async_trait]
-impl RecipientSourceTrait<Request, PubKey> for RecipientSource {
-    async fn get_expected_responders(&self, request: &Request) -> Vec<PubKey> {
-        match request {
-            Request::Example => {
-                // Get the memberships
-                let memberships = self.memberships.read().await;
+impl<I: NodeImplementation<SeqTypes>, V: Versions> RecipientSourceTrait<Request, PubKey>
+    for RecipientSource<I, V>
+{
+    async fn get_expected_responders(&self, _request: &Request) -> Result<Vec<PubKey>> {
+        // Get the current epoch number
+        let epoch_number = self
+            .consensus
+            .consensus()
+            .read()
+            .await
+            .cur_epoch()
+            .unwrap_or(EpochNumber::genesis());
 
-                // Get everyone in the stake table
-
-                // NOTE: This is just an example request, therefore this is hardcoded to get members of epoch 0.
-                // When doing a real request, please choose the appropriate epoch to get members from.
-                memberships
-                    .stake_table(Some(EpochNumber::new(0)))
-                    .iter()
-                    .map(|entry| entry.stake_table_entry.stake_key)
-                    .collect()
+        // Attempt to get the membership for the current epoch
+        let membership = match self
+            .memberships
+            .membership_for_epoch(Some(epoch_number))
+            .await
+        {
+            Ok(membership) => membership,
+            Err(e) => {
+                warn!(
+                    "Failed to get membership for epoch {}: {e:#}. Failing over to genesis",
+                    epoch_number
+                );
+                self.memberships
+                    .membership_for_epoch(Some(EpochNumber::genesis()))
+                    .await
+                    .with_context(|| "failed to get stake table for epoch")?
             },
-        }
+        };
+
+        // Sum all participants in the membership
+        Ok(membership
+            .stake_table()
+            .await
+            .iter()
+            .map(|entry| entry.stake_table_entry.stake_key)
+            .filter(|key| *key != self.public_key)
+            .collect())
     }
 }

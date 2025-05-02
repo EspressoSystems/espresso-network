@@ -2,6 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
+use alloy::primitives::U256;
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use committable::Commitment;
@@ -32,15 +33,13 @@ use hotshot_types::{
     PeerConfig,
 };
 use indexmap::IndexMap;
-use itertools::Itertools;
-use primitive_types::U256;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
-    v0_3::{IndexedStake, Validator},
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     EpochVersion, SequencerVersions,
 };
 use crate::{
@@ -149,7 +148,7 @@ pub trait StateCatchup: Send + Sync {
         self.backoff()
             .retry(mt, |mt, retry| {
                 self.try_remember_blocks_merkle_tree(retry, instance, height, view, mt)
-                    .map_err(|err| err.context("fetching frontier"))
+                    .map_err(|err| err.context(format!("fetching frontier using {}", self.name())))
                     .boxed()
             })
             .await
@@ -228,141 +227,11 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
+    fn is_local(&self) -> bool;
+
     fn backoff(&self) -> &BackoffParams;
     fn name(&self) -> String;
-}
-
-#[async_trait]
-impl<T: StateCatchup + ?Sized> StateCatchup for Box<T> {
-    async fn try_fetch_leaves(&self, retry: usize, height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        (**self).try_fetch_leaves(retry, height).await
-    }
-
-    async fn fetch_leaf(
-        &self,
-        height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
-        success_threshold: U256,
-    ) -> anyhow::Result<Leaf2> {
-        (**self)
-            .fetch_leaf(height, stake_table, success_threshold)
-            .await
-    }
-    async fn try_fetch_accounts(
-        &self,
-        retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        fee_merkle_tree_root: FeeMerkleCommitment,
-        accounts: &[FeeAccount],
-    ) -> anyhow::Result<FeeMerkleTree> {
-        (**self)
-            .try_fetch_accounts(
-                retry,
-                instance,
-                height,
-                view,
-                fee_merkle_tree_root,
-                accounts,
-            )
-            .await
-    }
-
-    async fn fetch_accounts(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        fee_merkle_tree_root: FeeMerkleCommitment,
-        accounts: Vec<FeeAccount>,
-    ) -> anyhow::Result<Vec<FeeAccountProof>> {
-        (**self)
-            .fetch_accounts(instance, height, view, fee_merkle_tree_root, accounts)
-            .await
-    }
-
-    async fn try_remember_blocks_merkle_tree(
-        &self,
-        retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
-        (**self)
-            .try_remember_blocks_merkle_tree(retry, instance, height, view, mt)
-            .await
-    }
-
-    async fn remember_blocks_merkle_tree(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
-        (**self)
-            .remember_blocks_merkle_tree(instance, height, view, mt)
-            .await
-    }
-
-    async fn try_fetch_chain_config(
-        &self,
-        retry: usize,
-        commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
-        (**self).try_fetch_chain_config(retry, commitment).await
-    }
-
-    async fn fetch_chain_config(
-        &self,
-        commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
-        (**self).fetch_chain_config(commitment).await
-    }
-
-    async fn try_fetch_reward_accounts(
-        &self,
-        retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<RewardMerkleTree> {
-        (**self)
-            .try_fetch_reward_accounts(
-                retry,
-                instance,
-                height,
-                view,
-                reward_merkle_tree_root,
-                accounts,
-            )
-            .await
-    }
-
-    async fn fetch_reward_accounts(
-        &self,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: Vec<RewardAccount>,
-    ) -> anyhow::Result<Vec<RewardAccountProof>> {
-        (**self)
-            .fetch_reward_accounts(instance, height, view, reward_merkle_tree_root, accounts)
-            .await
-    }
-
-    fn backoff(&self) -> &BackoffParams {
-        (**self).backoff()
-    }
-
-    fn name(&self) -> String {
-        (**self).name()
-    }
 }
 
 #[async_trait]
@@ -496,160 +365,14 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     fn name(&self) -> String {
         (**self).name()
     }
-}
 
-/// Catchup from multiple providers tries each provider in a round robin fashion until it succeeds.
-#[async_trait]
-impl<T: StateCatchup> StateCatchup for Vec<T> {
-    async fn try_fetch_leaves(&self, retry: usize, height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        for provider in self {
-            match provider.try_fetch_leaves(retry, height).await {
-                Ok(leaves) => return Ok(leaves),
-                Err(err) => {
-                    tracing::info!(
-                        provider = provider.name(),
-                        "failed to fetch leaves: {err:#}"
-                    );
-                },
-            }
-        }
-
-        bail!("could not fetch leaves from any provider");
-    }
-    #[tracing::instrument(skip(self, instance))]
-    async fn try_fetch_accounts(
-        &self,
-        retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        fee_merkle_tree_root: FeeMerkleCommitment,
-        accounts: &[FeeAccount],
-    ) -> anyhow::Result<FeeMerkleTree> {
-        for provider in self {
-            match provider
-                .try_fetch_accounts(
-                    retry,
-                    instance,
-                    height,
-                    view,
-                    fee_merkle_tree_root,
-                    accounts,
-                )
-                .await
-            {
-                Ok(tree) => return Ok(tree),
-                Err(err) => {
-                    tracing::info!(
-                        ?accounts,
-                        provider = provider.name(),
-                        "failed to fetch accounts: {err:#}"
-                    );
-                },
-            }
-        }
-
-        bail!("could not fetch account from any provider");
-    }
-
-    #[tracing::instrument(skip(self, instance, mt))]
-    async fn try_remember_blocks_merkle_tree(
-        &self,
-        retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        mt: &mut BlockMerkleTree,
-    ) -> anyhow::Result<()> {
-        for provider in self {
-            match provider
-                .try_remember_blocks_merkle_tree(retry, instance, height, view, mt)
-                .await
-            {
-                Ok(()) => return Ok(()),
-                Err(err) => {
-                    tracing::info!(
-                        provider = provider.name(),
-                        "failed to fetch frontier: {err:#}"
-                    );
-                },
-            }
-        }
-
-        bail!("could not fetch account from any provider");
-    }
-
-    async fn try_fetch_chain_config(
-        &self,
-        retry: usize,
-        commitment: Commitment<ChainConfig>,
-    ) -> anyhow::Result<ChainConfig> {
-        for provider in self {
-            match provider.try_fetch_chain_config(retry, commitment).await {
-                Ok(cf) => return Ok(cf),
-                Err(err) => {
-                    tracing::info!(
-                        provider = provider.name(),
-                        "failed to fetch chain config: {err:#}"
-                    );
-                },
-            }
-        }
-
-        bail!("could not fetch chain config from any provider");
-    }
-
-    #[tracing::instrument(skip(self, instance))]
-    async fn try_fetch_reward_accounts(
-        &self,
-        retry: usize,
-        instance: &NodeState,
-        height: u64,
-        view: ViewNumber,
-        reward_merkle_tree_root: RewardMerkleCommitment,
-        accounts: &[RewardAccount],
-    ) -> anyhow::Result<RewardMerkleTree> {
-        for provider in self {
-            match provider
-                .try_fetch_reward_accounts(
-                    retry,
-                    instance,
-                    height,
-                    view,
-                    reward_merkle_tree_root,
-                    accounts,
-                )
-                .await
-            {
-                Ok(tree) => return Ok(tree),
-                Err(err) => {
-                    tracing::info!(
-                        ?accounts,
-                        provider = provider.name(),
-                        "failed to fetch reward accounts: {err:#}"
-                    );
-                },
-            }
-        }
-
-        bail!("could not fetch account from any provider");
-    }
-
-    fn backoff(&self) -> &BackoffParams {
-        // Use whichever provider's backoff is most conservative.
-        self.iter()
-            .map(|p| p.backoff())
-            .max()
-            .expect("provider list not empty")
-    }
-
-    fn name(&self) -> String {
-        format!("[{}]", self.iter().map(StateCatchup::name).join(","))
+    fn is_local(&self) -> bool {
+        (**self).is_local()
     }
 }
 
 #[async_trait]
-pub trait PersistenceOptions: Clone + Send + Sync + 'static {
+pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);
@@ -675,6 +398,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         epoch: EpochNumber,
         stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
     ) -> anyhow::Result<()>;
+
+    async fn store_events(
+        &self,
+        l1_block: u64,
+        events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()>;
+    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>>;
 }
 
 #[async_trait]
@@ -786,11 +516,11 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         };
         let validated_state = if leaf.block_header().height() == 0 {
             // If we are starting from genesis, we can provide the full state.
-            Some(Arc::new(genesis_validated_state))
+            genesis_validated_state
         } else {
             // Otherwise, we will have to construct a sparse state and fetch missing data during
             // catchup.
-            None
+            ValidatedState::from_header(leaf.block_header())
         };
 
         // If we are not starting from genesis, we start from the view following the maximum view
@@ -829,8 +559,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         let state_cert = self
             .load_state_cert()
             .await
-            .context("loading light client state update certificate")?
-            .unwrap_or(LightClientStateUpdateCertificate::genesis());
+            .context("loading light client state update certificate")?;
 
         tracing::info!(
             ?leaf,
@@ -848,7 +577,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
                 epoch_height,
                 epoch_start_block,
                 anchor_leaf: leaf,
-                anchor_state: validated_state.unwrap_or_default(),
+                anchor_state: Arc::new(validated_state),
                 anchor_state_delta: None,
                 start_view: view,
                 start_epoch: epoch,

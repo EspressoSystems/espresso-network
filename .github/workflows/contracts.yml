@@ -25,10 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install Nix
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@v31
 
       - name: Enable Cachix
-        uses: cachix/cachix-action@v15
+        uses: cachix/cachix-action@v16
         # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
         continue-on-error: true
         with:

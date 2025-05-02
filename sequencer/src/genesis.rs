@@ -3,20 +3,19 @@ use std::{
     path::Path,
 };
 
+use alloy::primitives::Address;
 use anyhow::{Context, Ok};
 use espresso_types::{
     v0_99::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
     Upgrade,
 };
-use ethers::types::H160;
-use ethers_conv::ToAlloy;
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
 
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct StakeTableConfig {
-    pub capacity: u64,
+    pub capacity: usize,
 }
 
 /// An L1 block from which an Espresso chain should start syncing.
@@ -53,6 +52,7 @@ pub struct Genesis {
     #[serde(with = "version_ser")]
     pub upgrade_version: Version,
     pub epoch_height: Option<u64>,
+    pub epoch_start_block: Option<u64>,
     pub chain_config: ChainConfig,
     pub stake_table: StakeTableConfig,
     #[serde(default)]
@@ -88,7 +88,7 @@ impl Genesis {
             tracing::info!("validating fee contract at {fee_contract_address:x}");
 
             if !l1
-                .retry_on_all_providers(|| l1.is_proxy_contract(fee_contract_address.to_alloy()))
+                .retry_on_all_providers(|| l1.is_proxy_contract(fee_contract_address))
                 .await
                 .context("checking if fee contract is a proxy")?
             {
@@ -107,12 +107,10 @@ impl Genesis {
             let chain_config = chain_config.unwrap();
 
             if let Some(fee_contract_address) = chain_config.fee_contract {
-                if fee_contract_address == H160::zero() {
+                if fee_contract_address == Address::default() {
                     anyhow::bail!("Fee contract cannot use the zero address");
                 } else if !l1
-                    .retry_on_all_providers(|| {
-                        l1.is_proxy_contract(fee_contract_address.to_alloy())
-                    })
+                    .retry_on_all_providers(|| l1.is_proxy_contract(fee_contract_address))
                     .await
                     .context(format!(
                         "checking if fee contract is a proxy in upgrade {version}",
@@ -322,61 +320,22 @@ impl Genesis {
 mod test {
     use std::sync::Arc;
 
-    use anyhow::Result;
-    use contract_bindings_ethers::fee_contract::FeeContract;
+    use alloy::{
+        node_bindings::Anvil,
+        primitives::{B256, U256},
+        providers::{layers::AnvilProvider, ProviderBuilder},
+    };
     use espresso_types::{
         L1BlockInfo, TimeBasedUpgrade, Timestamp, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
-    use ethers::{
-        middleware::Middleware,
-        prelude::*,
-        signers::Signer,
-        utils::{Anvil, AnvilInstance},
-    };
     use sequencer_utils::{
-        deployer,
-        deployer::test_helpers::{deploy_fee_contract, deploy_fee_contract_as_proxy},
+        deployer::{self, Contracts},
         ser::FromStringOrInteger,
         test_utils::setup_test,
     };
     use toml::toml;
 
     use super::*;
-
-    /// A wallet with local signer and connected to network via http
-    pub type SignerWallet = SignerMiddleware<Provider<Http>, LocalWallet>;
-
-    async fn deploy_fee_contract_for_test(
-        anvil: &AnvilInstance,
-    ) -> Result<(Arc<SignerWallet>, FeeContract<SignerWallet>)> {
-        let provider = Provider::<Http>::try_from(anvil.endpoint())?;
-        let signer = Wallet::from(anvil.keys()[0].clone())
-            .with_chain_id(provider.get_chainid().await?.as_u64());
-        let l1_wallet = Arc::new(SignerWallet::new(provider.clone(), signer));
-
-        let fee_contract_address = deploy_fee_contract(l1_wallet.clone()).await?;
-
-        let fee_contract = FeeContract::new(fee_contract_address, l1_wallet.clone());
-
-        Ok((l1_wallet, fee_contract))
-    }
-
-    async fn deploy_fee_contract_as_proxy_for_test(
-        anvil: &AnvilInstance,
-    ) -> Result<(Arc<SignerWallet>, FeeContract<SignerWallet>)> {
-        let provider = Provider::<Http>::try_from(anvil.endpoint())?;
-        let signer = Wallet::from(anvil.keys()[0].clone())
-            .with_chain_id(provider.get_chainid().await?.as_u64());
-        let l1_wallet = Arc::new(SignerWallet::new(provider.clone(), signer));
-
-        let mut contracts = deployer::Contracts::default();
-        let fee_contract_address =
-            deploy_fee_contract_as_proxy(l1_wallet.clone(), &mut contracts).await?;
-
-        let fee_contract = FeeContract::new(fee_contract_address, l1_wallet.clone());
-
-        Ok((l1_wallet, fee_contract))
-    }
 
     #[test]
     fn test_genesis_from_toml_with_optional_fields() {
@@ -432,7 +391,7 @@ mod test {
             genesis.accounts,
             [
                 (
-                    FeeAccount::from(H160([
+                    FeeAccount::from(Address::from([
                         0x23, 0x61, 0x8e, 0x81, 0xe3, 0xf5, 0xcd, 0xf7, 0xf5, 0x4c, 0x3d, 0x65,
                         0xf7, 0xfb, 0xc0, 0xab, 0xf5, 0xb2, 0x1e, 0x8f
                     ])),
@@ -447,9 +406,9 @@ mod test {
             genesis.l1_finalized,
             L1Finalized::Block(L1BlockInfo {
                 number: 64,
-                timestamp: 0x123def.into(),
+                timestamp: U256::from(0x123def),
                 // Can't do B256 here directly because it's the wrong endianness
-                hash: H256([
+                hash: B256::from([
                     0x80, 0xf5, 0xdd, 0x11, 0xf2, 0xbd, 0xda, 0x28, 0x14, 0xcb, 0x1a, 0xd9, 0x4e,
                     0xf3, 0x0a, 0x47, 0xde, 0x02, 0xcf, 0x28, 0xad, 0x68, 0xc8, 0x9e, 0x10, 0x4c,
                     0x00, 0xc4, 0xe5, 0x1b, 0xb7, 0xa5
@@ -564,60 +523,25 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_genesis_fee_contract_is_not_a_proxy() -> anyhow::Result<()> {
-        setup_test();
-
-        let anvil = Anvil::new().spawn();
-        let (_wallet, contract) = deploy_fee_contract_for_test(&anvil).await?;
-
-        let toml = format!(
-            r#"
-            base_version = "0.1"
-            upgrade_version = "0.2"
-
-            [stake_table]
-            capacity = 10
-
-            [chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "{:?}"
-
-            [header]
-            timestamp = 123456
-
-            [l1_finalized]
-            number = 42
-        "#,
-            contract.address()
-        )
-        .to_string();
-
-        let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
-
-        // validate the fee_contract address
-        let result = genesis
-            .validate_fee_contract(&L1Client::anvil(&anvil).unwrap())
-            .await;
-
-        // check if the result from the validation is an error
-        if let Err(e) = result {
-            assert!(e.to_string().contains("is not a proxy"));
-        } else {
-            panic!("Expected the fee contract to not be a proxy, but the validation succeeded");
-        }
-        Ok(())
-    }
+    // tests for fee contract not being a proxy are removed, since we now only have one function in `deployer.rs` that ensures
+    // deploying of the fee contract behind proxy, and this function is being unit tested there.
+    // Here, we primarily focus on testing the config and validation logic, not deployment logic.
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_genesis_fee_contract_is_a_proxy() -> anyhow::Result<()> {
         setup_test();
 
-        let anvil = Anvil::new().spawn();
-        let (_wallet, proxy_contract) = deploy_fee_contract_as_proxy_for_test(&anvil).await?;
+        let anvil = Arc::new(Anvil::new().spawn());
+        let wallet = anvil.wallet().unwrap();
+        let admin = wallet.default_signer().address();
+        let inner_provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .on_http(anvil.endpoint_url());
+        let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
+        let mut contracts = Contracts::new();
+
+        let proxy_addr =
+            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
 
         let toml = format!(
             r#"
@@ -640,7 +564,7 @@ mod test {
             [l1_finalized]
             number = 42
         "#,
-            proxy_contract.address()
+            proxy_addr,
         )
         .to_string();
 
@@ -662,8 +586,17 @@ mod test {
     async fn test_genesis_fee_contract_is_a_proxy_with_upgrades() -> anyhow::Result<()> {
         setup_test();
 
-        let anvil = Anvil::new().spawn();
-        let (_wallet, proxy_contract) = deploy_fee_contract_as_proxy_for_test(&anvil).await?;
+        let anvil = Arc::new(Anvil::new().spawn());
+        let wallet = anvil.wallet().unwrap();
+        let admin = wallet.default_signer().address();
+        let inner_provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .on_http(anvil.endpoint_url());
+        let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
+        let mut contracts = Contracts::new();
+
+        let proxy_addr =
+            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
 
         let toml = format!(
             r#"
@@ -713,8 +646,7 @@ mod test {
             bid_recipient = "0x0000000000000000000000000000000000000000"
             fee_contract = "{:?}"
         "#,
-            proxy_contract.clone().address(),
-            proxy_contract.clone().address()
+            proxy_addr, proxy_addr,
         )
         .to_string();
 
@@ -729,85 +661,6 @@ mod test {
             result.is_ok(),
             "Expected Fee Contract to be a proxy, but it was not"
         );
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_genesis_fee_contract_is_not_a_proxy_with_upgrades() -> anyhow::Result<()> {
-        setup_test();
-
-        let anvil = Anvil::new().spawn();
-        let (_wallet, contract) = deploy_fee_contract_for_test(&anvil).await?;
-
-        let toml = format!(
-            r#"
-            base_version = "0.1"
-            upgrade_version = "0.2"
-
-            [stake_table]
-            capacity = 10
-
-            [chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-
-            [header]
-            timestamp = 123456
-
-            [l1_finalized]
-            number = 42
-
-            [[upgrade]]
-            version = "0.2"
-            start_proposing_view = 5
-            stop_proposing_view = 15
-
-            [upgrade.fee]
-
-            [upgrade.fee.chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "{:?}"
-
-            [[upgrade]]
-            version = "0.3"
-            start_proposing_view = 5
-            stop_proposing_view = 15
-
-            [upgrade.marketplace]
-            [upgrade.marketplace.chain_config]
-            chain_id = 999999999
-            max_block_size = 3000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            bid_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "{:?}"
-        "#,
-            contract.clone().address(),
-            contract.clone().address()
-        )
-        .to_string();
-
-        let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
-
-        // Call the validation logic for the fee_contract address
-        let result = genesis
-            .validate_fee_contract(&L1Client::anvil(&anvil).unwrap())
-            .await;
-
-        // check if the result from the validation is an error
-        if let Err(e) = result {
-            // assert that the error message contains "Fee contract's address is not a proxy"
-            assert!(e
-                .to_string()
-                .contains("Fee contract's address is not a proxy"));
-        } else {
-            panic!("Expected the fee contract to not be a proxy, but the validation succeeded");
-        }
         Ok(())
     }
 
@@ -939,8 +792,17 @@ mod test {
     async fn test_genesis_fee_contract_l1_failover() -> anyhow::Result<()> {
         setup_test();
 
-        let anvil = Anvil::new().spawn();
-        let (_wallet, proxy_contract) = deploy_fee_contract_as_proxy_for_test(&anvil).await?;
+        let anvil = Arc::new(Anvil::new().spawn());
+        let wallet = anvil.wallet().unwrap();
+        let admin = wallet.default_signer().address();
+        let inner_provider = ProviderBuilder::new()
+            .wallet(wallet)
+            .on_http(anvil.endpoint_url());
+        let provider = AnvilProvider::new(inner_provider, Arc::clone(&anvil));
+        let mut contracts = Contracts::new();
+
+        let proxy_addr =
+            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, admin).await?;
 
         let toml = format!(
             r#"
@@ -963,7 +825,7 @@ mod test {
             [l1_finalized]
             number = 42
         "#,
-            proxy_contract.address()
+            proxy_addr
         )
         .to_string();
 
@@ -1208,8 +1070,8 @@ mod test {
     #[test]
     fn test_marketplace_upgrade_toml() {
         let toml = toml! {
-            base_version = "0.1"
-            upgrade_version = "0.2"
+            base_version = "0.3"
+            upgrade_version = "0.99"
 
             [stake_table]
             capacity = 10
@@ -1254,10 +1116,12 @@ mod test {
     }
 
     #[test]
-    fn test_marketplace_and_fee_upgrade_toml() {
+    fn test_fee_and_epoch_upgrade_toml() {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            epoch_height = 20
+            epoch_start_block = 1
 
             [stake_table]
             capacity = 10
@@ -1286,6 +1150,69 @@ mod test {
             start_proposing_view = 1
             stop_proposing_view = 10
 
+            [upgrade.epoch]
+            [upgrade.epoch.chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+            stake_table_contract = "0x0000000000000000000000000000000000000000"
+
+            [[upgrade]]
+            version = "0.2"
+            start_proposing_view = 1
+            stop_proposing_view = 15
+
+            [upgrade.fee]
+
+            [upgrade.fee.chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+        }
+        .to_string();
+
+        toml::from_str::<Genesis>(&toml).unwrap();
+    }
+
+    #[test]
+    fn test_fee_and_epoch_and_marketplace_upgrade_toml() {
+        let toml = toml! {
+            base_version = "0.1"
+            upgrade_version = "0.2"
+            epoch_height = 20
+            epoch_start_block = 1
+
+            [stake_table]
+            capacity = 10
+
+            [chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+
+            [header]
+            timestamp = 123456
+
+            [accounts]
+            "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
+            "0x0000000000000000000000000000000000000000" = 42
+
+            [l1_finalized]
+            number = 64
+            timestamp = "0x123def"
+            hash = "0x80f5dd11f2bdda2814cb1ad94ef30a47de02cf28ad68c89e104c00c4e51bb7a5"
+
+            [[upgrade]]
+            version = "0.99"
+            start_proposing_view = 1
+            stop_proposing_view = 10
+
             [upgrade.marketplace]
             [upgrade.marketplace.chain_config]
             chain_id = 12345
@@ -1294,6 +1221,22 @@ mod test {
             fee_recipient = "0x0000000000000000000000000000000000000000"
             bid_recipient = "0x0000000000000000000000000000000000000000"
             fee_contract = "0x0000000000000000000000000000000000000000"
+            stake_table_contract = "0x0000000000000000000000000000000000000000"
+
+            [[upgrade]]
+            version = "0.3"
+            start_proposing_view = 1
+            stop_proposing_view = 10
+
+            [upgrade.epoch]
+            [upgrade.epoch.chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+            bid_recipient = "0x0000000000000000000000000000000000000000"
+            fee_contract = "0x0000000000000000000000000000000000000000"
+            stake_table_contract = "0x0000000000000000000000000000000000000000"
 
             [[upgrade]]
             version = "0.2"

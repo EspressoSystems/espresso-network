@@ -15,16 +15,13 @@ import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "../src/libraries/BLSSig.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
 import { LightClient } from "../src/LightClient.sol";
-import { LightClientMock } from "../test/mocks/LightClientMock.sol";
-import { InitializedAt } from "../src/InitializedAt.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { LightClientV2 } from "../src/LightClientV2.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
+import { LightClientCommonTest } from "./LightClientV2.t.sol";
+import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
-import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
-import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 // Token contract
@@ -32,19 +29,15 @@ import { EspToken } from "../src/EspToken.sol";
 
 // Target contract
 import { StakeTable as S } from "../src/StakeTable.sol";
-import { StakeTableMock } from "../test/mocks/StakeTableMock.sol";
-import { DeployStakeTableScript } from "./script/StakeTable.s.sol";
-import { DeployEspTokenScript } from "./script/EspToken.s.sol";
-import { Timelock } from "../src/Timelock.sol";
+import "@openzeppelin/contracts/governance/TimelockController.sol";
+
 // TODO: currently missing several tests
 // TODO: test only owner methods access control
 
-contract StakeTable_register_Test is Test {
-    StakeTableMock public stakeTable;
-    address payable public proxy;
-    address public admin;
+contract StakeTable_register_Test is LightClientCommonTest {
+    S public stakeTable;
+    // NOTE: address admin defined in LightClientCommonTest
     EspToken public token;
-    LightClientMock public lcMock;
     uint256 public constant INITIAL_BALANCE = 5 ether;
     uint256 public constant ESCROW_PERIOD = 1 weeks;
     uint16 public constant COMMISSION = 1234; // 12.34 %
@@ -70,8 +63,8 @@ contract StakeTable_register_Test is Test {
             BN254.G1Point memory blsSig,
             BN254.G2Point memory blsVK,
             uint256 schnorrVKx,
-            uint256 schnorrVKy,
-        ) = abi.decode(result, (BN254.G1Point, BN254.G2Point, uint256, uint256, address));
+            uint256 schnorrVKy
+        ) = abi.decode(result, (BN254.G1Point, BN254.G2Point, uint256, uint256));
 
         return (
             blsVK, // blsVK
@@ -81,41 +74,37 @@ contract StakeTable_register_Test is Test {
     }
 
     function setUp() public {
+        init(); // light client init
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
         validator = makeAddr("validator");
         delegator = makeAddr("delegator");
         admin = makeAddr("admin");
 
-        string[] memory cmds = new string[](3);
-        cmds[0] = "diff-test";
-        cmds[1] = "mock-genesis";
-        cmds[2] = "5";
+        // deploy EspToken and its proxy
+        EspToken tokenImpl = new EspToken();
+        bytes memory initData =
+            abi.encodeWithSignature("initialize(address,address)", admin, tokenGrantRecipient);
+        ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
+        token = EspToken(payable(address(proxy)));
 
-        bytes memory result = vm.ffi(cmds);
-        (
-            LightClientMock.LightClientState memory state,
-            LightClientMock.StakeTableState memory stakeState
-        ) = abi.decode(result, (LightClient.LightClientState, LightClient.StakeTableState));
-        LightClientMock.LightClientState memory genesis = state;
-        LightClientMock.StakeTableState memory genesisStakeTableState = stakeState;
-
-        lcMock = new LightClientMock(genesis, genesisStakeTableState, 864000);
-
-        DeployEspTokenScript tokenDeployer = new DeployEspTokenScript();
-        (address tokenAddress,) = tokenDeployer.run(tokenGrantRecipient);
-        token = EspToken(tokenAddress);
-
+        // transfer minted coin
         vm.prank(tokenGrantRecipient);
         token.transfer(address(validator), INITIAL_BALANCE);
 
-        DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
-        (proxy, admin) = stakeTableDeployer.run(
-            tokenAddress, address(lcMock), ESCROW_PERIOD, makeAddr("timelock")
+        // deploy stake table and its proxy
+        S staketableImpl = new S();
+        initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)",
+            address(token),
+            address(lc),
+            ESCROW_PERIOD,
+            admin
         );
-        stakeTable = StakeTableMock(proxy);
+        proxy = new ERC1967Proxy(address(staketableImpl), initData);
+        stakeTable = S(payable(address(proxy)));
     }
 
-    function test_Deployment_StoresBlockNumber() public {
+    function test_Deployment_StoresBlockNumber() public view {
         assertEq(stakeTable.initializedAtBlock(), block.number);
     }
 
@@ -496,6 +485,10 @@ contract StakeTable_register_Test is Test {
 
         vm.startPrank(delegator);
 
+        // Delegating zero amount fails
+        vm.expectRevert(S.ZeroAmount.selector);
+        stakeTable.delegate(validator, 0);
+
         // Delegate some funds
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator, 3 ether);
@@ -504,31 +497,35 @@ contract StakeTable_register_Test is Test {
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
         assertEq(token.balanceOf(address(stakeTable)), 3 ether);
 
-        // Withdraw from non-existent validator
+        // Withdraw from non-existent validator fails
         vm.expectRevert(S.NothingToWithdraw.selector);
         stakeTable.claimWithdrawal(makeAddr("nobody"));
 
-        // Withdraw without undelegation
+        // Withdraw without undelegation fails
         vm.expectRevert(S.NothingToWithdraw.selector);
         stakeTable.claimWithdrawal(validator);
 
-        // Request partial undelegation of funds
+        // Undelegating zero amount fails
+        vm.expectRevert(S.ZeroAmount.selector);
+        stakeTable.undelegate(validator, 0);
+
+        // Partial undelegation of funds ok
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Undelegated(delegator, validator, 1 ether);
         stakeTable.undelegate(validator, 1 ether);
 
-        // Withdraw too early
+        // Withdraw too early fails
         vm.expectRevert(S.PrematureWithdrawal.selector);
         stakeTable.claimWithdrawal(validator);
 
-        // Withdraw after escrow period
+        // Withdraw after escrow period ok
         vm.warp(block.timestamp + ESCROW_PERIOD);
         stakeTable.claimWithdrawal(validator);
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 2 ether);
 
         vm.stopPrank();
 
-        // Validator exit
+        // Validator exit succeeds
         vm.prank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.ValidatorExit(validator);
@@ -536,15 +533,15 @@ contract StakeTable_register_Test is Test {
 
         vm.startPrank(delegator);
 
-        // Withdraw too early
+        // Claim validator exit too early fails
         vm.expectRevert(S.PrematureWithdrawal.selector);
         stakeTable.claimValidatorExit(validator);
 
-        // Try to undelegate after validator exit
+        // Undelegate after validator exit fails
         vm.expectRevert(S.ValidatorInactive.selector);
         stakeTable.undelegate(validator, 1);
 
-        // Withdraw after escrow period
+        // Claim validator exit after escrow period ok
         vm.warp(block.timestamp + ESCROW_PERIOD);
         stakeTable.claimValidatorExit(validator);
 
@@ -557,6 +554,85 @@ contract StakeTable_register_Test is Test {
     // solhint-disable-next-line no-empty-blocks
     function test_revertIf_undelegate_AfterValidatorExit() public {
         // TODO
+    }
+
+    function test_multiple_undelegations_after_exit_epoch_succeeds() public {
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed1);
+
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        // register the node
+        vm.prank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+
+        vm.startPrank(delegator);
+
+        // Delegate some funds
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, 3 ether);
+        stakeTable.delegate(validator, 3 ether);
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
+        assertEq(token.balanceOf(address(stakeTable)), 3 ether);
+
+        (uint256 delegatedAmountBefore,) = stakeTable.validators(validator);
+        stakeTable.undelegate(validator, 2 ether);
+        (uint256 delegatedAmountAfter,) = stakeTable.validators(validator);
+        assertEq(delegatedAmountAfter, delegatedAmountBefore - 2 ether);
+
+        vm.expectRevert(S.UndelegationAlreadyExists.selector);
+        stakeTable.undelegate(validator, 1 ether);
+
+        // can't undelegate until the previous undelegation is withdrawn
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectRevert(S.UndelegationAlreadyExists.selector);
+        stakeTable.undelegate(validator, 1 ether);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, 2 ether);
+        stakeTable.claimWithdrawal(validator);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether + 2 ether);
+
+        assertEq(stakeTable.delegations(validator, delegator), 1 ether);
+
+        // now the delegator can undelegate again
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator, 1 ether);
+        stakeTable.undelegate(validator, 1 ether);
+
+        assertEq(stakeTable.delegations(validator, delegator), 0);
+        (uint256 amountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, 1 ether);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        assertEq(token.balanceOf(address(stakeTable)), 1 ether);
+
+        vm.expectRevert(S.PrematureWithdrawal.selector);
+        stakeTable.claimWithdrawal(validator);
+        (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, 1 ether);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, 1 ether);
+        stakeTable.claimWithdrawal(validator);
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
+
+        vm.stopPrank();
     }
 }
 
@@ -641,11 +717,11 @@ contract StakeTableUpgradeTest is Test {
     }
 
     function test_upgrade_succeeds() public {
-        (uint8 majorVersion,,) = StakeTableV2Test(stakeTableRegisterTest.proxy()).getVersion();
+        (uint8 majorVersion,,) = S(stakeTableRegisterTest.stakeTable()).getVersion();
         assertEq(majorVersion, 1);
 
         vm.startPrank(stakeTableRegisterTest.admin());
-        address proxy = stakeTableRegisterTest.proxy();
+        address proxy = address(stakeTableRegisterTest.stakeTable());
         S(proxy).upgradeToAndCall(address(new StakeTableV2Test()), "");
 
         (uint8 majorVersionNew,,) = StakeTableV2Test(proxy).getVersion();
@@ -658,7 +734,7 @@ contract StakeTableUpgradeTest is Test {
     /// forge-config: default.allow_internal_expect_revert = true
     function test_upgrade_reverts_when_not_admin() public {
         address notAdmin = makeAddr("not_admin");
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         (uint8 majorVersion,,) = proxy.getVersion();
         assertEq(majorVersion, 1);
 
@@ -679,14 +755,14 @@ contract StakeTableUpgradeTest is Test {
     }
 
     function test_initialize_function_is_protected() public {
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         proxy.initialize(address(0), address(0), 0, address(0));
     }
 
     function test_initialize_function_is_protected_when_upgraded() public {
         vm.startPrank(stakeTableRegisterTest.admin());
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         proxy.upgradeToAndCall(address(new StakeTableV2Test()), "");
 
         vm.expectRevert(Initializable.InvalidInitialization.selector);
@@ -749,12 +825,12 @@ contract StakeTableUpgradeTest is Test {
 
     function test_reinitialize_succeeds_only_once() public {
         vm.startPrank(stakeTableRegisterTest.admin());
-        S proxy = S(stakeTableRegisterTest.proxy());
+        S proxy = stakeTableRegisterTest.stakeTable();
         proxy.upgradeToAndCall(
             address(new StakeTableV2Test()), abi.encodeWithSignature("initializeV2(uint256)", 2)
         );
 
-        StakeTableV2Test proxyV2 = StakeTableV2Test(stakeTableRegisterTest.proxy());
+        StakeTableV2Test proxyV2 = StakeTableV2Test(address(stakeTableRegisterTest.stakeTable()));
         assertEq(proxyV2.newValue(), 2);
 
         vm.expectRevert(Initializable.InvalidInitialization.selector);
@@ -766,20 +842,47 @@ contract StakeTableUpgradeTest is Test {
 
 contract StakeTableTimelockTest is Test {
     address public impl;
-    address public proxy;
+    address public proxyAddress;
     address public tokenGrantRecipient;
     address public validator;
     address public delegator;
     address public timelockAdmin;
     address[] public proposers = [makeAddr("proposer")];
     address[] public executors = [makeAddr("executor")];
-    LightClientMock public lcMock;
+    LightClientV2 public lcV2;
     EspToken public token;
-    StakeTableMock public stakeTable;
-    Timelock public timelock;
+    S public stakeTable;
+    TimelockController public timelockController;
     uint256 public constant INITIAL_BALANCE = 5 ether;
     uint256 public constant ESCROW_PERIOD = 1 weeks;
     uint256 public constant DELAY = 15 seconds;
+
+    function deployEspToken(address _admin, address _tokenGrantRecipient) public {
+        EspToken tokenImpl = new EspToken();
+        bytes memory initData =
+            abi.encodeWithSignature("initialize(address,address)", _admin, _tokenGrantRecipient);
+        ERC1967Proxy _proxy = new ERC1967Proxy(address(tokenImpl), initData);
+        token = EspToken(payable(address(_proxy)));
+    }
+
+    function deployStakeTable(
+        address _token,
+        address _lightClient,
+        uint256 _escrowPeriod,
+        address _admin
+    ) public {
+        S stakeTableImpl = new S();
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)",
+            _token,
+            _lightClient,
+            _escrowPeriod,
+            _admin
+        );
+        ERC1967Proxy _proxy = new ERC1967Proxy(address(stakeTableImpl), initData);
+        stakeTable = S(payable(address(_proxy)));
+        proxyAddress = address(_proxy);
+    }
 
     function setUp() public {
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
@@ -792,34 +895,22 @@ contract StakeTableTimelockTest is Test {
         cmds[1] = "mock-genesis";
         cmds[2] = "5";
 
-        bytes memory result = vm.ffi(cmds);
-        (
-            LightClientMock.LightClientState memory state,
-            LightClientMock.StakeTableState memory stakeState
-        ) = abi.decode(result, (LightClient.LightClientState, LightClient.StakeTableState));
-        LightClientMock.LightClientState memory genesis = state;
-        LightClientMock.StakeTableState memory genesisStakeTableState = stakeState;
+        lcV2 = new LightClientV2();
 
-        lcMock = new LightClientMock(genesis, genesisStakeTableState, 864000);
+        //deploy timelock
+        timelockController = new TimelockController(DELAY, proposers, executors, timelockAdmin);
 
-        DeployEspTokenScript tokenDeployer = new DeployEspTokenScript();
-        (address tokenAddress,) = tokenDeployer.run(tokenGrantRecipient);
-        token = EspToken(tokenAddress);
+        deployEspToken(address(timelockController), tokenGrantRecipient);
 
         vm.prank(tokenGrantRecipient);
         token.transfer(address(validator), INITIAL_BALANCE);
 
-        //deploy timelock
-        timelock = new Timelock(DELAY, proposers, executors, timelockAdmin);
-
-        DeployStakeTableScript stakeTableDeployer = new DeployStakeTableScript();
-        (proxy,) =
-            stakeTableDeployer.run(tokenAddress, address(lcMock), ESCROW_PERIOD, address(timelock));
-        stakeTable = StakeTableMock(proxy);
+        deployStakeTable(address(token), address(lcV2), ESCROW_PERIOD, address(timelockController));
+        stakeTable = S(proxyAddress);
     }
 
     function test_initialize_sets_timelock_as_owner() public {
-        assertEq(stakeTable.owner(), address(timelock));
+        assertEq(stakeTable.owner(), address(timelockController));
     }
 
     function test_timelock_upgrade_proposal_and_execution_succeeds() public {
@@ -829,27 +920,28 @@ contract StakeTableTimelockTest is Test {
         bytes memory data =
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
 
-        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
 
-        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
 
         vm.stopPrank();
 
-        vm.assertFalse(timelock.isOperationReady(txId));
+        vm.assertFalse(timelockController.isOperationReady(txId));
 
         vm.warp(block.timestamp + DELAY + 1);
 
-        vm.assertTrue(timelock.isOperationReady(txId));
+        vm.assertTrue(timelockController.isOperationReady(txId));
 
         vm.startPrank(executors[0]);
-        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
         vm.stopPrank();
-        vm.assertTrue(timelock.isOperationDone(txId));
+        vm.assertTrue(timelockController.isOperationDone(txId));
     }
 
     function test_expect_revert_when_timelock_is_not_owner() public {
-        assertEq(stakeTable.owner(), address(timelock));
-        vm.startPrank(address(timelock));
+        assertEq(stakeTable.owner(), address(timelockController));
+        vm.startPrank(address(timelockController));
         stakeTable.transferOwnership(makeAddr("newOwner"));
         vm.stopPrank();
 
@@ -859,26 +951,27 @@ contract StakeTableTimelockTest is Test {
         bytes memory data =
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
 
-        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
-        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
 
         vm.stopPrank();
 
-        vm.assertFalse(timelock.isOperationReady(txId));
+        vm.assertFalse(timelockController.isOperationReady(txId));
 
         vm.warp(block.timestamp + DELAY + 1);
 
-        vm.assertTrue(timelock.isOperationReady(txId));
+        vm.assertTrue(timelockController.isOperationReady(txId));
 
         vm.startPrank(executors[0]);
         vm.expectRevert(
             abi.encodeWithSelector(
-                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, address(timelock)
+                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, address(timelockController)
             )
         );
-        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
         vm.stopPrank();
-        vm.assertFalse(timelock.isOperationDone(txId));
+        vm.assertFalse(timelockController.isOperationDone(txId));
     }
 
     function test_expect_revert_when_timelock_upgrade_proposal_and_execution_before_delay()
@@ -890,8 +983,9 @@ contract StakeTableTimelockTest is Test {
         bytes memory data =
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
 
-        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
-        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
 
         vm.stopPrank();
 
@@ -903,9 +997,9 @@ contract StakeTableTimelockTest is Test {
                 bytes32(1 << uint8(TimelockController.OperationState.Ready))
             )
         );
-        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
         vm.stopPrank();
-        vm.assertFalse(timelock.isOperationDone(txId));
+        vm.assertFalse(timelockController.isOperationDone(txId));
     }
 
     function test_expect_revert_when_timelock_upgrade_proposal_and_execution_without_correct_permission(
@@ -916,19 +1010,20 @@ contract StakeTableTimelockTest is Test {
         bytes memory data =
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
 
-        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 address(makeAddr("notProposer")),
-                timelock.PROPOSER_ROLE()
+                timelockController.PROPOSER_ROLE()
             )
         );
-        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
         vm.stopPrank();
 
         vm.startPrank(proposers[0]);
-        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
         vm.stopPrank();
 
         vm.warp(block.timestamp + DELAY + 1);
@@ -938,12 +1033,12 @@ contract StakeTableTimelockTest is Test {
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 address(makeAddr("notExecutor")),
-                timelock.EXECUTOR_ROLE()
+                timelockController.EXECUTOR_ROLE()
             )
         );
-        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
         vm.stopPrank();
-        vm.assertFalse(timelock.isOperationDone(txId));
+        vm.assertFalse(timelockController.isOperationDone(txId));
     }
 
     function test_expect_revert_when_execute_with_wrong_salt() public {
@@ -955,9 +1050,9 @@ contract StakeTableTimelockTest is Test {
         bytes32 wrongSalt = keccak256("salt-B");
 
         bytes32 wrongTxId =
-            timelock.hashOperation(address(stakeTable), 0, data, wrongSalt, bytes32(0));
+            timelockController.hashOperation(address(stakeTable), 0, data, wrongSalt, bytes32(0));
         vm.startPrank(proposers[0]);
-        timelock.schedule(address(stakeTable), 0, data, correctSalt, bytes32(0), DELAY);
+        timelockController.schedule(address(stakeTable), 0, data, correctSalt, bytes32(0), DELAY);
         vm.stopPrank();
 
         vm.warp(block.timestamp + DELAY + 1);
@@ -970,7 +1065,7 @@ contract StakeTableTimelockTest is Test {
                 bytes32(1 << uint8(TimelockController.OperationState.Ready))
             )
         );
-        timelock.execute(address(stakeTable), 0, data, wrongSalt, bytes32(0));
+        timelockController.execute(address(stakeTable), 0, data, wrongSalt, bytes32(0));
         vm.stopPrank();
     }
 
@@ -991,8 +1086,8 @@ contract StakeTableTimelockTest is Test {
 
     function test_timelock_admin_can_grant_roles_without_delay() public {
         vm.startPrank(timelockAdmin);
-        timelock.grantRole(timelock.PROPOSER_ROLE(), timelockAdmin);
-        timelock.grantRole(timelock.EXECUTOR_ROLE(), timelockAdmin);
+        timelockController.grantRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
+        timelockController.grantRole(timelockController.EXECUTOR_ROLE(), timelockAdmin);
         vm.stopPrank();
     }
 
@@ -1003,19 +1098,20 @@ contract StakeTableTimelockTest is Test {
             "upgradeToAndCall(address,bytes)", address(new StakeTableV2Test()), ""
         );
 
-        bytes32 txId = timelock.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
 
-        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
 
         vm.stopPrank();
 
-        bytes32 cancelRole = timelock.CANCELLER_ROLE();
-        assertFalse(timelock.hasRole(cancelRole, timelockAdmin));
+        bytes32 cancelRole = timelockController.CANCELLER_ROLE();
+        assertFalse(timelockController.hasRole(cancelRole, timelockAdmin));
         vm.startPrank(timelockAdmin);
-        timelock.grantRole(cancelRole, timelockAdmin);
-        assertTrue(timelock.hasRole(cancelRole, timelockAdmin));
-        timelock.cancel(txId);
-        assertEq(timelock.getTimestamp(txId), 0);
+        timelockController.grantRole(cancelRole, timelockAdmin);
+        assertTrue(timelockController.hasRole(cancelRole, timelockAdmin));
+        timelockController.cancel(txId);
+        assertEq(timelockController.getTimestamp(txId), 0);
         vm.stopPrank();
 
         // Attempt to execute the canceled operation
@@ -1028,16 +1124,16 @@ contract StakeTableTimelockTest is Test {
                 bytes32(1 << uint8(TimelockController.OperationState.Ready))
             )
         );
-        timelock.execute(address(proxy), 0, data, bytes32(0), bytes32(0));
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
         vm.stopPrank();
     }
 
     function test_timelock_role_revocation() public {
         vm.startPrank(timelockAdmin);
-        timelock.grantRole(timelock.PROPOSER_ROLE(), timelockAdmin);
-        assertTrue(timelock.hasRole(timelock.PROPOSER_ROLE(), timelockAdmin));
-        timelock.revokeRole(timelock.PROPOSER_ROLE(), timelockAdmin);
-        assertFalse(timelock.hasRole(timelock.PROPOSER_ROLE(), timelockAdmin));
+        timelockController.grantRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
+        assertTrue(timelockController.hasRole(timelockController.PROPOSER_ROLE(), timelockAdmin));
+        timelockController.revokeRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
+        assertFalse(timelockController.hasRole(timelockController.PROPOSER_ROLE(), timelockAdmin));
         vm.stopPrank();
     }
 
@@ -1047,25 +1143,25 @@ contract StakeTableTimelockTest is Test {
         bytes memory data1 =
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
         bytes32 txId1 =
-            timelock.hashOperation(address(stakeTable), 0, data1, bytes32(0), bytes32(0));
+            timelockController.hashOperation(address(stakeTable), 0, data1, bytes32(0), bytes32(0));
 
         bytes memory data2 =
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
         bytes32 txId2 =
-            timelock.hashOperation(address(stakeTable), 0, data2, bytes32(0), bytes32(0));
+            timelockController.hashOperation(address(stakeTable), 0, data2, bytes32(0), bytes32(0));
 
-        timelock.schedule(address(stakeTable), 0, data1, bytes32(0), bytes32(0), DELAY);
-        timelock.schedule(address(stakeTable), 0, data2, bytes32(0), bytes32(0), DELAY);
+        timelockController.schedule(address(stakeTable), 0, data1, bytes32(0), bytes32(0), DELAY);
+        timelockController.schedule(address(stakeTable), 0, data2, bytes32(0), bytes32(0), DELAY);
 
         vm.warp(block.timestamp + DELAY + 1);
 
         vm.startPrank(executors[0]);
-        timelock.execute(address(stakeTable), 0, data1, bytes32(0), bytes32(0));
-        timelock.execute(address(stakeTable), 0, data2, bytes32(0), bytes32(0));
+        timelockController.execute(address(stakeTable), 0, data1, bytes32(0), bytes32(0));
+        timelockController.execute(address(stakeTable), 0, data2, bytes32(0), bytes32(0));
         vm.stopPrank();
 
-        assertTrue(timelock.isOperationDone(txId1));
-        assertTrue(timelock.isOperationDone(txId2));
+        assertTrue(timelockController.isOperationDone(txId1));
+        assertTrue(timelockController.isOperationDone(txId2));
     }
 
     function test_expect_revert_when_timelock_zero_delay_schedule() public {
@@ -1077,7 +1173,7 @@ contract StakeTableTimelockTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(TimelockController.TimelockInsufficientDelay.selector, 0, DELAY)
         );
-        timelock.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), 0);
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), 0);
         vm.stopPrank();
     }
 
@@ -1086,7 +1182,9 @@ contract StakeTableTimelockTest is Test {
 
         // Encode an upgrade call with invalid data
         bytes memory invalidData = abi.encodeWithSignature("nonExistentFunction()");
-        timelock.schedule(address(stakeTable), 0, invalidData, bytes32(0), bytes32(0), DELAY);
+        timelockController.schedule(
+            address(stakeTable), 0, invalidData, bytes32(0), bytes32(0), DELAY
+        );
 
         vm.stopPrank();
 
@@ -1096,7 +1194,7 @@ contract StakeTableTimelockTest is Test {
         // Attempt to execute the invalid data operation
         vm.startPrank(executors[0]);
         vm.expectRevert();
-        timelock.execute(address(proxy), 0, invalidData, bytes32(0), bytes32(0));
+        timelockController.execute(address(proxyAddress), 0, invalidData, bytes32(0), bytes32(0));
         vm.stopPrank();
     }
 }

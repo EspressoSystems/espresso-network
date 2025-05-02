@@ -18,15 +18,12 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types", features = ["testing"] }
-ethers = { workspace = true }
-ethers-conv = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true, optional = true }
-hotshot-stake-table = { workspace = true }
 hotshot-types = { workspace = true }
 jf-merkle-tree = { workspace = true }
 jf-signature = { workspace = true, features = ["bls"] }
@@ -46,6 +43,7 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
+alloy = { workspace = true }
 hotshot-query-service = { workspace = true }
 marketplace-solver = { path = "../marketplace-solver", features = ["testing"] }
 sequencer = { path = "../sequencer", features = ["testing"] }
