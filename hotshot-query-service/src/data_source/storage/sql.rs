@@ -682,6 +682,21 @@ impl PruneStorage for SqlStorage {
         Ok(size as u64)
     }
 
+    // Trigger incremental vacuum to free up space in the SQLite database.
+    #[cfg(feature = "embedded-db")]
+    async fn vacuum(&self) -> anyhow::Result<()> {
+        let config = self.get_pruning_config().ok_or(QueryError::Error {
+            message: "Pruning config not found".to_string(),
+        })?;
+        let mut conn = self.pool().acquire().await?;
+        query("PRAGMA incremental_vacuum($1)")
+            .bind(config.incremental_vacuum_pages() as i64)
+            .execute(conn.as_mut())
+            .await?;
+        conn.close().await?;
+        Ok(())
+    }
+
     /// Note: The prune operation may not immediately free up space even after rows are deleted.
     /// This is because a vacuum operation may be necessary to reclaim more space.
     /// PostgreSQL already performs auto vacuuming, so we are not including it here
@@ -736,14 +751,10 @@ impl PruneStorage for SqlStorage {
             }
         }
 
-        #[cfg(feature = "embedded-db")]
-        {
-            let mut conn = self.pool().acquire().await?;
-            query("PRAGMA incremental_vacuum(16000)")
-                .execute(conn.as_mut())
-                .await?;
-            conn.close().await?;
-        }
+        // Note: We don't vacuum the Postgres database,
+        // as there is no manual trigger for incremental vacuum,
+        // and a full vacuum can take a lot of time.
+        self.vacuum().await?;
 
         // If threshold is set, prune data exceeding minimum retention in batches
         // This parameter is needed for SQL storage as there is no direct way to get free space.
@@ -779,14 +790,7 @@ impl PruneStorage for SqlStorage {
                             message: format!("failed to commit {e}"),
                         })?;
 
-                        #[cfg(feature = "embedded-db")]
-                        {
-                            let mut conn = self.pool().acquire().await?;
-                            query("PRAGMA incremental_vacuum(16000)")
-                                .execute(conn.as_mut())
-                                .await?;
-                            conn.close().await?;
-                        }
+                        self.vacuum().await?;
 
                         pruner.pruned_height = Some(height);
 
