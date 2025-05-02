@@ -609,7 +609,7 @@ where
             .db
             .get_accounts(instance, block_height, view, accounts)
             .await
-            .with_context(|| "failed to get reward accounts from DB")?;
+            .with_context(|| "failed to get fee accounts from DB")?;
 
         // Verify the accounts
         let mut proofs = Vec::new();
