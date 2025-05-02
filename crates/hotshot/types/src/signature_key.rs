@@ -6,8 +6,6 @@
 
 //! Types and structs for the hotshot signature keys
 
-use std::borrow::Cow;
-
 use alloy::primitives::U256;
 use ark_serialize::SerializationError;
 use bitvec::{slice::BitSlice, vec::BitVec};
@@ -126,7 +124,7 @@ impl SignatureKey for BLSPubKey {
         threshold: U256,
     ) -> Self::QcParams<'_> {
         QcParams {
-            stake_entries: Cow::Borrowed(stake_entries),
+            stake_entries,
             threshold,
             agg_sig_pp: (),
         }

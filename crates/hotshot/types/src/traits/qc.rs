@@ -14,20 +14,16 @@ use ark_std::{
 use bitvec::prelude::*;
 use digest::generic_array::{ArrayLength, GenericArray};
 use jf_signature::{AggregateableSignatureSchemes, SignatureError};
-use serde::{Deserialize, Serialize};
 
 /// Trait for validating a QC built from different signatures on the same message
-pub trait QuorumCertificateScheme<
-    A: AggregateableSignatureSchemes + Serialize + for<'a> Deserialize<'a>,
->
-{
+pub trait QuorumCertificateScheme<A: AggregateableSignatureSchemes> {
     /// Public parameters for generating the QC
     /// E.g: snark proving/verifying keys, list of (or pointer to) public keys stored in the smart contract.
-    type QcProverParams<'a>: Serialize + for<'b> Deserialize<'b>;
+    type QcProverParams<'a>;
 
     /// Public parameters for validating the QC
     /// E.g: verifying keys, stake table commitment
-    type QcVerifierParams<'a>: Serialize + for<'b> Deserialize<'b>;
+    type QcVerifierParams<'a>;
 
     /// Allows to fix the size of the message at compilation time.
     type MessageLength: ArrayLength<A::MessageUnit>;
