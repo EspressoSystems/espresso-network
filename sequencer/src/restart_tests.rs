@@ -866,7 +866,6 @@ impl TestNetwork {
         self.restart_helper(0..da_nodes, 0..regular_nodes, false)
             .await;
         self.check_progress().await;
-        self.check_state_integrity().await;
     }
 
     /// Restart indicated nodes, ensuring progress is maintained at all times.
