@@ -444,10 +444,10 @@ pub mod mock {
             let mut proofs = Vec::new();
             for account in accounts {
                 let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
-                    .context(format!("response missing account {account}"))?;
+                    .context(format!("response missing fee account {account}"))?;
                 proof
                     .verify(&fee_merkle_tree_root)
-                    .context(format!("invalid proof for accoujnt {account}"))?;
+                    .context(format!("invalid proof for fee account {account}"))?;
                 proofs.push(proof);
             }
 

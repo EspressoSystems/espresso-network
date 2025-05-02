@@ -43,15 +43,13 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use jf_merkle_tree::{
-    ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
-    MerkleTreeScheme, UniversalMerkleTreeScheme,
-};
+use jf_merkle_tree::MerkleTreeScheme;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
     catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, CatchupStorage},
     context::Consensus,
+    request_response::data_source::retain_reward_accounts,
     state_signature::StateSigner,
     SeqTypes, SequencerApiVersion, SequencerContext,
 };
@@ -594,25 +592,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> CatchupD
                 "state not available for height {height}, view {view:?}"
             ))?;
 
-        let mut snapshot = RewardMerkleTree::from_commitment(state.reward_merkle_tree.commitment());
-        for account in accounts {
-            match state.reward_merkle_tree.universal_lookup(account) {
-                LookupResult::Ok(elem, proof) => {
-                    // This remember cannot fail, since we just constructed a valid proof, and are
-                    // remembering into a tree with the same commitment.
-                    snapshot.remember(account, *elem, proof).unwrap();
-                },
-                LookupResult::NotFound(proof) => {
-                    // Likewise this cannot fail.
-                    snapshot.non_membership_remember(*account, proof).unwrap()
-                },
-                LookupResult::NotInMemory => {
-                    bail!("missing account {account}");
-                },
-            }
-        }
-
-        Ok(snapshot)
+        retain_reward_accounts(&state.reward_merkle_tree, accounts.iter().copied())
     }
 }
 

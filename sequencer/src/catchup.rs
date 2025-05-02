@@ -273,10 +273,10 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             let mut proofs = Vec::new();
             for account in accounts {
                 let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
-                    .context(format!("response missing account {account}"))?;
+                    .context(format!("response missing fee account {account}"))?;
                 proof
                     .verify(&fee_merkle_tree_root)
-                    .context(format!("invalid proof for accoujnt {account}"))?;
+                    .context(format!("invalid proof for fee account {account}"))?;
                 proofs.push(proof);
             }
 
@@ -391,7 +391,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             let mut proofs = Vec::new();
             for account in accounts {
                 let (proof, _) = RewardAccountProof::prove(&tree, (*account).into())
-                    .context(format!("response missing account {account}"))?;
+                    .context(format!("response missing reward account {account}"))?;
                 proof
                     .verify(&reward_merkle_tree_root)
                     .context(format!("invalid proof for reward account {account}"))?;
@@ -577,7 +577,11 @@ where
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Get the leaf chain
-        let leaf_chain = self.db.get_leaf_chain(height).await?;
+        let leaf_chain = self
+            .db
+            .get_leaf_chain(height)
+            .await
+            .with_context(|| "failed to get leaf chain from DB")?;
 
         // Verify the leaf chain
         let leaf = verify_leaf_chain(
