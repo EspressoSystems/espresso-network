@@ -841,9 +841,32 @@ impl ParallelStateCatchup {
         self.providers.lock().push(provider);
     }
 
-    /// Perform an async operation on all providers, returning the first result to succeed
-    pub async fn on_all_providers<C, F, RT>(&self, closure: C) -> anyhow::Result<RT>
+    /// Perform an async operation on all local providers, returning the first result to succeed
+    pub async fn on_local_providers<C, F, RT>(&self, closure: C) -> anyhow::Result<RT>
     where
+        C: Fn(Arc<dyn StateCatchup>) -> F + Clone + Send + Sync + 'static,
+        F: Future<Output = anyhow::Result<RT>> + Send + 'static,
+        RT: Send + Sync + 'static,
+    {
+        self.on_providers(|provider| provider.is_local(), closure)
+            .await
+    }
+
+    /// Perform an async operation on all remote providers, returning the first result to succeed
+    pub async fn on_remote_providers<C, F, RT>(&self, closure: C) -> anyhow::Result<RT>
+    where
+        C: Fn(Arc<dyn StateCatchup>) -> F + Clone + Send + Sync + 'static,
+        F: Future<Output = anyhow::Result<RT>> + Send + 'static,
+        RT: Send + Sync + 'static,
+    {
+        self.on_providers(|provider| !provider.is_local(), closure)
+            .await
+    }
+
+    /// Perform an async operation on all providers matching the given predicate, returning the first result to succeed
+    pub async fn on_providers<P, C, F, RT>(&self, predicate: P, closure: C) -> anyhow::Result<RT>
+    where
+        P: Fn(&Arc<dyn StateCatchup>) -> bool + Clone + Send + Sync + 'static,
         C: Fn(Arc<dyn StateCatchup>) -> F + Clone + Send + Sync + 'static,
         F: Future<Output = anyhow::Result<RT>> + Send + 'static,
         RT: Send + Sync + 'static,
@@ -852,6 +875,12 @@ impl ParallelStateCatchup {
         let providers = self.providers.lock().clone();
         if providers.is_empty() {
             return Err(anyhow::anyhow!("no providers were initialized"));
+        }
+
+        // Filter the providers by the predicate
+        let providers = providers.into_iter().filter(predicate).collect::<Vec<_>>();
+        if providers.is_empty() {
+            return Err(anyhow::anyhow!("no providers matched the given predicate"));
         }
 
         // Spawn futures for each provider
@@ -888,6 +917,15 @@ impl ParallelStateCatchup {
     }
 }
 
+macro_rules! clone {
+    ( ($( $x:ident ),*) $y:expr ) => {
+        {
+            $(let $x = $x.clone();)*
+            $y
+        }
+    };
+}
+
 /// A catchup implementation that parallelizes requests to a local and remote provider.
 /// It returns the result of the first provider to complete.
 #[async_trait]
@@ -899,17 +937,30 @@ impl StateCatchup for ParallelStateCatchup {
         stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        // Try fetching the leaf on all providers
-        self.on_all_providers(move |provider| {
-            // Clone things we need in the closure
-            let stake_table_clone = stake_table.clone();
+        // Try fetching the leaf on the local providers first
+        let local_result = self
+            .on_local_providers(clone! {(stake_table) move |provider| {
+                clone!{(stake_table) async move {
+                    provider
+                        .try_fetch_leaf(retry, height, stake_table, success_threshold)
+                        .await
+                }}
+            }})
+            .await;
 
-            async move {
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(clone! {(stake_table) move |provider| {
+            clone!{(stake_table) async move {
                 provider
-                    .try_fetch_leaf(retry, height, stake_table_clone, success_threshold)
+                    .try_fetch_leaf(retry, height, stake_table, success_threshold)
                     .await
-            }
-        })
+            }}
+        }})
         .await
     }
 
@@ -922,26 +973,44 @@ impl StateCatchup for ParallelStateCatchup {
         fee_merkle_tree_root: FeeMerkleCommitment,
         accounts: &[FeeAccount],
     ) -> anyhow::Result<Vec<FeeAccountProof>> {
-        let instance_clone = instance.clone();
+        // Try to get the accounts on local providers first
         let accounts_vec = accounts.to_vec();
-        self.on_all_providers(move |provider| {
-            // Clone things we need in the closure
-            let instance_clone = instance_clone.clone();
-            let accounts_clone = accounts_vec.clone();
+        let local_result = self
+            .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
+                clone! {(instance, accounts_vec) async move {
+                    provider
+                        .try_fetch_accounts(
+                            retry,
+                            &instance,
+                            height,
+                            view,
+                            fee_merkle_tree_root,
+                            &accounts_vec,
+                        )
+                        .await
+                }}
+            }})
+            .await;
 
-            async move {
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
+            clone!{(instance, accounts_vec) async move {
                 provider
-                    .try_fetch_accounts(
-                        retry,
-                        &instance_clone,
-                        height,
-                        view,
-                        fee_merkle_tree_root,
-                        &accounts_clone,
-                    )
-                    .await
-            }
-        })
+                .try_fetch_accounts(
+                    retry,
+                    &instance,
+                    height,
+                    view,
+                    fee_merkle_tree_root,
+                    &accounts_vec,
+                ).await
+            }}
+        }})
         .await
     }
 
@@ -953,32 +1022,60 @@ impl StateCatchup for ParallelStateCatchup {
         view: ViewNumber,
         mt: &mut BlockMerkleTree,
     ) -> anyhow::Result<()> {
-        let mt_clone = mt.clone();
-        let instance_clone = instance.clone();
-
-        let merkle_tree = self
-            .on_all_providers(move |provider| {
-                let instance_clone = instance_clone.clone();
-                let mut mt_clone = mt_clone.clone();
-
-                async move {
+        // Try to remember the blocks merkle tree on local providers first
+        let local_result = self
+            .on_local_providers(clone! {(mt, instance) move |provider| {
+                let mut mt = mt.clone();
+                clone! {(instance) async move {
+                    // Perform the call
                     provider
                         .try_remember_blocks_merkle_tree(
                             retry,
-                            &instance_clone,
+                            &instance,
                             height,
                             view,
-                            &mut mt_clone,
+                            &mut mt,
                         )
                         .await?;
-                    Ok(mt_clone)
-                }
-            })
-            .await
-            .with_context(|| "failed to remember blocks merkle tree")?;
+
+                    // Return the merkle tree so we can modify it
+                    Ok(mt)
+                }}
+            }})
+            .await;
+
+        // Check if we were successful locally
+        if let Ok(modified_mt) = local_result {
+            // Set the merkle tree to the output of the successful local call
+            *mt = modified_mt;
+
+            return Ok(());
+        }
+
+        // If that fails, try the remote ones
+        let remote_result = self
+            .on_remote_providers(clone! {(mt, instance) move |provider| {
+                let mut mt = mt.clone();
+                clone!{(instance) async move {
+                    // Perform the call
+                    provider
+                    .try_remember_blocks_merkle_tree(
+                        retry,
+                        &instance,
+                        height,
+                        view,
+                        &mut mt,
+                    )
+                    .await?;
+
+                    // Return the merkle tree
+                    Ok(mt)
+                }}
+            }})
+            .await?;
 
         // Update the original, local merkle tree
-        *mt = merkle_tree;
+        *mt = remote_result;
 
         Ok(())
     }
@@ -988,7 +1085,20 @@ impl StateCatchup for ParallelStateCatchup {
         retry: usize,
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
-        self.on_all_providers(move |provider| async move {
+        // Try fetching the chain config on the local providers first
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider.try_fetch_chain_config(retry, commitment).await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(move |provider| async move {
             provider.try_fetch_chain_config(retry, commitment).await
         })
         .await
@@ -1003,25 +1113,44 @@ impl StateCatchup for ParallelStateCatchup {
         reward_merkle_tree_root: RewardMerkleCommitment,
         accounts: &[RewardAccount],
     ) -> anyhow::Result<Vec<RewardAccountProof>> {
-        let instance_clone = instance.clone();
+        // Try to get the accounts on local providers first
         let accounts_vec = accounts.to_vec();
-        self.on_all_providers(move |provider| {
-            let instance_clone = instance_clone.clone();
-            let accounts_clone = accounts_vec.clone();
+        let local_result = self
+            .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
+                clone! {(instance, accounts_vec) async move {
+                    provider
+                        .try_fetch_reward_accounts(
+                            retry,
+                            &instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            &accounts_vec,
+                        )
+                        .await
+                }}
+            }})
+            .await;
 
-            async move {
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones
+        self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
+            clone!{(instance, accounts_vec) async move {
                 provider
-                    .try_fetch_reward_accounts(
-                        retry,
-                        &instance_clone,
-                        height,
-                        view,
-                        reward_merkle_tree_root,
-                        &accounts_clone,
-                    )
-                    .await
-            }
-        })
+                .try_fetch_reward_accounts(
+                    retry,
+                    &instance,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    &accounts_vec,
+                ).await
+            }}
+        }})
         .await
     }
 
@@ -1049,24 +1178,43 @@ impl StateCatchup for ParallelStateCatchup {
         fee_merkle_tree_root: FeeMerkleCommitment,
         accounts: Vec<FeeAccount>,
     ) -> anyhow::Result<Vec<FeeAccountProof>> {
-        let instance_clone = instance.clone();
-        self.on_all_providers(move |provider| {
-            // Clone things we need in the closure
-            let instance_clone = instance_clone.clone();
-            let accounts_clone = accounts.clone();
+        // Try to get the accounts on local providers first
+        let accounts_vec = accounts.to_vec();
+        let local_result = self
+            .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
+                clone! {(instance, accounts_vec) async move {
+                    provider
+                        .try_fetch_accounts(
+                            0,
+                            &instance,
+                            height,
+                            view,
+                            fee_merkle_tree_root,
+                            &accounts_vec,
+                        )
+                        .await
+                }}
+            }})
+            .await;
 
-            async move {
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
+            clone!{(instance, accounts_vec) async move {
                 provider
-                    .fetch_accounts(
-                        &instance_clone,
-                        height,
-                        view,
-                        fee_merkle_tree_root,
-                        accounts_clone,
-                    )
-                    .await
-            }
-        })
+                .fetch_accounts(
+                    &instance,
+                    height,
+                    view,
+                    fee_merkle_tree_root,
+                    accounts_vec,
+                ).await
+            }}
+        }})
         .await
     }
 
@@ -1076,15 +1224,30 @@ impl StateCatchup for ParallelStateCatchup {
         stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        self.on_all_providers(move |provider| {
-            let stake_table_clone = stake_table.clone();
+        // Try fetching the leaf on the local providers first
+        let local_result = self
+            .on_local_providers(clone! {(stake_table) move |provider| {
+                clone!{(stake_table) async move {
+                    provider
+                        .try_fetch_leaf(0, height, stake_table, success_threshold)
+                        .await
+                }}
+            }})
+            .await;
 
-            async move {
-                provider
-                    .fetch_leaf(height, stake_table_clone, success_threshold)
-                    .await
-            }
-        })
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(clone! {(stake_table) move |provider| {
+         clone!{(stake_table) async move {
+             provider
+                 .fetch_leaf(height, stake_table, success_threshold)
+                 .await
+         }}
+        }})
         .await
     }
 
@@ -1092,7 +1255,20 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
-        self.on_all_providers(move |provider| async move {
+        // Try fetching the chain config on the local providers first
+        let local_result = self
+            .on_local_providers(move |provider| async move {
+                provider.try_fetch_chain_config(0, commitment).await
+            })
+            .await;
+
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(move |provider| async move {
             provider.fetch_chain_config(commitment).await
         })
         .await
@@ -1106,23 +1282,43 @@ impl StateCatchup for ParallelStateCatchup {
         reward_merkle_tree_root: RewardMerkleCommitment,
         accounts: Vec<RewardAccount>,
     ) -> anyhow::Result<Vec<RewardAccountProof>> {
-        let instance_clone = instance.clone();
-        self.on_all_providers(move |provider| {
-            let instance_clone = instance_clone.clone();
-            let accounts_clone = accounts.clone();
+        // Try to get the accounts on local providers first
+        let accounts_vec = accounts.to_vec();
+        let local_result = self
+            .on_local_providers(clone! {(instance, accounts_vec) move |provider| {
+                clone! {(instance, accounts_vec) async move {
+                    provider
+                        .try_fetch_reward_accounts(
+                            0,
+                            &instance,
+                            height,
+                            view,
+                            reward_merkle_tree_root,
+                            &accounts_vec,
+                        )
+                        .await
+                }}
+            }})
+            .await;
 
-            async move {
+        // Check if we were successful locally
+        if local_result.is_ok() {
+            return local_result;
+        }
+
+        // If that fails, try the remote ones (with retry)
+        self.on_remote_providers(clone! {(instance, accounts_vec) move |provider| {
+            clone!{(instance, accounts_vec) async move {
                 provider
-                    .fetch_reward_accounts(
-                        &instance_clone,
-                        height,
-                        view,
-                        reward_merkle_tree_root,
-                        accounts_clone,
-                    )
-                    .await
-            }
-        })
+                .fetch_reward_accounts(
+                    &instance,
+                    height,
+                    view,
+                    reward_merkle_tree_root,
+                    accounts_vec,
+                ).await
+            }}
+        }})
         .await
     }
 
@@ -1133,26 +1329,60 @@ impl StateCatchup for ParallelStateCatchup {
         view: ViewNumber,
         mt: &mut BlockMerkleTree,
     ) -> anyhow::Result<()> {
-        let mt_clone = mt.clone();
-        let instance_clone = instance.clone();
-
-        let merkle_tree = self
-            .on_all_providers(move |provider| {
-                let instance_clone = instance_clone.clone();
-                let mut mt_clone = mt_clone.clone();
-
-                async move {
+        // Try to remember the blocks merkle tree on local providers first
+        let local_result = self
+            .on_local_providers(clone! {(mt, instance) move |provider| {
+                let mut mt = mt.clone();
+                clone! {(instance) async move {
+                    // Perform the call
                     provider
-                        .remember_blocks_merkle_tree(&instance_clone, height, view, &mut mt_clone)
+                        .try_remember_blocks_merkle_tree(
+                            0,
+                            &instance,
+                            height,
+                            view,
+                            &mut mt,
+                        )
                         .await?;
-                    Ok(mt_clone)
-                }
-            })
-            .await
-            .with_context(|| "failed to remember blocks merkle tree")?;
+
+                    // Return the merkle tree so we can modify it
+                    Ok(mt)
+                }}
+            }})
+            .await;
+
+        // Check if we were successful locally
+        if let Ok(modified_mt) = local_result {
+            // Set the merkle tree to the one with the
+            // successful call
+            *mt = modified_mt;
+
+            return Ok(());
+        }
+
+        // If that fails, try the remote ones (with retry)
+        let remote_result = self
+            .on_remote_providers(clone! {(mt, instance) move |provider| {
+                let mut mt = mt.clone();
+                clone!{(instance) async move {
+                    // Perform the call
+                    provider
+                    .remember_blocks_merkle_tree(
+                        &instance,
+                        height,
+                        view,
+                        &mut mt,
+                    )
+                    .await?;
+
+                    // Return the merkle tree
+                    Ok(mt)
+                }}
+            }})
+            .await?;
 
         // Update the original, local merkle tree
-        *mt = merkle_tree;
+        *mt = remote_result;
 
         Ok(())
     }
