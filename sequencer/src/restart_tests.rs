@@ -448,20 +448,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .config
                 .num_nodes_with_stake
         };
-        // Question : since blocks production in test must be
-        // deterministic... so we could probably just math the final
-        // state.  On the other hand apparently we can get leaves from
-        // `saved_leaves` like so:
-        // https://github.com/EspressoSystems/espresso-network/blob/main/crates/hotshot/types/src/consensus.rs#L1113-L1120
-        // no, ^ that won't work b/c state held in memory won't
-        // persist beyond restart. So we need to get from persistence.
-        // If real persistence is working we can use that, if not we
-        // can attach state to the test network.
-
-        // TODO Load saved consensus state from storage.
-        // let (initializer, anchor_view) = persistence
-        //     .load_consensus_state::<V>(instance_state.clone())
-        //     .await?;
 
         let saved_leaves = {
             context
