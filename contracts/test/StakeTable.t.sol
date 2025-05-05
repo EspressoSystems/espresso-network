@@ -1100,6 +1100,52 @@ contract StakeTable_register_Test is LightClientCommonTest {
         stakeTable.registerValidator(blsVK4, schnorrVK4, sig4, invalidCommission);
         vm.stopPrank();
     }
+
+    function test_ValidatorExit() public {
+        // Setup - register validator
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed1);
+
+        vm.startPrank(validator);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+        vm.stopPrank();
+
+        // Test 1: Non-validator cannot exit
+        address nonValidator = makeAddr("nonValidator");
+        vm.startPrank(nonValidator);
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // Test 2: Wrong validator cannot exit another validator's position
+        address wrongValidator = makeAddr("wrongValidator");
+        vm.startPrank(wrongValidator);
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // Test 3: Successful exit by correct validator
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // Test 4: Cannot exit again after already exited
+        vm.startPrank(validator);
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // Verify validator status after exit
+        (uint256 validatorAmountDelegated, S.ValidatorStatus status) =
+            stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        assertEq(uint256(status), uint256(S.ValidatorStatus.Exited));
+    }
 }
 
 contract StakeTableV2Test is S {
