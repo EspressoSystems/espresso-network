@@ -16,6 +16,7 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 committable = "0.2"
 derive_more = { workspace = true }
+dotenvy = "0.15.7"
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true }

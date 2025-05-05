@@ -1,4 +1,9 @@
-use std::{collections::HashMap, io::Write};
+use std::{
+    collections::HashMap,
+    io::Write,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 use alloy::{
     contract::RawCallBuilder,
@@ -330,6 +335,10 @@ pub async fn deploy_light_client_proxy(
 /// Upgrade the light client proxy to use LightClientV2.
 /// Internally, first detect existence of proxy, then deploy LCV2, then upgrade and initializeV2.
 /// Internal to "deploy LCV2", we deploy PlonkVerifierV2 whose address will be used at LCV2 init time.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a regular EOA, not a multisig.
+/// - the proxy is not yet initialized for V2
 pub async fn upgrade_light_client_v2(
     provider: impl Provider,
     contracts: &mut Contracts,
@@ -435,6 +444,118 @@ pub async fn upgrade_light_client_v2(
             }
 
             Ok(receipt)
+        },
+    }
+}
+
+/// Upgrade the light client proxy to use LightClientV2.
+/// Internally, first detect existence of proxy, then deploy LCV2, then upgrade and initializeV2.
+/// Internal to "deploy LCV2", we deploy PlonkVerifierV2 whose address will be used at LCV2 init time.
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+/// - the proxy is not yet initialized for V2
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_light_client_v2_multisig_owner(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    is_mock: bool,
+    blocks_per_epoch: u64,
+    epoch_start_block: u64,
+    rpc_url: String,
+    multisig_address: Address,
+) -> Result<(String, bool)> {
+    match contracts.address(Contract::LightClientProxy) {
+        // check if proxy already exists
+        None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
+        Some(proxy_addr) => {
+            let proxy = LightClient::new(proxy_addr, &provider);
+            let owner = proxy.owner().call().await?;
+            let owner_addr = owner._0;
+            assert_eq!(
+                owner_addr, multisig_address,
+                "Proxy is not owned by the multisig"
+            );
+            // TODO: check if owner is a multisig
+            // first deploy PlonkVerifierV2.sol
+            let pv2_addr = contracts
+                .deploy(
+                    Contract::PlonkVerifierV2,
+                    PlonkVerifierV2::deploy_builder(&provider),
+                )
+                .await?;
+            // then deploy LightClientV2.sol
+            let target_lcv2_bytecode = if is_mock {
+                LightClientV2Mock::BYTECODE.encode_hex()
+            } else {
+                LightClientV2::BYTECODE.encode_hex()
+            };
+            let lcv2_linked_bytecode = {
+                match target_lcv2_bytecode
+                    .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                    .count()
+                {
+                    0 => return Err(anyhow!("lib placeholder not found")),
+                    1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
+                        LIBRARY_PLACEHOLDER_ADDRESS,
+                        &pv2_addr.encode_hex(),
+                        1,
+                    ))?,
+                    _ => {
+                        return Err(anyhow!(
+                            "more than one lib placeholder found, consider using a different value"
+                        ))
+                    },
+                }
+            };
+            let lcv2_addr = if is_mock {
+                let addr = LightClientV2Mock::deploy_builder(&provider)
+                    .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
+                    .deploy()
+                    .await?;
+                tracing::info!("deployed LightClientV2Mock at {addr:#x}");
+                addr
+            } else {
+                contracts
+                    .deploy(
+                        Contract::LightClientV2,
+                        LightClientV2::deploy_builder(&provider)
+                            .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
+                    )
+                    .await?
+            };
+
+            // prepare init calldata
+            let lcv2 = LightClientV2::new(lcv2_addr, &provider);
+            let init_data = lcv2
+                .initializeV2(blocks_per_epoch, epoch_start_block)
+                .calldata()
+                .to_owned();
+
+            println!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", blocks_per_epoch, epoch_start_block);
+            // invoke upgrade on proxy via the safeSDK
+            let result = call_upgrade_proxy_script(
+                proxy_addr.to_string(),
+                lcv2_addr.to_string(),
+                init_data.to_string(),
+                rpc_url,
+                owner_addr.to_string(),
+            )
+            .await;
+
+            // Check the result directly
+            if let Err(ref err) = result {
+                tracing::error!("LightClientProxy upgrade failed: {:?}", err);
+            } else {
+                tracing::info!("LightClientProxy upgrade proposal sent");
+                // IDEA: add a function to wait for the proposal to be executed
+            }
+
+            match result {
+                Ok(r) => Ok(r),
+                Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
+            }
         },
     }
 }
@@ -650,6 +771,45 @@ pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bo
     }
 
     Ok(true)
+}
+
+/// this depends on upgradeProxy.ts which has to be ran on a real network supported by the safeSDK
+pub async fn call_upgrade_proxy_script(
+    proxy_addr: String,
+    new_impl_addr: String,
+    init_data: String,
+    rpc_url: String,
+    safe_address: String,
+) -> Result<(String, bool), anyhow::Error> {
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../contracts/script/multisigTransactionProposals/safeSDK/upgradeProxy.ts");
+    let output = Command::new("npx")
+        .arg("ts-node")
+        .arg(script_path.to_str().unwrap())
+        .arg("--from-rust")
+        .arg("--proxy")
+        .arg(proxy_addr)
+        .arg("--impl")
+        .arg(new_impl_addr)
+        .arg("--init-data")
+        .arg(init_data)
+        .arg("--rpc-url")
+        .arg(rpc_url)
+        .arg("--safe-address")
+        .arg(safe_address)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    let output = output.unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        Ok((stderr.to_string(), false))
+    } else {
+        Ok((stdout.to_string(), true))
+    }
 }
 
 #[cfg(test)]
@@ -933,6 +1093,86 @@ mod tests {
     #[tokio::test]
     async fn test_upgrade_mock_light_client_v2() -> Result<()> {
         test_upgrade_light_client_to_v2_helper(true).await
+    }
+
+    // This test is used to test the upgrade of the LightClientProxy via the multisig wallet
+    // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
+    // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
+    // The test assumes that there is a file .env.deployer.rs.test in the root directory with the following variables:
+    // RPC_URL=
+    // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
+    // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
+    // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
+    async fn test_upgrade_light_client_to_v2_multisig_owner_helper(is_mock: bool) -> Result<()> {
+        dotenvy::from_filename_override(".env.deployer.rs.test").ok();
+        let sepolia_rpc_url = std::env::var("RPC_URL").expect("RPC_URL must be set");
+        let multisig_admin = std::env::var("SAFE_MULTISIG_ADDRESS")
+            .expect("SAFE_MULTISIG_ADDRESS must be set")
+            .parse::<Address>()
+            .unwrap();
+
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let blocks_per_epoch = 10; // for test
+        let epoch_start_block = 22;
+
+        // prepare `initialize()` input
+        let genesis_state = LightClientStateSol::dummy_genesis();
+        let genesis_stake = StakeTableStateSol::dummy_genesis();
+        let admin = provider.get_accounts().await?[0];
+
+        let prover = Address::random();
+
+        // deploy proxy and V1
+        let lc_proxy_addr = deploy_light_client_proxy(
+            &provider,
+            &mut contracts,
+            false,
+            genesis_state.clone(),
+            genesis_stake.clone(),
+            admin,
+            Some(prover),
+        )
+        .await?;
+
+        // transfer ownership to multisig
+        let _receipt = transfer_ownership(
+            &provider,
+            Contract::LightClientProxy,
+            lc_proxy_addr,
+            multisig_admin,
+        )
+        .await?;
+        let lc = LightClient::new(lc_proxy_addr, &provider);
+        assert_eq!(lc.owner().call().await?._0, multisig_admin);
+
+        // then send upgrade proposal to the multisig wallet
+        let (result, success) = upgrade_light_client_v2_multisig_owner(
+            &provider,
+            &mut contracts,
+            is_mock,
+            blocks_per_epoch,
+            epoch_start_block,
+            sepolia_rpc_url,
+            multisig_admin,
+        )
+        .await?;
+        println!(
+            "Result when trying to upgrade LightClientProxy via the multisig wallet: {:?}",
+            result
+        );
+        assert!(success);
+
+        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
+        // One has to test that the upgrade proposal is available via the Safe UI
+        // and then test that the v1 state is persisted
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_upgrade_light_client_to_v2_multisig_owner() -> Result<()> {
+        test_upgrade_light_client_to_v2_multisig_owner_helper(false).await
     }
 
     #[tokio::test]

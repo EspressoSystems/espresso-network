@@ -9428,6 +9428,7 @@ dependencies = [
  "clap 4.5.34",
  "committable",
  "derive_more 1.0.0",
+ "dotenvy",
  "hotshot",
  "hotshot-contract-adapter",
  "hotshot-example-types",
