@@ -1177,7 +1177,9 @@ contract StakeTable_register_Test is LightClientCommonTest {
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
         stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newSig);
-        (S.ValidatorStatus status) = stakeTable.validators(validator);
+        (uint256 validatorAmountDelegated, S.ValidatorStatus status) =
+            stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
         assertEq(uint256(status), uint256(S.ValidatorStatus.Active));
 
         // Test 3: Cannot update with same BLS key
@@ -1198,6 +1200,46 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
         vm.expectRevert(S.ValidatorAlreadyExited.selector);
         stakeTable.updateConsensusKeys(postExitBlsVK, postExitSchnorrVK, postExitSig);
+        vm.stopPrank();
+    }
+
+    function test_ValidatorSelfDelegation() public {
+        uint256 validatorBalance = token.balanceOf(validator);
+        assertEq(validatorBalance, INITIAL_BALANCE);
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed1);
+
+        vm.startPrank(validator);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(validator, validator, INITIAL_BALANCE / 2);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 2);
+
+        validatorBalance = token.balanceOf(validator);
+        uint256 stakeTableBalance = token.balanceOf(address(stakeTable));
+        assertEq(validatorBalance, INITIAL_BALANCE / 2);
+        assertEq(stakeTableBalance, INITIAL_BALANCE / 2);
+        (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, INITIAL_BALANCE / 2);
+        uint256 delegatedAmount = stakeTable.delegations(validator, validator);
+        assertEq(delegatedAmount, INITIAL_BALANCE / 2);
+
+        // Can add more self-delegation
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(validator, validator, INITIAL_BALANCE / 4);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 4);
+
+        // Verify accumulated self-delegation
+        assertEq(token.balanceOf(validator), INITIAL_BALANCE / 4);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 2 + INITIAL_BALANCE / 4);
+        assertEq(
+            stakeTable.delegations(validator, validator), INITIAL_BALANCE / 2 + INITIAL_BALANCE / 4
+        );
         vm.stopPrank();
     }
 }
