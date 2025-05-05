@@ -930,9 +930,11 @@ contract StakeTableTimelockTest is Test {
 
         vm.stopPrank();
 
+        vm.warp(block.timestamp + DELAY - 1);
+
         vm.assertFalse(timelockController.isOperationReady(txId));
 
-        vm.warp(block.timestamp + DELAY + 1);
+        vm.warp(block.timestamp + 1);
 
         vm.assertTrue(timelockController.isOperationReady(txId));
 
