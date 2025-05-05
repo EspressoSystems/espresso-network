@@ -20,8 +20,9 @@ use espresso_types::{
     FeeAccount, MockSequencerVersions, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction,
 };
 use futures::{
-    future::{join_all, try_join_all, BoxFuture, FutureExt},
-    stream::{BoxStream, StreamExt},
+    future::{self, join_all, try_join_all, BoxFuture, FutureExt},
+    stream::{BoxStream, SplitSink, StreamExt},
+    SinkExt,
 };
 use hotshot::traits::{implementations::derive_libp2p_peer_id, ValidatedState as _};
 use hotshot_orchestrator::run_orchestrator;
@@ -63,24 +64,12 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
     setup_test();
 
     let mut network = TestNetwork::new(network.0, network.1, cdn).await;
+    network.start_event_task().await;
 
     // Let the network get going.
     network.check_progress().await;
     // Restart some combination of nodes and ensure progress resumes.
     network.restart(restart.0, restart.1).await;
-
-    network.shut_down().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_restart_replay_blocks() {
-    setup_test();
-
-    let mut network = TestNetwork::new(2, 2, false).await;
-    network.start_event_task().await;
-
-    network.check_progress().await;
-    // network.check_replay_blocks().await;
 
     network.shut_down().await;
 }
@@ -677,6 +666,7 @@ impl TestNetwork {
                     .expect("event stream terminated unexpectedly");
 
                 let Event { view_number, event } = event;
+                tracing::error!(?view_number, "got event");
 
                 let EventType::Decide { .. } = event.clone() else {
                     continue;
