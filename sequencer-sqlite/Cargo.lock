@@ -9826,7 +9826,7 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03c3c6b7927ffe7ecaa769ee0e3994da3b8cafc8f444578982c83ecb161af917"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -10279,9 +10279,9 @@ dependencies = [
 
 [[package]]
 name = "surf-disco"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bcf4981d3d4dc702a855914e80a9ea4f348b5a2c634cd64eed7bd583a14e26d"
+checksum = "cc2b2235f188bd95c42d517ebdc1bb76b36e17942051140a7de52e287360dbb8"
 dependencies = [
  "async-std",
  "async-tungstenite",
