@@ -609,7 +609,15 @@ pub mod testing {
     };
 
     use alloy::{
+        node_bindings::{Anvil, AnvilInstance},
         primitives::U256,
+        providers::{
+            fillers::{
+                BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
+            },
+            layers::AnvilProvider,
+            RootProvider,
+        },
         signers::{
             k256::ecdsa::SigningKey,
             local::{LocalSigner, PrivateKeySigner},
@@ -621,8 +629,8 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, Event, FeeAccount, MarketplaceVersion, NetworkConfig, PubKey, SeqTypes,
-        Transaction, Upgrade, UpgradeMap,
+        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
+        SeqTypes, Transaction, Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -670,7 +678,15 @@ pub mod testing {
 
     const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
     const BUILDER_CHANNEL_CAPACITY_FOR_TEST: usize = 128;
-
+    type AnvilFillProvider = AnvilProvider<
+        FillProvider<
+            JoinFill<
+                alloy::providers::Identity,
+                JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+            >,
+            RootProvider,
+        >,
+    >;
     struct LegacyBuilderImplementation {
         global_state: Arc<LegacyGlobalState<SeqTypes>>,
     }
@@ -837,6 +853,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
@@ -875,11 +892,26 @@ pub mod testing {
             self
         }
 
-        pub fn l1_url(mut self, l1_url: Url) -> Self {
-            self.l1_url = l1_url;
+        /// Sets the Anvil instance to use
+        /// This sets the L1 URL based on the Anvil endpoint and constructs an `AnvilProvider`
+        /// using the provided Anvil instance.
+        /// The `AnvilProvider` can be used to configure the Anvil for example,
+        /// enabling interval mining after the test network is initialized.
+        pub fn anvil_provider(mut self, anvil: AnvilInstance) -> Self {
+            self.l1_url = anvil.endpoint().parse().unwrap();
+            let l1_client = L1Client::anvil(&anvil).expect("create l1 client");
+            let anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
+            self.anvil_provider = Some(anvil_provider);
             self
         }
 
+        /// Sets a custom L1 URL, overriding any previously set Anvil instance URL.
+        /// This removes the anvil provider, as well as it is no longer needed
+        pub fn l1_url(mut self, l1_url: Url) -> Self {
+            self.anvil_provider = None;
+            self.l1_url = l1_url;
+            self
+        }
         pub fn signer(mut self, signer: LocalSigner<SigningKey>) -> Self {
             self.signer = signer;
             self
@@ -954,6 +986,7 @@ pub mod testing {
                 marketplace_builder_port: self.marketplace_builder_port,
                 builder_port: self.builder_port,
                 upgrades: self.upgrades,
+                anvil_provider: self.anvil_provider,
             }
         }
     }
@@ -1009,17 +1042,26 @@ pub mod testing {
                 start_voting_time: 0,
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
-                epoch_height: 300,
+                epoch_height: 30,
                 epoch_start_block: 1,
             };
+
+            let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+
+            let l1_client = L1Client::anvil(&anvil).expect("failed to create l1 client");
+            let anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
+
+            let l1_signer_key = anvil_provider.anvil().keys()[0].clone();
+            let signer = LocalSigner::from(l1_signer_key);
 
             Self {
                 config,
                 priv_keys,
                 state_key_pairs,
                 master_map,
-                l1_url: "http://localhost:8545".parse().unwrap(),
-                signer: LocalSigner::random(),
+                l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
+                anvil_provider: Some(anvil_provider),
+                signer,
                 state_relay_url: None,
                 builder_port: None,
                 marketplace_builder_port: None,
@@ -1035,6 +1077,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
@@ -1069,6 +1112,9 @@ pub mod testing {
 
         pub fn l1_url(&self) -> Url {
             self.l1_url.clone()
+        }
+        pub fn anvil(&self) -> Option<&AnvilFillProvider> {
+            self.anvil_provider.as_ref()
         }
 
         pub fn get_upgrade_map(&self) -> UpgradeMap {

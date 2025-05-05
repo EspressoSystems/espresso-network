@@ -660,8 +660,8 @@ pub mod test_helpers {
     use std::time::Duration;
 
     use alloy::{
-        node_bindings::Anvil,
         primitives::{Address, U256},
+        providers::ext::AnvilApi,
     };
     use committable::Committable;
     use espresso_types::{
@@ -851,6 +851,17 @@ pub mod test_helpers {
             )
             .await
             .expect("deployed pos contracts");
+
+            // enable interval mining with a 1s interval.
+            // This ensures that blocks are finalized every second, even when there are no transactions.
+            // It's useful for testing stake table updates,
+            // which rely on the finalized L1 block number.
+            if let Some(anvil) = network_config.anvil() {
+                anvil
+                    .anvil_set_interval_mining(1)
+                    .await
+                    .expect("interval mining");
+            }
 
             // Add stake table address to `ChainConfig` (held in state),
             // avoiding overwrite other values. Base fee is set to `0` to avoid
@@ -1044,9 +1055,7 @@ pub mod test_helpers {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -1096,9 +1105,7 @@ pub mod test_helpers {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port).submit(Default::default()));
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -1132,9 +1139,7 @@ pub mod test_helpers {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -1174,9 +1179,7 @@ pub mod test_helpers {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -1324,7 +1327,6 @@ pub mod test_helpers {
 mod api_tests {
     use std::fmt::Debug;
 
-    use alloy::node_bindings::Anvil;
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
     use espresso_types::{
@@ -1394,9 +1396,7 @@ mod api_tests {
         // Start query service.
         let port = pick_unused_port().expect("No ports free");
         let storage = D::create_storage().await;
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(D::options(&storage, Options::with_port(port)).submit(Default::default()))
             .network_config(network_config)
@@ -1802,10 +1802,7 @@ mod api_tests {
         // Start query service.
         let port = pick_unused_port().expect("No ports free");
         let storage = D::create_storage().await;
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1)
             .epoch_height(TEST_EPOCH_HEIGHT)
             .build();
         let config = TestNetworkConfigBuilder::default()
@@ -1863,7 +1860,7 @@ mod api_tests {
 mod test {
     use std::{collections::HashSet, time::Duration};
 
-    use alloy::{node_bindings::Anvil, primitives::U256, signers::local::LocalSigner};
+    use alloy::primitives::U256;
     use committable::{Commitment, Committable};
     use espresso_types::{
         config::PublicHotShotConfig,
@@ -1920,9 +1917,7 @@ mod test {
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
         let options = Options::with_port(port);
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::<5, _, NullStateCatchup>::default()
             .api_config(options)
             .network_config(network_config)
@@ -1964,9 +1959,7 @@ mod test {
 
         let options = SqlDataSource::options(&storage, Options::with_port(port));
 
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -2044,9 +2037,7 @@ mod test {
         let options =
             SqlDataSource::leaf_only_ds_options(&storage, Options::with_port(port)).unwrap();
 
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -2130,8 +2121,6 @@ mod test {
 
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
 
         let url: url::Url = format!("http://localhost:{port}{url_suffix}")
@@ -2140,7 +2129,7 @@ mod test {
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
-            .network_config(TestConfigBuilder::default().l1_url(l1).build())
+            .network_config(TestConfigBuilder::default().build())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![url.clone()],
@@ -2252,11 +2241,8 @@ mod test {
 
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
         const EPOCH_HEIGHT: u64 = 5;
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1)
             .epoch_height(EPOCH_HEIGHT)
             .build();
         const NUM_NODES: usize = 5;
@@ -2361,12 +2347,10 @@ mod test {
 
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
         const NUM_NODES: usize = 5;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
-            .network_config(TestConfigBuilder::default().l1_url(l1).build())
+            .network_config(TestConfigBuilder::default().build())
             .build();
         let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
 
@@ -2452,11 +2436,8 @@ mod test {
 
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
         const EPOCH_HEIGHT: u64 = 5;
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1)
             .epoch_height(EPOCH_HEIGHT)
             .build();
         const NUM_NODES: usize = 5;
@@ -2552,8 +2533,6 @@ mod test {
         setup_test();
 
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
 
         let chain_config: ChainConfig = ChainConfig::default();
 
@@ -2574,7 +2553,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .network_config(TestConfigBuilder::default().l1_url(l1).build())
+            .network_config(TestConfigBuilder::default().build())
             .build();
 
         let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
@@ -2609,8 +2588,6 @@ mod test {
         setup_test();
 
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
 
         let cf = ChainConfig {
             max_block_size: 300.into(),
@@ -2649,7 +2626,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .network_config(TestConfigBuilder::default().l1_url(l1).build())
+            .network_config(TestConfigBuilder::default().build())
             .build();
 
         let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
@@ -2697,15 +2674,10 @@ mod test {
         const NUM_NODES: usize = 5;
         let upgrade_version = <V as Versions>::Upgrade::VERSION;
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
-        let l1 = anvil.endpoint_url();
-        let signer = LocalSigner::from(anvil.keys()[0].clone());
 
         let test_config = TestConfigBuilder::default()
             .epoch_height(200)
             .epoch_start_block(321)
-            .l1_url(l1)
-            .signer(signer.clone())
             .set_upgrades(upgrade_version)
             .await
             .build();
@@ -2797,16 +2769,13 @@ mod test {
             .try_into()
             .unwrap();
         let port = pick_unused_port().unwrap();
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
                 &storage[0],
                 Options::with_port(port),
             ))
             .persistences(persistence.clone())
-            .network_config(TestConfigBuilder::default().l1_url(l1).build())
+            .network_config(TestConfigBuilder::default().build())
             .build();
         let mut network = TestNetwork::new(config, MockSequencerVersions::new()).await;
 
@@ -2860,8 +2829,6 @@ mod test {
 
         // Start up again, resuming from the last decided leaf.
         let port = pick_unused_port().expect("No ports free");
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
 
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
@@ -2879,7 +2846,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .network_config(TestConfigBuilder::default().l1_url(l1).build())
+            .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
         let client: Client<ServerError, StaticVersion<0, 1>> =
@@ -2926,9 +2893,7 @@ mod test {
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
 
         let options = Options::with_port(port).config(Default::default());
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -2982,9 +2947,7 @@ mod test {
 
         let options = Options::with_port(query_service_port).hotshot_events(hotshot_events);
 
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
@@ -3040,14 +3003,7 @@ mod test {
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
-        let l1_url = instance.endpoint_url();
-        let secret_key = instance.keys()[0].clone();
-        let signer = LocalSigner::from(secret_key);
-
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1_url.clone())
-            .signer(signer.clone())
             .epoch_height(epoch_height)
             .build();
 
@@ -3138,15 +3094,7 @@ mod test {
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
-        let l1_url = instance.endpoint_url();
-        let secret_key = instance.keys()[0].clone();
-
-        let signer = LocalSigner::from(secret_key);
-
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1_url.clone())
-            .signer(signer.clone())
             .epoch_height(epoch_height)
             .build();
 
@@ -3238,15 +3186,7 @@ mod test {
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
-        let l1_url = instance.endpoint_url();
-        let secret_key = instance.keys()[0].clone();
-
-        let signer = LocalSigner::from(secret_key);
-
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1_url.clone())
-            .signer(signer.clone())
             .epoch_height(epoch_height)
             .build();
 
@@ -3364,17 +3304,7 @@ mod test {
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let instance = Anvil::new()
-            .args(["--slots-in-an-epoch", "0", "--block-time", "1"])
-            .spawn();
-        let l1_url = instance.endpoint_url();
-        let secret_key = instance.keys()[0].clone();
-
-        let signer = LocalSigner::from(secret_key);
-
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1_url.clone())
-            .signer(signer.clone())
             .epoch_height(epoch_height)
             .build();
 
@@ -3390,6 +3320,7 @@ mod test {
             .try_into()
             .unwrap();
 
+        let l1_url = network_config.l1_url();
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
@@ -3482,17 +3413,7 @@ mod test {
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let instance = Anvil::new()
-            .args(["--slots-in-an-epoch", "0", "--block-time", "1"])
-            .spawn();
-        let l1_url = instance.endpoint_url();
-        let secret_key = instance.keys()[0].clone();
-
-        let signer = LocalSigner::from(secret_key);
-
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1_url.clone())
-            .signer(signer.clone())
             .epoch_height(epoch_height)
             .build();
 

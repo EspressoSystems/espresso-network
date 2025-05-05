@@ -38,7 +38,7 @@ use crate::{
 };
 
 pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 3;
-type Prov = FillProvider<
+pub type AlloyFillProvider = FillProvider<
     JoinFill<
         JoinFill<
             Identity,
@@ -49,7 +49,7 @@ type Prov = FillProvider<
     RootProvider,
 >;
 
-fn make_provider(rpc_url: &Url, signer: LocalSigner<SigningKey>) -> Prov {
+fn make_provider(rpc_url: &Url, signer: LocalSigner<SigningKey>) -> AlloyFillProvider {
     let wallet = EthereumWallet::from(signer);
     ProviderBuilder::new()
         .wallet(wallet)

@@ -544,9 +544,7 @@ mod test {
         let (ports, urls) = pick_urls_and_start_network().await;
 
         // Run the network.
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let tmpdir = TempDir::new().unwrap();
         let config = TestNetworkConfigBuilder::default()
             .api_config(
@@ -666,9 +664,7 @@ mod test {
         let (ports, urls) = pick_urls_and_start_network().await;
 
         // Run the network.
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let tmpdir = TempDir::new().unwrap();
         let config = TestNetworkConfigBuilder::default()
             .api_config(
