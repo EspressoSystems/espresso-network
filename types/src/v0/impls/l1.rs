@@ -180,7 +180,7 @@ impl SwitchingTransport {
         let metrics = L1ClientMetrics::new(&**opt.metrics, urls.len());
 
         // Create a new `SingleTransport` for the first URL
-        let first_transport = Arc::new(RwLock::new(SingleTransport::new(&first_url, 0)));
+        let first_transport = Arc::new(RwLock::new(SingleTransport::new(&first_url, 0, None)));
 
         Ok(Self {
             urls: Arc::new(urls),
@@ -250,15 +250,33 @@ impl SingleTransportStatus {
 
         false
     }
+
+    /// Whether or not the transport should be switched back to the primary URL.
+    fn should_revert(&mut self, revert_at: Option<Instant>) -> bool {
+        if self.shutting_down {
+            // We have already switched away from this transport in another thread.
+            return false;
+        }
+        let Some(revert_at) = revert_at else {
+            return false;
+        };
+        if Instant::now() >= revert_at {
+            self.shutting_down = true;
+            return true;
+        }
+
+        false
+    }
 }
 
 impl SingleTransport {
     /// Create a new `SingleTransport` with the given URL
-    fn new(url: &Url, generation: usize) -> Self {
+    fn new(url: &Url, generation: usize, revert_at: Option<Instant>) -> Self {
         Self {
             generation,
             client: Http::new(url.clone()),
             status: Default::default(),
+            revert_at,
         }
     }
 }
@@ -290,6 +308,21 @@ impl Service<RequestPacket> for SwitchingTransport {
         Box::pin(async move {
             // Clone the current transport
             let mut current_transport = self_clone.current_transport.read().clone();
+
+            // Revert back to the primary transport if it's time.
+            let should_revert = current_transport
+                .status
+                .write()
+                .should_revert(current_transport.revert_at);
+            if should_revert {
+                // Switch to the next generation which maps to index 0.
+                let n = self_clone.urls.len();
+                // Rounding down to a multiple of n gives us the last generation of the primary transport.
+                let prev_primary_gen = (current_transport.generation / n) * n;
+                // Adding n jumps to the next generation.
+                let next_gen = prev_primary_gen + n;
+                current_transport = self_clone.switch_to(next_gen, current_transport);
+            }
 
             // If we've been rate limited, back off until the limit (hopefully) expires.
             if let Some(t) = current_transport.status.read().rate_limited_until {
@@ -345,27 +378,44 @@ impl Service<RequestPacket> for SwitchingTransport {
                     {
                         // Increment the failovers metric
                         self_clone.metrics.failovers.add(1);
-
-                        // Calculate the next URL index
-                        let next_gen = current_transport.generation + 1;
-                        let next_index = next_gen % self_clone.urls.len();
-                        let url = self_clone.urls[next_index].clone();
-                        tracing::info!(%url, "failing over to next L1 transport");
-
-                        // Create a new transport from the next URL and index
-                        let new_transport = SingleTransport::new(&url, next_gen);
-
-                        // Switch to the next URL
-                        *self_clone.current_transport.write() = new_transport;
-
-                        // Notify the transport that it has been switched
-                        self_clone.switch_notify.notify_waiters();
+                        self_clone.switch_to(current_transport.generation + 1, current_transport);
                     }
 
                     Err(err)
                 },
             }
         })
+    }
+}
+
+impl SwitchingTransport {
+    fn switch_to(&self, next_gen: usize, current_transport: SingleTransport) -> SingleTransport {
+        let next_index = next_gen % self.urls.len();
+        let url = self.urls[next_index].clone();
+        tracing::info!(%url, next_gen, "switch L1 transport");
+
+        let revert_at = if next_gen % self.urls.len() == 0 {
+            // If we are reverting to the primary transport, clear our scheduled revert time.
+            None
+        } else if current_transport.generation % self.urls.len() == 0 {
+            // If we are failing over from the primary transport, schedule a time to automatically
+            // revert back.
+            Some(Instant::now() + self.opt.l1_failover_revert)
+        } else {
+            // Otherwise keep the currently scheduled revert time.
+            current_transport.revert_at
+        };
+
+        // Create a new transport from the next URL and index
+        let new_transport = SingleTransport::new(&url, next_gen, revert_at);
+
+        // Switch to the next URL
+        *self.current_transport.write() = new_transport.clone();
+
+        // Notify the transport that it has been switched
+        self.switch_notify.notify_waiters();
+
+        new_transport
     }
 }
 
@@ -1610,6 +1660,35 @@ mod test {
         provider.get_block_number().await.unwrap_err();
         provider.get_block_number().await.unwrap();
         assert!(get_failover_index(&provider) == 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_failover_revert() {
+        setup_test();
+
+        let anvil = Anvil::new().block_time(1).spawn();
+        let provider = L1ClientOptions {
+            l1_polling_interval: Duration::from_secs(1),
+            l1_consecutive_failure_tolerance: 1,
+            l1_failover_revert: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![
+            "http://notarealurl:1234".parse().unwrap(),
+            anvil.endpoint_url(),
+        ])
+        .expect("Failed to create L1 client");
+
+        // The first request fails and triggers a failover.
+        provider.get_block_number().await.unwrap_err();
+        assert_eq!(get_failover_index(&provider), 1);
+
+        // The next request succeeds from the other provider.
+        provider.get_block_number().await.unwrap();
+
+        // Eventually we revert back to the primary and requests fail again.
+        sleep(Duration::from_millis(2100)).await;
+        provider.get_block_number().await.unwrap_err();
     }
 
     // Checks that the L1 client initialized the state on startup even
