@@ -1088,8 +1088,32 @@ mod tests {
         let timelock = Timelock::new(timelock_addr, &provider);
         assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
 
-        // there are assert statements in the deploy_timelock function that test the roles (proposers, executors, admin)
-        // so we don't need to test them again here
+        // Verify initialization parameters
+        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert!(
+            timelock
+                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+                .call()
+                .await?
+                ._0
+        );
+        assert!(
+            timelock
+                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+                .call()
+                .await?
+                ._0
+        );
+
+        // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
+        let default_admin_role = U256::ZERO;
+        assert!(
+            timelock
+                .hasRole(default_admin_role.into(), admin)
+                .call()
+                .await?
+                ._0
+        );
         Ok(())
     }
 }
