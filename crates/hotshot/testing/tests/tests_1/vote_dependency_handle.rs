@@ -26,7 +26,7 @@ const TIMEOUT: Duration = Duration::from_millis(35);
 #[cfg(test)]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_vote_dependency_handle() {
-    use std::{sync::Arc, time::Instant};
+    use std::sync::Arc;
 
     hotshot::helpers::initialize_logging();
 
