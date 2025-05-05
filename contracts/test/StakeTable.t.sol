@@ -1146,6 +1146,60 @@ contract StakeTable_register_Test is LightClientCommonTest {
         assertEq(validatorAmountDelegated, 0);
         assertEq(uint256(status), uint256(S.ValidatorStatus.Exited));
     }
+
+    function test_ConsensusKeyUpdateAuthorization() public {
+        // Setup - register initial validator
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed1);
+
+        vm.startPrank(validator);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+        vm.stopPrank();
+
+        (
+            BN254.G2Point memory newBlsVK,
+            EdOnBN254.EdOnBN254Point memory newSchnorrVK,
+            BN254.G1Point memory newSig
+        ) = genClientWallet(validator, seed2);
+
+        // Test 1: Non-validator cannot update keys
+        address nonValidator = makeAddr("nonValidator");
+        vm.startPrank(nonValidator);
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newSig);
+        vm.stopPrank();
+
+        // Test 2: Successful update by  validator
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
+        stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newSig);
+        (S.ValidatorStatus status) = stakeTable.validators(validator);
+        assertEq(uint256(status), uint256(S.ValidatorStatus.Active));
+
+        // Test 3: Cannot update with same BLS key
+        vm.expectRevert(S.BlsKeyAlreadyUsed.selector);
+        stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newSig);
+        vm.stopPrank();
+
+        // Test 4: Cannot update after exit
+        vm.startPrank(validator);
+        stakeTable.deregisterValidator();
+
+        // Generate another set of new keys
+        (
+            BN254.G2Point memory postExitBlsVK,
+            EdOnBN254.EdOnBN254Point memory postExitSchnorrVK,
+            BN254.G1Point memory postExitSig
+        ) = genClientWallet(validator, "145");
+
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        stakeTable.updateConsensusKeys(postExitBlsVK, postExitSchnorrVK, postExitSig);
+        vm.stopPrank();
+    }
 }
 
 contract StakeTableV2Test is S {
