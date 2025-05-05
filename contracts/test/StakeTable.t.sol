@@ -73,6 +73,25 @@ contract StakeTable_register_Test is LightClientCommonTest {
         );
     }
 
+    function registerValidatorOnStakeTable(
+        address validator,
+        string memory seed,
+        uint16 commission,
+        S stakeTable
+    ) public {
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed);
+
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, commission);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, commission);
+        vm.stopPrank();
+    }
+
     function setUp() public {
         init(); // light client init
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
@@ -632,6 +651,391 @@ contract StakeTable_register_Test is LightClientCommonTest {
         assertEq(token.balanceOf(address(stakeTable)), 0);
 
         vm.stopPrank();
+    }
+
+    function test_RevertWhen_DelegateToZeroAddress() public {
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.delegate(address(0), 1 ether);
+    }
+
+    function test_RevertWhen_DelegateToNonExistentValidator() public {
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.delegate(makeAddr("non-existent"), 1 ether);
+    }
+
+    function test_MultiDelegationsToSameValidator() public {
+        // Should test multiple delegations to same validator accumulate correctly
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+        vm.stopPrank();
+
+        assertEq(
+            stakeTable.delegations(validator, delegator), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3
+        );
+    }
+
+    function test_DelegationsToMultipleValidators() public {
+        // Should test delegating to multiple validators works correctly
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        // register validator 1
+        address validator1 = makeAddr("validator1");
+        registerValidatorOnStakeTable(validator1, seed1, COMMISSION, stakeTable);
+
+        // register validator 2
+        address validator2 = makeAddr("validator2");
+        registerValidatorOnStakeTable(validator2, seed2, COMMISSION, stakeTable);
+
+        // delegate to validator 1
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator1, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator1, INITIAL_BALANCE / 3);
+
+        // delegate to validator 2
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator2, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator2, INITIAL_BALANCE / 3);
+
+        // delegate from validator 1
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator1, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator1, INITIAL_BALANCE / 3);
+
+        // check the delegations
+        assertEq(
+            stakeTable.delegations(validator1, delegator), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3
+        );
+        assertEq(stakeTable.delegations(validator2, delegator), INITIAL_BALANCE / 3);
+
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_UndelegateMoreThanDelegated() public {
+        // Should test undelegating more than delegated amount fails
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+
+        vm.expectRevert(abi.encodeWithSelector(S.InsufficientBalance.selector, INITIAL_BALANCE));
+        stakeTable.undelegate(validator, INITIAL_BALANCE + 1);
+        vm.stopPrank();
+    }
+
+    function test_PartialUndelegationsAccounting() public {
+        // Should test multiple partial undelegations are accounted correctly
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+
+        uint256 amountToUndelegate = INITIAL_BALANCE / 2;
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator, amountToUndelegate);
+        stakeTable.undelegate(validator, amountToUndelegate);
+
+        assertEq(stakeTable.delegations(validator, delegator), INITIAL_BALANCE - amountToUndelegate);
+        (uint256 amountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, amountToUndelegate);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, INITIAL_BALANCE - amountToUndelegate);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE);
+
+        //warp to the exitEscrowPeriod and claim the withdrawal
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+
+        uint256 delegatorBalanceBefore = token.balanceOf(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, amountToUndelegate);
+        stakeTable.claimWithdrawal(validator);
+        assertEq(token.balanceOf(delegator), delegatorBalanceBefore + amountToUndelegate);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE - amountToUndelegate);
+        (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, 0);
+        assertEq(unlocksAt, 0);
+        vm.stopPrank();
+    }
+
+    function test_UndelegateFromMultipleValidators() public {
+        // Should test undelegating from multiple validators works correctly
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        address validator1 = makeAddr("validator1");
+        address validator2 = makeAddr("validator2");
+        registerValidatorOnStakeTable(validator1, seed1, COMMISSION, stakeTable);
+        registerValidatorOnStakeTable(validator2, seed2, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator1, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator1, INITIAL_BALANCE / 3);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator2, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator2, INITIAL_BALANCE / 3);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator1, INITIAL_BALANCE / 3);
+        stakeTable.undelegate(validator1, INITIAL_BALANCE / 3);
+        (uint256 amountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator1, delegator);
+        assertEq(amountUndelegated, INITIAL_BALANCE / 3);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3);
+        (uint256 validatorDelegatedAmount,) = stakeTable.validators(validator1);
+        assertEq(validatorDelegatedAmount, 0);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator2, INITIAL_BALANCE / 3);
+        stakeTable.undelegate(validator2, INITIAL_BALANCE / 3);
+        (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator2, delegator);
+        assertEq(amountUndelegated, INITIAL_BALANCE / 3);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3);
+        (validatorDelegatedAmount,) = stakeTable.validators(validator2);
+        assertEq(validatorDelegatedAmount, 0);
+
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        uint256 delegatorBalanceBefore = token.balanceOf(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE / 3);
+        stakeTable.claimWithdrawal(validator1);
+        assertEq(token.balanceOf(delegator), delegatorBalanceBefore + INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 3);
+
+        delegatorBalanceBefore = token.balanceOf(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE / 3);
+        stakeTable.claimWithdrawal(validator2);
+        assertEq(token.balanceOf(delegator), delegatorBalanceBefore + INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
+
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_WithdrawFromNonExistentUndelegation() public {
+        // Should test withdrawing when no undelegation exists
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectRevert(abi.encodeWithSelector(S.InsufficientBalance.selector, 0));
+        stakeTable.undelegate(validator, INITIAL_BALANCE);
+        vm.stopPrank();
+    }
+
+    function test_WithdrawalAfterValidatorExit() public {
+        // Should test withdrawing after validator exit
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+        vm.stopPrank();
+
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+        (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        (uint256 delegatorAmountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(delegatorAmountUndelegated, 0); // undelegated amount is zero because the user did
+            // not undelegate
+        assertEq(unlocksAt, 0); // unlocks at is zero because the user did not undelegate
+
+        vm.startPrank(delegator);
+        vm.expectRevert(abi.encodeWithSelector(S.ValidatorAlreadyExited.selector));
+        stakeTable.undelegate(validator, INITIAL_BALANCE);
+
+        //validator already exited so call claim withdaral exit
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
+        (validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
+        assertEq(delegatedAmount, 0);
+    }
+
+    function test_ValidatorExitDuringUndelegationPeriod() public {
+        // Should test withdrawing after validator exit
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator, INITIAL_BALANCE / 2);
+        stakeTable.undelegate(validator, INITIAL_BALANCE / 2);
+        vm.stopPrank();
+
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+        (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        (uint256 delegatorAmountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(delegatorAmountUndelegated, INITIAL_BALANCE / 2); // undelegated amount is
+            // INITIAL_BALANCE/2 because the user undelegated INITIAL_BALANCE/2
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD); // unlocks at is the current timestamp
+            // + ESCROW_PERIOD because the user undelegated INITIAL_BALANCE/2
+
+        vm.startPrank(delegator);
+        vm.expectRevert(abi.encodeWithSelector(S.ValidatorAlreadyExited.selector));
+        stakeTable.undelegate(validator, INITIAL_BALANCE);
+
+        //validator already exited so call claim withdaral exit
+        uint256 remainderStakedBalance = INITIAL_BALANCE - INITIAL_BALANCE / 2;
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, remainderStakedBalance);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE / 2);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 2);
+        (validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
+        assertEq(delegatedAmount, 0);
+
+        // now claim the previous undelegation
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE / 2);
+        stakeTable.claimWithdrawal(validator);
+        vm.stopPrank();
+    }
+
+    function test_ValidatorExitWithMultipleDelegators() public {
+        address delegator2 = makeAddr("delegator2");
+        address delegator3 = makeAddr("delegator3");
+        vm.startPrank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE / 3);
+        token.transfer(delegator2, INITIAL_BALANCE / 3);
+        token.transfer(delegator3, INITIAL_BALANCE / 3);
+        vm.stopPrank();
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE / 3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+        vm.stopPrank();
+
+        vm.startPrank(delegator2);
+        token.approve(address(stakeTable), INITIAL_BALANCE / 3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator2, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+
+        vm.startPrank(delegator3);
+        token.approve(address(stakeTable), INITIAL_BALANCE / 3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator3, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE / 3);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        vm.startPrank(delegator2);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator2, INITIAL_BALANCE / 3);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        vm.startPrank(delegator3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator3, INITIAL_BALANCE / 3);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(delegator2), INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(delegator3), INITIAL_BALANCE / 3);
     }
 }
 

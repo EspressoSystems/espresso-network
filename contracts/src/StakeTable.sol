@@ -275,6 +275,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     }
 
     function ensureValidatorActive(address validator) internal view {
+        if (validators[validator].status == ValidatorStatus.Exited) {
+            revert ValidatorAlreadyExited();
+        }
         if (!(validators[validator].status == ValidatorStatus.Active)) {
             revert ValidatorInactive();
         }
@@ -361,6 +364,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         validators[validator].status = ValidatorStatus.Exited;
         validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+        validators[validator].delegatedAmount = 0;
 
         emit ValidatorExit(validator);
     }
@@ -398,10 +402,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         if (amount == 0) {
             revert ZeroAmount();
-        }
-
-        if (validators[delegator].status == ValidatorStatus.Exited) {
-            revert ValidatorAlreadyExited();
         }
 
         if (undelegations[validator][delegator].amount != 0) {
