@@ -1071,25 +1071,25 @@ contract StakeTableTimelockTest is Test {
         vm.stopPrank();
     }
 
-    function test_UnauthorizedCannotUpgrade() public {
-        vm.startPrank(makeAddr("notAdmin"));
+    function test_RevertWhen_UnauthorizedCannotUpgrade() public {
+        address notAdmin = makeAddr("notAdmin");
+        vm.startPrank(notAdmin);
+        S newStakeTable = new S();
 
-        try stakeTable.upgradeToAndCall(address(new S()), "") {
-            fail();
-        } catch (bytes memory lowLevelData) {
-            // Handle custom error
-            bytes4 selector;
-            assembly {
-                selector := mload(add(lowLevelData, 32))
-            }
-            assertEq(selector, OwnableUpgradeable.OwnableUnauthorizedAccount.selector);
-        }
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+        );
+        stakeTable.upgradeToAndCall(address(newStakeTable), "");
     }
 
     function test_AdminCanGrantRolesWithoutDelay() public {
         vm.startPrank(timelockAdmin);
         timelockController.grantRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
+        assertTrue(timelockController.hasRole(timelockController.PROPOSER_ROLE(), timelockAdmin));
+
         timelockController.grantRole(timelockController.EXECUTOR_ROLE(), timelockAdmin);
+        assertTrue(timelockController.hasRole(timelockController.EXECUTOR_ROLE(), timelockAdmin));
+
         vm.stopPrank();
     }
 
