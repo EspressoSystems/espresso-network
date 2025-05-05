@@ -381,10 +381,10 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
             revert InsufficientAllowance(allowance, amount);
         }
 
+        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
+
         validators[validator].delegatedAmount += amount;
         delegations[validator][delegator] += amount;
-
-        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
 
         emit Delegated(delegator, validator, amount);
     }
