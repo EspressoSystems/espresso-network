@@ -16,23 +16,21 @@ use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use derivative::Derivative;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, Delta,
-    FeeAccount, MockSequencerVersions, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, FeeAccount,
+    MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
 };
 use futures::{
-    future::{self, join_all, try_join_all, BoxFuture, FutureExt},
-    stream::{BoxStream, SplitSink, StreamExt},
-    SinkExt,
+    future::{join_all, try_join_all, BoxFuture, FutureExt},
+    stream::{BoxStream, StreamExt},
 };
-use hotshot::traits::{implementations::derive_libp2p_peer_id, ValidatedState as _};
+use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_query_service::Leaf2;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
     test_builder::BuilderChange,
 };
 use hotshot_types::{
-    event::{Event, EventType, LeafInfo},
+    event::{Event, EventType},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
@@ -1003,43 +1001,4 @@ fn select<'a, T>(nodes: &'a mut [T], is: &'a [usize]) -> impl Iterator<Item = &'
         .iter_mut()
         .enumerate()
         .filter_map(|(i, elem)| if is.contains(&i) { Some(elem) } else { None })
-}
-
-async fn start_event_task(
-    da_nodes: Vec<TestNode<api::sql::DataSource>>,
-    regular_nodes: Vec<TestNode<api::sql::DataSource>>,
-    state: LocalState,
-) -> JoinHandle<()> {
-    // let event_state = Arc::clone(&self.events);
-
-    let contexts: Vec<_> = da_nodes
-            .iter()
-            // It proved easier to get the stream from `context`
-            // rather than call `event_stream()` on the node.
-            .filter_map(|node| node.context.clone())
-            .collect();
-    // .chain(self.regular_nodes)
-    // .map(|node| node.event_stream()),
-
-    let streams = join_all(contexts.iter().map(|c| c.event_stream())).await;
-    let mut stream = futures::stream::iter(streams).flatten_unordered(None);
-
-    spawn(async move {
-        loop {
-            let event = stream
-                .next()
-                .await
-                .expect("event stream terminated unexpectedly");
-
-            let Event { view_number, event } = event; //.view_number.clone();
-
-            let EventType::Decide { .. } = event.clone() else {
-                continue;
-            };
-
-            let mut event_state = state.lock().await;
-            tracing::error!(?view_number, "got decide event");
-            event_state.insert(view_number, event);
-        }
-    })
 }
