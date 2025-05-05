@@ -1037,6 +1037,69 @@ contract StakeTable_register_Test is LightClientCommonTest {
         assertEq(token.balanceOf(delegator2), INITIAL_BALANCE / 3);
         assertEq(token.balanceOf(delegator3), INITIAL_BALANCE / 3);
     }
+
+    function test_ValidatorRegistration_CommissionRates() public {
+        // Test valid commission rates (2 decimal places)
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed1);
+
+        // Test commission = 12.34%
+        uint16 commission1234 = 1234; // 12.34%
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, commission1234);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, commission1234);
+        vm.stopPrank();
+
+        // Get a new validator and keys for next test
+        address validator2 = makeAddr("validator2");
+        (
+            BN254.G2Point memory blsVK2,
+            EdOnBN254.EdOnBN254Point memory schnorrVK2,
+            BN254.G1Point memory sig2
+        ) = genClientWallet(validator2, seed2);
+
+        // Test maximum commission = 100.00%
+        uint16 commission10000 = 10000; // 100.00%
+        vm.startPrank(validator2);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorRegistered(validator2, blsVK2, schnorrVK2, commission10000);
+        stakeTable.registerValidator(blsVK2, schnorrVK2, sig2, commission10000);
+        vm.stopPrank();
+
+        // Get a new validator and keys for next test
+        address validator3 = makeAddr("validator3");
+        (
+            BN254.G2Point memory blsVK3,
+            EdOnBN254.EdOnBN254Point memory schnorrVK3,
+            BN254.G1Point memory sig3
+        ) = genClientWallet(validator3, "135");
+
+        // Test minimum commission = 0.00%
+        uint16 commission0 = 0; // 0.00%
+        vm.startPrank(validator3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorRegistered(validator3, blsVK3, schnorrVK3, commission0);
+        stakeTable.registerValidator(blsVK3, schnorrVK3, sig3, commission0);
+        vm.stopPrank();
+
+        // Test invalid commission > 100.00%
+        address validator4 = makeAddr("validator4");
+        (
+            BN254.G2Point memory blsVK4,
+            EdOnBN254.EdOnBN254Point memory schnorrVK4,
+            BN254.G1Point memory sig4
+        ) = genClientWallet(validator4, "145");
+
+        uint16 invalidCommission = 10001; // 100.01%
+        vm.startPrank(validator4);
+        vm.expectRevert(S.InvalidCommission.selector);
+        stakeTable.registerValidator(blsVK4, schnorrVK4, sig4, invalidCommission);
+        vm.stopPrank();
+    }
 }
 
 contract StakeTableV2Test is S {
