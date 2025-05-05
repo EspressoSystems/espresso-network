@@ -146,9 +146,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// A zero amount would lead to a no-op.
     error ZeroAmount();
 
-    /// The caller is not the timelock
-    error NotTimelock();
-
     // === Structs ===
 
     /// @notice Represents an Espresso validator and tracks funds currently delegated to them.

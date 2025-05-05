@@ -999,7 +999,6 @@ interface StakeTable {
     error InvalidInitialization();
     error InvalidSchnorrVK();
     error NotInitializing();
-    error NotTimelock();
     error NothingToWithdraw();
     error OwnableInvalidOwner(address owner);
     error OwnableUnauthorizedAccount(address account);
@@ -1962,11 +1961,6 @@ interface StakeTable {
   {
     "type": "error",
     "name": "NotInitializing",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "NotTimelock",
     "inputs": []
   },
   {
@@ -2959,67 +2953,6 @@ pub mod StakeTable {
             type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
             const SIGNATURE: &'static str = "NotInitializing()";
             const SELECTOR: [u8; 4] = [215u8, 230u8, 188u8, 248u8];
-            #[inline]
-            fn new<'a>(
-                tuple: <Self::Parameters<'a> as alloy_sol_types::SolType>::RustType,
-            ) -> Self {
-                tuple.into()
-            }
-            #[inline]
-            fn tokenize(&self) -> Self::Token<'_> {
-                ()
-            }
-        }
-    };
-    #[derive(Default, Debug, PartialEq, Eq, Hash)]
-    /**Custom error with signature `NotTimelock()` and selector `0xcad4da2a`.
-    ```solidity
-    error NotTimelock();
-    ```*/
-    #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
-    #[derive(Clone)]
-    pub struct NotTimelock {}
-    #[allow(
-        non_camel_case_types,
-        non_snake_case,
-        clippy::pub_underscore_fields,
-        clippy::style
-    )]
-    const _: () = {
-        use alloy::sol_types as alloy_sol_types;
-        #[doc(hidden)]
-        type UnderlyingSolTuple<'a> = ();
-        #[doc(hidden)]
-        type UnderlyingRustTuple<'a> = ();
-        #[cfg(test)]
-        #[allow(dead_code, unreachable_patterns)]
-        fn _type_assertion(_t: alloy_sol_types::private::AssertTypeEq<UnderlyingRustTuple>) {
-            match _t {
-                alloy_sol_types::private::AssertTypeEq::<
-                    <UnderlyingSolTuple as alloy_sol_types::SolType>::RustType,
-                >(_) => {},
-            }
-        }
-        #[automatically_derived]
-        #[doc(hidden)]
-        impl ::core::convert::From<NotTimelock> for UnderlyingRustTuple<'_> {
-            fn from(value: NotTimelock) -> Self {
-                ()
-            }
-        }
-        #[automatically_derived]
-        #[doc(hidden)]
-        impl ::core::convert::From<UnderlyingRustTuple<'_>> for NotTimelock {
-            fn from(tuple: UnderlyingRustTuple<'_>) -> Self {
-                Self {}
-            }
-        }
-        #[automatically_derived]
-        impl alloy_sol_types::SolError for NotTimelock {
-            type Parameters<'a> = UnderlyingSolTuple<'a>;
-            type Token<'a> = <Self::Parameters<'a> as alloy_sol_types::SolType>::Token<'a>;
-            const SIGNATURE: &'static str = "NotTimelock()";
-            const SELECTOR: [u8; 4] = [202u8, 212u8, 218u8, 42u8];
             #[inline]
             fn new<'a>(
                 tuple: <Self::Parameters<'a> as alloy_sol_types::SolType>::RustType,
@@ -8762,8 +8695,6 @@ pub mod StakeTable {
         #[allow(missing_docs)]
         NotInitializing(NotInitializing),
         #[allow(missing_docs)]
-        NotTimelock(NotTimelock),
-        #[allow(missing_docs)]
         NothingToWithdraw(NothingToWithdraw),
         #[allow(missing_docs)]
         OwnableInvalidOwner(OwnableInvalidOwner),
@@ -8815,7 +8746,6 @@ pub mod StakeTable {
             [153u8, 150u8, 179u8, 21u8],
             [170u8, 29u8, 73u8, 164u8],
             [179u8, 152u8, 151u8, 159u8],
-            [202u8, 212u8, 218u8, 42u8],
             [208u8, 208u8, 79u8, 96u8],
             [212u8, 35u8, 164u8, 241u8],
             [215u8, 230u8, 188u8, 248u8],
@@ -8831,7 +8761,7 @@ pub mod StakeTable {
     impl alloy_sol_types::SolInterface for StakeTableErrors {
         const NAME: &'static str = "StakeTableErrors";
         const MIN_DATA_LENGTH: usize = 0usize;
-        const COUNT: usize = 26usize;
+        const COUNT: usize = 25usize;
         #[inline]
         fn selector(&self) -> [u8; 4] {
             match self {
@@ -8871,7 +8801,6 @@ pub mod StakeTable {
                 Self::NotInitializing(_) => {
                     <NotInitializing as alloy_sol_types::SolError>::SELECTOR
                 },
-                Self::NotTimelock(_) => <NotTimelock as alloy_sol_types::SolError>::SELECTOR,
                 Self::NothingToWithdraw(_) => {
                     <NothingToWithdraw as alloy_sol_types::SolError>::SELECTOR
                 },
@@ -9123,18 +9052,6 @@ pub mod StakeTable {
                         ERC1967NonPayable
                     },
                     {
-                        fn NotTimelock(
-                            data: &[u8],
-                            validate: bool,
-                        ) -> alloy_sol_types::Result<StakeTableErrors> {
-                            <NotTimelock as alloy_sol_types::SolError>::abi_decode_raw(
-                                data, validate,
-                            )
-                            .map(StakeTableErrors::NotTimelock)
-                        }
-                        NotTimelock
-                    },
-                    {
                         fn NothingToWithdraw(
                             data: &[u8],
                             validate: bool,
@@ -9294,9 +9211,6 @@ pub mod StakeTable {
                 Self::NotInitializing(inner) => {
                     <NotInitializing as alloy_sol_types::SolError>::abi_encoded_size(inner)
                 },
-                Self::NotTimelock(inner) => {
-                    <NotTimelock as alloy_sol_types::SolError>::abi_encoded_size(inner)
-                },
                 Self::NothingToWithdraw(inner) => {
                     <NothingToWithdraw as alloy_sol_types::SolError>::abi_encoded_size(inner)
                 },
@@ -9390,9 +9304,6 @@ pub mod StakeTable {
                 },
                 Self::NotInitializing(inner) => {
                     <NotInitializing as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
-                },
-                Self::NotTimelock(inner) => {
-                    <NotTimelock as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
                 },
                 Self::NothingToWithdraw(inner) => {
                     <NothingToWithdraw as alloy_sol_types::SolError>::abi_encode_raw(inner, out)
