@@ -28,7 +28,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
         storage::Storage,
     },
-    utils::{is_epoch_transition, EpochTransitionIndicator},
+    utils::{is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{Certificate, HasViewNumber},
     StakeTableEntries,
 };
@@ -344,29 +344,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         // If we are in the epoch transition and we are the leader in the next epoch,
         // we might want to start collecting dependencies for our next epoch proposal.
 
-        if !leader_in_current_epoch {
-            let leader_in_next_epoch = epoch_number.is_some()
-                && matches!(
-                    epoch_transition_indicator,
-                    EpochTransitionIndicator::InTransition
-                )
-                && epoch_membership
-                    .next_epoch()
-                    .await
-                    .context(warn!(
-                        "Missing the randomized stake table for epoch {:?}",
-                        epoch_number.unwrap() + 1
-                    ))?
-                    .leader(view_number)
-                    .await?
-                    == self.public_key;
+        let leader_in_next_epoch = !leader_in_current_epoch
+            && epoch_number.is_some()
+            && matches!(
+                epoch_transition_indicator,
+                EpochTransitionIndicator::InTransition
+            )
+            && epoch_membership
+                .next_epoch()
+                .await
+                .context(warn!(
+                    "Missing the randomized stake table for epoch {:?}",
+                    epoch_number.unwrap() + 1
+                ))?
+                .leader(view_number)
+                .await?
+                == self.public_key;
 
-            // Don't even bother making the task if we are not entitled to propose anyway.
-            ensure!(
-                leader_in_current_epoch || leader_in_next_epoch,
-                debug!("We are not the leader of the next view")
-            );
-        }
+        // Don't even bother making the task if we are not entitled to propose anyway.
+        ensure!(
+            leader_in_current_epoch || leader_in_next_epoch,
+            debug!("We are not the leader of the next view")
+        );
 
         // Don't try to propose twice for the same view.
         ensure!(
@@ -446,12 +445,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         let epoch_number = self.cur_epoch;
-        let epoch_transition_indicator = if self
-            .consensus
-            .read()
-            .await
-            .is_high_qc_for_epoch_transition()
-        {
+        let maybe_high_qc_block_number = self.consensus.read().await.high_qc().data.block_number;
+        let epoch_transition_indicator = if maybe_high_qc_block_number.is_some_and(|bn| {
+            is_epoch_transition(bn, self.epoch_height) && !is_last_block(bn, self.epoch_height)
+        }) {
             EpochTransitionIndicator::InTransition
         } else {
             EpochTransitionIndicator::NotInTransition
