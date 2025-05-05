@@ -466,7 +466,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
         vm.stopPrank();
     }
 
-    function test_claimWithdrawal_succeeds() public {
+    function test_ClaimWithdrawalSucceeds() public {
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -555,11 +555,11 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     // solhint-disable-next-line no-empty-blocks
-    function test_revertIf_undelegate_AfterValidatorExit() public {
+    function test_RevertWhen_UndelegateAfterValidatorExit() public {
         // TODO
     }
 
-    function test_multiple_undelegations_after_exit_epoch_succeeds() public {
+    function test_MultipleUndelegationsAfterExitEpochSucceeds() public {
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -719,7 +719,7 @@ contract StakeTableUpgradeTest is Test {
         stakeTableRegisterTest.setUp();
     }
 
-    function test_upgrade_succeeds() public {
+    function test_UpgradeSucceeds() public {
         (uint8 majorVersion,,) = S(stakeTableRegisterTest.stakeTable()).getVersion();
         assertEq(majorVersion, 1);
 
@@ -735,7 +735,7 @@ contract StakeTableUpgradeTest is Test {
     }
 
     /// forge-config: default.allow_internal_expect_revert = true
-    function test_upgrade_reverts_when_not_admin() public {
+    function test_RevertWhen_NotAdmin() public {
         address notAdmin = makeAddr("not_admin");
         S proxy = stakeTableRegisterTest.stakeTable();
         (uint8 majorVersion,,) = proxy.getVersion();
@@ -757,13 +757,13 @@ contract StakeTableUpgradeTest is Test {
         vm.stopPrank();
     }
 
-    function test_initialize_function_is_protected() public {
+    function test_InitializeFunction_IsProtected() public {
         S proxy = stakeTableRegisterTest.stakeTable();
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         proxy.initialize(address(0), address(0), 0, address(0));
     }
 
-    function test_initialize_function_is_protected_when_upgraded() public {
+    function test_InitializeFunction_IsProtected_WhenUpgraded() public {
         vm.startPrank(stakeTableRegisterTest.admin());
         S proxy = stakeTableRegisterTest.stakeTable();
         proxy.upgradeToAndCall(address(new StakeTableV2Test()), "");
@@ -774,7 +774,7 @@ contract StakeTableUpgradeTest is Test {
         vm.stopPrank();
     }
 
-    function test_storage_layout_is_compatible() public {
+    function test_StorageLayout_IsCompatible() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
         cmds[1] = "contracts/test/script/compare-storage-layout.js";
@@ -787,7 +787,7 @@ contract StakeTableUpgradeTest is Test {
         assertEq(result, "true");
     }
 
-    function test_storage_layout_is_incompatible_if_field_is_missing() public {
+    function test_StorageLayout_IsIncompatibleIfFieldIsMissing() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
         cmds[1] = "contracts/test/script/compare-storage-layout.js";
@@ -800,7 +800,7 @@ contract StakeTableUpgradeTest is Test {
         assertEq(result, "false");
     }
 
-    function test_storage_layout_is_incompatible_if_fields_are_reordered() public {
+    function test_StorageLayout_IsIncompatibleIfFieldsAreReordered() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
         cmds[1] = "contracts/test/script/compare-storage-layout.js";
@@ -813,7 +813,7 @@ contract StakeTableUpgradeTest is Test {
         assertEq(result, "false");
     }
 
-    function test_storage_layout_is_incompatible_between_diff_contracts() public {
+    function test_StorageLayout_IsIncompatibleBetweenDiffContracts() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
         cmds[1] = "contracts/test/script/compare-storage-layout.js";
@@ -826,7 +826,7 @@ contract StakeTableUpgradeTest is Test {
         assertEq(result, "false");
     }
 
-    function test_reinitialize_succeeds_only_once() public {
+    function test_ReinitializeSucceedsOnlyOnce() public {
         vm.startPrank(stakeTableRegisterTest.admin());
         S proxy = stakeTableRegisterTest.stakeTable();
         proxy.upgradeToAndCall(
@@ -912,11 +912,11 @@ contract StakeTableTimelockTest is Test {
         stakeTable = S(proxyAddress);
     }
 
-    function test_initialize_sets_timelock_as_owner() public view {
+    function test_InitializeSetsTimelockAsOwner() public view {
         assertEq(stakeTable.owner(), address(timelockController));
     }
 
-    function test_timelock_upgrade_proposal_and_execution_succeeds() public {
+    function test_UpgradeProposalAndExecutionSucceeds() public {
         vm.startPrank(proposers[0]);
 
         // Encode upgrade call
@@ -942,7 +942,7 @@ contract StakeTableTimelockTest is Test {
         vm.assertTrue(timelockController.isOperationDone(txId));
     }
 
-    function test_expect_revert_when_timelock_is_not_owner() public {
+    function test_RevertWhen_TimelockIsNotOwner() public {
         assertEq(stakeTable.owner(), address(timelockController));
         vm.startPrank(address(timelockController));
         stakeTable.transferOwnership(makeAddr("newOwner"));
@@ -977,9 +977,7 @@ contract StakeTableTimelockTest is Test {
         vm.assertFalse(timelockController.isOperationDone(txId));
     }
 
-    function test_expect_revert_when_timelock_upgrade_proposal_and_execution_before_delay()
-        public
-    {
+    function test_RevertWhen_UpgradeProposalAndExecutionBeforeDelay() public {
         vm.startPrank(proposers[0]);
 
         // Encode upgrade call
@@ -1005,8 +1003,7 @@ contract StakeTableTimelockTest is Test {
         vm.assertFalse(timelockController.isOperationDone(txId));
     }
 
-    function test_expect_revert_when_timelock_upgrade_proposal_and_execution_without_correct_permission(
-    ) public {
+    function test_RevertWhen_ExecutionWithoutCorrectPermission() public {
         vm.startPrank(makeAddr("notProposer"));
 
         // Encode upgrade call
@@ -1044,7 +1041,7 @@ contract StakeTableTimelockTest is Test {
         vm.assertFalse(timelockController.isOperationDone(txId));
     }
 
-    function test_expect_revert_when_execute_with_wrong_salt() public {
+    function test_RevertWhen_ExecuteWithWrongSalt() public {
         // Encode upgrade call
         bytes memory data =
             abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
@@ -1072,7 +1069,7 @@ contract StakeTableTimelockTest is Test {
         vm.stopPrank();
     }
 
-    function test_unauthorized_cannot_upgrade() public {
+    function test_UnauthorizedCannotUpgrade() public {
         vm.startPrank(makeAddr("notAdmin"));
 
         try stakeTable.upgradeToAndCall(address(new S()), "") {
@@ -1087,14 +1084,14 @@ contract StakeTableTimelockTest is Test {
         }
     }
 
-    function test_timelock_admin_can_grant_roles_without_delay() public {
+    function test_AdminCanGrantRolesWithoutDelay() public {
         vm.startPrank(timelockAdmin);
         timelockController.grantRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
         timelockController.grantRole(timelockController.EXECUTOR_ROLE(), timelockAdmin);
         vm.stopPrank();
     }
 
-    function test_timelock_cancel_operation_succeeds() public {
+    function test_CancelOperation() public {
         vm.startPrank(proposers[0]);
 
         bytes memory data = abi.encodeWithSignature(
@@ -1131,7 +1128,7 @@ contract StakeTableTimelockTest is Test {
         vm.stopPrank();
     }
 
-    function test_timelock_role_revocation() public {
+    function test_RevokeRole() public {
         vm.startPrank(timelockAdmin);
         timelockController.grantRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
         assertTrue(timelockController.hasRole(timelockController.PROPOSER_ROLE(), timelockAdmin));
@@ -1140,7 +1137,7 @@ contract StakeTableTimelockTest is Test {
         vm.stopPrank();
     }
 
-    function test_timelock_successfully_handles_multiple_operations() public {
+    function test_MultipleOperations_OnTimelock() public {
         vm.startPrank(proposers[0]);
 
         bytes memory data1 =
@@ -1167,7 +1164,7 @@ contract StakeTableTimelockTest is Test {
         assertTrue(timelockController.isOperationDone(txId2));
     }
 
-    function test_expect_revert_when_timelock_zero_delay_schedule() public {
+    function test_RevertWhen_ZeroDelaySchedule() public {
         vm.startPrank(proposers[0]);
 
         bytes memory data =
@@ -1180,7 +1177,7 @@ contract StakeTableTimelockTest is Test {
         vm.stopPrank();
     }
 
-    function test_expect_revert_when_timelock_invalid_data_operation() public {
+    function test_RevertWhen_InvalidDataOperation() public {
         vm.startPrank(proposers[0]);
 
         // Encode an upgrade call with invalid data
