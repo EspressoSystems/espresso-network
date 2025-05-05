@@ -21,18 +21,18 @@ import { LightClientCommonTest } from "./LightClientV2.t.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { Timelock } from "../src/Timelock.sol";
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
 
 // Target contract
 import { StakeTable as S } from "../src/StakeTable.sol";
-import "@openzeppelin/contracts/governance/TimelockController.sol";
 
 // TODO: currently missing several tests
 // TODO: test only owner methods access control
@@ -855,7 +855,7 @@ contract StakeTableTimelockTest is Test {
     LightClientV2 public lcV2;
     EspToken public token;
     S public stakeTable;
-    TimelockController public timelockController;
+    Timelock public timelockController;
     uint256 public constant INITIAL_BALANCE = 5 ether;
     uint256 public constant ESCROW_PERIOD = 1 weeks;
     uint256 public constant DELAY = 15 seconds;
@@ -901,7 +901,7 @@ contract StakeTableTimelockTest is Test {
         lcV2 = new LightClientV2();
 
         //deploy timelock
-        timelockController = new TimelockController(DELAY, proposers, executors, timelockAdmin);
+        timelockController = new Timelock(DELAY, proposers, executors, timelockAdmin);
 
         deployEspToken(address(timelockController), tokenGrantRecipient);
 
