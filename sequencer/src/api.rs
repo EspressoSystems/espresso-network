@@ -2114,6 +2114,16 @@ mod test {
             .send()
             .await
             .unwrap_err();
+
+        let leaf = client
+            .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/764000"))
+            .bytes()
+            .await
+            .unwrap();
+
+        println!("{leaf:?}");
+
+        assert!(0 > 1);
     }
 
     async fn run_catchup_test(url_suffix: &str) {
