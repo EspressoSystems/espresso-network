@@ -682,6 +682,26 @@ impl PruneStorage for SqlStorage {
         Ok(size as u64)
     }
 
+    /// Trigger incremental vacuum to free up space in the SQLite database.
+    /// Note: We don't vacuum the Postgres database,
+    /// as there is no manual trigger for incremental vacuum,
+    /// and a full vacuum can take a lot of time.
+    #[cfg(feature = "embedded-db")]
+    async fn vacuum(&self) -> anyhow::Result<()> {
+        let config = self.get_pruning_config().ok_or(QueryError::Error {
+            message: "Pruning config not found".to_string(),
+        })?;
+        let mut conn = self.pool().acquire().await?;
+        query(&format!(
+            "PRAGMA incremental_vacuum({})",
+            config.incremental_vacuum_pages()
+        ))
+        .execute(conn.as_mut())
+        .await?;
+        conn.close().await?;
+        Ok(())
+    }
+
     /// Note: The prune operation may not immediately free up space even after rows are deleted.
     /// This is because a vacuum operation may be necessary to reclaim more space.
     /// PostgreSQL already performs auto vacuuming, so we are not including it here
@@ -731,17 +751,9 @@ impl PruneStorage for SqlStorage {
                 tx.commit().await.map_err(|e| QueryError::Error {
                     message: format!("failed to commit {e}"),
                 })?;
-
                 pruner.pruned_height = Some(height);
                 return Ok(Some(height));
             }
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
-            let mut conn = self.pool().acquire().await?;
-            query("VACUUM").execute(conn.as_mut()).await?;
-            conn.close().await?;
         }
 
         // If threshold is set, prune data exceeding minimum retention in batches
@@ -778,12 +790,7 @@ impl PruneStorage for SqlStorage {
                             message: format!("failed to commit {e}"),
                         })?;
 
-                        #[cfg(feature = "embedded-db")]
-                        {
-                            let mut conn = self.pool().acquire().await?;
-                            query("VACUUM").execute(conn.as_mut()).await?;
-                            conn.close().await?;
-                        }
+                        self.vacuum().await?;
 
                         pruner.pruned_height = Some(height);
 
@@ -1410,12 +1417,16 @@ mod test {
     }
 
     async fn vacuum(storage: &SqlStorage) {
+        #[cfg(feature = "embedded-db")]
+        let query = "PRAGMA incremental_vacuum(16000)";
+        #[cfg(not(feature = "embedded-db"))]
+        let query = "VACUUM";
         storage
             .pool
             .acquire()
             .await
             .unwrap()
-            .execute("VACUUM")
+            .execute(query)
             .await
             .unwrap();
     }

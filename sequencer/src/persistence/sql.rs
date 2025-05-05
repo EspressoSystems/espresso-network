@@ -466,6 +466,12 @@ pub struct PruningOptions {
         value_parser = parse_duration,
     )]
     interval: Option<Duration>,
+
+    /// Number of SQLite pages to vacuum from the freelist
+    /// during each pruner cycle.
+    /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES")]
+    pages: Option<u64>,
 }
 
 impl From<PruningOptions> for PrunerCfg {
@@ -488,6 +494,10 @@ impl From<PruningOptions> for PrunerCfg {
         }
         if let Some(interval) = opt.interval {
             cfg = cfg.with_interval(interval);
+        }
+
+        if let Some(pages) = opt.pages {
+            cfg = cfg.with_incremental_vacuum_pages(pages)
         }
 
         cfg = cfg.with_state_tables(vec![

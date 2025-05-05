@@ -285,6 +285,37 @@ contract have to be upgraded and should use the new PlonkVerifier contract addre
 
 ### Via a Software Wallet
 
+### Upgrade to Same Light Client Version (normally for a patch)
+
+In `.env.contracts` ensure you have the following filled out:
+
+```
+export ETHERSCAN_API_KEY=
+export DEPLOYER_MNEMONIC=
+export DEPLOYER_MNEMONIC_OFFSET=
+export RPC_URL=
+export PLONK_VERIFIER_ADDRESS=
+export LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS=
+export SAFE_MULTISIG_ADDRESS=
+export USE_HARDWARE_WALLET=
+```
+
+1. Run the following command in the home directory:
+
+```bash
+source .env.contracts && \
+forge clean && \
+forge script contracts/script/LightClient.s.sol:LightClientContractUpgradeToSameVersionScript \
+--ffi \
+--rpc-url $RPC_URL \
+--libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS \
+--build-info true \
+--broadcast \
+--verify --etherscan-api-key $ETHERSCAN_API_KEY
+```
+
+2. Go to safe.global and have the signers confirm the transaction and finally execute it
+
 ### Upgrade to Patch (modify epoch start block)
 
 In `.env.contracts` ensure the following value is updated to the desired value:
