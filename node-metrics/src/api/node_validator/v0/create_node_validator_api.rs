@@ -120,10 +120,10 @@ pub async fn create_node_validator_processing(
 
     let hotshot_client = surf_disco::Client::new(config.stake_table_url_base.clone());
 
-    let (hotshot_config, mut stake_table) =
-        get_config_stake_table_from_sequencer(hotshot_client.clone())
-            .await
-            .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
+    let hotshot_config = get_config_stake_table_from_sequencer(hotshot_client.clone())
+        .await
+        .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
+    let mut stake_table = hotshot_config.known_nodes_with_stake.clone();
 
     if let (Some(epoch_starting_block), Some(num_blocks_per_epoch)) = (
         hotshot_config.epoch_start_block,

@@ -10,10 +10,10 @@ use alloy::{
 };
 use clap::Parser;
 use espresso_types::parse_duration;
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::{
     fetch_epoch_config_from_sequencer, run_prover_once, run_prover_service, StateProverConfig,
 };
+use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
 use vbs::version::StaticVersion;

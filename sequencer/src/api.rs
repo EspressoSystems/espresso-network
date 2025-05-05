@@ -674,7 +674,7 @@ pub mod test_helpers {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
-    use hotshot_state_prover::service::legacy_light_client_genesis_from_stake_table;
+    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -702,7 +702,7 @@ pub mod test_helpers {
         },
     };
 
-    pub const STAKE_TABLE_CAPACITY_FOR_TEST: u64 = 10;
+    pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 
     pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize, V: Versions> {
         pub server: SequencerContext<network::Memory, P::Persistence, V>,
@@ -833,7 +833,10 @@ pub mod test_helpers {
 
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
-            let initial_stake_table = network_config.stake_table();
+            let initial_stake_table = network_config
+                .hotshot_config()
+                .known_nodes_with_stake
+                .clone();
 
             let stake_table_address = pos_deploy_routine(
                 &l1_url,
@@ -844,6 +847,7 @@ pub mod test_helpers {
                 network_config.staking_priv_keys(),
                 None,
                 multiple_delegators,
+                STAKE_TABLE_CAPACITY_FOR_TEST,
             )
             .await
             .expect("deployed pos contracts");
@@ -1009,8 +1013,11 @@ pub mod test_helpers {
         }
 
         pub fn light_client_genesis(&self) -> (LightClientStateSol, StakeTableStateSol) {
-            let st = self.cfg.stake_table();
-            legacy_light_client_genesis_from_stake_table(st).unwrap()
+            light_client_genesis_from_stake_table(
+                &self.cfg.hotshot_config().known_nodes_with_stake,
+                STAKE_TABLE_CAPACITY_FOR_TEST,
+            )
+            .unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {
@@ -2118,8 +2125,7 @@ mod test {
             .unwrap_err();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_catchup() {
+    async fn run_catchup_test(url_suffix: &str) {
         setup_test();
 
         // Start a sequencer network, using the query service for catchup.
@@ -2127,12 +2133,17 @@ mod test {
         let anvil = Anvil::new().spawn();
         let l1 = anvil.endpoint_url();
         const NUM_NODES: usize = 5;
+
+        let url: url::Url = format!("http://localhost:{port}{url_suffix}")
+            .parse()
+            .unwrap();
+
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().l1_url(l1).build())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    vec![url.clone()],
                     Default::default(),
                     &NoMetrics,
                 )
@@ -2177,7 +2188,7 @@ mod test {
                 ValidatedState::default(),
                 no_storage::Options,
                 Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    vec![url],
                     Default::default(),
                     &NoMetrics,
                 )),
@@ -2217,6 +2228,21 @@ mod test {
                 break;
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup() {
+        run_catchup_test("").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_v0() {
+        run_catchup_test("/v0").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catchup_v1() {
+        run_catchup_test("/v1").await;
     }
 
     #[ignore]
@@ -2937,15 +2963,14 @@ mod test {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_hotshot_event_streaming() {
+    async fn run_hotshot_event_streaming_test(url_suffix: &str) {
         setup_test();
 
         let hotshot_event_streaming_port =
             pick_unused_port().expect("No ports free for hotshot event streaming");
         let query_service_port = pick_unused_port().expect("No ports free for query service");
 
-        let url = format!("http://localhost:{hotshot_event_streaming_port}")
+        let url = format!("http://localhost:{hotshot_event_streaming_port}{url_suffix}")
             .parse()
             .unwrap();
 
@@ -2988,6 +3013,21 @@ mod test {
             }
         }
         assert_eq!(receive_count, total_count + 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_v0() {
+        run_hotshot_event_streaming_test("/v0").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming_v1() {
+        run_hotshot_event_streaming_test("/v1").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_hotshot_event_streaming() {
+        run_hotshot_event_streaming_test("").await;
     }
 
     // TODO when `EpochVersion` becomes base version we can merge this

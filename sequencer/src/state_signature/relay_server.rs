@@ -9,12 +9,11 @@ use async_lock::RwLock;
 use clap::Args;
 use espresso_types::{config::PublicNetworkConfig, SeqTypes};
 use futures::FutureExt;
-use hotshot_stake_table::utils::one_honest_threshold;
 use hotshot_state_prover::service::{
     fetch_epoch_config_from_sequencer, fetch_stake_table_from_sequencer,
 };
 use hotshot_types::{
-    light_client::{StateSignaturesBundle, StateVerKey},
+    light_client::{one_honest_threshold, StateSignaturesBundle, StateVerKey},
     traits::signature_key::{StakeTableEntryType, StateSignatureKey},
     utils::{epoch_from_block_number, is_gt_epoch_root},
     PeerConfig,

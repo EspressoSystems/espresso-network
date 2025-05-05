@@ -341,12 +341,9 @@ mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_std::UniformRand;
     use hotshot_types::{
-        light_client::{LightClientState, StakeTableState},
+        light_client::{compute_stake_table_commitment, LightClientState, StakeTableState},
         signature_key::SchnorrPubKey,
-        traits::{
-            signature_key::StateSignatureKey,
-            stake_table::{SnapshotVersion, StakeTableScheme},
-        },
+        traits::signature_key::StateSignatureKey,
     };
     use jf_relation::Circuit;
     use jf_signature::schnorr::Signature;
@@ -365,14 +362,18 @@ mod tests {
         let mut prng = test_rng();
 
         let (qc_keys, state_keys) = key_pairs_for_testing(num_validators, &mut prng);
-        let st = stake_table_for_testing(ST_CAPACITY, &qc_keys, &state_keys);
-        let st_state = st.voting_state().unwrap();
+        let st = stake_table_for_testing(&qc_keys, &state_keys);
+        let st_state = compute_stake_table_commitment(&st, ST_CAPACITY).unwrap();
         let next_st_state = st_state;
 
         let entries = st
-            .try_iter(SnapshotVersion::LastEpochStart)
-            .unwrap()
-            .map(|(_, stake_amount, state_key)| (state_key, stake_amount))
+            .iter()
+            .map(|config| {
+                (
+                    config.state_ver_key.clone(),
+                    config.stake_table_entry.stake_amount,
+                )
+            })
             .collect::<Vec<_>>();
 
         let lightclient_state = LightClientState {

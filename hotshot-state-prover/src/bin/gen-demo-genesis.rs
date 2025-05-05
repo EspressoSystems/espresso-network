@@ -1,8 +1,8 @@
 use alloy::{hex::ToHexExt, sol_types::SolValue};
 use clap::Parser;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_state_prover::service::light_client_genesis;
+use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
 use url::Url;
 
 #[derive(Parser)]

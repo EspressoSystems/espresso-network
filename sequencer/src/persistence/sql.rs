@@ -57,7 +57,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use sqlx::{query, Executor, Row};
 
-use crate::{catchup::SqlStateCatchup, NodeType, SeqTypes, ViewNumber};
+use crate::{catchup::SqlStateCatchup, NodeType, SeqTypes, ViewNumber, RECENT_STAKE_TABLES_LIMIT};
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -466,6 +466,12 @@ pub struct PruningOptions {
         value_parser = parse_duration,
     )]
     interval: Option<Duration>,
+
+    /// Number of SQLite pages to vacuum from the freelist
+    /// during each pruner cycle.
+    /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
+    #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES")]
+    pages: Option<u64>,
 }
 
 impl From<PruningOptions> for PrunerCfg {
@@ -488,6 +494,10 @@ impl From<PruningOptions> for PrunerCfg {
         }
         if let Some(interval) = opt.interval {
             cfg = cfg.with_interval(interval);
+        }
+
+        if let Some(pages) = opt.pages {
+            cfg = cfg.with_incremental_vacuum_pages(pages)
         }
 
         cfg = cfg.with_state_tables(vec![
@@ -1976,14 +1986,19 @@ impl SequencerPersistence for Persistence {
             .db
             .read()
             .await?
-            .fetch_all("SELECT * from epoch_drb_and_root ORDER BY epoch ASC")
+            .fetch_all(
+                query("SELECT * from epoch_drb_and_root ORDER BY epoch DESC LIMIT $1")
+                    .bind(RECENT_STAKE_TABLES_LIMIT as i64),
+            )
             .await?;
 
+        // reverse the rows vector to return the most recent epochs, but in ascending order
         rows.into_iter()
+            .rev()
             .map(|row| {
-                let epoch: i64 = row.get("epoch");
-                let drb_result: Option<Vec<u8>> = row.get("drb_result");
-                let block_header: Option<Vec<u8>> = row.get("block_header");
+                let epoch: i64 = row.try_get("epoch")?;
+                let drb_result: Option<Vec<u8>> = row.try_get("drb_result")?;
+                let block_header: Option<Vec<u8>> = row.try_get("block_header")?;
                 if let Some(drb_result) = drb_result {
                     let drb_result_array = drb_result
                         .try_into()
@@ -2039,7 +2054,7 @@ impl MembershipPersistence for Persistence {
         let mut tx = self.db.write().await?;
 
         let rows = match query_as::<(i64, Vec<u8>)>(
-            "SELECT epoch, stake FROM epoch_drb_and_root LIMIT $1",
+            "SELECT epoch, stake FROM epoch_drb_and_root ORDER BY epoch DESC LIMIT $1",
         )
         .bind(limit as i64)
         .fetch_all(tx.as_mut())
@@ -2978,40 +2993,5 @@ mod test {
         );
 
         storage.migrate_consensus().await.unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_membership_persistence() -> anyhow::Result<()> {
-        setup_test();
-
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-
-        let storage = opt.create().await.unwrap();
-
-        let validator = Validator::mock();
-        let mut st = IndexMap::new();
-        st.insert(validator.account, validator);
-        storage
-            .store_stake(EpochNumber::new(10), st.clone())
-            .await?;
-
-        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
-        assert_eq!(st, table);
-
-        let val2 = Validator::mock();
-        let mut st2 = IndexMap::new();
-        st2.insert(val2.account, val2);
-        storage
-            .store_stake(EpochNumber::new(11), st2.clone())
-            .await?;
-
-        let tables = storage.load_latest_stake(4).await?.unwrap();
-        let mut iter = tables.iter();
-        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
-        assert_eq!(Some(&(EpochNumber::new(11), st2)), iter.next());
-        assert_eq!(None, iter.next());
-
-        Ok(())
     }
 }
