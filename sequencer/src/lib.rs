@@ -896,7 +896,6 @@ pub mod testing {
         /// Also sets the L1 URL based on the Anvil endpoint.
         /// The `AnvilProvider` can be used to configure the Anvil, for example,
         /// by enabling interval mining after the test network is initialized.
-
         pub fn anvil_provider(mut self, anvil: AnvilInstance) -> Self {
             self.l1_url = anvil.endpoint().parse().unwrap();
             let l1_client = L1Client::anvil(&anvil).expect("create l1 client");
