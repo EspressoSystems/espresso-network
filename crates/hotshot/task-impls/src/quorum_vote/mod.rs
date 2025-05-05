@@ -99,12 +99,6 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Signature key for light client state
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
-
-    /// View timeout from config.
-    pub timeout: u64,
-
-    /// The time this view started
-    pub view_start_time: Instant,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -276,8 +270,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     &vid_share,
                     &da_cert,
                     &self.consensus,
-                    self.timeout,
-                    self.view_start_time,
                     &self.receiver.activate_cloned(),
                 )
                 .await
@@ -430,9 +422,6 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Signature key for light client state
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
-
-    /// View timeout from config.
-    pub timeout: u64,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -539,8 +528,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 epoch_height: self.epoch_height,
                 consensus_metrics: Arc::clone(&self.consensus_metrics),
                 state_private_key: self.state_private_key.clone(),
-                timeout: self.timeout,
-                view_start_time: Instant::now(),
             },
         );
         self.vote_dependencies

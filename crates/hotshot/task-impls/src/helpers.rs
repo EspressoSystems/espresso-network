@@ -7,7 +7,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use alloy::primitives::U256;
@@ -1255,8 +1255,6 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
     da_cert: &DaCertificate2<TYPES>,
     consensus: &OuterConsensus<TYPES>,
-    timeout: u64,
-    view_start_time: Instant,
     receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<Proposal<TYPES, VidDisperseShare<TYPES>>> {
     tracing::debug!("getting the second VID share for epoch {:?}", target_epoch);
@@ -1279,42 +1277,26 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         }
     }
 
-    let wait_duration = Duration::from_millis(timeout / 2);
-
-    // TODO configure timeout
-    let Some(time_spent) = Instant::now().checked_duration_since(view_start_time) else {
-        // Shouldn't be possible, now must be after the start
-        return Err(warn!(
-            "Now is earlier than the view start time. Shouldn't be possible."
-        ));
-    };
-    let Some(time_left) = wait_duration.checked_sub(time_spent) else {
-        // No time left
-        return Err(warn!("Run out of time waiting for the second VID share."));
-    };
     let receiver = receiver.clone();
-    let Ok(Some(event)) = tokio::time::timeout(time_left, async move {
-        let da_cert_clone = da_cert.clone();
-        EventDependency::new(
-            receiver,
-            Box::new(move |event| {
-                let event = event.as_ref();
-                if let HotShotEvent::VidShareValidated(second_vid_share) = event {
-                    if target_epoch == da_cert_clone.epoch() {
-                        second_vid_share.data.payload_commitment()
-                            == da_cert_clone.data().payload_commit
-                    } else {
-                        Some(second_vid_share.data.payload_commitment())
-                            == da_cert_clone.data().next_epoch_payload_commit
-                    }
+    let da_cert_clone = da_cert.clone();
+    let Some(event) = EventDependency::new(
+        receiver,
+        Box::new(move |event| {
+            let event = event.as_ref();
+            if let HotShotEvent::VidShareValidated(second_vid_share) = event {
+                if target_epoch == da_cert_clone.epoch() {
+                    second_vid_share.data.payload_commitment()
+                        == da_cert_clone.data().payload_commit
                 } else {
-                    false
+                    Some(second_vid_share.data.payload_commitment())
+                        == da_cert_clone.data().next_epoch_payload_commit
                 }
-            }),
-        )
-        .completed()
-        .await
-    })
+            } else {
+                false
+            }
+        }),
+    )
+    .completed()
     .await
     else {
         return Err(warn!("Error while waiting for the second VID share."));
