@@ -385,14 +385,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         }
     }
 
-    async fn get_validated_state(&self) -> anyhow::Result<Arc<ValidatedState>> {
-        let Some(context) = &self.context else {
-            bail!("context not available");
-        };
-
-        Ok(context.decided_state().await)
-    }
-
     fn check_progress_with_timeout(&self) -> BoxFuture<anyhow::Result<()>> {
         async {
             let Some(context) = &self.context else {
@@ -420,99 +412,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             }
         }
         .boxed()
-    }
-
-    async fn replay_blocks(&self) -> anyhow::Result<()> {
-        let Some(context) = &self.context else {
-            tracing::info!("skipping progress check on stopped node");
-            return Ok(());
-        };
-
-        let num_nodes = {
-            context
-                .consensus()
-                .read()
-                .await
-                .hotshot
-                .config
-                .num_nodes_with_stake
-        };
-
-        let saved_leaves = {
-            context
-                .consensus()
-                .read()
-                .await
-                .hotshot
-                .config
-                .num_nodes_with_stake
-        };
-
-        let node_id = context.node_id();
-        tracing::info!(node_id, num_nodes, "waiting for progress from node");
-
-        let node_state = context.node_state();
-        let validated_state = context.decided_state().await; // or .state(view)
-
-        // Wait for a block proposed by this node. This proves that the node is tracking consensus
-        // (getting Decide events) and participating (able to propose).
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
-        // genesis doesn't work be b/c by the time we get the first
-        // leaf we are already many blocks in.
-        let leaf = Leaf2::genesis::<PosVersion>(&*validated_state, &node_state).await;
-        let mut parent_leaf = LeafInfo::new(leaf, validated_state, None, None, None);
-
-        let version = <PosVersion as Versions>::Upgrade::version();
-
-        let mut events = context.event_stream().await;
-        // let x = context.saved_leaves();
-
-        // let mut maybe_parent = consensus_reader
-        //     .saved_leaves()
-        //     .get(&justify_qc.data.leaf_commit)
-        //     .cloned();
-
-        while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
-                continue;
-            };
-
-            tracing::error!(
-                "got decide height {}, parent height: {}",
-                leaf_chain[0].leaf.height(),
-                parent_leaf.leaf.height()
-            );
-
-            for leaf in leaf_chain.iter() {
-                tracing::error!("parent height: {}", parent_leaf.leaf.height());
-
-                let state = leaf.state.clone();
-                let header = leaf.leaf.block_header();
-                let view_number = leaf.leaf.view_number();
-                let payload = leaf.leaf.block_payload().unwrap();
-
-                // TODO need to get parent leaf somehow, also version
-                // question can we depend on it being in state?
-                // let consensus_reader = consensus.read().await;
-
-                state
-                    .validate_and_apply_header(
-                        &node_state,
-                        &parent_leaf.leaf,
-                        header,
-                        payload.byte_len().as_usize() as u32,
-                        version,
-                        view_number.u64(),
-                    )
-                    .await
-                    .unwrap();
-
-                // state.apply_proposal();
-                parent_leaf = leaf.clone();
-            }
-        }
-
-        bail!("node {node_id} event stream ended unexpectedly");
     }
 
     async fn check_progress(&self) -> anyhow::Result<()> {
@@ -798,31 +697,6 @@ impl TestNetwork {
         )
         .await
         .unwrap();
-    }
-
-    async fn check_replay_blocks(&self) {
-        let v: Vec<_> = try_join_all(
-            self.da_nodes
-                .iter()
-                .map(TestNode::replay_blocks)
-                .chain(self.regular_nodes.iter().map(TestNode::replay_blocks)),
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn check_state_integrity(&self) {
-        let v: Vec<_> = try_join_all(
-            self.da_nodes
-                .iter()
-                .map(TestNode::get_validated_state)
-                .chain(self.regular_nodes.iter().map(TestNode::get_validated_state)),
-        )
-        .await
-        .unwrap();
-
-        let first = v.first().unwrap();
-        v.iter().for_each(|i| assert_eq!(i, first));
     }
 
     async fn check_builder(&self) {
