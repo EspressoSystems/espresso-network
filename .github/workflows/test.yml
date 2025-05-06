@@ -27,7 +27,7 @@ env:
 jobs:
   build-test-artifacts-postgres:
     name: Build test artifacts (postgres)
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -40,7 +40,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: true
-          cache-provider: buildjet
+          cache-provider: github
 
       - name: Show memory
         run: free -h
@@ -62,7 +62,7 @@ jobs:
 
   build-test-artifacts-sqlite:
     name: Build test artifacts (sqlite)
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -76,7 +76,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: true
-          cache-provider: buildjet
+          cache-provider: github
 
       - name: Show memory
         run: free -h
@@ -98,7 +98,7 @@ jobs:
 
   build-test-bins:
     name: Build test binaries
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -108,7 +108,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: true
-          cache-provider: buildjet
+          cache-provider: github
 
       - name: Build Bins
         run: |
