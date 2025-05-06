@@ -635,7 +635,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 // Validate the DAC.
                 cert.is_valid_cert(
-                    StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
+                    &StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
                     membership_da_success_threshold,
                     &self.upgrade_lock,
                 )

@@ -229,9 +229,10 @@ pub async fn build_assembled_sig<
     upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> <TYPES::SignatureKey as SignatureKey>::QcType {
     let stake_table = CERT::stake_table(epoch_membership).await;
-    let real_qc_pp: <TYPES::SignatureKey as SignatureKey>::QcParams =
+    let stake_table_entries = StakeTableEntries::<TYPES>::from(stake_table.clone()).0;
+    let real_qc_pp: <TYPES::SignatureKey as SignatureKey>::QcParams<'_> =
         <TYPES::SignatureKey as SignatureKey>::public_parameter(
-            StakeTableEntries::<TYPES>::from(stake_table.clone()).0,
+            &stake_table_entries,
             CERT::threshold(epoch_membership).await,
         );
 

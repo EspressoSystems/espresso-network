@@ -114,7 +114,7 @@ async fn test_certificate2_validity() {
 
     assert!(qc
         .is_valid_cert(
-            membership_stake_table.clone(),
+            &membership_stake_table,
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
@@ -123,7 +123,7 @@ async fn test_certificate2_validity() {
 
     assert!(qc2
         .is_valid_cert(
-            membership_stake_table,
+            &membership_stake_table,
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
