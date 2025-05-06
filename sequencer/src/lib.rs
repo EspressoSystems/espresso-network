@@ -609,6 +609,7 @@ pub mod testing {
     };
 
     use alloy::{
+        network::EthereumWallet,
         node_bindings::{Anvil, AnvilInstance},
         primitives::U256,
         providers::{
@@ -616,7 +617,7 @@ pub mod testing {
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             },
             layers::AnvilProvider,
-            RootProvider,
+            ProviderBuilder, RootProvider,
         },
         signers::{
             k256::ecdsa::SigningKey,
@@ -626,6 +627,10 @@ pub mod testing {
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
+    use espresso_contract_deployer::{
+        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
+        Contract, Contracts,
+    };
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
@@ -666,7 +671,7 @@ pub mod testing {
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::pos_deploy_routine;
+    use staking_cli::demo::setup_stake_table_contract_for_test;
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -932,25 +937,51 @@ pub mod testing {
                     let blocks_per_epoch = self.config.epoch_height;
                     let epoch_start_block = self.config.epoch_start_block;
 
-                    let initial_stake_table = self.config.known_nodes_with_stake.clone();
-
-                    let staking_private_keys =
-                        staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
-
-                    let address = pos_deploy_routine(
-                        &self.l1_url,
-                        &self.signer,
-                        blocks_per_epoch,
-                        epoch_start_block,
-                        initial_stake_table,
-                        staking_private_keys.clone(),
-                        None,
-                        false,
+                    let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+                        &self.config.known_nodes_with_stake,
                         STAKE_TABLE_CAPACITY_FOR_TEST,
                     )
+                    .unwrap();
+
+                    let validators =
+                        staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
+
+                    let deployer = ProviderBuilder::new()
+                        .wallet(EthereumWallet::from(self.signer.clone()))
+                        .on_http(self.l1_url.clone());
+
+                    let mut contracts = Contracts::new();
+                    let args = DeployerArgsBuilder::default()
+                        .deployer(deployer.clone())
+                        .mock_light_client(true)
+                        .genesis_lc_state(genesis_state)
+                        .genesis_st_state(genesis_stake)
+                        .blocks_per_epoch(blocks_per_epoch)
+                        .epoch_start_block(epoch_start_block)
+                        .build()
+                        .unwrap();
+                    args.deploy_all(&mut contracts)
+                        .await
+                        .expect("failed to deploy all contracts");
+
+                    let st_addr = contracts
+                        .address(Contract::StakeTableProxy)
+                        .expect("StakeTableProxy address not found");
+                    let token_addr = contracts
+                        .address(Contract::EspTokenProxy)
+                        .expect("EspTokenProxy address not found");
+                    setup_stake_table_contract_for_test(
+                        self.l1_url.clone(),
+                        &deployer,
+                        st_addr,
+                        token_addr,
+                        validators,
+                        false,
+                    )
                     .await
-                    .expect("deployed pos contracts");
-                    Upgrade::pos_view_based(address)
+                    .expect("stake table setup failed");
+
+                    Upgrade::pos_view_based(st_addr)
                 },
                 _ => panic!("Upgrade not configured for version {:?}", version),
             };
@@ -1153,6 +1184,10 @@ pub mod testing {
                 .await
             }))
             .await
+        }
+
+        pub fn known_nodes_with_stake(&self) -> &[PeerConfig<SeqTypes>] {
+            &self.config.known_nodes_with_stake
         }
 
         #[allow(clippy::too_many_arguments)]
