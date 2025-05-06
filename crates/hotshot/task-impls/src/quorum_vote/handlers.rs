@@ -7,7 +7,6 @@
 use std::{sync::Arc, time::Instant};
 
 use async_broadcast::{InactiveReceiver, Sender};
-use async_lock::RwLock;
 use chrono::Utc;
 use committable::Committable;
 use hotshot_types::{
@@ -258,8 +257,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
 
         let _ = task_state
             .storage
-            .write()
-            .await
             .update_decided_upgrade_certificate(Some(cert.clone()))
             .await;
     }
@@ -474,7 +471,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: UpgradeLock<TYPES, V>,
     view_number: TYPES::View,
-    storage: Arc<RwLock<I::Storage>>,
+    storage: I::Storage,
     leaf: Leaf2<TYPES>,
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
@@ -522,8 +519,6 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     let now = Instant::now();
     // Add to the storage.
     storage
-        .write()
-        .await
         .append_vid_general(&vid_share)
         .await
         .wrap()

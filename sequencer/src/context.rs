@@ -99,7 +99,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         instance_state: NodeState,
         storage: Option<Arc<SqlStorage>>,
         state_catchup: ParallelStateCatchup,
-        persistence: P,
+        persistence: Arc<P>,
         network: Arc<N>,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
@@ -135,8 +135,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             0,
         )));
 
-        let persistence = Arc::new(persistence);
-
         let handle = SystemContext::init(
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -147,7 +145,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             network.clone(),
             initializer,
             ConsensusMetricsValue::new(metrics),
-            persistence.clone(),
+            Arc::clone(&persistence),
             marketplace_config,
         )
         .await?
