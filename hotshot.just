@@ -51,13 +51,41 @@ test-ci-8 *args:
   echo Running integration test group 8
   RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_8 {{args}}
 
-test-ci-9 *args:
-  echo Running integration test group 9
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_9 {{args}}
-
 test-ci-10 *args:
   echo Running integration test group 10
   RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_10 {{args}}
+
+test-ci-epoch-1 *args:
+  echo Running integration test group epoch 1
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_1 {{args}}
+
+test-ci-epoch-2 *args:
+  echo Running integration test group epoch 2
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_2 {{args}}
+
+test-ci-epoch-3 *args:
+  echo Running integration test group epoch 3
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_3 {{args}}
+
+test-ci-epoch-4 *args:
+  echo Running integration test group epoch 4
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_4 {{args}}
+
+test-ci-epoch-5 *args:
+  echo Running integration test group epoch 5
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_5 {{args}}
+
+test-ci-epoch-6 *args:
+  echo Running integration test group epoch 6
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_6 {{args}}
+
+test-ci-epoch-7 *args:
+  echo Running integration test group epoch 7
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_7 {{args}}
+
+test-ci-epoch-8 *args:
+  echo Running integration test group epoch 8
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_8 {{args}}
 
 # Usage:
 #
