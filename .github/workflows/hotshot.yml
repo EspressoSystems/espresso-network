@@ -26,7 +26,14 @@ jobs:
           - test-ci-6
           - test-ci-7
           - test-ci-8
-          - test-ci-9
+          - test-ci-epoch-1
+          - test-ci-epoch-2
+          - test-ci-epoch-3
+          - test-ci-epoch-4
+          - test-ci-epoch-5
+          - test-ci-epoch-6
+          - test-ci-epoch-7
+          - test-ci-epoch-8
           - test-ci-10
           - test-ci-rest
       fail-fast: false
