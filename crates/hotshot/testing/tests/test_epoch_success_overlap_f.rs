@@ -7,10 +7,9 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-        EpochsTestVersions, Libp2pImpl, MemoryImpl,
-        PushCdnImpl, RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig, TestTypes, TestTypesEpochCatchupTypes,
-        TestTypesRandomizedCommitteeMembers, TestTypesRandomizedLeader,
-    };
+    EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, StableQuorumFilterConfig,
+    TestTypesRandomizedCommitteeMembers,
+};
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,

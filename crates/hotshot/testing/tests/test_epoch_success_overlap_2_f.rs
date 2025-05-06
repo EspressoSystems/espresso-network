@@ -7,8 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl,
-    StableQuorumFilterConfig,
+    EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, StableQuorumFilterConfig,
     TestTypesRandomizedCommitteeMembers,
 };
 use hotshot_macros::cross_tests;
