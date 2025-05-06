@@ -39,29 +39,25 @@ test-ci-5 *args:
   echo Running integration test group 5
   RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_5 {{args}}
 
-test-ci-6-1 *args:
+test-ci-6 *args:
   echo Running integration test group 6
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_6 --partition hash:1/6 {{args}}
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_6 {{args}}
 
-test-ci-6-2 *args:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_6 --partition hash:2/6 {{args}}
+test-ci-7 *args:
+  echo Running integration test group 7
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_7 {{args}}
 
-test-ci-6-3 *args:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_6 --partition hash:3/6 {{args}}
+test-ci-8 *args:
+  echo Running integration test group 8
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_8 {{args}}
 
-test-ci-6-4 *args:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_6 --partition hash:4/6 {{args}}
+test-ci-9 *args:
+  echo Running integration test group 9
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_9 {{args}}
 
-test-ci-6-5 *args:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_6 --partition hash:5/6 {{args}}
-
-test-ci-6-6 *args:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_6 --partition hash:6/6 {{args}}
+test-ci-10 *args:
+  echo Running integration test group 10
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_10 {{args}}
 
 # Usage:
 #
