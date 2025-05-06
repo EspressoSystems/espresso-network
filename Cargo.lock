@@ -475,7 +475,7 @@ dependencies = [
  "lru 0.13.0",
  "parking_lot",
  "pin-project",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -542,7 +542,7 @@ dependencies = [
  "async-stream",
  "futures",
  "pin-project",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -775,7 +775,7 @@ checksum = "4cc3079a33483afa1b1365a3add3ea3e21c75b10f704870198ba7846627d10f2"
 dependencies = [
  "alloy-json-rpc",
  "alloy-transport",
- "reqwest 0.12.15",
+ "reqwest",
  "serde_json",
  "tower 0.5.2",
  "tracing",
@@ -2432,7 +2432,7 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
- "tokio-rustls 0.26.2",
+ "tokio-rustls",
  "tracing",
  "url",
  "warp",
@@ -2466,7 +2466,7 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
- "tokio-rustls 0.26.2",
+ "tokio-rustls",
  "tracing",
  "url",
  "warp",
@@ -3866,6 +3866,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "espresso-contract-deployer"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap 4.5.34",
+ "derive_builder",
+ "derive_more 1.0.0",
+ "espresso-types",
+ "hotshot-contract-adapter",
+ "hotshot-types",
+ "surf-disco",
+ "tide-disco",
+ "tokio",
+ "tracing",
+ "vbs",
+]
+
+[[package]]
 name = "espresso-macros"
 version = "0.1.0"
 source = "git+https://github.com/EspressoSystems/espresso-macros.git?tag=0.1.0#9e0b0258c99757c567676c4dd92f1501db0cf580"
@@ -3899,6 +3918,7 @@ dependencies = [
  "cld",
  "committable",
  "derive_more 1.0.0",
+ "espresso-contract-deployer",
  "espresso-types",
  "ethers-core",
  "fluent-asserter",
@@ -5041,7 +5061,7 @@ dependencies = [
  "hotshot-types",
  "jf-vid",
  "rand 0.8.5",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "sha2 0.10.8",
  "sha3",
@@ -5207,7 +5227,7 @@ dependencies = [
  "rand 0.8.5",
  "refinery",
  "refinery-core",
- "reqwest 0.12.15",
+ "reqwest",
  "semver 1.0.26",
  "serde",
  "serde_json",
@@ -5242,6 +5262,7 @@ dependencies = [
  "ark-std 0.4.0",
  "clap 4.5.34",
  "displaydoc",
+ "espresso-contract-deployer",
  "espresso-types",
  "futures",
  "hotshot-contract-adapter",
@@ -5255,7 +5276,7 @@ dependencies = [
  "jf-rescue",
  "jf-signature 0.2.0",
  "jf-utils",
- "reqwest 0.12.15",
+ "reqwest",
  "sequencer-utils",
  "serde",
  "surf-disco",
@@ -5344,7 +5365,7 @@ dependencies = [
  "lru 0.12.5",
  "portpicker",
  "rand 0.8.5",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "sha2 0.10.8",
  "tagged-base64",
@@ -5582,20 +5603,6 @@ dependencies = [
 
 [[package]]
 name = "hyper-rustls"
-version = "0.24.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
-dependencies = [
- "futures-util",
- "http 0.2.12",
- "hyper 0.14.32",
- "rustls 0.21.12",
- "tokio",
- "tokio-rustls 0.24.1",
-]
-
-[[package]]
-name = "hyper-rustls"
 version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d191583f3da1305256f22463b9bb0471acad48a4e534a5218b9963e9c1f59b2"
@@ -5607,7 +5614,7 @@ dependencies = [
  "rustls 0.23.25",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.2",
+ "tokio-rustls",
  "tower-service",
 ]
 
@@ -5901,7 +5908,7 @@ dependencies = [
  "netlink-proto",
  "netlink-sys",
  "rtnetlink",
- "system-configuration 0.6.1",
+ "system-configuration",
  "tokio",
  "windows 0.53.0",
 ]
@@ -7743,7 +7750,7 @@ dependencies = [
  "hotshot-types",
  "node-metrics",
  "prometheus-parse",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "serde_json",
  "surf-disco",
@@ -9191,47 +9198,6 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.11.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd67538700a17451e7cba03ac727fb961abb7607553461627b97de0b89cf4a62"
-dependencies = [
- "base64 0.21.7",
- "bytes 1.10.1",
- "encoding_rs",
- "futures-core",
- "futures-util",
- "h2 0.3.26",
- "http 0.2.12",
- "http-body 0.4.6",
- "hyper 0.14.32",
- "hyper-rustls 0.24.2",
- "ipnet",
- "js-sys",
- "log",
- "mime",
- "once_cell",
- "percent-encoding",
- "pin-project-lite 0.2.16",
- "rustls 0.21.12",
- "rustls-pemfile 1.0.4",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper 0.1.2",
- "system-configuration 0.5.1",
- "tokio",
- "tokio-rustls 0.24.1",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "webpki-roots 0.25.4",
- "winreg",
-]
-
-[[package]]
-name = "reqwest"
 version = "0.12.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d19c46a6fdd48bc4dab94b6103fccc55d34c67cc0ad04653aad4ea2a07cd7bbb"
@@ -9246,7 +9212,7 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.6.0",
- "hyper-rustls 0.27.5",
+ "hyper-rustls",
  "hyper-tls",
  "hyper-util",
  "ipnet",
@@ -9257,12 +9223,12 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "pin-project-lite 0.2.16",
- "rustls-pemfile 2.2.0",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 1.0.2",
- "system-configuration 0.6.1",
+ "system-configuration",
  "tokio",
  "tokio-native-tls",
  "tower 0.5.2",
@@ -9626,20 +9592,8 @@ dependencies = [
  "base64 0.13.1",
  "log",
  "ring 0.16.20",
- "sct 0.6.1",
+ "sct",
  "webpki",
-]
-
-[[package]]
-name = "rustls"
-version = "0.21.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f56a14d1f48b391359b22f731fd4bd7e43c97f3c50eee276f3aa09c94784d3e"
-dependencies = [
- "log",
- "ring 0.17.14",
- "rustls-webpki 0.101.7",
- "sct 0.7.1",
 ]
 
 [[package]]
@@ -9655,15 +9609,6 @@ dependencies = [
  "rustls-webpki 0.103.1",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
-dependencies = [
- "base64 0.21.7",
 ]
 
 [[package]]
@@ -9805,16 +9750,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sct"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
-dependencies = [
- "ring 0.17.14",
- "untrusted 0.9.0",
-]
-
-[[package]]
 name = "seahash"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9927,6 +9862,7 @@ dependencies = [
  "derive_more 1.0.0",
  "dotenvy",
  "escargot",
+ "espresso-contract-deployer",
  "espresso-macros",
  "espresso-types",
  "futures",
@@ -9961,7 +9897,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_distr",
  "request-response",
- "reqwest 0.12.15",
+ "reqwest",
  "semver 1.0.26",
  "sequencer",
  "sequencer-utils",
@@ -9999,21 +9935,15 @@ dependencies = [
  "async-trait",
  "clap 4.5.34",
  "committable",
- "derive_more 1.0.0",
  "hotshot",
- "hotshot-contract-adapter",
  "hotshot-example-types",
- "hotshot-types",
  "log-panics",
  "portpicker",
- "reqwest 0.11.27",
  "serde",
  "serde_json",
  "surf",
- "tempfile",
  "tokio",
  "toml",
- "tower-service",
  "tracing",
  "url",
 ]
@@ -10398,7 +10328,7 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03c3c6b7927ffe7ecaa769ee0e3994da3b8cafc8f444578982c83ecb161af917"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -10672,6 +10602,7 @@ dependencies = [
  "derive_more 1.0.0",
  "directories 6.0.0",
  "dotenvy",
+ "espresso-contract-deployer",
  "espresso-types",
  "futures-util",
  "git-version",
@@ -10852,16 +10783,16 @@ dependencies = [
 
 [[package]]
 name = "surf-disco"
-version = "0.9.2"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc2b2235f188bd95c42d517ebdc1bb76b36e17942051140a7de52e287360dbb8"
+checksum = "2bcf4981d3d4dc702a855914e80a9ea4f348b5a2c634cd64eed7bd583a14e26d"
 dependencies = [
  "async-std",
  "async-tungstenite",
  "derivative",
  "futures",
  "hex",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "serde_json",
  "tide-disco",
@@ -11023,34 +10954,13 @@ dependencies = [
 
 [[package]]
 name = "system-configuration"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba3a3adc5c275d719af8cb4272ea1c4a6d668a777f37e115f6d11ddbc1c8e0e7"
-dependencies = [
- "bitflags 1.3.2",
- "core-foundation",
- "system-configuration-sys 0.5.0",
-]
-
-[[package]]
-name = "system-configuration"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
 dependencies = [
  "bitflags 2.9.0",
  "core-foundation",
- "system-configuration-sys 0.6.0",
-]
-
-[[package]]
-name = "system-configuration-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75fb188eb626b924683e3b95e3a48e63551fcfb51949de2f06a9d91dbee93c9"
-dependencies = [
- "core-foundation-sys",
- "libc",
+ "system-configuration-sys",
 ]
 
 [[package]]
@@ -11118,7 +11028,7 @@ dependencies = [
  "dotenvy",
  "espresso-types",
  "futures",
- "reqwest 0.12.15",
+ "reqwest",
  "surf-disco",
  "tempfile",
  "tokio",
@@ -11241,7 +11151,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "rand 0.8.5",
- "reqwest 0.12.15",
+ "reqwest",
  "routefinder",
  "semver 1.0.26",
  "serde",
@@ -11476,16 +11386,6 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c28327cf380ac148141087fbfb9de9d7bd4e84ab5d2c28fbc911d753de8a7081"
-dependencies = [
- "rustls 0.21.12",
- "tokio",
-]
-
-[[package]]
-name = "tokio-rustls"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e727b36a1a0e8b74c376ac2211e40c2c8af09fb4013c60d910495810f008e9b"
@@ -11517,7 +11417,7 @@ dependencies = [
  "rustls 0.23.25",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.2",
+ "tokio-rustls",
  "tungstenite 0.26.2",
  "webpki-roots 0.26.8",
 ]
@@ -12431,12 +12331,6 @@ checksum = "aabe153544e473b775453675851ecc86863d2a81d786d741f6b76778f2a48940"
 dependencies = [
  "webpki",
 ]
-
-[[package]]
-name = "webpki-roots"
-version = "0.25.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f20c57d8d7db6d3b86154206ae5d8fba62dd39573114de97c2cb0578251f8e1"
 
 [[package]]
 name = "webpki-roots"

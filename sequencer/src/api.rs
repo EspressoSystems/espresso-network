@@ -640,10 +640,16 @@ pub mod test_helpers {
     use std::time::Duration;
 
     use alloy::{
+        network::EthereumWallet,
         node_bindings::Anvil,
         primitives::{Address, U256},
+        providers::ProviderBuilder,
     };
     use committable::Committable;
+    use espresso_contract_deployer::{
+        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
+        Contract, Contracts,
+    };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
         EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
@@ -653,8 +659,6 @@ pub mod test_helpers {
         stream::StreamExt,
     };
     use hotshot::types::{Event, EventType};
-    use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
-    use hotshot_state_prover::service::light_client_genesis_from_stake_table;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -663,7 +667,7 @@ pub mod test_helpers {
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use staking_cli::demo::pos_deploy_routine;
+    use staking_cli::demo::setup_stake_table_contract_for_test;
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -810,27 +814,48 @@ pub mod test_helpers {
 
             let l1_url = network_config.l1_url();
             let signer = network_config.signer();
+            let deployer = ProviderBuilder::new()
+                .wallet(EthereumWallet::from(signer.clone()))
+                .on_http(l1_url.clone());
 
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
-            let initial_stake_table = network_config
-                .hotshot_config()
-                .known_nodes_with_stake
-                .clone();
-
-            let stake_table_address = pos_deploy_routine(
-                &l1_url,
-                &signer,
-                blocks_per_epoch,
-                epoch_start_block,
-                initial_stake_table,
-                network_config.staking_priv_keys(),
-                None,
-                multiple_delegators,
+            let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+                &network_config.hotshot_config().known_nodes_with_stake,
                 STAKE_TABLE_CAPACITY_FOR_TEST,
             )
+            .unwrap();
+
+            let mut contracts = Contracts::new();
+            let args = DeployerArgsBuilder::default()
+                .deployer(deployer.clone())
+                .mock_light_client(true)
+                .genesis_lc_state(genesis_state)
+                .genesis_st_state(genesis_stake)
+                .blocks_per_epoch(blocks_per_epoch)
+                .epoch_start_block(epoch_start_block)
+                .build()
+                .unwrap();
+            args.deploy_all(&mut contracts)
+                .await
+                .expect("failed to deploy all contracts");
+
+            let stake_table_address = contracts
+                .address(Contract::StakeTableProxy)
+                .expect("StakeTableProxy address not found");
+            let token_addr = contracts
+                .address(Contract::EspTokenProxy)
+                .expect("EspTokenProxy address not found");
+            setup_stake_table_contract_for_test(
+                l1_url.clone(),
+                &deployer,
+                stake_table_address,
+                token_addr,
+                network_config.staking_priv_keys(),
+                multiple_delegators,
+            )
             .await
-            .expect("deployed pos contracts");
+            .expect("stake table setup failed");
 
             // Add stake table address to `ChainConfig` (held in state),
             // avoiding overwrite other values. Base fee is set to `0` to avoid
@@ -990,14 +1015,6 @@ pub mod test_helpers {
                 cfg: cfg.network_config,
                 temp_dir,
             }
-        }
-
-        pub fn light_client_genesis(&self) -> (LightClientStateSol, StakeTableStateSol) {
-            light_client_genesis_from_stake_table(
-                &self.cfg.hotshot_config().known_nodes_with_stake,
-                STAKE_TABLE_CAPACITY_FOR_TEST,
-            )
-            .unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {
