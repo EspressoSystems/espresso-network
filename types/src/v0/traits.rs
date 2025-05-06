@@ -19,7 +19,7 @@ use hotshot_types::{
     },
     drb::DrbResult,
     event::{HotShotAction, LeafInfo},
-    message::{convert_proposal, Proposal, UpgradeLock},
+    message::{convert_proposal, Proposal},
     simple_certificate::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
@@ -29,7 +29,7 @@ use hotshot_types::{
         storage::Storage,
         ValidatedState as HotShotState,
     },
-    utils::{genesis_epoch_from_version, verify_leaf_chain},
+    utils::genesis_epoch_from_version,
     PeerConfig,
 };
 use indexmap::IndexMap;
@@ -38,43 +38,46 @@ use serde::{de::DeserializeOwned, Serialize};
 use super::{
     impls::NodeState,
     utils::BackoffParams,
-    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    EpochVersion, SequencerVersions,
 };
 use crate::{
     v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,
-    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NetworkConfig, SeqTypes,
+    FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes,
 };
 
 #[async_trait]
 pub trait StateCatchup: Send + Sync {
-    async fn try_fetch_leaves(&self, retry: usize, height: u64) -> anyhow::Result<Vec<Leaf2>>;
+    /// Fetch the leaf at the given height without retrying on transient errors.
+    async fn try_fetch_leaf(
+        &self,
+        retry: usize,
+        height: u64,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
+        success_threshold: U256,
+    ) -> anyhow::Result<Leaf2>;
 
+    /// Fetch the leaf at the given height, retrying on transient errors.
     async fn fetch_leaf(
         &self,
         height: u64,
         stake_table: Vec<PeerConfig<SeqTypes>>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        self.backoff().retry(
-            self, |provider, retry| {
-        let stake_table_clone = stake_table.clone();
-        async move {
-                    let mut chain = provider.try_fetch_leaves(retry, height).await?;
-                    chain.sort_by_key(|l| l.view_number());
-                    let leaf_chain = chain.into_iter().rev().collect();
-                    verify_leaf_chain(
-                        leaf_chain,
-                        stake_table_clone.clone(),
-                        success_threshold,
-                        height,
-                        &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new()).await
-                }.boxed()
-            }).await
+        self.backoff()
+            .retry(self, |provider, retry| {
+                let stake_table_clone = stake_table.clone();
+                async move {
+                    provider
+                        .try_fetch_leaf(retry, height, stake_table_clone, success_threshold)
+                        .await
+                }
+                .boxed()
+            })
+            .await
     }
 
-    /// Try to fetch the given accounts state, failing without retrying if unable.
+    /// Fetch the given list of accounts without retrying on transient errors.
     async fn try_fetch_accounts(
         &self,
         retry: usize,
@@ -82,8 +85,8 @@ pub trait StateCatchup: Send + Sync {
         height: u64,
         view: ViewNumber,
         fee_merkle_tree_root: FeeMerkleCommitment,
-        account: &[FeeAccount],
-    ) -> anyhow::Result<FeeMerkleTree>;
+        accounts: &[FeeAccount],
+    ) -> anyhow::Result<Vec<FeeAccountProof>>;
 
     /// Fetch the given list of accounts, retrying on transient errors.
     async fn fetch_accounts(
@@ -98,7 +101,7 @@ pub trait StateCatchup: Send + Sync {
             .retry(self, |provider, retry| {
                 let accounts = &accounts;
                 async move {
-                    let tree = provider
+                    provider
                         .try_fetch_accounts(
                             retry,
                             instance,
@@ -112,22 +115,14 @@ pub trait StateCatchup: Send + Sync {
                             err.context(format!(
                                 "fetching accounts {accounts:?}, height {height}, view {view:?}"
                             ))
-                        })?;
-                    accounts
-                        .iter()
-                        .map(|account| {
-                            FeeAccountProof::prove(&tree, (*account).into())
-                                .context(format!("missing account {account}"))
-                                .map(|(proof, _)| proof)
                         })
-                        .collect::<anyhow::Result<Vec<FeeAccountProof>>>()
                 }
                 .boxed()
             })
             .await
     }
 
-    /// Try to fetch and remember the blocks frontier, failing without retrying if unable.
+    /// Fetch and remember the blocks frontier without retrying on transient errors.
     async fn try_remember_blocks_merkle_tree(
         &self,
         retry: usize,
@@ -154,12 +149,14 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Fetch the chain config without retrying on transient errors.
     async fn try_fetch_chain_config(
         &self,
         retry: usize,
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig>;
 
+    /// Fetch the chain config, retrying on transient errors.
     async fn fetch_chain_config(
         &self,
         commitment: Commitment<ChainConfig>,
@@ -174,7 +171,7 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
-    /// Try to fetch the given accounts state, failing without retrying if unable.
+    /// Fetch the given list of reward accounts without retrying on transient errors.
     async fn try_fetch_reward_accounts(
         &self,
         retry: usize,
@@ -182,10 +179,10 @@ pub trait StateCatchup: Send + Sync {
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitment,
-        account: &[RewardAccount],
-    ) -> anyhow::Result<RewardMerkleTree>;
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<Vec<RewardAccountProof>>;
 
-    /// Fetch the given list of accounts, retrying on transient errors.
+    /// Fetch the given list of reward accounts, retrying on transient errors.
     async fn fetch_reward_accounts(
         &self,
         instance: &NodeState,
@@ -198,7 +195,7 @@ pub trait StateCatchup: Send + Sync {
             .retry(self, |provider, retry| {
                 let accounts = &accounts;
                 async move {
-                    let tree = provider
+                    provider
                         .try_fetch_reward_accounts(
                             retry,
                             instance,
@@ -212,15 +209,7 @@ pub trait StateCatchup: Send + Sync {
                             err.context(format!(
                                 "fetching reward accounts {accounts:?}, height {height}, view {view:?}"
                             ))
-                        })?;
-                    accounts
-                        .iter()
-                        .map(|account| {
-                            RewardAccountProof::prove(&tree, (*account).into())
-                                .context(format!("missing reward account {account}"))
-                                .map(|(proof, _)| proof)
                         })
-                        .collect::<anyhow::Result<Vec<RewardAccountProof>>>()
                 }
                 .boxed()
             })
@@ -230,14 +219,25 @@ pub trait StateCatchup: Send + Sync {
     /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
     fn is_local(&self) -> bool;
 
+    /// Returns the backoff parameters for the catchup provider.
     fn backoff(&self) -> &BackoffParams;
+
+    /// Returns the name of the catchup provider.
     fn name(&self) -> String;
 }
 
 #[async_trait]
 impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
-    async fn try_fetch_leaves(&self, retry: usize, height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        (**self).try_fetch_leaves(retry, height).await
+    async fn try_fetch_leaf(
+        &self,
+        retry: usize,
+        height: u64,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
+        success_threshold: U256,
+    ) -> anyhow::Result<Leaf2> {
+        (**self)
+            .try_fetch_leaf(retry, height, stake_table, success_threshold)
+            .await
     }
 
     async fn fetch_leaf(
@@ -258,7 +258,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         view: ViewNumber,
         fee_merkle_tree_root: FeeMerkleCommitment,
         accounts: &[FeeAccount],
-    ) -> anyhow::Result<FeeMerkleTree> {
+    ) -> anyhow::Result<Vec<FeeAccountProof>> {
         (**self)
             .try_fetch_accounts(
                 retry,
@@ -332,7 +332,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitment,
         accounts: &[RewardAccount],
-    ) -> anyhow::Result<RewardMerkleTree> {
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
         (**self)
             .try_fetch_reward_accounts(
                 retry,

@@ -578,7 +578,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 
                 certificate
                     .is_valid_cert(
-                        StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
                         membership_success_threshold,
                         &self.upgrade_lock,
                     )

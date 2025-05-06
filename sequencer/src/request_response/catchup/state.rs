@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
-    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     v0_99::ChainConfig,
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
+    Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
@@ -18,6 +18,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use tokio::time::timeout;
 
 use crate::request_response::{
     request::{Request, Response},
@@ -32,52 +33,111 @@ impl<
         P: SequencerPersistence,
     > StateCatchup for RequestResponseProtocol<I, V, N, P>
 {
-    async fn try_fetch_leaves(&self, _retry: usize, _height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        unreachable!()
+    async fn try_fetch_leaf(
+        &self,
+        _retry: usize,
+        height: u64,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
+        success_threshold: U256,
+    ) -> anyhow::Result<Leaf2> {
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Fetch the leaf
+        timeout(
+            timeout_duration,
+            self.fetch_leaf(height, stake_table, success_threshold),
+        )
+        .await
+        .with_context(|| "timed out while fetching leaf")?
     }
 
     async fn try_fetch_accounts(
         &self,
         _retry: usize,
-        _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _fee_merkle_tree_root: FeeMerkleCommitment,
-        _accounts: &[FeeAccount],
-    ) -> anyhow::Result<FeeMerkleTree> {
-        unreachable!()
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        fee_merkle_tree_root: FeeMerkleCommitment,
+        accounts: &[FeeAccount],
+    ) -> anyhow::Result<Vec<FeeAccountProof>> {
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Fetch the accounts
+        timeout(
+            timeout_duration,
+            self.fetch_accounts(
+                instance,
+                height,
+                view,
+                fee_merkle_tree_root,
+                accounts.to_vec(),
+            ),
+        )
+        .await
+        .with_context(|| "timed out while fetching accounts")?
     }
 
     async fn try_remember_blocks_merkle_tree(
         &self,
         _retry: usize,
-        _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _mt: &mut BlockMerkleTree,
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        mt: &mut BlockMerkleTree,
     ) -> anyhow::Result<()> {
-        unreachable!()
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Remember the blocks merkle tree
+        timeout(
+            timeout_duration,
+            self.remember_blocks_merkle_tree(instance, height, view, mt),
+        )
+        .await
+        .with_context(|| "timed out while remembering blocks merkle tree")?
     }
 
     async fn try_fetch_chain_config(
         &self,
         _retry: usize,
-        _commitment: Commitment<ChainConfig>,
+        commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
-        unreachable!()
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Fetch the chain config
+        timeout(timeout_duration, self.fetch_chain_config(commitment))
+            .await
+            .with_context(|| "timed out while fetching chain config")?
     }
 
-    #[tracing::instrument(skip(self, _instance))]
     async fn try_fetch_reward_accounts(
         &self,
         _retry: usize,
-        _instance: &NodeState,
-        _height: u64,
-        _view: ViewNumber,
-        _reward_merkle_tree_root: RewardMerkleCommitment,
-        _accounts: &[RewardAccount],
-    ) -> anyhow::Result<RewardMerkleTree> {
-        unreachable!()
+        instance: &NodeState,
+        height: u64,
+        view: ViewNumber,
+        reward_merkle_tree_root: RewardMerkleCommitment,
+        accounts: &[RewardAccount],
+    ) -> anyhow::Result<Vec<RewardAccountProof>> {
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Fetch the reward accounts
+        timeout(
+            timeout_duration,
+            self.fetch_reward_accounts(
+                instance,
+                height,
+                view,
+                reward_merkle_tree_root,
+                accounts.to_vec(),
+            ),
+        )
+        .await
+        .with_context(|| "timed out while fetching reward accounts")?
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -162,15 +222,10 @@ impl<
                     return Err(anyhow::anyhow!("expected leaf response"));
                 };
 
-                // Sort the leaf chain by view number and reverse it
-                let mut leaf_chain = leaf_chain.clone();
-                leaf_chain.sort_by_key(|l| l.view_number());
-                leaf_chain.reverse();
-
                 // Verify the leaf chain
                 let leaf = verify_leaf_chain(
                     leaf_chain,
-                    stake_table_clone,
+                    &stake_table_clone,
                     success_threshold,
                     height,
                     &UpgradeLock::<SeqTypes, SequencerVersions<EpochVersion, EpochVersion>>::new(),

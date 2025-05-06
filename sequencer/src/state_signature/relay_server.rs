@@ -7,11 +7,11 @@ use std::{
 use alloy::primitives::U256;
 use async_lock::RwLock;
 use clap::Args;
-use espresso_types::{config::PublicNetworkConfig, SeqTypes};
-use futures::FutureExt;
-use hotshot_state_prover::service::{
+use espresso_contract_deployer::network_config::{
     fetch_epoch_config_from_sequencer, fetch_stake_table_from_sequencer,
 };
+use espresso_types::{config::PublicNetworkConfig, SeqTypes};
+use futures::FutureExt;
 use hotshot_types::{
     light_client::{one_honest_threshold, StateSignaturesBundle, StateVerKey},
     traits::signature_key::{StakeTableEntryType, StateSignatureKey},

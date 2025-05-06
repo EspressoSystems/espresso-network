@@ -383,16 +383,18 @@ impl Upgrade {
 pub mod mock {
     use std::collections::HashMap;
 
+    use alloy::primitives::U256;
+    use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
-    use hotshot_types::data::ViewNumber;
+    use hotshot_types::{data::ViewNumber, PeerConfig};
     use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
     use super::*;
     use crate::{
         retain_accounts,
-        v0_1::{RewardAccount, RewardMerkleCommitment, RewardMerkleTree},
-        BackoffParams, BlockMerkleTree, FeeAccount, FeeMerkleCommitment, FeeMerkleTree, Leaf2,
+        v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
+        BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
     };
 
     #[derive(Debug, Clone, Default)]
@@ -412,11 +414,13 @@ pub mod mock {
 
     #[async_trait]
     impl StateCatchup for MockStateCatchup {
-        async fn try_fetch_leaves(
+        async fn try_fetch_leaf(
             &self,
             _retry: usize,
             _height: u64,
-        ) -> anyhow::Result<Vec<Leaf2>> {
+            _stake_table: Vec<PeerConfig<SeqTypes>>,
+            _success_threshold: U256,
+        ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))
         }
 
@@ -428,12 +432,26 @@ pub mod mock {
             view: ViewNumber,
             fee_merkle_tree_root: FeeMerkleCommitment,
             accounts: &[FeeAccount],
-        ) -> anyhow::Result<FeeMerkleTree> {
+        ) -> anyhow::Result<Vec<FeeAccountProof>> {
             let src = &self.state[&view].fee_merkle_tree;
             assert_eq!(src.commitment(), fee_merkle_tree_root);
 
             tracing::info!("catchup: fetching accounts {accounts:?} for view {view:?}");
-            retain_accounts(src, accounts.iter().copied())
+            let tree = retain_accounts(src, accounts.iter().copied())
+                .with_context(|| "failed to retain accounts")?;
+
+            // Verify the proofs
+            let mut proofs = Vec::new();
+            for account in accounts {
+                let (proof, _) = FeeAccountProof::prove(&tree, (*account).into())
+                    .context(format!("response missing fee account {account}"))?;
+                proof
+                    .verify(&fee_merkle_tree_root)
+                    .context(format!("invalid proof for fee account {account}"))?;
+                proofs.push(proof);
+            }
+
+            Ok(proofs)
         }
 
         async fn try_remember_blocks_merkle_tree(
@@ -477,7 +495,7 @@ pub mod mock {
             _view: ViewNumber,
             _reward_merkle_tree_root: RewardMerkleCommitment,
             _accounts: &[RewardAccount],
-        ) -> anyhow::Result<RewardMerkleTree> {
+        ) -> anyhow::Result<Vec<RewardAccountProof>> {
             anyhow::bail!("unimplemented")
         }
 
