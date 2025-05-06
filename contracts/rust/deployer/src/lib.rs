@@ -3,15 +3,59 @@ use std::{collections::HashMap, io::Write};
 use alloy::{
     contract::RawCallBuilder,
     hex::{FromHex, ToHexExt},
-    network::TransactionBuilder,
+    network::{Ethereum, EthereumWallet, TransactionBuilder},
     primitives::{Address, Bytes, U256},
-    providers::Provider,
+    providers::{
+        fillers::{FillProvider, JoinFill, WalletFiller},
+        utils::JoinedRecommendedFillers,
+        Provider, ProviderBuilder, RootProvider,
+    },
     rpc::types::TransactionReceipt,
+    signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+    transports::http::reqwest::Url,
 };
 use anyhow::{anyhow, Result};
 use clap::{builder::OsStr, Parser};
 use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
+
+pub mod builder;
+pub mod network_config;
+
+/// Type alias that connects to providers with recommended fillers and wallet
+/// use `<HttpProviderWithWallet as WalletProvider>::wallet()` to access internal wallet
+/// use `<HttpProviderWithWallet as WalletProvider>::default_signer_address(&provider)` to get wallet address
+pub type HttpProviderWithWallet = FillProvider<
+    JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
+    RootProvider,
+    Ethereum,
+>;
+
+/// a handy thin wrapper around wallet builder and provider builder that directly
+/// returns an instantiated `Provider` with default fillers with wallet, ready to send tx
+pub fn build_provider(mnemonic: String, account_index: u32, url: Url) -> HttpProviderWithWallet {
+    let signer = build_signer(mnemonic, account_index);
+    let wallet = EthereumWallet::from(signer);
+    ProviderBuilder::new().wallet(wallet).on_http(url)
+}
+
+pub fn build_signer(mnemonic: String, account_index: u32) -> PrivateKeySigner {
+    MnemonicBuilder::<English>::default()
+        .phrase(mnemonic)
+        .index(account_index)
+        .expect("wrong mnemonic or index")
+        .build()
+        .expect("fail to build signer")
+}
+
+/// similar to [`build_provider()`] but using a random wallet
+pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
+    let signer = MnemonicBuilder::<English>::default()
+        .build_random()
+        .expect("fail to build signer");
+    let wallet = EthereumWallet::from(signer);
+    ProviderBuilder::new().wallet(wallet).on_http(url)
+}
 
 // We pass this during `forge bind --libraries` as a placeholder for the actual deployed library address
 const LIBRARY_PLACEHOLDER_ADDRESS: &str = "ffffffffffffffffffffffffffffffffffffffff";
@@ -657,7 +701,6 @@ mod tests {
     use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
 
     use super::*;
-    use crate::test_utils::setup_test;
 
     #[tokio::test]
     async fn test_is_contract() -> Result<(), anyhow::Error> {
@@ -712,7 +755,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_deploy_mock_light_client_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 

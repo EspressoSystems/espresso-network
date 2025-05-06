@@ -60,6 +60,7 @@ vec1 = { workspace = true }
 vid = { workspace = true }
 
 [dev-dependencies]
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = ".", features = [ "testing" ] }
 portpicker = { workspace = true }
 

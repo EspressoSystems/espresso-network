@@ -1111,11 +1111,9 @@ mod test {
         primitives::utils::parse_ether,
         providers::layers::AnvilProvider,
     };
+    use espresso_contract_deployer::{deploy_fee_contract_proxy, Contracts};
     use portpicker::pick_unused_port;
-    use sequencer_utils::{
-        deployer::{deploy_fee_contract_proxy, Contracts},
-        test_utils::setup_test,
-    };
+    use sequencer_utils::test_utils::setup_test;
     use time::OffsetDateTime;
 
     use super::*;
