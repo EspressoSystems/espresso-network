@@ -23,12 +23,11 @@ jobs:
           - test-ci-3
           - test-ci-4
           - test-ci-5
-          - test-ci-6-1
-          - test-ci-6-2
-          - test-ci-6-3
-          - test-ci-6-4
-          - test-ci-6-5
-          - test-ci-6-6
+          - test-ci-6
+          - test-ci-7
+          - test-ci-8
+          - test-ci-9
+          - test-ci-10
           - test-ci-rest
       fail-fast: false
     runs-on: ubuntu-latest
