@@ -325,14 +325,11 @@ mod test {
         primitives::{B256, U256},
         providers::{layers::AnvilProvider, ProviderBuilder},
     };
+    use espresso_contract_deployer::{self as deployer, Contracts};
     use espresso_types::{
         L1BlockInfo, TimeBasedUpgrade, Timestamp, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
-    use sequencer_utils::{
-        deployer::{self, Contracts},
-        ser::FromStringOrInteger,
-        test_utils::setup_test,
-    };
+    use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
     use toml::toml;
 
     use super::*;

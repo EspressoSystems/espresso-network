@@ -1,20 +1,14 @@
 use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
-use alloy::{
-    network::EthereumWallet,
-    primitives::{Address, U256},
-    providers::ProviderBuilder,
-    signers::local::{coins_bip39::English, MnemonicBuilder},
-};
-use anyhow::Context;
+use alloy::primitives::{Address, U256};
 use clap::Parser;
-use espresso_types::{config::PublicNetworkConfig, parse_duration};
-use hotshot_state_prover::service::light_client_genesis;
-use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
-use sequencer_utils::{
-    deployer::{self, transfer_ownership, Contract, Contracts, DeployedContracts},
-    logging,
+use espresso_contract_deployer::{
+    build_provider, builder::DeployerArgsBuilder, network_config::light_client_genesis, Contract,
+    Contracts, DeployedContracts,
 };
+use espresso_types::{config::PublicNetworkConfig, parse_duration};
+use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
+use sequencer_utils::logging;
 use tide_disco::error::ServerError;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -98,9 +92,6 @@ struct Options {
     )]
     account_index: u32,
 
-    // /// Only deploy the given groups of related contracts.
-    // #[clap(long, value_delimiter = ',')]
-    // only: Option<Vec<ContractGroup>>,
     /// Option to deploy fee contracts
     #[clap(long, default_value = "false")]
     deploy_fee: bool,
@@ -167,147 +158,83 @@ async fn main() -> anyhow::Result<()> {
 
     let mut contracts = Contracts::from(opt.contracts);
 
-    let signer = MnemonicBuilder::<English>::default()
-        .phrase(opt.mnemonic)
-        .index(opt.account_index)
-        .expect("wrong mnemonic or index")
-        .build()
-        .expect("fail to build signer");
-    let deployer = signer.address();
-    let wallet = EthereumWallet::from(signer);
-    let provider = ProviderBuilder::new().wallet(wallet).on_http(opt.rpc_url);
+    let provider = build_provider(opt.mnemonic, opt.account_index, opt.rpc_url);
 
-    if opt.deploy_fee {
-        let owner = match opt.multisig_address {
-            Some(multisig) => multisig,
-            None => deployer,
-        };
-        let _fee_proxy_addr =
-            deployer::deploy_fee_contract_proxy(&provider, &mut contracts, owner).await?;
+    // First use builder to build constructor input arguments
+    let mut args_builder = DeployerArgsBuilder::default();
+    args_builder
+        .deployer(provider)
+        .mock_light_client(opt.use_mock);
+    if let Some(multisig) = opt.multisig_address {
+        args_builder.multisig(multisig);
+    }
+    if let Some(token_recipient) = opt.initial_token_grant_recipient {
+        args_builder.token_recipient(token_recipient);
     }
 
     if opt.deploy_light_client_v1 {
         let (genesis_state, genesis_stake) =
             light_client_genesis(&opt.sequencer_url, opt.stake_table_capacity).await?;
-        let lc_proxy_addr = deployer::deploy_light_client_proxy(
-            &provider,
-            &mut contracts,
-            opt.use_mock,
-            genesis_state,
-            genesis_stake,
-            deployer,
-            opt.permissioned_prover,
-        )
-        .await?;
-        // NOTE: in actual production, we should transfer ownership to multisig at this point,
-        // and only upgrade from multisig, but here for tests and demo, we only transfer ownership
-        // after upgrade so that the deployer can still upgrade.
-
-        if opt.upgrade_light_client_v2 {
-            // fetch epoch length from HotShot config
-            // Request the configuration until it is successful
-            let (mut blocks_per_epoch, epoch_start_block) = loop {
-                match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                    opt.sequencer_url.clone(),
-                )
-                .get::<PublicNetworkConfig>("config/hotshot")
-                .send()
-                .await
-                {
-                    Ok(resp) => {
-                        let config = resp.hotshot_config();
-                        break (config.blocks_per_epoch(), config.epoch_start_block());
-                    },
-                    Err(e) => {
-                        tracing::error!("Failed to fetch the network config: {e}");
-                        sleep(Duration::from_secs(5));
-                    },
-                }
-            };
-
-            // TEST-ONLY: if this config is not yet set, we use a large default value
-            // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
-            // This large value will act as if we are always in epoch 1, which won't conflict
-            // with the effective purpose of the real `PublicNetworkConfig`.
-            if opt.use_mock && blocks_per_epoch == 0 {
-                blocks_per_epoch = u64::MAX;
+        args_builder
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake);
+        if let Some(prover) = opt.permissioned_prover {
+            args_builder.permissioned_prover(prover);
+        }
+    }
+    if opt.upgrade_light_client_v2 {
+        // fetch epoch length from HotShot config
+        // Request the configuration until it is successful
+        let (blocks_per_epoch, epoch_start_block) = loop {
+            match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                opt.sequencer_url.clone(),
+            )
+            .get::<PublicNetworkConfig>("config/hotshot")
+            .send()
+            .await
+            {
+                Ok(resp) => {
+                    let config = resp.hotshot_config();
+                    break (config.blocks_per_epoch(), config.epoch_start_block());
+                },
+                Err(e) => {
+                    tracing::error!("Failed to fetch the network config: {e}");
+                    sleep(Duration::from_secs(5));
+                },
             }
-            tracing::info!(%blocks_per_epoch, "Upgrading LightClientV2 with ");
-
-            deployer::upgrade_light_client_v2(
-                &provider,
-                &mut contracts,
-                opt.use_mock,
-                blocks_per_epoch,
-                epoch_start_block,
-            )
-            .await?;
-        }
-
-        // NOTE: see the comment during LC V1 deployment, we defer ownership transfer to multisig here.
-        if let Some(multisig) = opt.multisig_address {
-            transfer_ownership(
-                &provider,
-                Contract::LightClientProxy,
-                lc_proxy_addr,
-                multisig,
-            )
-            .await?;
-        }
-    }
-
-    if opt.deploy_esp_token {
-        let recipient = match opt.initial_token_grant_recipient {
-            Some(r) => r,
-            None => deployer,
         };
-        let token_proxy_addr =
-            deployer::deploy_token_proxy(&provider, &mut contracts, deployer, recipient).await?;
-
-        if let Some(multisig) = opt.multisig_address {
-            transfer_ownership(
-                &provider,
-                Contract::EspTokenProxy,
-                token_proxy_addr,
-                multisig,
-            )
-            .await?;
-        }
+        args_builder
+            .blocks_per_epoch(blocks_per_epoch)
+            .epoch_start_block(epoch_start_block);
     }
-
     if opt.deploy_stake_table {
-        let token_addr = contracts
-            .address(Contract::EspTokenProxy)
-            .context("no ESP token proxy address")?;
-        let lc_addr = contracts
-            .address(Contract::LightClientProxy)
-            .context("no LightClient proxy address")?;
-        let escrow_period = U256::from(
-            opt.exit_escrow_period
-                .context("no exit escrow period")?
-                .as_secs(),
-        );
-        let stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
-            &provider,
-            &mut contracts,
-            token_addr,
-            lc_addr,
-            escrow_period,
-            deployer,
-        )
-        .await?;
-
-        if let Some(multisig) = opt.multisig_address {
-            transfer_ownership(
-                &provider,
-                Contract::StakeTableProxy,
-                stake_table_proxy_addr,
-                multisig,
-            )
-            .await?;
+        if let Some(escrow_period) = opt.exit_escrow_period {
+            args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
         }
     }
 
+    // then deploy specified contracts
+    let args = args_builder.build()?;
+    if opt.deploy_fee {
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+    }
+    if opt.deploy_esp_token {
+        args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
+    }
+    if opt.deploy_light_client_v1 {
+        args.deploy(&mut contracts, Contract::LightClientProxy)
+            .await?;
+    }
+    if opt.upgrade_light_client_v2 {
+        args.deploy(&mut contracts, Contract::LightClientV2).await?;
+    }
+    if opt.deploy_stake_table {
+        args.deploy(&mut contracts, Contract::StakeTableProxy)
+            .await?;
+    }
+
+    // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
         let file = File::options()
             .create(true)

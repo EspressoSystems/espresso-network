@@ -1,0 +1,21 @@
+[package]
+name = "espresso-contract-deployer"
+description = "Libraries and binaries to deploy contracts used in Espresso Network"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+derive_builder = "0.20.2"
+derive_more = { workspace = true }
+espresso-types = { path = "../../../types" }
+hotshot-contract-adapter = { workspace = true }
+hotshot-types = { workspace = true }
+surf-disco = { workspace = true }
+tide-disco = { workspace = true }
+tokio = { workspace = true }
+tracing = "0.1.37"
+vbs = { workspace = true }
