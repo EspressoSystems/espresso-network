@@ -9,10 +9,9 @@ use alloy::{
     },
 };
 use clap::Parser;
+use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
 use espresso_types::parse_duration;
-use hotshot_state_prover::service::{
-    fetch_epoch_config_from_sequencer, run_prover_once, run_prover_service, StateProverConfig,
-};
+use hotshot_state_prover::service::{run_prover_once, run_prover_service, StateProverConfig};
 use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
