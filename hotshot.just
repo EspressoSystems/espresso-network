@@ -19,73 +19,36 @@ test-ci-rest *args:
   --exclude gen-vk-contract \
   --profile hotshot --lib --bins --tests --benches --workspace {{args}}
 
-test-ci-1 *args:
-  echo Running integration test group 1
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_1 {{args}}
+test-ci test *args:
+  echo Running integration test group {{test}}
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test {{test}} {{args}}
 
-test-ci-2 *args:
-  echo Running integration test group 2
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_2 {{args}}
-
-test-ci-3 *args:
-  echo Running integration test group 3
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_3 {{args}}
-
-test-ci-4 *args:
-  echo Running integration test group 4
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_4 {{args}}
-
-test-ci-5 *args:
-  echo Running integration test group 5
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_5 {{args}}
-
-test-ci-6 *args:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_6 {{args}}
-
-test-ci-7 *args:
-  echo Running integration test group 7
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_7 {{args}}
-
-test-ci-8 *args:
-  echo Running integration test group 8
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_8 {{args}}
-
-test-ci-10 *args:
-  echo Running integration test group 10
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_10 {{args}}
-
-test-ci-epoch-1 *args:
-  echo Running integration test group epoch 1
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_1 {{args}}
-
-test-ci-epoch-2 *args:
-  echo Running integration test group epoch 2
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_2 {{args}}
-
-test-ci-epoch-3 *args:
-  echo Running integration test group epoch 3
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_3 {{args}}
-
-test-ci-epoch-4 *args:
-  echo Running integration test group epoch 4
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_4 {{args}}
-
-test-ci-epoch-5 *args:
-  echo Running integration test group epoch 5
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_5 {{args}}
-
-test-ci-epoch-6 *args:
-  echo Running integration test group epoch 6
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_6 {{args}}
-
-test-ci-epoch-7 *args:
-  echo Running integration test group epoch 7
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_7 {{args}}
-
-test-ci-epoch-8 *args:
-  echo Running integration test group epoch 8
-  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test tests_epoch_8 {{args}}
+test-ci-all *args:
+    just hotshot::test-ci test_epoch_success_catchup_types {{args}}
+    just hotshot::test-ci test_epoch_success_overlap_2_f {{args}}
+    just hotshot::test-ci test_epoch_success_overlap_2f_plus_1 {{args}}
+    just hotshot::test-ci test_epoch_success_overlap_3f {{args}}
+    just hotshot::test-ci test_epoch_success_overlap_dynamic {{args}}
+    just hotshot::test-ci test_epoch_success_overlap_f {{args}}
+    just hotshot::test-ci test_epoch_success_overlap_f_plus_1 {{args}}
+    just hotshot::test-ci test_epoch_success_types {{args}}
+    just hotshot::test-ci test_epoch_success_types_randomized_leader {{args}}
+    just hotshot::test-ci tests_1 {{args}}
+    just hotshot::test-ci tests_10 {{args}}
+    just hotshot::test-ci tests_2 {{args}}
+    just hotshot::test-ci tests_3 {{args}}
+    just hotshot::test-ci tests_4 {{args}}
+    just hotshot::test-ci tests_5 {{args}}
+    just hotshot::test-ci tests_6 {{args}}
+    just hotshot::test-ci tests_7 {{args}}
+    just hotshot::test-ci tests_8 {{args}}
+    just hotshot::test-ci tests_epoch_1 {{args}}
+    just hotshot::test-ci tests_epoch_3 {{args}}
+    just hotshot::test-ci tests_epoch_4 {{args}}
+    just hotshot::test-ci tests_epoch_5 {{args}}
+    just hotshot::test-ci tests_epoch_6 {{args}}
+    just hotshot::test-ci tests_epoch_7 {{args}}
+    just hotshot::test-ci tests_epoch_8 {{args}}
 
 # Usage:
 #

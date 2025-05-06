@@ -18,23 +18,31 @@ jobs:
     strategy:
       matrix:
         test_suites:
-          - test-ci-1
-          - test-ci-2
-          - test-ci-3
-          - test-ci-4
-          - test-ci-5
-          - test-ci-6
-          - test-ci-7
-          - test-ci-8
-          - test-ci-epoch-1
-          - test-ci-epoch-2
-          - test-ci-epoch-3
-          - test-ci-epoch-4
-          - test-ci-epoch-5
-          - test-ci-epoch-6
-          - test-ci-epoch-7
-          - test-ci-epoch-8
-          - test-ci-10
+          - test-ci test_epoch_success_catchup_types
+          - test-ci test_epoch_success_overlap_2_f
+          - test-ci test_epoch_success_overlap_2f_plus_1
+          - test-ci test_epoch_success_overlap_3f
+          - test-ci test_epoch_success_overlap_dynamic
+          - test-ci test_epoch_success_overlap_f
+          - test-ci test_epoch_success_overlap_f_plus_1
+          - test-ci test_epoch_success_types
+          - test-ci test_epoch_success_types_randomized_leader
+          - test-ci tests_1
+          - test-ci tests_10
+          - test-ci tests_2
+          - test-ci tests_3
+          - test-ci tests_4
+          - test-ci tests_5
+          - test-ci tests_6
+          - test-ci tests_7
+          - test-ci tests_8
+          - test-ci tests_epoch_1
+          - test-ci tests_epoch_3
+          - test-ci tests_epoch_4
+          - test-ci tests_epoch_5
+          - test-ci tests_epoch_6
+          - test-ci tests_epoch_7
+          - test-ci tests_epoch_8
           - test-ci-rest
       fail-fast: false
     runs-on: ubuntu-latest
