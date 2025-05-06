@@ -16,3 +16,4 @@ pub mod r#lightclientv2mock;
 pub mod r#plonkverifier;
 pub mod r#plonkverifierv2;
 pub mod r#staketable;
+pub mod r#timelock;

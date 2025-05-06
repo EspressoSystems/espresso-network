@@ -68,6 +68,9 @@ pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
     #[clap(long, env = Contract::PlonkVerifier)]
     plonk_verifier: Option<Address>,
+    /// Timelock.sol
+    #[clap(long, env = Contract::Timelock)]
+    timelock: Option<Address>,
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
@@ -113,6 +116,8 @@ pub struct DeployedContracts {
 pub enum Contract {
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_ADDRESS")]
     PlonkVerifier,
+    #[display("ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS")]
+    Timelock,
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V2_ADDRESS")]
     PlonkVerifierV2,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_ADDRESS")]
@@ -153,6 +158,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.plonk_verifier_v2 {
             m.insert(Contract::PlonkVerifierV2, addr);
+        }
+        if let Some(addr) = deployed.timelock {
+            m.insert(Contract::Timelock, addr);
         }
         if let Some(addr) = deployed.light_client {
             m.insert(Contract::LightClient, addr);
@@ -696,6 +704,67 @@ pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bo
     Ok(true)
 }
 
+/// Deploy and initialize a Timelock contract
+///
+/// Parameters:
+/// - `min_delay`: The minimum delay for operations
+/// - `proposers`: The list of addresses that can propose
+/// - `executors`: The list of addresses that can execute
+/// - `admin`: The address that can perform admin actions
+pub async fn deploy_timelock(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    min_delay: U256,
+    proposers: Vec<Address>,
+    executors: Vec<Address>,
+    admin: Address,
+) -> Result<Address> {
+    let timelock_addr = contracts
+        .deploy(
+            Contract::Timelock,
+            Timelock::deploy_builder(
+                &provider,
+                min_delay,
+                proposers.clone(),
+                executors.clone(),
+                admin,
+            ),
+        )
+        .await?;
+
+    // Verify deployment
+    let timelock = Timelock::new(timelock_addr, &provider);
+
+    // Verify initialization parameters
+    assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+    assert!(
+        timelock
+            .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+            .call()
+            .await?
+            ._0
+    );
+    assert!(
+        timelock
+            .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+            .call()
+            .await?
+            ._0
+    );
+
+    // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
+    let default_admin_role = U256::ZERO;
+    assert!(
+        timelock
+            .hasRole(default_admin_role.into(), admin)
+            .call()
+            .await?
+            ._0
+    );
+
+    Ok(timelock_addr)
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
@@ -1033,6 +1102,60 @@ mod tests {
         assert_eq!(stake_table.owner().call().await?._0, owner);
         assert_eq!(stake_table.token().call().await?._0, token_addr);
         assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deploy_timelock() -> Result<()> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        // Setup test parameters
+        let min_delay = U256::from(86400); // 1 day in seconds
+        let admin = provider.get_accounts().await?[0];
+        let proposers = vec![Address::random()];
+        let executors = vec![Address::random()];
+
+        let timelock_addr = deploy_timelock(
+            &provider,
+            &mut contracts,
+            min_delay,
+            proposers.clone(),
+            executors.clone(),
+            admin,
+        )
+        .await?;
+
+        // Verify deployment
+        let timelock = Timelock::new(timelock_addr, &provider);
+        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+
+        // Verify initialization parameters
+        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert!(
+            timelock
+                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+                .call()
+                .await?
+                ._0
+        );
+        assert!(
+            timelock
+                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+                .call()
+                .await?
+                ._0
+        );
+
+        // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
+        let default_admin_role = U256::ZERO;
+        assert!(
+            timelock
+                .hasRole(default_admin_role.into(), admin)
+                .call()
+                .await?
+                ._0
+        );
         Ok(())
     }
 }

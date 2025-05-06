@@ -7,7 +7,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use either::Either;
 use hotshot_task::{
@@ -75,7 +74,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub timeout: u64,
 
     /// This node's storage ref
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// Shared consensus task state
     pub consensus: OuterConsensus<TYPES>,
@@ -525,8 +524,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     .insert(state_cert.epoch, state_cert.clone());
 
                 self.storage
-                    .write()
-                    .await
                     .update_high_qc2_and_state_cert(qc.clone(), state_cert.clone())
                     .await
                     .wrap()

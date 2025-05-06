@@ -1,11 +1,11 @@
 pragma solidity ^0.8.0;
 
 import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 import { LightClientV2 as LightClient } from "../src/LightClientV2.sol";
@@ -224,9 +224,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         address _tokenAddress,
         address _lightClientAddress,
         uint256 _exitEscrowPeriod,
-        address _initialOwner
+        address _timelock
     ) public initializer {
-        __Ownable_init(_initialOwner);
+        __Ownable_init(_timelock);
         __UUPSUpgradeable_init();
         initializeAtBlock();
 
@@ -262,7 +262,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         return (1, 0, 0);
     }
 
-    /// @notice only the owner can authorize an upgrade
+    /// @notice only the timelock can authorize an upgrade
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
         emit Upgrade(newImplementation);
     }

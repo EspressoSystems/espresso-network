@@ -141,7 +141,7 @@ impl NodeState {
             StakeTableFetcher::mock(),
         )));
 
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
         Self::new(
             0,
             chain_config,
@@ -167,7 +167,7 @@ impl NodeState {
             vec![],
             StakeTableFetcher::mock(),
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
 
         Self::new(
             0,
@@ -193,7 +193,7 @@ impl NodeState {
             StakeTableFetcher::mock(),
         )));
 
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
         Self::new(
             0,
             ChainConfig::default(),
@@ -218,7 +218,7 @@ impl NodeState {
             vec![],
             StakeTableFetcher::mock(),
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
 
         Self::new(
             0,
@@ -297,7 +297,7 @@ impl Default for NodeState {
             vec![],
             StakeTableFetcher::mock(),
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
 
         Self::new(
             1u64,

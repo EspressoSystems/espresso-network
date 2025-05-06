@@ -1036,7 +1036,7 @@ interface StakeTable {
     function deregisterValidator() external;
     function exitEscrowPeriod() external view returns (uint256);
     function getVersion() external pure returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
-    function initialize(address _tokenAddress, address _lightClientAddress, uint256 _exitEscrowPeriod, address _initialOwner) external;
+    function initialize(address _tokenAddress, address _lightClientAddress, uint256 _exitEscrowPeriod, address _timelock) external;
     function initializedAtBlock() external view returns (uint256);
     function lightClient() external view returns (address);
     function owner() external view returns (address);
@@ -1266,7 +1266,7 @@ interface StakeTable {
         "internalType": "uint256"
       },
       {
-        "name": "_initialOwner",
+        "name": "_timelock",
         "type": "address",
         "internalType": "address"
       }
@@ -6154,7 +6154,7 @@ pub mod StakeTable {
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `initialize(address,address,uint256,address)` and selector `0xbe203094`.
     ```solidity
-    function initialize(address _tokenAddress, address _lightClientAddress, uint256 _exitEscrowPeriod, address _initialOwner) external;
+    function initialize(address _tokenAddress, address _lightClientAddress, uint256 _exitEscrowPeriod, address _timelock) external;
     ```*/
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -6166,7 +6166,7 @@ pub mod StakeTable {
         #[allow(missing_docs)]
         pub _exitEscrowPeriod: alloy::sol_types::private::primitives::aliases::U256,
         #[allow(missing_docs)]
-        pub _initialOwner: alloy::sol_types::private::Address,
+        pub _timelock: alloy::sol_types::private::Address,
     }
     ///Container type for the return parameters of the [`initialize(address,address,uint256,address)`](initializeCall) function.
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
@@ -6212,7 +6212,7 @@ pub mod StakeTable {
                         value._tokenAddress,
                         value._lightClientAddress,
                         value._exitEscrowPeriod,
-                        value._initialOwner,
+                        value._timelock,
                     )
                 }
             }
@@ -6224,7 +6224,7 @@ pub mod StakeTable {
                         _tokenAddress: tuple.0,
                         _lightClientAddress: tuple.1,
                         _exitEscrowPeriod: tuple.2,
-                        _initialOwner: tuple.3,
+                        _timelock: tuple.3,
                     }
                 }
             }
@@ -6291,7 +6291,7 @@ pub mod StakeTable {
                         &self._exitEscrowPeriod,
                     ),
                     <alloy::sol_types::sol_data::Address as alloy_sol_types::SolType>::tokenize(
-                        &self._initialOwner,
+                        &self._timelock,
                     ),
                 )
             }
@@ -9822,13 +9822,13 @@ pub mod StakeTable {
             _tokenAddress: alloy::sol_types::private::Address,
             _lightClientAddress: alloy::sol_types::private::Address,
             _exitEscrowPeriod: alloy::sol_types::private::primitives::aliases::U256,
-            _initialOwner: alloy::sol_types::private::Address,
+            _timelock: alloy::sol_types::private::Address,
         ) -> alloy_contract::SolCallBuilder<T, &P, initializeCall, N> {
             self.call_builder(&initializeCall {
                 _tokenAddress,
                 _lightClientAddress,
                 _exitEscrowPeriod,
-                _initialOwner,
+                _timelock,
             })
         }
         ///Creates a new call builder for the [`initializedAtBlock`] function.

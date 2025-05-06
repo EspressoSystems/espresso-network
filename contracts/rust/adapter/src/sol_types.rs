@@ -43,6 +43,7 @@ pub use crate::bindings::{
         self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTable,
         BN254::G2Point as G2PointSol,
     },
+    timelock::Timelock,
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
