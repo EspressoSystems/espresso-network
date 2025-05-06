@@ -2,8 +2,11 @@
 //! a set of recipients and wait for responses.
 
 use std::{
+    any::Any,
     collections::HashMap,
+    future::Future,
     marker::PhantomData,
+    pin::Pin,
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
@@ -17,13 +20,13 @@ use network::{Bytes, Receiver, Sender};
 use parking_lot::RwLock;
 use rand::seq::SliceRandom;
 use recipient_source::RecipientSource;
-use request::{Request, Response};
+use request::Request;
 use tokio::{
     spawn,
     time::{sleep, timeout},
 };
 use tokio_util::task::AbortOnDropHandle;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use util::BoundedVecDeque;
 
 /// The data source trait. Is what we use to derive the response data for a request
@@ -199,6 +202,17 @@ impl<
     }
 }
 
+/// A type alias for an `Arc<dyn Any + Send + Sync + 'static>`
+type ThreadSafeAny = Arc<dyn Any + Send + Sync + 'static>;
+
+/// A type alias for the future that validates a response
+type ResponseValidationFuture =
+    Pin<Box<dyn Future<Output = Result<ThreadSafeAny, anyhow::Error>> + Send + Sync + 'static>>;
+
+/// A type alias for the function that returns the above future
+type ResponseValidationFn<R> =
+    Box<dyn Fn(&R, <R as Request>::Response) -> ResponseValidationFuture + Send + Sync + 'static>;
+
 /// The inner implementation for the request-response protocol
 pub struct RequestResponseInner<
     S: Sender<K>,
@@ -236,7 +250,7 @@ impl<
     /// # Errors
     /// - If the request was invalid
     /// - If there was a critical error (e.g. the channel was closed)
-    pub async fn request_indefinitely(
+    pub async fn request_indefinitely<F, Fut, O>(
         self: &Arc<Self>,
         public_key: &K,
         private_key: &K::PrivateKey,
@@ -245,7 +259,14 @@ impl<
         estimated_request_ttl: Duration,
         // The request to make
         request: Req,
-    ) -> std::result::Result<Req::Response, RequestError> {
+        // The response validation function
+        response_validation_fn: F,
+    ) -> std::result::Result<O, RequestError>
+    where
+        F: Fn(&Req, Req::Response) -> Fut + Send + Sync + 'static + Clone,
+        Fut: Future<Output = anyhow::Result<O>> + Send + Sync + 'static,
+        O: Send + Sync + 'static + Clone,
+    {
         loop {
             // Sign a request message
             let request_message = RequestMessage::new_signed(public_key, private_key, &request)
@@ -256,7 +277,14 @@ impl<
                 })?;
 
             // Request the data, handling the errors appropriately
-            match self.request(request_message, estimated_request_ttl).await {
+            match self
+                .request(
+                    request_message,
+                    estimated_request_ttl,
+                    response_validation_fn.clone(),
+                )
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(RequestError::Timeout) => continue,
                 Err(e) => return Err(e),
@@ -272,11 +300,17 @@ impl<
     /// - If the request times out
     /// - If the channel is closed (this is an internal error)
     /// - If the request we sign is invalid
-    pub async fn request(
+    pub async fn request<F, Fut, O>(
         self: &Arc<Self>,
         request_message: RequestMessage<Req, K>,
         timeout_duration: Duration,
-    ) -> std::result::Result<Req::Response, RequestError> {
+        response_validation_fn: F,
+    ) -> std::result::Result<O, RequestError>
+    where
+        F: Fn(&Req, Req::Response) -> Fut + Send + Sync + 'static + Clone,
+        Fut: Future<Output = anyhow::Result<O>> + Send + Sync + 'static,
+        O: Send + Sync + 'static + Clone,
+    {
         timeout(timeout_duration, async move {
             // Calculate the hash of the request
             let request_hash = blake3::hash(&request_message.request.to_bytes().map_err(|e| {
@@ -300,10 +334,20 @@ impl<
                     // Create a new broadcast channel for the response
                     let (sender, receiver) = async_broadcast::broadcast(1);
 
+                    // Modify the response validation function to return an `Arc<dyn Any>`
+                    let response_validation_fn =
+                        Box::new(move |request: &Req, response: Req::Response| {
+                            let fut = response_validation_fn(request, response);
+                            Box::pin(
+                                async move { fut.await.map(|ok| Arc::new(ok) as ThreadSafeAny) },
+                            ) as ResponseValidationFuture
+                        });
+
                     // Create a new active request
                     let active_request = ActiveRequest(Arc::new(ActiveRequestInner {
                         sender,
                         receiver,
+                        response_validation_fn,
                         request: request_message.request.clone(),
                         active_requests: Arc::clone(&self.active_requests),
                         request_hash,
@@ -322,7 +366,12 @@ impl<
             let mut recipients = self
                 .recipient_source
                 .get_expected_responders(&request_message.request)
-                .await;
+                .await
+                .map_err(|e| {
+                    RequestError::InvalidRequest(anyhow::anyhow!(
+                        "failed to get expected responders for request: {e}"
+                    ))
+                })?;
             recipients.shuffle(&mut rand::thread_rng());
 
             // Create a request message and serialize it
@@ -387,6 +436,15 @@ impl<
         .await
         .map_err(|_| RequestError::Timeout)
         .and_then(|result| result)
+        .and_then(|result| {
+            result.downcast::<O>().map_err(|e| {
+                RequestError::Other(anyhow::anyhow!(
+                    "failed to downcast response to expected type: {:?}",
+                    e
+                ))
+            })
+        })
+        .map(|result| Arc::unwrap_or_clone(result))
     }
 
     /// The task responsible for receiving messages from the receiver and handling them
@@ -404,7 +462,7 @@ impl<
                     let message = match Message::from_bytes(&message) {
                         Ok(message) => message,
                         Err(e) => {
-                            warn!("Received invalid message: {e}");
+                            warn!("Received invalid message: {e:#}");
                             continue;
                         },
                     };
@@ -421,7 +479,7 @@ impl<
                 },
                 // An error here means the receiver will _NEVER_ receive any more messages
                 Err(e) => {
-                    error!("Request/response receive task exited: {e}");
+                    error!("Request/response receive task exited: {e:#}");
                     return;
                 },
             }
@@ -481,7 +539,7 @@ impl<
             .and_then(|result| result);
 
             if let Err(e) = result {
-                warn!("Failed to send response to requester: {e}");
+                debug!("Failed to send response to requester: {e:#}");
             }
         }));
 
@@ -512,13 +570,21 @@ impl<
         let response_task = AbortOnDropHandle::new(tokio::spawn(async move {
             if timeout(response_validate_timeout, async move {
                 // Make sure the response is valid for the given request
-                if let Err(e) = response.response.validate(&active_request.request).await {
-                    warn!("Received invalid response: {e}");
-                    return;
-                }
+                let validation_result = match (active_request.response_validation_fn)(
+                    &active_request.request,
+                    response.response,
+                )
+                .await
+                {
+                    Ok(validation_result) => validation_result,
+                    Err(e) => {
+                        warn!("Received invalid response: {e:#}");
+                        return;
+                    },
+                };
 
                 // Send the response to the requester (the user of [`RequestResponse::request`])
-                let _ = active_request.sender.try_broadcast(response.response);
+                let _ = active_request.sender.try_broadcast(validation_result);
             })
             .await
             .is_err()
@@ -541,11 +607,15 @@ pub struct ActiveRequest<R: Request>(Arc<ActiveRequestInner<R>>);
 /// The inner implementation of an active request
 pub struct ActiveRequestInner<R: Request> {
     /// The sender to use for the protocol
-    sender: async_broadcast::Sender<R::Response>,
+    sender: async_broadcast::Sender<ThreadSafeAny>,
     /// The receiver to use for the protocol
-    receiver: async_broadcast::Receiver<R::Response>,
+    receiver: async_broadcast::Receiver<ThreadSafeAny>,
+
     /// The request that we are waiting for a response to
     request: R,
+
+    /// The function used to validate the response
+    response_validation_fn: ResponseValidationFn<R>,
 
     /// A copy of the map of currently active requests
     active_requests: ActiveRequestsMap<R>,
@@ -586,6 +656,10 @@ mod tests {
             sender,
             receiver,
             request: TestRequest(vec![1, 2, 3]),
+            response_validation_fn: Box::new(|_request, _response| {
+                Box::pin(async move { Ok(Arc::new(()) as ThreadSafeAny) })
+                    as ResponseValidationFuture
+            }),
             active_requests: Arc::clone(&active_requests),
             request_hash: blake3::hash(&[1, 2, 3]),
         }));
@@ -636,9 +710,9 @@ mod tests {
     // Implement the [`RecipientSource`] trait for the [`TestSender`] type
     #[async_trait]
     impl RecipientSource<TestRequest, BLSPubKey> for TestSender {
-        async fn get_expected_responders(&self, _request: &TestRequest) -> Vec<BLSPubKey> {
+        async fn get_expected_responders(&self, _request: &TestRequest) -> Result<Vec<BLSPubKey>> {
             // Get all the participants in the network
-            self.network.keys().copied().collect()
+            Ok(self.network.keys().copied().collect())
         }
     }
 
@@ -662,14 +736,6 @@ mod tests {
     impl Request for TestRequest {
         type Response = Vec<u8>;
         async fn validate(&self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    // Implement the [`Response`] trait for the [`TestRequest`] type
-    #[async_trait]
-    impl Response<TestRequest> for Vec<u8> {
-        async fn validate(&self, _request: &TestRequest) -> Result<()> {
             Ok(())
         }
     }
@@ -832,7 +898,13 @@ mod tests {
                     .expect("failed to create request message");
 
                 // Request the data from the protocol
-                let response = protocol.request(request, config.request_timeout).await?;
+                let response = protocol
+                    .request(
+                        request,
+                        config.request_timeout,
+                        |_request, response| async move { Ok(response) },
+                    )
+                    .await?;
 
                 // Make sure the response is the hash of the request
                 assert_eq!(response, request_hash);
@@ -963,7 +1035,11 @@ mod tests {
                 // Start requesting it
                 one_clone
                     .0
-                    .request(request_message, Duration::from_secs(20))
+                    .request(
+                        request_message,
+                        Duration::from_secs(20),
+                        |_request, response| async move { Ok(response) },
+                    )
                     .await?;
 
                 Ok::<(), anyhow::Error>(())

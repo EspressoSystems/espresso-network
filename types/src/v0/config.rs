@@ -1,6 +1,5 @@
 use std::{num::NonZeroUsize, time::Duration};
 
-use anyhow::Context;
 use hotshot_types::{
     network::{
         BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
@@ -38,7 +37,7 @@ impl From<ValidatorConfig<SeqTypes>> for PublicValidatorConfig {
 
         Self {
             public_key,
-            stake_value: stake_value.as_u64(),
+            stake_value: stake_value.to::<u64>(),
             is_da,
             state_public_key: state_public_key.to_string(),
             private_key: "*****".into(),
@@ -168,6 +167,12 @@ impl PublicHotShotConfig {
     pub fn known_da_nodes(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.known_da_nodes.clone()
     }
+    pub fn blocks_per_epoch(&self) -> u64 {
+        self.epoch_height
+    }
+    pub fn epoch_start_block(&self) -> u64 {
+        self.epoch_start_block
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -231,10 +236,7 @@ impl PublicNetworkConfig {
             .known_nodes_with_stake
             .iter()
             .position(|peer| peer.stake_table_entry.stake_key == my_own_validator_config.public_key)
-            .context(format!(
-                "the node {} is not in the stake table",
-                my_own_validator_config.public_key
-            ))? as u64;
+            .unwrap_or(0) as u64;
 
         Ok(NetworkConfig {
             rounds: self.rounds,

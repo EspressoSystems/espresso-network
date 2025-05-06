@@ -1,6 +1,7 @@
+use alloy::primitives::{Address, U256};
+use alloy_compat::ethers_serde;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use derive_more::{Add, Display, From, Into, Mul, Sub};
-use ethers::{abi::Address, types::U256};
 use jf_merkle_tree::{MerkleTreeScheme, UniversalMerkleTreeScheme};
 use serde::{Deserialize, Serialize};
 
@@ -47,7 +48,8 @@ pub struct FeeAmount(pub U256);
     Into,
 )]
 #[display("{_0:x}")]
-pub struct FeeAccount(pub Address);
+#[serde(transparent)]
+pub struct FeeAccount(#[serde(with = "ethers_serde::address")] pub Address);
 
 #[derive(
     Hash,

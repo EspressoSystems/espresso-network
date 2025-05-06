@@ -29,11 +29,13 @@ use committable::Committable;
 use futures::future::Future;
 use hotshot_types::{
     data::{VidCommitment, VidShare},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    traits::{
+        block_contents::BlockHeader,
+        node_implementation::{ConsensusTime, NodeType},
+    },
 };
 use serde::{de::DeserializeOwned, Serialize};
 use snafu::OptionExt;
-use vec1::Vec1;
 
 use super::{
     ledger_log::{Iter, LedgerLog},
@@ -49,6 +51,7 @@ use crate::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
         },
+        StateCertQueryData,
     },
     data_source::{update, VersionedDataSource},
     metrics::PrometheusMetrics,
@@ -61,6 +64,7 @@ use crate::{
 const CACHED_LEAVES_COUNT: usize = 100;
 const CACHED_BLOCKS_COUNT: usize = 100;
 const CACHED_VID_COMMON_COUNT: usize = 100;
+const CACHED_STATE_CERT_COUNT: usize = 5;
 
 #[derive(custom_debug::Debug)]
 pub struct FileSystemStorageInner<Types>
@@ -80,6 +84,7 @@ where
     leaf_storage: LedgerLog<LeafQueryData<Types>>,
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
+    state_cert_storage: LedgerLog<StateCertQueryData<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -145,7 +150,7 @@ impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
 where
     Payload<Types>: QueryablePayload<Types>,
 {
-    async fn migrate_types(&self) -> anyhow::Result<()> {
+    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -205,6 +210,11 @@ where
                 leaf_storage: LedgerLog::create(loader, "leaves", CACHED_LEAVES_COUNT)?,
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
+                state_cert_storage: LedgerLog::create(
+                    loader,
+                    "state_cert",
+                    CACHED_STATE_CERT_COUNT,
+                )?,
             }),
             metrics: Default::default(),
         })
@@ -227,6 +237,11 @@ where
             loader,
             "vid_common",
             CACHED_VID_COMMON_COUNT,
+        )?;
+        let state_cert_storage = LedgerLog::<StateCertQueryData<Types>>::open(
+            loader,
+            "state_cert",
+            CACHED_STATE_CERT_COUNT,
         )?;
 
         let mut index_by_block_hash = HashMap::new();
@@ -275,6 +290,7 @@ where
                 leaf_storage,
                 block_storage,
                 vid_storage,
+                state_cert_storage,
                 top_storage: None,
             }),
             metrics: Default::default(),
@@ -287,6 +303,7 @@ where
         inner.leaf_storage.skip_version()?;
         inner.block_storage.skip_version()?;
         inner.vid_storage.skip_version()?;
+        inner.state_cert_storage.skip_version()?;
         if let Some(store) = &mut inner.top_storage {
             store.commit_version()?;
         }
@@ -307,6 +324,7 @@ where
         self.leaf_storage.revert_version().unwrap();
         self.block_storage.revert_version().unwrap();
         self.vid_storage.revert_version().unwrap();
+        self.state_cert_storage.revert_version().unwrap();
     }
 }
 
@@ -339,6 +357,7 @@ where
         self.inner.leaf_storage.commit_version().await?;
         self.inner.block_storage.commit_version().await?;
         self.inner.vid_storage.commit_version().await?;
+        self.inner.state_cert_storage.commit_version().await?;
         if let Some(store) = &mut self.inner.top_storage {
             store.commit_version()?;
         }
@@ -456,12 +475,6 @@ where
             .nth(n)
             .context(NotFoundSnafu)?
             .context(MissingSnafu)
-    }
-
-    async fn get_leaves(&mut self, _height: u64) -> QueryResult<Vec1<LeafQueryData<Types>>> {
-        return Err(QueryError::Error {
-            message: "get_leaves is not supported with file system backend".into(),
-        });
     }
 
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>> {
@@ -595,6 +608,15 @@ where
         // `from` itself if we can, or fail.
         self.get_leaf((from as usize).into()).await
     }
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+        self.inner
+            .state_cert_storage
+            .iter()
+            .nth(epoch as usize)
+            .context(NotFoundSnafu)?
+            .context(MissingSnafu)
+    }
 }
 
 impl<Types: NodeType> UpdateAvailabilityStorage<Types>
@@ -657,6 +679,16 @@ where
         self.inner
             .vid_storage
             .insert(common.height() as usize, (common, share))?;
+        Ok(())
+    }
+
+    async fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .state_cert_storage
+            .insert(state_cert.0.epoch.u64() as usize, state_cert)?;
         Ok(())
     }
 }

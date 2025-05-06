@@ -23,7 +23,6 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-stake-table = { workspace = true }
 tokio = { workspace = true }
 
 # Dependencies for feature `testing`

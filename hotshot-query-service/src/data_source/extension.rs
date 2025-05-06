@@ -22,8 +22,8 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
         LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload,
-        TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
-        VidCommonQueryData,
+        StateCertQueryData, TransactionHash, TransactionQueryData, UpdateAvailabilityData,
+        VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -302,6 +302,9 @@ where
         hash: TransactionHash<Types>,
     ) -> Fetch<TransactionQueryData<Types>> {
         self.data_source.get_transaction(hash).await
+    }
+    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>> {
+        self.data_source.get_state_cert(epoch).await
     }
 }
 

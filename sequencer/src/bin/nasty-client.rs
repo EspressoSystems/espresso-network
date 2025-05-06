@@ -28,7 +28,8 @@ use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use espresso_types::{
-    parse_duration, v0_99::IterableFeeInfo, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes,
+    parse_duration, v0_99::IterableFeeInfo, ADVZNamespaceProofQueryData, BlockMerkleTree,
+    FeeMerkleTree, Header, SeqTypes,
 };
 use futures::{
     future::{FutureExt, TryFuture, TryFutureExt},
@@ -48,7 +49,7 @@ use jf_merkle_tree::{
     ForgetableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use rand::{seq::SliceRandom, RngCore};
-use sequencer::{api::endpoints::ADVZNamespaceProofQueryData, SequencerApiVersion};
+use sequencer::SequencerApiVersion;
 use sequencer_utils::logging;
 use serde::de::DeserializeOwned;
 use strum::{EnumDiscriminants, VariantArray};

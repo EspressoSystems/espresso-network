@@ -20,5 +20,5 @@ git clone --recursive . "$REPO_COPY_DIR"
 # Run the installation and tests inside the container.
 docker run -it --rm \
     -v "$REPO_COPY_DIR:/code" \
-    ubuntu:latest \
+    ubuntu:24.04 \
     bash -c "cd /code && ./scripts/ubuntu-install-test-no-nix"

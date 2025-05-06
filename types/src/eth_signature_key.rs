@@ -3,15 +3,21 @@ use std::{
     hash::Hash,
 };
 
-use ethers::{
-    core::k256::ecdsa::{SigningKey, VerifyingKey},
+use alloy::{
+    primitives::{Address, PrimitiveSignature},
     signers::{
-        coins_bip39::{English, Mnemonic},
-        LocalWallet, WalletError,
+        self,
+        k256::ecdsa::{SigningKey, VerifyingKey},
+        local::{
+            coins_bip39::{English, Mnemonic},
+            PrivateKeySigner,
+        },
+        utils::public_key_to_address,
+        SignerSync,
     },
-    types::{Address, Signature},
-    utils::public_key_to_address,
 };
+use alloy_compat::ethers_serde;
+use derive_more::*;
 use hotshot_types::traits::signature_key::{BuilderSignatureKey, PrivateSignatureKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -75,7 +81,7 @@ impl EthKeyPair {
     pub fn from_mnemonic(
         phrase: impl AsRef<str>,
         index: impl Into<u32>,
-    ) -> Result<Self, WalletError> {
+    ) -> Result<Self, signers::local::LocalSignerError> {
         let index: u32 = index.into();
         let mnemonic = Mnemonic::<English>::new_from_phrase(phrase.as_ref())?;
         let derivation_path = format!("m/44'/60'/0'/0/{index}");
@@ -84,6 +90,7 @@ impl EthKeyPair {
         let signing_key: &SigningKey = derived_priv_key.as_ref();
         Ok(signing_key.clone().into())
     }
+
     pub fn random() -> EthKeyPair {
         SigningKey::random(&mut rand::thread_rng()).into()
     }
@@ -96,8 +103,8 @@ impl EthKeyPair {
         self.fee_account.address()
     }
 
-    pub fn signer(&self) -> LocalWallet {
-        LocalWallet::from_bytes(&self.signing_key.to_bytes()).unwrap()
+    pub fn signer(&self) -> PrivateKeySigner {
+        PrivateKeySigner::from(self.signing_key.clone())
     }
 }
 
@@ -149,11 +156,16 @@ impl Ord for EthKeyPair {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(self::Debug, Error)]
 #[error("Failed to sign builder message")]
-pub struct SigningError(#[from] WalletError);
+pub struct SigningError(#[from] signers::Error);
 
-pub type BuilderSignature = Signature;
+/// signature type for the builder
+#[derive(
+    self::Debug, Clone, Copy, Hash, Deref, PartialEq, Eq, From, Into, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct BuilderSignature(#[serde(with = "ethers_serde::signature")] pub PrimitiveSignature);
 
 impl BuilderSignatureKey for FeeAccount {
     type BuilderPrivateKey = EthKeyPair;
@@ -161,7 +173,7 @@ impl BuilderSignatureKey for FeeAccount {
     type SignError = SigningError;
 
     fn validate_builder_signature(&self, signature: &Self::BuilderSignature, data: &[u8]) -> bool {
-        signature.verify(data, self.address()).is_ok()
+        signature.recover_address_from_msg(data).unwrap() == self.address()
     }
 
     fn sign_builder_message(
@@ -169,8 +181,12 @@ impl BuilderSignatureKey for FeeAccount {
         data: &[u8],
     ) -> Result<Self::BuilderSignature, Self::SignError> {
         let wallet = private_key.signer();
-        let message_hash = ethers::utils::hash_message(data);
-        wallet.sign_hash(message_hash).map_err(SigningError::from)
+        let message_hash = alloy::primitives::eip191_hash_message(data);
+        let sig = wallet
+            .sign_hash_sync(&message_hash)
+            .map_err(SigningError::from)?
+            .into();
+        Ok(sig)
     }
 
     fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::BuilderPrivateKey) {
@@ -209,16 +225,12 @@ mod tests {
         let key0 = EthKeyPair::from_mnemonic(mnemonic, 0u32).unwrap();
         assert_eq!(
             key0.address(),
-            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-                .parse()
-                .unwrap()
+            Address::parse_checksummed("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", None).unwrap()
         );
         let key1 = EthKeyPair::from_mnemonic(mnemonic, 1u32).unwrap();
         assert_eq!(
             key1.address(),
-            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
-                .parse()
-                .unwrap()
+            Address::parse_checksummed("0x70997970C51812dc3A010C7d01b50e0d17dc79C8", None).unwrap()
         );
     }
 

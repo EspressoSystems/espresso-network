@@ -62,6 +62,7 @@ pub async fn decide_leaf_chain_with_transactions(
         state: Default::default(),
         delta: None,
         vid_share: None,
+        state_cert: None,
     }])
 }
 

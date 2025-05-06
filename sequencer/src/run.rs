@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use clap::Parser;
+use espresso_types::traits::SequencerPersistence;
 #[allow(unused_imports)]
 use espresso_types::{
     traits::NullEventConsumer, FeeVersion, MarketplaceVersion, SequencerVersions,
@@ -202,6 +204,10 @@ where
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
     let persistence = storage_opt.create().await?;
+    persistence
+        .migrate_consensus()
+        .await
+        .context("failed to migrate consensus data")?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
@@ -234,7 +240,7 @@ where
             }
 
             http_opt
-                .serve(move |metrics, consumer| {
+                .serve(move |metrics, consumer, storage| {
                     async move {
                         init_node(
                             genesis,
@@ -242,6 +248,7 @@ where
                             &*metrics,
                             persistence,
                             l1_params,
+                            storage,
                             versions,
                             consumer,
                             opt.is_da,
@@ -262,6 +269,7 @@ where
                 &NoMetrics,
                 persistence,
                 l1_params,
+                None,
                 versions,
                 NullEventConsumer,
                 opt.is_da,
@@ -318,6 +326,7 @@ mod test {
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
+            epoch_start_block: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

@@ -56,7 +56,8 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryData,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
@@ -125,7 +126,7 @@ impl TransactionMode for Write {
         //
         // The proper way to begin a write transaction in SQLite is with `BEGIN IMMEDIATE`. However,
         // sqlx does not expose any way to customize the `BEGIN` statement that starts a
-        // transaction. A servicable workaround is to perform some write statement before performing
+        // transaction. A serviceable workaround is to perform some write statement before performing
         // any read statement, ensuring that the first lock we acquire is exclusive. A write
         // statement that has no actual effect on the database is suitable for this purpose, hence
         // the `WHERE false`.
@@ -467,7 +468,6 @@ where
 {
     async fn insert_leaf(&mut self, leaf: LeafQueryData<Types>) -> anyhow::Result<()> {
         let height = leaf.height();
-        let view = leaf.leaf().view_number().u64();
 
         // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
         // fetcher is racing with the pruner.
@@ -517,11 +517,10 @@ where
         let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
         self.upsert(
             "leaf2",
-            ["height", "view", "hash", "block_hash", "leaf", "qc"],
-            ["height", "view"],
+            ["height", "hash", "block_hash", "leaf", "qc"],
+            ["height"],
             [(
                 height as i64,
-                view as i64,
                 leaf.hash().to_string(),
                 leaf.block_hash().to_string(),
                 leaf_json,
@@ -629,6 +628,38 @@ where
             )
             .await
         }
+    }
+
+    async fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
+    ) -> anyhow::Result<()> {
+        let height = state_cert.height();
+
+        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
+        // fetcher is racing with the pruner.
+        if let Some(pruned_height) = self.load_pruned_height().await? {
+            if height <= pruned_height {
+                tracing::info!(
+                    height,
+                    pruned_height,
+                    "ignoring state cert which is already pruned"
+                );
+                return Ok(());
+            }
+        }
+        let epoch = state_cert.0.epoch.u64();
+        let bytes = bincode::serialize(&state_cert.0).context("failed to serialize state cert")?;
+        // Directly upsert the state cert to the finalized_state_cert table because
+        // this is called only when the corresponding leaf is decided.
+        self.upsert(
+            "finalized_state_cert",
+            ["epoch", "state_cert"],
+            ["epoch"],
+            [(epoch as i64, bytes)],
+        )
+        .await?;
+        Ok(())
     }
 }
 

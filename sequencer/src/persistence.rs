@@ -23,12 +23,15 @@ pub trait ChainConfigPersistence: Sized + Send + Sync {
 #[cfg(any(test, feature = "testing"))]
 mod testing {
 
-    use espresso_types::v0::traits::{PersistenceOptions, SequencerPersistence};
+    use espresso_types::{
+        traits::MembershipPersistence,
+        v0::traits::{PersistenceOptions, SequencerPersistence},
+    };
 
     use super::*;
     #[allow(dead_code)]
     #[async_trait]
-    pub trait TestablePersistence: SequencerPersistence {
+    pub trait TestablePersistence: SequencerPersistence + MembershipPersistence {
         type Storage: Sync;
 
         async fn tmp_storage() -> Self::Storage;
@@ -45,19 +48,23 @@ mod testing {
 mod persistence_tests {
     use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
+    use alloy::{node_bindings::Anvil, signers::local::LocalSigner};
     use anyhow::bail;
     use async_lock::RwLock;
     use committable::{Commitment, Committable};
     use espresso_types::{
         traits::{EventConsumer, NullEventConsumer, PersistenceOptions},
-        Event, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        v0_3::{StakeTableFetcher, Validator},
+        Event, L1Client, Leaf, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
+        ValidatedState,
     };
+    use futures::{future::join_all, StreamExt, TryStreamExt};
     use hotshot::{
         types::{BLSPubKey, SignatureKey},
         InitializerEpochInfo,
     };
     use hotshot_example_types::node_types::TestVersions;
-    use hotshot_query_service::testing::mocks::MockVersions;
+    use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
     use hotshot_types::{
         data::{
             ns_table::parse_ns_table, vid_commitment, vid_disperse::VidDisperseShare2, DaProposal2,
@@ -79,11 +86,23 @@ mod persistence_tests {
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
     };
+    use indexmap::IndexMap;
+    use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
+    use surf_disco::Client;
     use testing::TestablePersistence;
-    use vbs::version::{StaticVersionType, Version};
+    use tide_disco::error::ServerError;
+    use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use super::*;
+    use crate::{
+        api::{
+            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            Options,
+        },
+        testing::TestConfigBuilder,
+        SequencerApiVersion, RECENT_STAKE_TABLES_LIMIT,
+    };
 
     #[derive(Clone, Debug, Default)]
     struct EventCollector {
@@ -230,6 +249,35 @@ mod persistence_tests {
                 }
             ]
         );
+
+        // Store more than the limit
+        let total_epochs = RECENT_STAKE_TABLES_LIMIT + 10;
+        for i in 0..total_epochs {
+            let epoch = EpochNumber::new(i);
+            let drb = [i as u8; 32];
+            storage
+                .add_drb_result(epoch, drb)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to store DRB result for epoch {}", i));
+        }
+
+        let results = storage.load_start_epoch_info().await.unwrap();
+
+        // Check that only the most recent RECENT_STAKE_TABLES_LIMIT epochs are returned
+        assert_eq!(
+            results.len(),
+            RECENT_STAKE_TABLES_LIMIT as usize,
+            "Should return only the most recent {RECENT_STAKE_TABLES_LIMIT} epochs",
+        );
+
+        for (i, info) in results.iter().enumerate() {
+            let expected_epoch =
+                EpochNumber::new(total_epochs - RECENT_STAKE_TABLES_LIMIT + i as u64);
+            let expected_drb = [(total_epochs - RECENT_STAKE_TABLES_LIMIT + i as u64) as u8; 32];
+            assert_eq!(info.epoch, expected_epoch, "invalid epoch at index {i}",);
+            assert_eq!(info.drb_result, expected_drb, "invalid DRB at index {i}",);
+            assert!(info.block_header.is_none(), "Expected no block header");
+        }
     }
 
     fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
@@ -238,6 +286,7 @@ mod persistence_tests {
             vid_share: None,
             state: Default::default(),
             delta: None,
+            state_cert: None,
         }
     }
 
@@ -1094,5 +1143,324 @@ mod persistence_tests {
             .load_quorum_proposal(ViewNumber::new(0))
             .await
             .is_err());
+    }
+
+    // test for validating stake table event fetching from persistence,
+    // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
+    #[tokio::test(flavor = "multi_thread")]
+    pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
+    ) -> anyhow::Result<()> {
+        setup_test();
+
+        let epoch_height = 20;
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let anvil_instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+        let l1_rpc_url = anvil_instance.endpoint_url();
+        let l1_signer_key = anvil_instance.keys()[0].clone();
+        let signer = LocalSigner::from(l1_signer_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_rpc_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_api_options = Options::with_port(query_service_port);
+
+        const NODE_COUNT: usize = 2;
+
+        let storage = join_all((0..NODE_COUNT).map(|_| P::tmp_storage())).await;
+        let persistence_options: [_; NODE_COUNT] = storage
+            .iter()
+            .map(P::options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // Build the config with PoS hook
+
+        let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(query_api_options)
+            .network_config(network_config.clone())
+            .persistences(persistence_options.clone())
+            .pos_hook::<PosVersion>(true)
+            .await
+            .expect("Pos deployment failed")
+            .build();
+
+        //start the network
+
+        let mut test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
+
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(
+            format!("http://localhost:{query_service_port}")
+                .parse()
+                .unwrap(),
+        );
+        client.connect(None).await;
+        tracing::info!(query_service_port, "server running");
+
+        // wait until we enter in epoch 3
+        let _initial_blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(40)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        // Load initial persisted events and validate they exist.
+        let persistence = persistence_options[0].clone().create().await.unwrap();
+        let res1 = persistence
+            .load_events()
+            .await
+            .expect("failed to load events");
+        assert!(res1.is_some());
+
+        let (events1_l1_block, events1) = res1.unwrap();
+        assert!(!events1.is_empty());
+
+        let _epoch_4_blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(65)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        // Stop consensus to freeze the state
+        test_network.stop_consensus().await;
+
+        let latest_events_data = persistence
+            .load_events()
+            .await
+            .expect("failed to load events");
+        assert!(latest_events_data.is_some());
+
+        let (latest_l1_block, final_persisted_events) = latest_events_data.unwrap();
+        assert!(!final_persisted_events.is_empty());
+
+        let membership_coordinator = test_network
+            .server
+            .consensus()
+            .read()
+            .await
+            .membership_coordinator
+            .clone();
+
+        let l1_client = L1Client::new(vec![l1_rpc_url]).unwrap();
+        let node_state = test_network.server.node_state();
+        let chain_config = node_state.chain_config;
+        let stake_table_contract = chain_config.stake_table_contract.unwrap();
+
+        // Fetch events directly from the contract and compare with persisted data.
+        let contract_events = StakeTableFetcher::fetch_events_from_contract(
+            l1_client.clone(),
+            stake_table_contract,
+            None,
+            latest_l1_block,
+        )
+        .await
+        .unwrap()
+        .sort_events()
+        .unwrap();
+
+        assert_eq!(
+            contract_events, final_persisted_events,
+            "Events from contract and persistence do not match"
+        );
+
+        let current_membership = membership_coordinator.membership();
+        let membership_state = current_membership.read().await;
+        let stake_table_fetcher = membership_state.fetcher();
+
+        let fetched_events = stake_table_fetcher
+            .fetch_events(stake_table_contract, latest_l1_block)
+            .await
+            .unwrap();
+        assert_eq!(fetched_events, final_persisted_events);
+
+        // store an old snapshot of events in contract
+        // so that fetcher has to get additional events from the contract
+        persistence
+            .store_events(events1_l1_block, events1.clone())
+            .await
+            .unwrap();
+        let events = persistence.load_events().await.unwrap();
+        assert_eq!(events1.clone(), events.clone().unwrap().1);
+        assert_eq!(events.unwrap().0, events1_l1_block);
+
+        // Ensure fetcher events still matches contract state after restoring older snapshot.
+        let fetcher_events = stake_table_fetcher
+            .fetch_events(stake_table_contract, latest_l1_block)
+            .await
+            .unwrap();
+        let expected_events = StakeTableFetcher::fetch_events_from_contract(
+            l1_client,
+            stake_table_contract,
+            None,
+            latest_l1_block,
+        )
+        .await
+        .unwrap()
+        .sort_events()
+        .unwrap();
+
+        assert_eq!(fetcher_events, expected_events);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    pub async fn test_stake_table_background_fetching<P: TestablePersistence>() -> anyhow::Result<()>
+    {
+        setup_test();
+
+        let epoch_height = 30;
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let anvil_instance = Anvil::new()
+            .args(["--slots-in-an-epoch", "0", "--block-time", "1"])
+            .spawn();
+        let l1_rpc_url = anvil_instance.endpoint_url();
+        let l1_signer_key = anvil_instance.keys()[0].clone();
+        let signer = LocalSigner::from(l1_signer_key);
+
+        let network_config = TestConfigBuilder::default()
+            .l1_url(l1_rpc_url.clone())
+            .signer(signer.clone())
+            .epoch_height(epoch_height)
+            .build();
+
+        let query_service_port = pick_unused_port().expect("No ports free for query service");
+        let query_api_options = Options::with_port(query_service_port);
+
+        const NODE_COUNT: usize = 2;
+
+        let storage = join_all((0..NODE_COUNT).map(|_| P::tmp_storage())).await;
+        let persistence_options: [_; NODE_COUNT] = storage
+            .iter()
+            .map(P::options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // Build the config with PoS hook
+        let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(query_api_options)
+            .network_config(network_config.clone())
+            .persistences(persistence_options.clone())
+            .pos_hook::<PosVersion>(true)
+            .await
+            .expect("Pos deployment failed")
+            .build();
+
+        //start the network
+        let _test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
+
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(
+            format!("http://localhost:{query_service_port}")
+                .parse()
+                .unwrap(),
+        );
+        client.connect(None).await;
+        tracing::info!(query_service_port, "server running");
+
+        // wait until we enter in epoch 3
+        let _initial_blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(60)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        // Load initial persisted events and validate they exist.
+        let persistence = persistence_options[0].clone().create().await.unwrap();
+        let res1 = persistence
+            .load_events()
+            .await
+            .expect("failed to load events");
+        assert!(res1.is_some());
+
+        let (mut prev_l1, prev_events) = res1.unwrap();
+        assert!(!prev_events.is_empty());
+
+        for _i in 0..10 {
+            // Wait for more than update interval to assert that persistence was updated
+            // L1 update interval is 5s for testing
+            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+
+            let res = persistence
+                .load_events()
+                .await
+                .expect("failed to load events");
+
+            let (l1, events) = res.unwrap();
+            assert!(!events.is_empty());
+
+            assert!(l1 > prev_l1, "events not updated");
+            prev_l1 = l1;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    pub async fn test_membership_persistence<P: TestablePersistence>() -> anyhow::Result<()> {
+        setup_test();
+
+        let tmp = P::tmp_storage().await;
+        let mut opt = P::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let validator = Validator::mock();
+        let mut st = IndexMap::new();
+        st.insert(validator.account, validator);
+        storage
+            .store_stake(EpochNumber::new(10), st.clone())
+            .await?;
+
+        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        assert_eq!(st, table);
+
+        let val2 = Validator::mock();
+        let mut st2 = IndexMap::new();
+        st2.insert(val2.account, val2);
+        storage
+            .store_stake(EpochNumber::new(11), st2.clone())
+            .await?;
+
+        let tables = storage.load_latest_stake(4).await?.unwrap();
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(EpochNumber::new(11), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+        assert_eq!(None, iter.next());
+
+        for i in 0..=20 {
+            storage
+                .store_stake(EpochNumber::new(i), st2.clone())
+                .await?;
+        }
+
+        let tables = storage.load_latest_stake(5).await?.unwrap();
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(EpochNumber::new(20), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(19), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(18), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(17), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(16), st2)), iter.next());
+        assert_eq!(None, iter.next());
+
+        Ok(())
     }
 }

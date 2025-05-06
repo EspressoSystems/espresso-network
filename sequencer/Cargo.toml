@@ -6,17 +6,20 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["fee"]
+default = ["fee", "pos"]
 testing = [
     "hotshot-testing",
     "marketplace-builder-core",
     "espresso-types/testing",
     "sequencer-utils/testing",
-    "hotshot-query-service/testing"
+    "hotshot-query-service/testing",
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
-sqlite-unbundled = ["hotshot-query-service/sqlite-unbundled", "sqlx/sqlite-unbundled"]
+sqlite-unbundled = [
+    "hotshot-query-service/sqlite-unbundled",
+    "sqlx/sqlite-unbundled",
+]
 fee = []
 pos = []
 marketplace = []
@@ -36,7 +39,7 @@ rand = "0.8.5"
 reqwest = { workspace = true }
 
 # Enable "testing" feature when running tests
-sequencer = { path = ".", features = [ "testing" ] }
+sequencer = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 
 [build-dependencies]
@@ -56,31 +59,30 @@ byteorder = "1"
 staking-cli = { workspace = true }
 
 # CDN imports
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = ["global-permits"] }
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = [
+    "global-permits",
+] }
 cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-marshal" }
 
 alloy = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = "0.2"
-contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 espresso-types = { path = "../types" }
-ethers = { workspace = true }
-ethers-conv = { workspace = true }
 futures = { workspace = true }
 indexmap = { workspace = true }
 
 hotshot = { workspace = true }
+hotshot-builder-core-refactored = { path = "../hotshot-builder-core-refactored" }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }
 
 # Dependencies for feature `testing`
@@ -101,7 +103,6 @@ marketplace-solver = { path = "../marketplace-solver" }
 num_enum = "0.7"
 parking_lot = "0.12"
 portpicker = { workspace = true }
-primitive-types = { workspace = true }
 priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
@@ -114,10 +115,10 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 snafu = "0.8"
 sqlx = { workspace = true, features = [
-	"bit-vec",
-	"postgres",
-	"runtime-tokio",
-	"tls-native-tls",
+    "bit-vec",
+    "postgres",
+    "runtime-tokio",
+    "tls-native-tls",
 ] }
 static_assertions = "1"
 strum = { workspace = true }
@@ -127,6 +128,7 @@ tempfile = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

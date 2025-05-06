@@ -86,6 +86,7 @@ pub enum Error {
         start: String,
         end: u64,
     },
+    #[snafu(display("error {status}: {message}"))]
     Custom {
         message: String,
         status: StatusCode,
@@ -114,6 +115,7 @@ impl Error {
 pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
     options: &Options,
     _: Ver,
+    api_ver: semver::Version,
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
@@ -125,7 +127,7 @@ where
         options.extensions.clone(),
     )?;
     let window_limit = options.window_limit;
-    api.with_version("0.0.1".parse().unwrap())
+    api.with_version(api_ver)
         .get("block_height", |_req, state| {
             async move { state.block_height().await.context(QuerySnafu) }.boxed()
         })?
@@ -257,6 +259,7 @@ mod test {
                     ..Default::default()
                 },
                 MockBase::instance(),
+                "1.0.0".parse().unwrap(),
             )
             .unwrap(),
         )
@@ -430,7 +433,12 @@ mod test {
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "node",
-            define_api(&Default::default(), MockBase::instance()).unwrap(),
+            define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "1.0.0".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap();
         network.spawn(
@@ -606,6 +614,7 @@ mod test {
                     ..Default::default()
                 },
                 MockBase::instance(),
+                "1.0.0".parse().unwrap(),
             )
             .unwrap();
         api.get("get_ext", |_, state| {

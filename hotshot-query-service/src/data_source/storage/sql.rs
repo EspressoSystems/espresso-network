@@ -22,10 +22,7 @@ use futures::future::FutureExt;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidShare},
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
-    traits::{
-        metrics::Metrics,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    traits::{metrics::Metrics, node_implementation::NodeType},
     vid::advz::{ADVZCommon, ADVZShare},
 };
 use itertools::Itertools;
@@ -685,6 +682,26 @@ impl PruneStorage for SqlStorage {
         Ok(size as u64)
     }
 
+    /// Trigger incremental vacuum to free up space in the SQLite database.
+    /// Note: We don't vacuum the Postgres database,
+    /// as there is no manual trigger for incremental vacuum,
+    /// and a full vacuum can take a lot of time.
+    #[cfg(feature = "embedded-db")]
+    async fn vacuum(&self) -> anyhow::Result<()> {
+        let config = self.get_pruning_config().ok_or(QueryError::Error {
+            message: "Pruning config not found".to_string(),
+        })?;
+        let mut conn = self.pool().acquire().await?;
+        query(&format!(
+            "PRAGMA incremental_vacuum({})",
+            config.incremental_vacuum_pages()
+        ))
+        .execute(conn.as_mut())
+        .await?;
+        conn.close().await?;
+        Ok(())
+    }
+
     /// Note: The prune operation may not immediately free up space even after rows are deleted.
     /// This is because a vacuum operation may be necessary to reclaim more space.
     /// PostgreSQL already performs auto vacuuming, so we are not including it here
@@ -734,17 +751,9 @@ impl PruneStorage for SqlStorage {
                 tx.commit().await.map_err(|e| QueryError::Error {
                     message: format!("failed to commit {e}"),
                 })?;
-
                 pruner.pruned_height = Some(height);
                 return Ok(Some(height));
             }
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
-            let mut conn = self.pool().acquire().await?;
-            query("VACUUM").execute(conn.as_mut()).await?;
-            conn.close().await?;
         }
 
         // If threshold is set, prune data exceeding minimum retention in batches
@@ -781,12 +790,7 @@ impl PruneStorage for SqlStorage {
                             message: format!("failed to commit {e}"),
                         })?;
 
-                        #[cfg(feature = "embedded-db")]
-                        {
-                            let mut conn = self.pool().acquire().await?;
-                            query("VACUUM").execute(conn.as_mut()).await?;
-                            conn.close().await?;
-                        }
+                        self.vacuum().await?;
 
                         pruner.pruned_height = Some(height);
 
@@ -821,29 +825,35 @@ impl VersionedDataSource for SqlStorage {
 
 #[async_trait]
 pub trait MigrateTypes<Types: NodeType> {
-    async fn migrate_types(&self) -> anyhow::Result<()>;
+    async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()>;
 }
 
 #[async_trait]
 impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
-    async fn migrate_types(&self) -> anyhow::Result<()> {
-        let mut offset = 0;
-        let limit = 10000;
+    async fn migrate_types(&self, batch_size: u64) -> anyhow::Result<()> {
+        let limit = batch_size;
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
         })?;
 
-        let (is_migration_completed,) =
-            query_as::<(bool,)>("SELECT completed from types_migration LIMIT 1 ")
-                .fetch_one(tx.as_mut())
-                .await?;
+        // The table `types_migration` is populated in the SQL migration with `completed = false` and `migrated_rows = 0`
+        // so fetch_one() would always return a row.
+        // After each batch insert, it is updated with the number of rows migrated.
+        // This is necessary to resume from the same point in case of a restart.
+        let (is_migration_completed, mut offset) = query_as::<(bool, i64)>(
+            "SELECT completed, migrated_rows from types_migration WHERE id = 1 ",
+        )
+        .fetch_one(tx.as_mut())
+        .await?;
 
         if is_migration_completed {
             tracing::info!("types migration already completed");
             return Ok(());
         }
 
-        tracing::warn!("migrating query service types storage");
+        tracing::warn!(
+            "migrating query service types storage. Offset={offset}, batch_size={limit}"
+        );
 
         loop {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
@@ -851,10 +861,13 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             })?;
 
             let rows = QueryBuilder::default()
-                .query(&format!(
-                    "SELECT leaf, qc, common as vid_common, share as vid_share FROM leaf INNER JOIN vid on leaf.height = vid.height ORDER BY leaf.height LIMIT {} OFFSET {}",
-                    limit, offset
-                ))
+                .query(
+                    "SELECT leaf, qc, common as vid_common, share as vid_share
+                    FROM leaf INNER JOIN vid on leaf.height = vid.height 
+                    WHERE leaf.height >= $1 AND leaf.height < $2",
+                )
+                .bind(offset)
+                .bind(offset + limit as i64)
                 .fetch_all(tx.as_mut())
                 .await?;
 
@@ -882,19 +895,22 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                     serde_json::to_value(leaf2.clone()).context("failed to serialize leaf2")?;
                 let qc2_json = serde_json::to_value(qc2).context("failed to serialize QC2")?;
 
-                // TODO (abdul): revisit after V1 VID has common field
                 let vid_common_bytes: Vec<u8> = row.try_get("vid_common")?;
-                let vid_share_bytes: Vec<u8> = row.try_get("vid_share")?;
+                let vid_share_bytes: Option<Vec<u8>> = row.try_get("vid_share")?;
 
-                let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
-                    .context("failed to deserialize vid_share")?;
+                let mut new_vid_share_bytes = None;
 
-                let new_vid_share_bytes = bincode::serialize(&VidShare::V0(vid_share))
-                    .context("failed to serialize vid_share")?;
+                if let Some(vid_share_bytes) = vid_share_bytes {
+                    let vid_share: ADVZShare = bincode::deserialize(&vid_share_bytes)
+                        .context("failed to deserialize vid_share")?;
+                    new_vid_share_bytes = Some(
+                        bincode::serialize(&VidShare::V0(vid_share))
+                            .context("failed to serialize vid_share")?,
+                    );
+                }
 
                 let vid_common: ADVZCommon = bincode::deserialize(&vid_common_bytes)
                     .context("failed to deserialize vid_common")?;
-
                 let new_vid_common_bytes = bincode::serialize(&VidCommon::V0(vid_common))
                     .context("failed to serialize vid_common")?;
 
@@ -905,7 +921,6 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 ));
                 leaf_rows.push((
                     leaf2.height() as i64,
-                    leaf2.view_number().u64() as i64,
                     commit.to_string(),
                     leaf2.block_header().commit().to_string(),
                     leaf2_json,
@@ -914,19 +929,22 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             }
 
             // migrate leaf2
-            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
-                "INSERT INTO leaf2 (height, view, hash, block_hash, leaf, qc) ",
-            );
+            let mut query_builder: sqlx::QueryBuilder<Db> =
+                sqlx::QueryBuilder::new("INSERT INTO leaf2 (height, hash, block_hash, leaf, qc) ");
+
+            // Advance the `offset` to the highest `leaf.height` processed in this batch.
+            // This ensures the next iteration starts from the next unseen leaf
+            offset += limit as i64;
 
             query_builder.push_values(leaf_rows.into_iter(), |mut b, row| {
                 b.push_bind(row.0)
                     .push_bind(row.1)
                     .push_bind(row.2)
                     .push_bind(row.3)
-                    .push_bind(row.4)
-                    .push_bind(row.5);
+                    .push_bind(row.4);
             });
 
+            query_builder.push(" ON CONFLICT DO NOTHING");
             let query = query_builder.build();
 
             let mut tx = self.write().await.map_err(|err| QueryError::Error {
@@ -935,8 +953,15 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
             query.execute(tx.as_mut()).await?;
 
-            tx.commit().await?;
-            tracing::warn!("inserted {} rows into leaf2 table", offset);
+            // update migrated_rows column with the offset
+            tx.upsert(
+                "types_migration",
+                ["id", "completed", "migrated_rows"],
+                ["id"],
+                [(1_i64, false, offset)],
+            )
+            .await?;
+
             // migrate vid
             let mut query_builder: sqlx::QueryBuilder<Db> =
                 sqlx::QueryBuilder::new("INSERT INTO vid2 (height, common, share) ");
@@ -944,24 +969,19 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             query_builder.push_values(vid_rows.into_iter(), |mut b, row| {
                 b.push_bind(row.0).push_bind(row.1).push_bind(row.2);
             });
-
+            query_builder.push(" ON CONFLICT DO NOTHING");
             let query = query_builder.build();
-
-            let mut tx = self.write().await.map_err(|err| QueryError::Error {
-                message: err.to_string(),
-            })?;
 
             query.execute(tx.as_mut()).await?;
 
             tx.commit().await?;
 
-            tracing::warn!("inserted {} rows into vid2 table", offset);
+            tracing::warn!("Migrated leaf and vid: offset={offset}");
 
-            if rows.len() < limit {
+            tracing::info!("offset={offset}");
+            if rows.len() < limit as usize {
                 break;
             }
-
-            offset += limit;
         }
 
         let mut tx = self.write().await.map_err(|err| QueryError::Error {
@@ -972,9 +992,9 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
 
         tx.upsert(
             "types_migration",
-            ["id", "completed"],
+            ["id", "completed", "migrated_rows"],
             ["id"],
-            [(0_i64, true)],
+            [(1_i64, true, offset)],
         )
         .await?;
 
@@ -1397,12 +1417,16 @@ mod test {
     }
 
     async fn vacuum(storage: &SqlStorage) {
+        #[cfg(feature = "embedded-db")]
+        let query = "PRAGMA incremental_vacuum(16000)";
+        #[cfg(not(feature = "embedded-db"))]
+        let query = "VACUUM";
         storage
             .pool
             .acquire()
             .await
             .unwrap()
-            .execute("VACUUM")
+            .execute(query)
             .await
             .unwrap();
     }
@@ -1702,7 +1726,7 @@ mod test {
     async fn test_types_migration() {
         setup_test();
 
-        let num_rows = 200;
+        let num_rows = 500;
         let db = TmpDb::init().await;
 
         let storage = SqlStorage::connect(db.config()).await.unwrap();
@@ -1815,10 +1839,15 @@ mod test {
             let mut vid = advz_scheme(2);
             let disperse = vid.disperse(payload.encode()).unwrap();
             let common = disperse.common;
-            let share = disperse.shares[0].clone();
 
             let common_bytes = bincode::serialize(&common).unwrap();
-            let share_bytes = bincode::serialize(&share).unwrap();
+            let share = disperse.shares[0].clone();
+            let mut share_bytes = Some(bincode::serialize(&share).unwrap());
+
+            // insert some nullable vid shares
+            if i % 10 == 0 {
+                share_bytes = None
+            }
 
             tx.upsert(
                 "vid",
@@ -1831,7 +1860,11 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage)
+        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage, 50)
+            .await
+            .expect("failed to migrate");
+
+        <SqlStorage as MigrateTypes<MockTypes>>::migrate_types(&storage, 50)
             .await
             .expect("failed to migrate");
 

@@ -6,3 +6,8 @@ DOC = "Get the stake table for the current epoch"
 PATH = ["stake-table/:epoch_number"]
 ":epoch_number" = "Integer"
 DOC = "Get the stake table for the given epoch"
+
+[route.get_validators]
+PATH = ["validators/:epoch_number"]
+":epoch_number" = "Integer"
+DOC = "Get the validators map for the given epoch."

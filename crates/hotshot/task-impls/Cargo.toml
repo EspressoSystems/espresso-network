@@ -1,0 +1,42 @@
+[package]
+authors = { workspace = true }
+description = "Async task implementations for consensus"
+edition = { workspace = true }
+name = "hotshot-task-impls"
+version = { workspace = true }
+license = "MIT"
+
+[features]
+example-upgrade = []
+rewind = []
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-broadcast = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+committable = { workspace = true }
+either = { workspace = true }
+futures = { workspace = true }
+hotshot-builder-api = { workspace = true }
+hotshot-task = { workspace = true }
+hotshot-types = { workspace = true }
+hotshot-utils = { workspace = true }
+jf-vid = { workspace = true }
+lru = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+vec1 = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }

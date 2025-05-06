@@ -63,13 +63,12 @@ use futures::future::Future;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 use jf_merkle_tree::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
-use vec1::Vec1;
 
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        TransactionQueryData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
         query_data::{
@@ -120,7 +119,6 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>>;
-    async fn get_leaves(&mut self, height: u64) -> QueryResult<Vec1<LeafQueryData<Types>>>;
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>>;
     async fn get_header(&mut self, id: BlockId<Types>) -> QueryResult<Header<Types>>;
     async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>>;
@@ -195,6 +193,8 @@ where
 
     /// Get the first leaf which is available in the database with height >= `from`.
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>>;
 }
 
 pub trait UpdateAvailabilityStorage<Types>
@@ -213,6 +213,10 @@ where
         &mut self,
         common: VidCommonQueryData<Types>,
         share: Option<VidShare>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
