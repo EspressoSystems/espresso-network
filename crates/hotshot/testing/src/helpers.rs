@@ -35,7 +35,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
-        storage::storage_add_drb_result,
+        storage::storage_store_drb_result,
         EncodeBytes,
     },
     utils::{option_epoch_from_block_number, View, ViewInner},
@@ -130,7 +130,7 @@ pub async fn build_system_handle_from_launcher<
 
     let coordinator = EpochMembershipCoordinator::new(
         memberships,
-        Some(storage_add_drb_result(storage.clone())),
+        Some(storage_store_drb_result(storage.clone())),
         hotshot_config.epoch_height,
     );
     let node_key_map = launcher.metadata.build_node_key_map();

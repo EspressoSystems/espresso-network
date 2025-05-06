@@ -1904,7 +1904,7 @@ impl SequencerPersistence for Persistence {
         tx.commit().await
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         epoch: EpochNumber,
         drb_result: DrbResult,

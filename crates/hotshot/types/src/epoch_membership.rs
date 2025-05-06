@@ -17,7 +17,7 @@ use crate::{
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
-        storage::StorageAddDrbResultFn,
+        storage::StorageStoreDrbResultFn,
     },
     utils::{root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
@@ -37,8 +37,8 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// wait for the actual catchup and allert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
-    /// Callback function to store a drb result when one is calculated during catchup
-    storage_add_drb_result_fn: Option<StorageAddDrbResultFn<TYPES>>,
+    /// Callback function to store a drb result in storage when one is calculated during catchup
+    storage_store_drb_result_fn: Option<StorageStoreDrbResultFn<TYPES>>,
 
     /// Number of blocks in an epoch
     pub epoch_height: u64,
@@ -49,7 +49,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
         Self {
             membership: Arc::clone(&self.membership),
             catchup_map: Arc::clone(&self.catchup_map),
-            storage_add_drb_result_fn: self.storage_add_drb_result_fn.clone(),
+            storage_store_drb_result_fn: self.storage_store_drb_result_fn.clone(),
             epoch_height: self.epoch_height,
         }
     }
@@ -65,13 +65,13 @@ where
     /// Create an EpochMembershipCoordinator
     pub fn new(
         membership: Arc<RwLock<TYPES::Membership>>,
-        storage_add_drb_result_fn: Option<StorageAddDrbResultFn<TYPES>>,
+        storage_store_drb_result_fn: Option<StorageStoreDrbResultFn<TYPES>>,
         epoch_height: u64,
     ) -> Self {
         Self {
             membership,
             catchup_map: Arc::default(),
-            storage_add_drb_result_fn,
+            storage_store_drb_result_fn,
             epoch_height,
         }
     }
@@ -225,7 +225,7 @@ where
                 .unwrap()
         };
 
-        if let Some(cb) = &self.storage_add_drb_result_fn {
+        if let Some(cb) = &self.storage_store_drb_result_fn {
             tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
             if let Err(e) = cb(epoch, drb).await {
                 tracing::warn!("Failed to add drb result to storage: {e}");

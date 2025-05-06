@@ -23,7 +23,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     traits::{
         node_implementation::{NodeType, Versions},
-        storage::storage_add_drb_result,
+        storage::storage_store_drb_result,
     },
     HotShotConfig, PeerConfig, ValidatorConfig,
 };
@@ -264,7 +264,7 @@ pub async fn create_test_handle<
     let state_private_key = validator_config.state_private_key.clone();
     let membership_coordinator = EpochMembershipCoordinator::new(
         memberships,
-        Some(storage_add_drb_result(storage.clone())),
+        Some(storage_store_drb_result(storage.clone())),
         config.epoch_height,
     );
 

@@ -212,7 +212,7 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
         _drb_result: DrbResult,
