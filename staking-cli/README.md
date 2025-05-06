@@ -38,6 +38,9 @@ To show help for a command run `staking-cli COMMAND --help`, for example `stakin
 
 If you run into any problems please open an issue on https://github.com/EspressoSystems/espresso-network.
 
+To build tools that interact with the stake table contract the ABI can be found at
+[../contracts/artifacts/abi/StakeTable.json](../contracts/artifacts/abi/StakeTable.json).
+
 ## Getting Started
 
 ### Overview

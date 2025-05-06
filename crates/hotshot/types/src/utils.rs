@@ -104,12 +104,17 @@ pub type StateAndDelta<TYPES> = (
 );
 
 pub async fn verify_leaf_chain<T: NodeType, V: Versions>(
-    leaf_chain: Vec<Leaf2<T>>,
-    stake_table: Vec<PeerConfig<T>>,
+    mut leaf_chain: Vec<Leaf2<T>>,
+    stake_table: &[PeerConfig<T>],
     success_threshold: U256,
     expected_height: u64,
     upgrade_lock: &crate::message::UpgradeLock<T, V>,
 ) -> anyhow::Result<Leaf2<T>> {
+    // Sort the leaf chain by view number
+    leaf_chain.sort_by_key(|l| l.view_number());
+    // Reverse it
+    leaf_chain.reverse();
+
     // Check we actually have a chain long enough for deciding
     if leaf_chain.len() < 3 {
         return Err(anyhow!("Leaf chain is not long enough for a decide"));
@@ -136,30 +141,21 @@ pub async fn verify_leaf_chain<T: NodeType, V: Versions>(
         ));
     }
 
+    // Get the stake table entries
+    let stake_table_entries = StakeTableEntries::<T>::from(stake_table.to_vec()).0;
+
     // verify all QCs are valid
     newest_leaf
         .justify_qc()
-        .is_valid_cert(
-            StakeTableEntries::<T>::from(stake_table.clone()).0,
-            success_threshold,
-            upgrade_lock,
-        )
+        .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)
         .await?;
     parent
         .justify_qc()
-        .is_valid_cert(
-            StakeTableEntries::<T>::from(stake_table.clone()).0,
-            success_threshold,
-            upgrade_lock,
-        )
+        .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)
         .await?;
     grand_parent
         .justify_qc()
-        .is_valid_cert(
-            StakeTableEntries::<T>::from(stake_table.clone()).0,
-            success_threshold,
-            upgrade_lock,
-        )
+        .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)
         .await?;
 
     // Verify the root is in the chain of decided leaves
@@ -168,11 +164,7 @@ pub async fn verify_leaf_chain<T: NodeType, V: Versions>(
         ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
         ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
         leaf.justify_qc()
-            .is_valid_cert(
-                StakeTableEntries::<T>::from(stake_table.clone()).0,
-                success_threshold,
-                upgrade_lock,
-            )
+            .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)
             .await?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
