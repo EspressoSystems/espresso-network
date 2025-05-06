@@ -909,7 +909,7 @@ mod tests {
 
     use alloy::{
         node_bindings::{Anvil, AnvilInstance},
-        primitives::U256,
+        primitives::{Address, U256},
     };
     use committable::{Commitment, Committable};
     use escargot::CargoBuild;
@@ -1430,5 +1430,155 @@ mod tests {
 
         drop(process);
         drop(alt_providers);
+    }
+    
+    #[tokio::test(flavor = "multi_thread")]
+    async fn slow_dev_node_predeployment_test() {
+        setup_test();
+        
+        // Setup ports
+        let builder_port = pick_unused_port().unwrap();
+        let api_port = pick_unused_port().unwrap();
+        let dev_node_port = pick_unused_port().unwrap();
+        
+        // Deploy contracts first using L1_Deployment::Dump mode
+        let instance = Anvil::new().chain_id(1).spawn();
+        let l1_url = instance.endpoint_url();
+        
+        // Create a temporary directory for the dump file
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let dump_file = tmp_dir.path().join("anvil-state-dump.json");
+        let dump_file_path = dump_file.to_str().unwrap();
+        
+        // Run the dev node in dump mode to generate contract information
+        let dump_process = CargoBuild::new()
+            .bin("espresso-dev-node")
+            .features("testing embedded-db")
+            .current_target()
+            .run()
+            .unwrap()
+            .command()
+            .env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
+            .env("ESPRESSO_SEQUENCER_API_PORT", api_port.to_string())
+            .env("ESPRESSO_SEQUENCER_ETH_MNEMONIC", TEST_MNEMONIC)
+            .env("ESPRESSO_DEPLOYER_ACCOUNT_INDEX", "0")
+            .env("ESPRESSO_DEV_NODE_L1_DEPLOYMENT", "dump")
+            .env("ESPRESSO_SEQUENCER_STORAGE_PATH", tmp_dir.path())
+            .output()
+            .unwrap();
+        
+        tracing::info!(
+            "Dump process completed: stdout={}, stderr={}", 
+            String::from_utf8_lossy(&dump_process.stdout),
+            String::from_utf8_lossy(&dump_process.stderr)
+        );
+        
+        // Extract the LightClientProxy address from the output
+        let output = String::from_utf8_lossy(&dump_process.stdout);
+        let proxy_address_pattern = r#""LightClientProxy": "(0x[0-9a-fA-F]+)""#;
+        let re = regex::Regex::new(proxy_address_pattern).unwrap();
+        let light_client_proxy_address = re
+            .captures(&output)
+            .expect("Failed to find LightClientProxy address in dump output")
+            .get(1)
+            .unwrap()
+            .as_str();
+        
+        tracing::info!("Found LightClientProxy address: {}", light_client_proxy_address);
+        let light_client_proxy_address: Address = light_client_proxy_address.parse().unwrap();
+        
+        // Now run the dev node in Skip mode, providing the contract addresses
+        let process = CargoBuild::new()
+            .bin("espresso-dev-node")
+            .features("testing embedded-db")
+            .current_target()
+            .run()
+            .unwrap()
+            .command()
+            .env("ESPRESSO_SEQUENCER_L1_PROVIDER", l1_url.to_string())
+            .env("ESPRESSO_BUILDER_PORT", builder_port.to_string())
+            .env("ESPRESSO_SEQUENCER_API_PORT", api_port.to_string())
+            .env("ESPRESSO_SEQUENCER_ETH_MNEMONIC", TEST_MNEMONIC)
+            .env("ESPRESSO_DEPLOYER_ACCOUNT_INDEX", "0")
+            .env("ESPRESSO_DEV_NODE_PORT", dev_node_port.to_string())
+            .env("ESPRESSO_DEV_NODE_L1_DEPLOYMENT", "skip")
+            .env("ESPRESSO_SEQUENCER_STORAGE_PATH", tmp_dir.path())
+            .env("ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS", "25")
+            .env("ESPRESSO_CONTRACT_LIGHT_CLIENT_PROXY", light_client_proxy_address.to_string())
+            .spawn()
+            .unwrap();
+            
+        let process = BackgroundProcess(process);
+
+        let api_client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        api_client.connect(None).await;
+
+        // Validate that the node started correctly
+        tracing::info!("waiting for blocks");
+        let blocks = api_client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(3)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+            
+        assert!(!blocks.is_empty(), "Expected to receive blocks from the node");
+
+        let dev_node_client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{dev_node_port}").parse().unwrap());
+        dev_node_client.connect(None).await;
+
+        // Check the dev node api
+        let dev_info = dev_node_client
+            .get::<DevInfo>("api/dev-info")
+            .send()
+            .await
+            .unwrap();
+
+        // Verify the light client address matches what we provided
+        assert_eq!(
+            dev_info.l1_light_client_address, 
+            light_client_proxy_address,
+            "Light client address mismatch"
+        );
+        
+        // Verify we can interact with the light client contract
+        let signer = MnemonicBuilder::<English>::default()
+            .phrase(TEST_MNEMONIC)
+            .index(0)
+            .unwrap()
+            .build()
+            .unwrap();
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(signer))
+            .on_http(l1_url.clone());
+
+        let light_client = LightClientV2Mock::new(light_client_proxy_address, &provider);
+
+        // Wait for the first commitment to verify the node is working correctly
+        let mut attempts = 0;
+        let max_attempts = 10;
+        while light_client
+            .getHotShotCommitment(U256::from(1))
+            .call()
+            .await
+            .is_err()
+        {
+            tracing::info!("waiting for commitment (attempt {}/{})", attempts + 1, max_attempts);
+            sleep(Duration::from_secs(3)).await;
+            attempts += 1;
+            if attempts >= max_attempts {
+                panic!("Failed to get HotShot commitment after {} attempts", max_attempts);
+            }
+        }
+        
+        // Success! The node is running and using the pre-deployed contracts
+        tracing::info!("Successfully verified pre-deployment feature is working");
+        
+        drop(process);
     }
 }
