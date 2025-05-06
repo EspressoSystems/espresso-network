@@ -124,7 +124,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
 
     justify_qc
         .is_valid_cert(
-            StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+            &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
             membership_success_threshold,
             upgrade_lock,
         )
@@ -1050,7 +1050,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
 
                 timeout_cert
                     .is_valid_cert(
-                        StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
                         membership_success_threshold,
                         &validation_info.upgrade_lock,
                     )
@@ -1076,7 +1076,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
                 // View sync certs must also be valid.
                 view_sync_cert
                     .is_valid_cert(
-                        StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
                         membership_success_threshold,
                         &validation_info.upgrade_lock,
                     )
@@ -1140,7 +1140,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 
     if let Err(e) = qc
         .is_valid_cert(
-            StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+            &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
             membership_success_threshold,
             upgrade_lock,
         )
@@ -1181,7 +1181,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
         // Validate the next epoch qc as well
         next_epoch_qc
             .is_valid_cert(
-                StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
+                &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
                 membership_next_success_threshold,
                 upgrade_lock,
             )

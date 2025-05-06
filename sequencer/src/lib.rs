@@ -474,7 +474,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     }
 
     // Create the list of parallel catchup providers
-    let state_catchup_providers = ParallelStateCatchup::new(&[], Duration::from_secs(1));
+    let state_catchup_providers = ParallelStateCatchup::new(&[]);
 
     // Add the state peers to the list
     let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
@@ -1162,7 +1162,7 @@ pub mod testing {
             let chain_config = state.chain_config.resolve().unwrap_or_default();
 
             // Create an empty list of catchup providers
-            let catchup_providers = ParallelStateCatchup::new(&[], Duration::from_millis(500));
+            let catchup_providers = ParallelStateCatchup::new(&[]);
 
             // If we have the state peers, add them
             if let Some(state_peers) = state_peers {

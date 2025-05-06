@@ -136,6 +136,15 @@ pub struct L1ClientOptions {
     )]
     pub l1_consecutive_failure_tolerance: usize,
 
+    /// Revert back to the first provider this duration after failing over.
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_L1_FAILOVER_REVERT",
+        default_value = "30m",
+        value_parser = parse_duration,
+    )]
+    pub l1_failover_revert: Duration,
+
     /// Amount of time to wait after receiving a 429 response before making more L1 RPC requests.
     ///
     /// If not set, the general l1-retry-delay will be used.
@@ -262,6 +271,8 @@ pub(crate) struct SingleTransport {
     pub(crate) generation: usize,
     pub(crate) client: Http<Client>,
     pub(crate) status: Arc<RwLock<SingleTransportStatus>>,
+    /// Time at which to revert back to the primary provider after a failover.
+    pub(crate) revert_at: Option<Instant>,
 }
 
 /// The status of a single transport
