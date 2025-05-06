@@ -54,7 +54,7 @@ mod persistence_tests {
     use committable::{Commitment, Committable};
     use espresso_types::{
         traits::{EventConsumer, NullEventConsumer, PersistenceOptions},
-        v0_3::StakeTableFetcher,
+        v0_3::{StakeTableFetcher, Validator},
         Event, L1Client, Leaf, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
         ValidatedState,
     };
@@ -86,6 +86,7 @@ mod persistence_tests {
         vid::avidm::{init_avidm_param, AvidMScheme},
         vote::HasViewNumber,
     };
+    use indexmap::IndexMap;
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
     use surf_disco::Client;
@@ -100,7 +101,7 @@ mod persistence_tests {
             Options,
         },
         testing::TestConfigBuilder,
-        SequencerApiVersion,
+        SequencerApiVersion, RECENT_STAKE_TABLES_LIMIT,
     };
 
     #[derive(Clone, Debug, Default)]
@@ -248,6 +249,35 @@ mod persistence_tests {
                 }
             ]
         );
+
+        // Store more than the limit
+        let total_epochs = RECENT_STAKE_TABLES_LIMIT + 10;
+        for i in 0..total_epochs {
+            let epoch = EpochNumber::new(i);
+            let drb = [i as u8; 32];
+            storage
+                .add_drb_result(epoch, drb)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to store DRB result for epoch {}", i));
+        }
+
+        let results = storage.load_start_epoch_info().await.unwrap();
+
+        // Check that only the most recent RECENT_STAKE_TABLES_LIMIT epochs are returned
+        assert_eq!(
+            results.len(),
+            RECENT_STAKE_TABLES_LIMIT as usize,
+            "Should return only the most recent {RECENT_STAKE_TABLES_LIMIT} epochs",
+        );
+
+        for (i, info) in results.iter().enumerate() {
+            let expected_epoch =
+                EpochNumber::new(total_epochs - RECENT_STAKE_TABLES_LIMIT + i as u64);
+            let expected_drb = [(total_epochs - RECENT_STAKE_TABLES_LIMIT + i as u64) as u8; 32];
+            assert_eq!(info.epoch, expected_epoch, "invalid epoch at index {i}",);
+            assert_eq!(info.drb_result, expected_drb, "invalid DRB at index {i}",);
+            assert!(info.block_header.is_none(), "Expected no block header");
+        }
     }
 
     fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
@@ -1380,6 +1410,56 @@ mod persistence_tests {
             assert!(l1 > prev_l1, "events not updated");
             prev_l1 = l1;
         }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    pub async fn test_membership_persistence<P: TestablePersistence>() -> anyhow::Result<()> {
+        setup_test();
+
+        let tmp = P::tmp_storage().await;
+        let mut opt = P::options(&tmp);
+
+        let storage = opt.create().await.unwrap();
+
+        let validator = Validator::mock();
+        let mut st = IndexMap::new();
+        st.insert(validator.account, validator);
+        storage
+            .store_stake(EpochNumber::new(10), st.clone())
+            .await?;
+
+        let table = storage.load_stake(EpochNumber::new(10)).await?.unwrap();
+        assert_eq!(st, table);
+
+        let val2 = Validator::mock();
+        let mut st2 = IndexMap::new();
+        st2.insert(val2.account, val2);
+        storage
+            .store_stake(EpochNumber::new(11), st2.clone())
+            .await?;
+
+        let tables = storage.load_latest_stake(4).await?.unwrap();
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(EpochNumber::new(11), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(10), st)), iter.next());
+        assert_eq!(None, iter.next());
+
+        for i in 0..=20 {
+            storage
+                .store_stake(EpochNumber::new(i), st2.clone())
+                .await?;
+        }
+
+        let tables = storage.load_latest_stake(5).await?.unwrap();
+        let mut iter = tables.iter();
+        assert_eq!(Some(&(EpochNumber::new(20), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(19), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(18), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(17), st2.clone())), iter.next());
+        assert_eq!(Some(&(EpochNumber::new(16), st2)), iter.next());
+        assert_eq!(None, iter.next());
 
         Ok(())
     }

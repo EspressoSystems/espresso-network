@@ -77,7 +77,7 @@ pub fn light_client_genesis_from_stake_table(
     st: &[PeerConfig<SeqTypes>],
     stake_table_capacity: usize,
 ) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let st_state = compute_stake_table_commitment(st, stake_table_capacity);
+    let st_state = compute_stake_table_commitment(st, stake_table_capacity)?;
     Ok((
         LightClientStateSol {
             viewNum: 0,

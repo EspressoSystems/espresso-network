@@ -103,7 +103,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         network: Arc<N>,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
-        stake_table_capacity: u64,
+        stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         _: V,
         marketplace_config: MarketplaceConfig<SeqTypes, Node<N, P>>,
@@ -126,12 +126,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             .load_consensus_state::<V>(instance_state.clone())
             .await?;
 
-        let stake_table_commit = compute_stake_table_commitment(
-            &config.known_nodes_with_stake,
-            stake_table_capacity
-                .try_into()
-                .context("stake table capacity out of range")?,
-        );
+        let stake_table_commit =
+            compute_stake_table_commitment(&config.known_nodes_with_stake, stake_table_capacity)?;
         let stake_table_epoch = None;
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(

@@ -16,7 +16,7 @@ use alloy::{
 };
 use anyhow::{anyhow, Result};
 use clap::{builder::OsStr, Parser};
-use derive_more::Display;
+use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
 
 pub mod builder;
@@ -142,7 +142,7 @@ impl From<Contract> for OsStr {
 }
 
 /// Cache of contracts predeployed or deployed during this current run.
-#[derive(Debug, Clone, Default)]
+#[derive(Deref, Debug, Clone, Default)]
 pub struct Contracts(HashMap<Contract, Address>);
 
 impl From<DeployedContracts> for Contracts {

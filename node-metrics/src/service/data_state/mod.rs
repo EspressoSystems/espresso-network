@@ -13,16 +13,11 @@ use hotshot_query_service::{
     explorer::{BlockDetail, ExplorerHeader, Timestamp},
     Resolvable,
 };
-use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
-    light_client::{CircuitField, StateVerKey},
     signature_key::BLSPubKey,
-    traits::{
-        block_contents::BlockHeader,
-        stake_table::{SnapshotVersion, StakeTableScheme},
-        BlockPayload, EncodeBytes,
-    },
+    traits::{block_contents::BlockHeader, BlockPayload, EncodeBytes},
     utils::epoch_from_block_number,
+    PeerConfig,
 };
 pub use location_details::LocationDetails;
 pub use node_identity::NodeIdentity;
@@ -47,7 +42,7 @@ pub const MAX_VOTERS_HISTORY: usize = 100;
 pub struct DataState {
     latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
     latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
-    stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
+    stake_table: Vec<PeerConfig<SeqTypes>>,
     // Do we need any other data at the moment?
     node_identity: Vec<NodeIdentity>,
 }
@@ -56,17 +51,12 @@ impl DataState {
     pub fn new(
         latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
         latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
-        stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
     ) -> Self {
-        let node_identity = {
-            let stake_table_iter_result = stake_table.try_iter(SnapshotVersion::Head);
-            match stake_table_iter_result {
-                Ok(into_iter) => into_iter
-                    .map(|(key, ..)| NodeIdentity::from_public_key(key))
-                    .collect(),
-                Err(_) => vec![],
-            }
-        };
+        let node_identity: Vec<_> = stake_table
+            .iter()
+            .map(|config| NodeIdentity::from_public_key(config.stake_table_entry.stake_key))
+            .collect();
 
         Self {
             latest_blocks,
@@ -88,7 +78,7 @@ impl DataState {
         self.latest_voters.iter()
     }
 
-    pub fn stake_table(&self) -> &StakeTable<BLSPubKey, StateVerKey, CircuitField> {
+    pub fn stake_table(&self) -> &Vec<PeerConfig<SeqTypes>> {
         &self.stake_table
     }
 
@@ -104,32 +94,18 @@ impl DataState {
     // and a list of removed public keys
     fn stake_table_differences(
         &self,
-        old_stake_table: &StakeTable<BLSPubKey, StateVerKey, CircuitField>,
-        stake_table: &StakeTable<BLSPubKey, StateVerKey, CircuitField>,
+        old_stake_table: &[PeerConfig<SeqTypes>],
+        stake_table: &[PeerConfig<SeqTypes>],
     ) -> (Vec<BLSPubKey>, Vec<BLSPubKey>) {
-        let old_stake_table_set = match old_stake_table.try_iter(SnapshotVersion::Head) {
-            Ok(into_iter) => into_iter.map(|(key, ..)| key).collect::<HashSet<_>>(),
-            Err(err) => {
-                tracing::error!(
-                    "replace_stake_table: error getting old stake table iterator: {}",
-                    err
-                );
+        let old_stake_table_set = old_stake_table
+            .iter()
+            .map(|config| config.stake_table_entry.stake_key)
+            .collect::<HashSet<_>>();
 
-                return (vec![], vec![]);
-            },
-        };
-
-        let new_stake_table_set = match stake_table.try_iter(SnapshotVersion::Head) {
-            Ok(into_iter) => into_iter.map(|(key, ..)| key).collect::<HashSet<_>>(),
-            Err(err) => {
-                tracing::error!(
-                    "replace_stake_table: error getting new stake table iterator: {}",
-                    err
-                );
-
-                return (vec![], vec![]);
-            },
-        };
+        let new_stake_table_set = stake_table
+            .iter()
+            .map(|config| config.stake_table_entry.stake_key)
+            .collect::<HashSet<_>>();
 
         let added_public_keys = new_stake_table_set
             .difference(&old_stake_table_set)
@@ -159,10 +135,7 @@ impl DataState {
         (added_public_keys, removed_public_keys)
     }
 
-    pub fn replace_stake_table(
-        &mut self,
-        stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
-    ) {
+    pub fn replace_stake_table(&mut self, stake_table: Vec<PeerConfig<SeqTypes>>) {
         let old_stake_table = std::mem::replace(&mut self.stake_table, stake_table.clone());
 
         let current_identity_set = self
@@ -349,7 +322,7 @@ async fn perform_stake_table_epoch_check_and_update(
                 tracing::debug!(
                     "replacing stake table for epoch {}, new table contains {} entries",
                     upcoming_epoch,
-                    next_stake_table.len(SnapshotVersion::Head).unwrap_or(0),
+                    next_stake_table.len(),
                 );
                 // Update the stake table
                 let mut data_state_write_lock_guard = data_state.write().await;
@@ -428,14 +401,11 @@ where
     let mut data_state_write_lock_guard = data_state.write().await;
 
     let stake_table = &data_state_write_lock_guard.stake_table;
-    let stable_table_entries_vec = stake_table
-        .try_iter(SnapshotVersion::Head)
-        .map_or(vec![], |into_iter| into_iter.collect::<Vec<_>>());
 
     // We have a BitVec of voters who signed the QC.
     // We can use this to determine the weight of the QC
     let stake_table_entry_voter_participation_and_entries_pairs =
-        zip(stake_table_voters_bit_vec, stable_table_entries_vec);
+        zip(stake_table_voters_bit_vec, stake_table.iter());
     let stake_table_keys_that_voted = stake_table_entry_voter_participation_and_entries_pairs
         .filter(|(bit_ref, _)| *bit_ref)
         .map(|(_, entry)| {
@@ -443,8 +413,7 @@ where
             // In this case, we just want to determine who voted for this
             // Leaf.
 
-            let (key, ..): (BLSPubKey, _, _) = entry;
-            key
+            entry.stake_table_entry.stake_key
         });
 
     let voters_set: HashSet<BLSPubKey> = stake_table_keys_that_voted.collect();

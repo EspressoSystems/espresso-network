@@ -7,7 +7,7 @@ use espresso_contract_deployer::{
     Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
+use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use tide_disco::error::ServerError;
 use url::Url;

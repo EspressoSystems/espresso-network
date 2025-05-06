@@ -9,18 +9,12 @@ use alloy::{
     signers::local::PrivateKeySigner,
 };
 use anyhow::Result;
-use espresso_contract_deployer::{
-    build_provider, build_random_provider, build_signer, HttpProviderWithWallet,
-};
+use espresso_contract_deployer::{build_provider, build_random_provider, build_signer};
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::EspToken::{self, EspTokenErrors},
 };
-use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::{
-    light_client::{CircuitField, StateKeyPair, StateVerKey},
-    signature_key::{BLSKeyPair, BLSPubKey},
-};
+use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use url::Url;
@@ -32,12 +26,10 @@ use crate::{
     Config,
 };
 
-pub type StakeTableVecBased = StakeTable<BLSPubKey, StateVerKey, CircuitField>;
-
 /// Setup validator by sending them tokens and ethers, and registering them on stake table
 pub async fn setup_stake_table_contract_for_test(
     rpc_url: Url,
-    token_holder: &HttpProviderWithWallet,
+    token_holder: &(impl Provider + WalletProvider),
     stake_table_address: Address,
     token_address: Address,
     validators: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
@@ -45,8 +37,7 @@ pub async fn setup_stake_table_contract_for_test(
 ) -> Result<()> {
     tracing::info!(%stake_table_address, "staking to stake table contract for demo");
 
-    let token_holder_addr =
-        <HttpProviderWithWallet as WalletProvider>::default_signer_address(token_holder);
+    let token_holder_addr = token_holder.default_signer_address();
 
     tracing::info!("ESP token address: {token_address}");
     let token = EspToken::new(token_address, token_holder);
@@ -166,7 +157,7 @@ pub async fn setup_stake_table_contract_for_test(
 async fn add_multiple_delegators(
     rpc_url: &Url,
     validator_address: Address,
-    token_holder: &HttpProviderWithWallet,
+    token_holder: &(impl Provider + WalletProvider),
     stake_table_address: Address,
     token_address: Address,
     rng: &mut ChaCha20Rng,

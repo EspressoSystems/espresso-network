@@ -35,7 +35,6 @@ use hotshot_types::{
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StateSignatureKey,
-        stake_table::StakeTableError,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
@@ -103,7 +102,8 @@ impl ProverServiceState {
         let stake_table = fetch_stake_table_from_sequencer(&config.sequencer_url, None)
             .await
             .with_context(|| "Failed to initialize stake table")?;
-        let st_state = compute_stake_table_commitment(&stake_table, config.stake_table_capacity);
+        let st_state = compute_stake_table_commitment(&stake_table, config.stake_table_capacity)
+            .with_context(|| "Failed to compute stake table commitment")?;
         Ok(Self {
             config,
             epoch: None,
@@ -121,7 +121,8 @@ impl ProverServiceState {
                 .await
                 .with_context(|| format!("Failed to update stake table for epoch: {:?}", epoch))?;
             self.st_state =
-                compute_stake_table_commitment(&self.stake_table, self.config.stake_table_capacity);
+                compute_stake_table_commitment(&self.stake_table, self.config.stake_table_capacity)
+                    .with_context(|| "Failed to compute stake table commitment")?;
             self.epoch = epoch;
         }
         Ok(())
@@ -646,8 +647,6 @@ pub enum ProverError {
     ContractError(anyhow::Error),
     /// Error when communicating with the state relay server: {0}
     RelayServerError(ServerError),
-    /// Internal error with the stake table: {0}
-    StakeTableError(StakeTableError),
     /// Internal error when generating the SNARK proof: {0}
     PlonkError(PlonkError),
     /// Internal error: {0}
@@ -665,12 +664,6 @@ impl From<ServerError> for ProverError {
 impl From<PlonkError> for ProverError {
     fn from(err: PlonkError) -> Self {
         Self::PlonkError(err)
-    }
-}
-
-impl From<StakeTableError> for ProverError {
-    fn from(err: StakeTableError) -> Self {
-        Self::StakeTableError(err)
     }
 }
 

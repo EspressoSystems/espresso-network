@@ -31,12 +31,10 @@ use hotshot_builder_api::v0_99::builder::{
     BuildError, Error as BuilderApiError, Options as HotshotBuilderApiOptions,
 };
 use hotshot_orchestrator::client::{OrchestratorClient, ValidatorArgs};
-// Should move `STAKE_TABLE_CAPACITY` in the sequencer repo when we have variate stake table support
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     event::LeafInfo,
-    light_client::StateKeyPair,
+    light_client::{StateKeyPair, STAKE_TABLE_CAPACITY},
     network::NetworkConfig,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{

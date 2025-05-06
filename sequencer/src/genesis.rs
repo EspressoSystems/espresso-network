@@ -15,7 +15,7 @@ use vbs::version::Version;
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct StakeTableConfig {
-    pub capacity: u64,
+    pub capacity: usize,
 }
 
 /// An L1 block from which an Espresso chain should start syncing.

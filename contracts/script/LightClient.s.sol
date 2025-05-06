@@ -148,6 +148,57 @@ contract LightClientContractUpgradeToV2Script is Script {
 
 /// @notice Upgrades the light client contract first by deploying the new implementation
 /// and then executing the upgrade via the Safe Multisig wallet using the SAFE SDK.
+contract LightClientContractUpgradeToSameVersionScript is Script {
+    /// @dev First the new implementation contract is deployed via the deployer wallet.
+    /// It then uses the SAFE SDK via an ffi command to perform the upgrade through a Safe Multisig
+    /// wallet.
+    function run() public returns (address implementationAddress, bytes memory result) {
+        // get the deployer to deploy the new implementation contract
+        address deployer;
+        string memory ledgerCommand = vm.envString("USE_HARDWARE_WALLET");
+        if (keccak256(bytes(ledgerCommand)) == keccak256(bytes("true"))) {
+            deployer = vm.envAddress("DEPLOYER_HARDWARE_WALLET_ADDRESS");
+        } else {
+            // get the deployer info from the environment
+            string memory seedPhrase = vm.envString("DEPLOYER_MNEMONIC");
+            uint32 seedPhraseOffset = uint32(vm.envUint("DEPLOYER_MNEMONIC_OFFSET"));
+            (deployer,) = deriveRememberKey(seedPhrase, seedPhraseOffset);
+        }
+
+        vm.startBroadcast(deployer);
+
+        // deploy the new implementation contract
+        LC implementationContract = new LC();
+
+        vm.stopBroadcast();
+
+        // no initlaization needed for this upgrade as it's the same version
+        bytes memory initData = "";
+
+        // call upgradeToAndCall command so that the proxy can be upgraded to call from the new
+        // implementation above and
+        // execute the command via the Safe Multisig wallet
+        string[] memory cmds = new string[](3);
+        cmds[0] = "bash";
+        cmds[1] = "-c";
+        cmds[2] = string(
+            abi.encodePacked(
+                "source .env.contracts && ts-node contracts/script/multisigTransactionProposals/safeSDK/upgradeProxy.ts upgradeProxy ",
+                vm.toString(vm.envAddress("LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS")),
+                " ",
+                vm.toString(address(implementationContract)),
+                " ",
+                vm.toString(initData)
+            )
+        );
+
+        result = vm.ffi(cmds);
+        return (address(implementationContract), result);
+    }
+}
+
+/// @notice Upgrades the light client contract first by deploying the new implementation
+/// and then executing the upgrade via the Safe Multisig wallet using the SAFE SDK.
 contract LightClientContractUpgradeToV2PatchScript is Script {
     /// @dev First the new implementation contract is deployed via the deployer wallet.
     /// It then uses the SAFE SDK via an ffi command to perform the upgrade through a Safe Multisig
