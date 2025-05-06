@@ -38,7 +38,7 @@ use crate::{
 };
 
 pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 3;
-pub type AlloyFillProvider = FillProvider<
+type AlloyFillProvider = FillProvider<
     JoinFill<
         JoinFill<
             Identity,
