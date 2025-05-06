@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{sync::Arc, time::Duration};
+use std::{sync::{Arc, atomic::Ordering}, time::Duration};
 
 use futures::StreamExt;
 use hotshot::tasks::task_state::CreateTaskState;
@@ -152,7 +152,7 @@ async fn test_da_task_storage_failure() {
         build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
 
     // Set the error flag here for the system handle. This causes it to emit an error on append.
-    handle.storage().write().await.should_return_err = true;
+    handle.storage().should_return_err.store( true, Ordering::Relaxed);
     let membership = handle.hotshot.membership_coordinator.clone();
     let default_version = Version { major: 0, minor: 0 };
 

@@ -153,7 +153,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
 pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership: &Arc<RwLock<TYPES::Membership>>,
     epoch: TYPES::Epoch,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
     drb_result: DrbResult,
 ) {
@@ -161,12 +161,7 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     consensus_writer.drb_results.store_result(epoch, drb_result);
     drop(consensus_writer);
     tracing::debug!("Calling add_drb_result for epoch {epoch}");
-    if let Err(e) = storage
-        .write()
-        .await
-        .add_drb_result(epoch, drb_result)
-        .await
-    {
+    if let Err(e) = storage.add_drb_result(epoch, drb_result).await {
         tracing::error!("Failed to store drb result for epoch {epoch}: {e}");
     }
 
@@ -177,7 +172,7 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     seed: DrbSeedInput,
     epoch: TYPES::Epoch,
     membership: &Arc<RwLock<TYPES::Membership>>,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
 ) {
     let membership = membership.clone();
@@ -199,7 +194,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     decided_leaf: &Leaf2<TYPES>,
     epoch_height: u64,
     membership: &Arc<RwLock<TYPES::Membership>>,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
 ) {
     let decided_block_number = decided_leaf.block_header().block_number();
@@ -211,8 +206,6 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
         let mut start = Instant::now();
         if let Err(e) = storage
-            .write()
-            .await
             .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
             .await
         {
@@ -311,7 +304,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
     membership: &EpochMembershipCoordinator<TYPES>,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let mut res = LeafChainTraversalOutcome::default();
     let consensus_reader = consensus.read().await;
@@ -453,7 +446,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
     membership: &Arc<RwLock<TYPES::Membership>>,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
     epoch_height: u64,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let consensus_reader = consensus.read().await;
@@ -685,8 +678,6 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         );
         if let Err(e) = validation_info
             .storage
-            .write()
-            .await
             .update_high_qc2(justify_qc.clone())
             .await
         {
@@ -702,8 +693,6 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
             };
             if let Err(e) = validation_info
                 .storage
-                .write()
-                .await
                 .update_state_cert(state_cert.clone())
                 .await
             {
@@ -718,8 +707,6 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
             if let Err(e) = validation_info
                 .storage
-                .write()
-                .await
                 .update_next_epoch_high_qc2(next_epoch_justify_qc.clone())
                 .await
             {

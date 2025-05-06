@@ -48,7 +48,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
-    traits::{election::Membership, network::Topic},
+    traits::{election::Membership, network::Topic, storage::storage_add_drb_result},
     HotShotConfig, PeerConfig,
 };
 use tracing_subscriber::EnvFilter;
@@ -245,6 +245,7 @@ async fn init_consensus(
                 let storage: TestStorage<MockTypes> = TestStorage::default();
                 let coordinator = EpochMembershipCoordinator::new(
                     Arc::new(RwLock::new(membership)),
+                    Some(storage_add_drb_result(storage.clone())),
                     config.epoch_height,
                 );
 

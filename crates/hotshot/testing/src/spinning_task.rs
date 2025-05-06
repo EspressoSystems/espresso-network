@@ -254,22 +254,20 @@ where
                                 let marketplace_config =
                                     node.handle.hotshot.marketplace_config.clone();
 
-                                let read_storage = storage.read().await;
-                                let next_epoch_high_qc =
-                                    read_storage.next_epoch_high_qc_cloned().await;
-                                let start_view = read_storage.last_actioned_view().await;
-                                let start_epoch = read_storage.last_actioned_epoch().await;
-                                let high_qc = read_storage.high_qc_cloned().await.unwrap_or(
+                                let next_epoch_high_qc = storage.next_epoch_high_qc_cloned().await;
+                                let start_view = storage.last_actioned_view().await;
+                                let start_epoch = storage.last_actioned_epoch().await;
+                                let high_qc = storage.high_qc_cloned().await.unwrap_or(
                                     QuorumCertificate2::genesis::<V>(
                                         &TestValidatedState::default(),
                                         &TestInstanceState::default(),
                                     )
                                     .await,
                                 );
-                                let state_cert = read_storage.state_cert_cloned().await;
-                                let saved_proposals = read_storage.proposals_cloned().await;
+                                let state_cert = storage.state_cert_cloned().await;
+                                let saved_proposals = storage.proposals_cloned().await;
                                 let mut vid_shares = BTreeMap::new();
-                                for (view, hash_map) in read_storage.vids_cloned().await {
+                                for (view, hash_map) in storage.vids_cloned().await {
                                     let mut converted_hash_map = HashMap::new();
                                     for (key, proposal) in hash_map {
                                         converted_hash_map
@@ -283,7 +281,7 @@ where
                                     vid_shares.insert(view, converted_hash_map);
                                 }
                                 let decided_upgrade_certificate =
-                                    read_storage.decided_upgrade_certificate().await;
+                                    storage.decided_upgrade_certificate().await;
 
                                 let initializer = HotShotInitializer::<TYPES>::load(
                                     TestInstanceState::new(self.async_delay_config.clone()),
@@ -315,7 +313,7 @@ where
                                         initializer,
                                         config,
                                         validator_config,
-                                        (*read_storage).clone(),
+                                        storage.clone(),
                                         marketplace_config.clone(),
                                         internal_chan,
                                         (

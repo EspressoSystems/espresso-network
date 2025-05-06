@@ -59,7 +59,7 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub hotshot: Arc<SystemContext<TYPES, I, V>>,
 
     /// Reference to the internal storage for consensus datum.
-    pub(crate) storage: Arc<RwLock<I::Storage>>,
+    pub(crate) storage: I::Storage,
 
     /// Networks used by the instance of hotshot
     pub network: Arc<I::Network>,
@@ -341,7 +341,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     /// Provides a reference to the underlying storage for this [`SystemContext`], allowing access to
     /// historical data
     #[must_use]
-    pub fn storage(&self) -> Arc<RwLock<I::Storage>> {
-        Arc::clone(&self.storage)
+    pub fn storage(&self) -> I::Storage {
+        self.storage.clone()
     }
 }
