@@ -280,7 +280,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                             maybe_current_epoch_vid_share = Some(other_vid_share);
                         }
                         if leaf.block_header().payload_commitment()
-                            == maybe_current_epoch_vid_share
+                            != maybe_current_epoch_vid_share
                                 .unwrap()
                                 .data
                                 .payload_commitment()
