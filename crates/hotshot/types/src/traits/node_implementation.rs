@@ -24,7 +24,6 @@ use url::Url;
 use vbs::version::StaticVersionType;
 
 use super::{
-    auction_results_provider::AuctionResultsProvider,
     block_contents::{BlockHeader, TestableBlock, Transaction},
     network::{
         AsyncGenerator, ConnectedNetwork, NetworkReliability, TestableNetworkingImplementation,
@@ -43,14 +42,6 @@ use crate::{
     upgrade_config::UpgradeConstants,
 };
 
-/// This trait guarantees that a particular type has urls that can be extracted from it. This trait
-/// essentially ensures that the results returned by the [`AuctionResultsProvider`] trait includes a
-/// list of urls for the builders that HotShot must request from.
-pub trait HasUrls {
-    /// Returns the builder url associated with the datatype
-    fn urls(&self) -> Vec<Url>;
-}
-
 /// Node implementation aggregate trait
 ///
 /// This trait exists to collect multiple behavior implementations into one type, to allow
@@ -66,9 +57,6 @@ pub trait NodeImplementation<TYPES: NodeType>:
 
     /// Storage for DA layer interactions
     type Storage: Storage<TYPES>;
-
-    /// The auction results type for Solver interactions
-    type AuctionResultsProvider: AuctionResultsProvider<TYPES>;
 }
 
 /// extra functions required on a node implementation to be usable by hotshot-testing
@@ -217,17 +205,6 @@ pub trait NodeType:
     type View: ConsensusTime + Display;
     /// Same as above but for epoch.
     type Epoch: ConsensusTime + Display;
-    /// The AuctionSolverResult is a type that holds the data associated with a particular solver
-    /// run, for a particular view.
-    type AuctionResult: Debug
-        + HasUrls
-        + DeserializeOwned
-        + Default
-        + PartialEq
-        + Eq
-        + Clone
-        + Send
-        + Sync;
     /// The block header type that this hotshot setup is using.
     type BlockHeader: BlockHeader<Self>;
     /// The block type that this hotshot setup is using.
