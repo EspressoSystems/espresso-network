@@ -8,7 +8,7 @@ use vbs::version::StaticVersionType;
 #[derive(Parser)]
 struct Args {
     /// Port to run the server on.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "ESPRESSO_STATE_RELAY_SERVER_PORT",
@@ -18,7 +18,7 @@ struct Args {
 
     /// URL of a sequencer node that is currently providing the HotShot config.
     /// This is used to initialize the stake table.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_URL",
         default_value = "http://localhost:24000"
@@ -26,10 +26,10 @@ struct Args {
     pub sequencer_url: Url,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    #[arg(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 
