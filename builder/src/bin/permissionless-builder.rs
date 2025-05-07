@@ -126,9 +126,8 @@ async fn main() -> anyhow::Result<()> {
         }
         #[cfg(feature = "pos")]
         (espresso_types::EpochVersion::VERSION, _) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::MarketplaceVersion>>(
-                genesis, opt
-                // Specifying V0_0 disables upgrades
+            run::<SequencerVersions<espresso_types::EpochVersion, espresso_types::V0_0>>(
+                genesis, opt,
             )
             .await
         }
