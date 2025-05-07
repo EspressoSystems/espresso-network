@@ -3600,13 +3600,7 @@ mod test {
             let epoch = EpochNumber::new(epoch_num);
             let membership_for_epoch = coordinator.membership_for_epoch(Some(epoch)).await;
             if membership_for_epoch.is_err() {
-                loop {
-                    if coordinator.wait_for_catchup(epoch).await.is_ok() {
-                        break;
-                    }
-
-                    sleep(Duration::from_secs(1)).await;
-                }
+                coordinator.wait_for_catchup(epoch).await.unwrap();
             }
 
             println!("have stake table for epoch = {epoch_num}");
