@@ -31,7 +31,6 @@ env:
     target/release/espresso-bridge
     target/release/espresso-dev-node
     target/release/keygen
-    target/release/marketplace-builder
     target/release/marketplace-solver
     target/release/nasty-client
     target/release/node-metrics
@@ -132,7 +131,6 @@ jobs:
           - deploy
           - dev-rollup
           - espresso-dev-node
-          - marketplace-builder
           - marketplace-solver
           - nasty-client
           - node-validator

@@ -33,7 +33,6 @@ members = [
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
-    "marketplace-builder",
     "marketplace-solver",
     "node-metrics",
     "request-response",

@@ -7225,43 +7225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "marketplace-builder"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.0",
- "async-trait",
- "clap 4.5.34",
- "committable",
- "espresso-types",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-events-service",
- "hotshot-orchestrator",
- "hotshot-query-service",
- "hotshot-types",
- "jf-merkle-tree 0.1.0",
- "jf-signature 0.2.0",
- "marketplace-builder-core",
- "marketplace-builder-shared",
- "marketplace-solver",
- "portpicker",
- "sequencer",
- "sequencer-utils",
- "surf",
- "surf-disco",
- "tempfile",
- "tide-disco",
- "tokio",
- "tracing",
- "url",
- "vbs",
-]
-
-[[package]]
 name = "marketplace-builder-core"
 version = "0.1.0"
 dependencies = [
