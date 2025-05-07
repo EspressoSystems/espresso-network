@@ -5,11 +5,9 @@ use clap::Parser;
 use espresso_types::traits::SequencerPersistence;
 #[allow(unused_imports)]
 use espresso_types::{
-    traits::NullEventConsumer, FeeVersion, MarketplaceVersion, SequencerVersions,
-    SolverAuctionResultsProvider, V0_0,
+    traits::NullEventConsumer, FeeVersion, SequencerVersions, SolverAuctionResultsProvider, V0_0,
 };
 use futures::future::FutureExt;
-use hotshot::MarketplaceConfig;
 use hotshot_types::traits::{metrics::NoMetrics, node_implementation::Versions};
 use vbs::version::StaticVersionType;
 
@@ -172,14 +170,6 @@ where
         libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
     };
 
-    let marketplace_config = MarketplaceConfig {
-        auction_results_provider: Arc::new(SolverAuctionResultsProvider {
-            url: opt.auction_results_solver_url,
-            marketplace_path: opt.marketplace_solver_path,
-            results_path: opt.auction_results_path,
-        }),
-        fallback_builder_url: opt.fallback_builder_url,
-    };
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
     let persistence = storage_opt.create().await?;
@@ -232,7 +222,6 @@ where
                             consumer,
                             opt.is_da,
                             opt.identity,
-                            marketplace_config,
                             proposal_fetcher_config,
                         )
                         .await
@@ -253,7 +242,6 @@ where
                 NullEventConsumer,
                 opt.is_da,
                 opt.identity,
-                marketplace_config,
                 proposal_fetcher_config,
             )
             .await?
