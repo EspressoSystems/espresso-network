@@ -65,7 +65,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
         tracing::info!("Builder client connected to the hotshot events API");
 
         Ok(client
-            .socket("hotshot-events/v1/events")
+            .socket("hotshot-events/events")
             .subscribe::<Event<Types>>()
             .await?)
     }
@@ -224,7 +224,7 @@ mod tests {
         };
         let api = define_api::<MockEventsSource, _, MockVersion>(
             &Default::default(),
-            "0.0.1".parse().unwrap(),
+            "1.0.0".parse().unwrap(),
         )
         .unwrap();
 

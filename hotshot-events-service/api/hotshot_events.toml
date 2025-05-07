@@ -26,13 +26,6 @@ NAME = "hotshot_events_service"
 DESCRIPTION = ""
 FORMAT_VERSION = "0.1.0"
 
-[route.v1_events]
-PATH = ["v1/events"]
-METHOD = "SOCKET"
-DOC = """
-Get hotshot events starting now.
-"""
-
 [route.events]
 PATH = ["events"]
 METHOD = "SOCKET"

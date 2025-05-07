@@ -307,7 +307,7 @@ mod test {
         events_service_client.connect(None).await;
 
         let subscribed_events = events_service_client
-            .socket("hotshot-events/v1/events")
+            .socket("hotshot-events/events")
             .subscribe::<hotshot_types::event::Event<SeqTypes>>()
             .await
             .unwrap()

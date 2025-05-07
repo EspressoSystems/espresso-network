@@ -2951,7 +2951,7 @@ mod test {
         let _network = TestNetwork::new(config, MockSequencerVersions::new()).await;
 
         let mut subscribed_events = client
-            .socket("hotshot-events/v1/events")
+            .socket("hotshot-events/events")
             .subscribe::<Event<SeqTypes>>()
             .await
             .unwrap();
@@ -3029,7 +3029,7 @@ mod test {
         let _network = TestNetwork::new(config, PosVersion::new()).await;
 
         let mut subscribed_events = client
-            .socket("hotshot-events/v1/events")
+            .socket("hotshot-events/events")
             .subscribe::<Event<SeqTypes>>()
             .await
             .unwrap();

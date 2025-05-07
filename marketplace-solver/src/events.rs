@@ -36,7 +36,7 @@ impl EventsServiceClient {
     {
         let stream = self
             .0
-            .socket("v1/events")
+            .socket("events")
             .subscribe::<Event<SeqTypes>>()
             .await
             .context("failed to get event stream")?;
@@ -158,14 +158,24 @@ pub mod mock {
         let mut app =
             App::<_, hotshot_events_service::events::Error>::with_state(events_streamer.clone());
 
-        let hotshot_events_api = hotshot_events_service::events::define_api::<_, _, StaticVer01>(
-            &Default::default(),
-            "0.0.1".parse().unwrap(),
-        )
-        .expect("Failed to define hotshot eventsAPI");
+        let hotshot_events_api_v0 =
+            hotshot_events_service::events::define_api::<_, _, StaticVer01>(
+                &Default::default(),
+                "0.0.1".parse().unwrap(),
+            )
+            .expect("Failed to define hotshot events API v0");
 
-        app.register_module("events_api", hotshot_events_api)
-            .expect("Failed to register hotshot events API");
+        let hotshot_events_api_v1 =
+            hotshot_events_service::events::define_api::<_, _, StaticVer01>(
+                &Default::default(),
+                "1.0.0".parse().unwrap(),
+            )
+            .expect("Failed to define hotshot events API v1");
+
+        app.register_module("events_api", hotshot_events_api_v0)
+            .expect("Failed to register hotshot events API v0")
+            .register_module("events_api", hotshot_events_api_v1)
+            .expect("Failed to register hotshot events API v1");
 
         // cleanup with a function that takes in a a future
         let events_api_handle = spawn({

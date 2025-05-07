@@ -497,7 +497,7 @@ mod test {
         >::new(urls.event.clone());
         events_service_client.connect(None).await;
         let mut events = events_service_client
-            .socket("hotshot-events/v1/events")
+            .socket("hotshot-events/events")
             .subscribe::<Event>()
             .await
             .unwrap();
