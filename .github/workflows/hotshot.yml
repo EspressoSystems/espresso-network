@@ -14,36 +14,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: taiki-e/install-action@just
+      - id: set-matrix
+        run: echo "matrix=$(just hotshot::matrix)" >> "$GITHUB_OUTPUT"
   test:
     strategy:
-      matrix:
-        test_suites:
-          - test-ci test_epoch_success_catchup_types
-          - test-ci test_epoch_success_overlap_2_f
-          - test-ci test_epoch_success_overlap_2f_plus_1
-          - test-ci test_epoch_success_overlap_3f
-          - test-ci test_epoch_success_overlap_dynamic
-          - test-ci test_epoch_success_overlap_f
-          - test-ci test_epoch_success_overlap_f_plus_1
-          - test-ci test_epoch_success_types
-          - test-ci test_epoch_success_types_randomized_leader
-          - test-ci tests_1
-          - test-ci tests_10
-          - test-ci tests_2
-          - test-ci tests_3
-          - test-ci tests_4
-          - test-ci tests_5
-          - test-ci tests_6
-          - test-ci tests_7
-          - test-ci tests_8
-          - test-ci tests_epoch_1
-          - test-ci tests_epoch_3
-          - test-ci tests_epoch_4
-          - test-ci tests_epoch_5
-          - test-ci tests_epoch_6
-          - test-ci tests_epoch_7
-          - test-ci tests_epoch_8
-          - test-ci-rest
+      matrix: ${{ fromJson(needs.build-matrix.outputs.matrix) }}
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
