@@ -57,16 +57,6 @@ pub async fn main() -> anyhow::Result<()> {
             )
             .await
         },
-        #[cfg(all(feature = "fee", feature = "marketplace"))]
-        (FeeVersion::VERSION, espresso_types::MarketplaceVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<FeeVersion, MarketplaceVersion>::new(),
-            )
-            .await
-        },
         #[cfg(feature = "fee")]
         (FeeVersion::VERSION, _) => {
             run(
@@ -74,17 +64,6 @@ pub async fn main() -> anyhow::Result<()> {
                 modules,
                 opt,
                 SequencerVersions::<FeeVersion, espresso_types::V0_0>::new(),
-            )
-            .await
-        },
-        #[cfg(feature = "marketplace")]
-        (espresso_types::MarketplaceVersion::VERSION, _) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<espresso_types::MarketplaceVersion, espresso_types::V0_0>::new(
-                ),
             )
             .await
         },

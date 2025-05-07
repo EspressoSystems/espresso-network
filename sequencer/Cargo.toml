@@ -21,7 +21,6 @@ sqlite-unbundled = [
 ]
 fee = []
 pos = []
-marketplace = []
 
 [[bin]]
 name = "espresso-dev-node"
