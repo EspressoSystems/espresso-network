@@ -281,6 +281,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                         }
                         if leaf.block_header().payload_commitment()
                             != maybe_current_epoch_vid_share
+                                .as_ref()
                                 .unwrap()
                                 .data
                                 .payload_commitment()
