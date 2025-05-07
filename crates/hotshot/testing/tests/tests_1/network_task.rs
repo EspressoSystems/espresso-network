@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{sync::Arc, time::Duration};
+use std::{sync::{Arc, atomic::Ordering}, time::Duration};
 
 use async_broadcast::Sender;
 use async_lock::RwLock;
@@ -22,7 +22,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{ConsensusTime, NodeType},storage::storage_add_drb_result
     },
 };
 use tokio::time::timeout;
@@ -50,7 +50,7 @@ async fn test_network_task() {
 
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
 
-    let storage = Arc::new(RwLock::new((launcher.resource_generators.storage)(node_id)));
+    let storage = (launcher.resource_generators.storage)(node_id);
     let consensus = OuterConsensus::new(handle.hotshot.consensus());
     let config = (launcher.resource_generators.hotshot_config)(node_id);
     let validator_config = (launcher.resource_generators.validator_config)(node_id);
@@ -62,7 +62,7 @@ async fn test_network_task() {
         all_nodes.clone(),
         all_nodes,
     )));
-    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height);
+    let coordinator = EpochMembershipCoordinator::new(membership, Some(storage_add_drb_result(storage.clone())),config.epoch_height);
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             id: node_id,
@@ -226,8 +226,8 @@ async fn test_network_storage_fail() {
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
 
     let consensus = OuterConsensus::new(handle.hotshot.consensus());
-    let storage = Arc::new(RwLock::new((launcher.resource_generators.storage)(node_id)));
-    storage.write().await.should_return_err = true;
+    let storage = (launcher.resource_generators.storage)(node_id);
+    storage.should_return_err.store( true, Ordering::Relaxed);
     let config = (launcher.resource_generators.hotshot_config)(node_id);
     let validator_config = (launcher.resource_generators.validator_config)(node_id);
     let public_key = validator_config.public_key;
@@ -238,7 +238,7 @@ async fn test_network_storage_fail() {
         all_nodes.clone(),
         all_nodes,
     )));
-    let coordinator = EpochMembershipCoordinator::new(membership, config.epoch_height);
+    let coordinator = EpochMembershipCoordinator::new(membership, Some(storage_add_drb_result(storage.clone())),config.epoch_height);
     let network_state: NetworkEventTaskState<TestTypes, TestVersions, MemoryNetwork<_>, _> =
         NetworkEventTaskState {
             id: node_id,

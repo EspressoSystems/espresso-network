@@ -156,7 +156,7 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     pub id: u64,
 
     /// Reference to the internal storage for consensus datum.
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// shared lock for upgrade information
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -186,7 +186,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
             anchored_leaf: self.anchored_leaf.clone(),
             internal_event_stream: self.internal_event_stream.clone(),
             id: self.id,
-            storage: Arc::clone(&self.storage),
+            storage: self.storage.clone(),
             upgrade_lock: self.upgrade_lock.clone(),
             marketplace_config: self.marketplace_config.clone(),
         }
@@ -390,7 +390,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             output_event_stream: (external_tx.clone(), external_rx.clone().deactivate()),
             external_event_stream: (external_tx, external_rx.deactivate()),
             anchored_leaf: anchored_leaf.clone(),
-            storage: Arc::new(RwLock::new(storage)),
+            storage,
             upgrade_lock,
             marketplace_config,
         });
@@ -701,7 +701,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             output_event_stream: output_event_stream.clone(),
             internal_event_stream: internal_event_stream.clone(),
             hotshot: self.clone().into(),
-            storage: Arc::clone(&self.storage),
+            storage: self.storage.clone(),
             network: Arc::clone(&self.network),
             membership_coordinator: self.membership_coordinator.clone(),
             epoch_height: self.config.epoch_height,
@@ -886,7 +886,7 @@ where
             output_event_stream: left_external_event_stream.clone(),
             internal_event_stream: left_internal_event_stream.clone(),
             hotshot: Arc::clone(&left_system_context),
-            storage: Arc::clone(&left_system_context.storage),
+            storage: left_system_context.storage.clone(),
             network: Arc::clone(&left_system_context.network),
             membership_coordinator: left_system_context.membership_coordinator.clone(),
             epoch_height,
@@ -898,7 +898,7 @@ where
             output_event_stream: right_external_event_stream.clone(),
             internal_event_stream: right_internal_event_stream.clone(),
             hotshot: Arc::clone(&right_system_context),
-            storage: Arc::clone(&right_system_context.storage),
+            storage: right_system_context.storage.clone(),
             network: Arc::clone(&right_system_context.network),
             membership_coordinator: right_system_context.membership_coordinator.clone(),
             epoch_height,

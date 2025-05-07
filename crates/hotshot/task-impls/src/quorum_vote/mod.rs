@@ -7,7 +7,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_task::{
@@ -74,7 +73,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// Reference to the storage.
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// View number to vote on.
     pub view_number: TYPES::View,
@@ -144,13 +143,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     }
                     // Update our persistent storage of the proposal. If we cannot store the proposal return
                     // and error so we don't vote
-                    if let Err(e) = self
-                        .storage
-                        .write()
-                        .await
-                        .append_proposal_wrapper(proposal)
-                        .await
-                    {
+                    if let Err(e) = self.storage.append_proposal_wrapper(proposal).await {
                         tracing::error!("failed to store proposal, not voting.  error = {e:#}");
                         return;
                     }
@@ -369,7 +362,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 self.private_key.clone(),
                 self.upgrade_lock.clone(),
                 self.view_number,
-                Arc::clone(&self.storage),
+                self.storage.clone(),
                 leaf,
                 maybe_next_epoch_vid_share.unwrap_or(vid_share),
                 is_vote_leaf_extended,
@@ -420,7 +413,7 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub consensus_metrics: Arc<ConsensusMetricsValue>,
 
     /// Reference to the storage.
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -530,7 +523,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 consensus: OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
                 instance_state: Arc::clone(&self.instance_state),
                 membership_coordinator: self.membership.clone(),
-                storage: Arc::clone(&self.storage),
+                storage: self.storage.clone(),
                 view_number,
                 sender: event_sender.clone(),
                 receiver: event_receiver.clone().deactivate(),

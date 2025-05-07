@@ -17,6 +17,7 @@ use crate::{
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
+        storage::StorageAddDrbResultFn,
     },
     utils::{root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
@@ -36,6 +37,9 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// wait for the actual catchup and allert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
+    /// Callback function to store a drb result when one is calculated during catchup
+    storage_add_drb_result_fn: Option<StorageAddDrbResultFn<TYPES>>,
+
     /// Number of blocks in an epoch
     pub epoch_height: u64,
 }
@@ -45,6 +49,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
         Self {
             membership: Arc::clone(&self.membership),
             catchup_map: Arc::clone(&self.catchup_map),
+            storage_add_drb_result_fn: self.storage_add_drb_result_fn.clone(),
             epoch_height: self.epoch_height,
         }
     }
@@ -58,10 +63,15 @@ where
     Self: Send,
 {
     /// Create an EpochMembershipCoordinator
-    pub fn new(membership: Arc<RwLock<TYPES::Membership>>, epoch_height: u64) -> Self {
+    pub fn new(
+        membership: Arc<RwLock<TYPES::Membership>>,
+        storage_add_drb_result_fn: Option<StorageAddDrbResultFn<TYPES>>,
+        epoch_height: u64,
+    ) -> Self {
         Self {
             membership,
             catchup_map: Arc::default(),
+            storage_add_drb_result_fn,
             epoch_height,
         }
     }
@@ -206,10 +216,18 @@ where
             let mut drb_seed_input = [0u8; 32];
             let len = drb_seed_input_vec.len().min(32);
             drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+
             tokio::task::spawn_blocking(move || compute_drb_result::<TYPES>(drb_seed_input))
                 .await
                 .unwrap()
         };
+
+        if let Some(cb) = &self.storage_add_drb_result_fn {
+            tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
+            if let Err(e) = cb(epoch, drb).await {
+                tracing::warn!("Failed to add drb result to storage: {e}");
+            }
+        }
 
         self.membership.write().await.add_drb_result(epoch, drb);
         Ok(EpochMembership {

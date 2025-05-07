@@ -39,6 +39,7 @@ use hotshot_types::{
         election::Membership,
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        storage::storage_add_drb_result,
     },
     HotShotConfig, ValidatorConfig,
 };
@@ -612,7 +613,11 @@ where
             state_private_key,
             node_id,
             config,
-            EpochMembershipCoordinator::new(Arc::new(RwLock::new(memberships)), epoch_height),
+            EpochMembershipCoordinator::new(
+                Arc::new(RwLock::new(memberships)),
+                Some(storage_add_drb_result(storage.clone())),
+                epoch_height,
+            ),
             network,
             initializer,
             ConsensusMetricsValue::default(),
@@ -653,7 +658,11 @@ where
             state_private_key,
             node_id,
             config,
-            EpochMembershipCoordinator::new(memberships, epoch_height),
+            EpochMembershipCoordinator::new(
+                memberships,
+                Some(storage_add_drb_result(storage.clone())),
+                epoch_height,
+            ),
             network,
             initializer,
             ConsensusMetricsValue::default(),
