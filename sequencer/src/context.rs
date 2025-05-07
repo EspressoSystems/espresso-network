@@ -106,6 +106,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         _: V,
+        builder_url: Url,
         proposal_fetcher_cfg: ProposalFetcherConfig,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
@@ -149,7 +150,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             // at the moment we need to pass in a config to hotshot.
             MarketplaceConfig {
                 auction_results_provider: Arc::new(SolverAuctionResultsProvider::default()),
-                fallback_builder_url: "http://dummy".parse().unwrap(),
+                fallback_builder_url: builder_url,
             },
         )
         .await?

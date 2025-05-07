@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::Context;
 use clap::Parser;
 use espresso_types::traits::SequencerPersistence;
@@ -222,6 +220,7 @@ where
                             consumer,
                             opt.is_da,
                             opt.identity,
+                            opt.builder_url,
                             proposal_fetcher_config,
                         )
                         .await
@@ -242,6 +241,7 @@ where
                 NullEventConsumer,
                 opt.is_da,
                 opt.identity,
+                opt.builder_url,
                 proposal_fetcher_config,
             )
             .await?
