@@ -3540,7 +3540,7 @@ mod test {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {}", height);
-                if height >= 1 + EPOCH_HEIGHT * 3 {
+                if height > EPOCH_HEIGHT * 3 {
                     break;
                 }
             }
@@ -3557,7 +3557,7 @@ mod test {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Server decided at height: {}", height);
                 //  until 7 epochs
-                if height >= 1 + EPOCH_HEIGHT * 7 {
+                if height > EPOCH_HEIGHT * 7 {
                     break;
                 }
             }
