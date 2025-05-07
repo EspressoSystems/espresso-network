@@ -239,8 +239,9 @@ jobs:
           mv test-binaries/* target/debug
           chmod -c +x target/debug/*
 
+      # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
       - name: Install process-compose
-        run: nix profile install nixpkgs#process-compose
+        run: nix profile install nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae#process-compose
 
       - name: Test Integration
         env:
@@ -283,8 +284,9 @@ jobs:
       - name: chmod +x
         run: chmod -c +x target/debug/*
 
+      # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
       - name: Install process-compose
-        run: nix profile install nixpkgs#process-compose
+        run: nix profile install nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae#process-compose
 
       - name: Test Demo
         run: |
