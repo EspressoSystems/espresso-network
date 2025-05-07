@@ -43,7 +43,7 @@ matrix:
     # Add the extra "test-ci-rest"
     test_suites=$(echo "$test_suites" | jq '. + ["test-ci-rest"]')
 
-    echo "{\"test_suites\": $test_suites}"
+    echo "{\"test_suites\": $test_suites}" | jq -c
 
 # Usage:
 #
