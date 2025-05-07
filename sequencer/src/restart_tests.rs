@@ -23,7 +23,7 @@ use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},
 };
-use hotshot::traits::implementations::derive_libp2p_peer_id;
+use hotshot::{traits::implementations::derive_libp2p_peer_id, HotShotInitializer};
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
@@ -246,6 +246,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    initializer: Option<HotShotInitializer<SeqTypes>>,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -317,7 +318,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             opt,
             num_nodes: network.peer_ports.len(),
             context: None,
+            initializer: None,
         }
+    }
+
+    // TODO review if we want this as a separate fn from `stop`.
+    fn soft_stop(&mut self) -> BoxFuture<()> {
+        self.store();
+        self.stop()
     }
 
     fn stop(&mut self) -> BoxFuture<()> {
@@ -330,6 +338,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
+    /// Store state of node, useful to restore node later.
+    async fn store(&mut self) {
+        let initializer = self.context.clone().unwrap().into_initializer().await;
+        // TODO we may need more than just the initializer
+        self.initializer.replace(initializer); // then on start up `if let Some(_)`.
+    }
+
+    // TODO on start check if stored.get(id), if so `Context::new_from_channels`
     fn start(&mut self) -> BoxFuture<()>
     where
         S::Storage: Send,

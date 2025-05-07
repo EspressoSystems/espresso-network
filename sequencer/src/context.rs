@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt::{Debug, Display},
     marker::PhantomData,
     sync::Arc,
@@ -10,7 +11,7 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
-    NodeState, PubKey, SolverAuctionResultsProvider, Transaction, ValidatedState,
+    MockSequencerVersions, NodeState, PubKey, Transaction, ValidatedState,
 };
 use futures::{
     future::{join_all, Future},
@@ -18,17 +19,23 @@ use futures::{
 };
 use hotshot::{
     types::{Event, EventType, SystemContextHandle},
-    MarketplaceConfig, SystemContext,
+    HotShotInitializer, InitializerEpochInfo, MarketplaceConfig, SystemContext,
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_query_service::data_source::storage::SqlStorage;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    light_client::compute_stake_table_commitment,
     network::NetworkConfig,
-    traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
+    simple_certificate::QuorumCertificate2,
+    traits::{
+        metrics::Metrics,
+        network::ConnectedNetwork,
+        node_implementation::{ConsensusTime, Versions},
+    },
     PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
@@ -98,13 +105,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         instance_state: NodeState,
         storage: Option<Arc<SqlStorage>>,
         state_catchup: ParallelStateCatchup,
-        persistence: Arc<P>,
+        persistence: P,
         network: Arc<N>,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         _: V,
+        marketplace_config: MarketplaceConfig<SeqTypes, Node<N, P>>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
@@ -124,14 +132,16 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             .load_consensus_state::<V>(instance_state.clone())
             .await?;
 
-        let stake_table = config.hotshot_stake_table();
-        let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
+        let stake_table_commit =
+            compute_stake_table_commitment(&config.known_nodes_with_stake, stake_table_capacity)?;
         let stake_table_epoch = None;
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
-            stake_table.0,
+            config.known_nodes_with_stake.clone(),
             0,
         )));
+
+        let persistence = Arc::new(persistence);
 
         let handle = SystemContext::init(
             validator_config.public_key,
@@ -143,13 +153,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             network.clone(),
             initializer,
             ConsensusMetricsValue::new(metrics),
-            Arc::clone(&persistence),
-            // TODO: MA: will be removed when more marketplace code is removed,
-            // at the moment we need to pass in a config to hotshot.
-            MarketplaceConfig {
-                auction_results_provider: Arc::new(SolverAuctionResultsProvider::default()),
-                fallback_builder_url: "http://dummy".parse().unwrap(),
-            },
+            persistence.clone(),
+            marketplace_config,
         )
         .await?
         .0;
@@ -424,6 +429,40 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     /// Get the network config
     pub fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.network_config.clone()
+    }
+
+    /// Get a `HotshotInitialized` to restore from later.
+    // TODO most the values are fudged for now
+    pub async fn into_initializer(&self) -> HotShotInitializer<SeqTypes> {
+        let node_state = self.node_state();
+        let validated_state = self.decided_state().await;
+        let hotshot = self.consensus().read().await.hotshot.clone();
+
+        // TODO these are fudge values.
+        let iei = InitializerEpochInfo {
+            epoch: EpochNumber::new(0),
+            drb_result: Default::default(),
+            block_header: None,
+        };
+
+        // TODO real hich_qc
+        let high_qc =
+            QuorumCertificate2::genesis::<MockSequencerVersions>(&*validated_state, &node_state)
+                .await;
+        // TODO fudge
+        HotShotInitializer::<SeqTypes>::load(
+            node_state,
+            hotshot.config.epoch_height,
+            hotshot.config.epoch_start_block,
+            vec![iei],
+            hotshot.anchored_leaf.clone(),
+            (ViewNumber::new(0), None),
+            (high_qc, None),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            None,
+            None,
+        )
     }
 }
 
