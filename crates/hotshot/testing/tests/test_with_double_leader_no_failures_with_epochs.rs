@@ -4,22 +4,15 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::time::Duration;
 
-use hotshot_example_types::{
-    node_types::{
-        CombinedImpl, EpochUpgradeTestVersions, EpochsTestVersions, Libp2pImpl, MemoryImpl,
-        PushCdnImpl, RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
-        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes, TestTypesEpochCatchupTypes,
-        TestTypesRandomizedCommitteeMembers, TestTypesRandomizedLeader,
-    },
-    testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
-};
+use hotshot_example_types::node_types::{
+        CombinedImpl, EpochsTestVersions, Libp2pImpl,
+        PushCdnImpl,
+        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes,
+    };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
-    completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
-    spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
     test_builder::TestDescription,
     view_sync_task::ViewSyncTaskDescription,
 };

@@ -6,22 +6,14 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::{
-    node_types::{
-        CombinedImpl, EpochUpgradeTestVersions, EpochsTestVersions, Libp2pImpl, MemoryImpl,
-        PushCdnImpl, RandomOverlapQuorumFilterConfig, StableQuorumFilterConfig,
-        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestTypes, TestTypesEpochCatchupTypes,
-        TestTypesRandomizedCommitteeMembers, TestTypesRandomizedLeader,
-    },
-    testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
-};
+use hotshot_example_types::node_types::{
+        EpochUpgradeTestVersions, MemoryImpl, TestTypes, TestTypesRandomizedLeader,
+    };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
-    spinning_task::{ChangeNode, NodeAction, SpinningTaskDescription},
     test_builder::TestDescription,
-    view_sync_task::ViewSyncTaskDescription,
 };
 
 cross_tests!(
