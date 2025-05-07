@@ -1877,10 +1877,7 @@ mod test {
         types::HeightIndexed,
     };
     use hotshot_types::{
-        event::LeafInfo,
-        traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
-        utils::epoch_from_block_number,
-        ValidatorConfig,
+        data::EpochNumber, event::LeafInfo, traits::{metrics::NoMetrics, node_implementation::ConsensusTime}, utils::epoch_from_block_number, ValidatorConfig
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
@@ -3398,6 +3395,154 @@ mod test {
 
             target_bh = header.height();
         }
+
+        Ok(())
+    }
+
+    use hotshot_types::traits::election::Membership;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_rewards() -> anyhow::Result<()> {
+        // This test registers 5 validators and multiple delegators for each validator.
+        // One of the delegators is also a validator.
+        // The test verifies that the cumulative reward at each block height equals the total block reward,
+        // which is a constant.
+
+        setup_test();
+        let epoch_height = 20;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 3;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(true)
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // wait for atleast 62 blocks
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(62)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let validators = client
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/4")
+            .send()
+            .await
+            .expect("validators");
+
+        for validator in validators.values() {
+            let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
+
+            assert_eq!(delegator_stake_sum, validator.stake);
+        }
+
+        // insert all the address in a map
+        // We will query the reward-balance at each block height for all the addresses
+        // We don't know which validator was the leader because we don't have access to Membership
+        let mut addresses = HashSet::new();
+        for v in validators.values() {
+            addresses.insert(v.account);
+            addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
+        }
+
+        // check none of the address has any rewards distributed for first two epochs
+
+        // Check Cumulative rewards for epoch 3
+        // i.e block height 41 to 59
+        for block in 0..=40 {
+            for address in addresses.clone() {
+                let amount = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state/reward-balance/{block}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .ok()
+                    .flatten();
+                assert!(amount.is_none(), "amount is not none for block {block}")
+            }
+        }
+
+
+         // wait for atleast 62 blocks
+         let leaves = client
+         .socket("availability/stream/leaves/41")
+         .subscribe::<LeafQueryData<SeqTypes>>()
+         .await
+         .unwrap()
+         .take(20)
+         .try_collect::<Vec<_>>()
+         .await
+         .unwrap();
+
+         let node_state = network.server.node_state();
+        let coordinator = node_state.coordinator;
+         for leaf in leaves {
+
+            let membership  = coordinator.membership().read().await;
+            let epoch = epoch_from_block_number(leaf.height(), 20);
+            let epoch_number  = EpochNumber::new(epoch);
+            let leader = membership.leader(leaf.leaf().view_number(), Some(epoch_number)).expect("leader");
+            let address = membership.address(&epoch_number, leader).expect("address");
+            let validator = validators.get(&address).expect("leader not found");
+
+            // validator is also the delegator
+            let block  = leaf.height();
+            let leader_reward = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state/reward-balance/{block}/{address}"
+                    ))
+                    .send()
+                    .await
+                    .ok()
+                    .flatten().expect("amount");
+            
+            let commission = validator.commission
+            
+
+
+            // check that balance is expected one
+
+         }
 
         Ok(())
     }
