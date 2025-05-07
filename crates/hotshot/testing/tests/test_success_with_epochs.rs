@@ -7,9 +7,9 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-        CombinedImpl, EpochsTestVersions, Libp2pImpl,
-        PushCdnImpl, TestTwoStakeTablesTypes, TestTypes, TestTypesRandomizedLeader,
-    };
+    CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
+    TestTypesRandomizedLeader,
+};
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,

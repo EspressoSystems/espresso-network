@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-        EpochUpgradeTestVersions, MemoryImpl, TestTypes, TestTypesRandomizedLeader,
-    };
+    EpochUpgradeTestVersions, MemoryImpl, TestTypes, TestTypesRandomizedLeader,
+};
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,

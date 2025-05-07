@@ -4,16 +4,13 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-
 use hotshot_example_types::node_types::{
-        CombinedImpl, EpochsTestVersions, Libp2pImpl,
-        PushCdnImpl,
-        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes,
-    };
+    CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl, TestConsecutiveLeaderTypes,
+    TestTwoStakeTablesTypes,
+};
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
-    block_builder::SimpleBuilderImplementation,
-    test_builder::TestDescription,
+    block_builder::SimpleBuilderImplementation, test_builder::TestDescription,
     view_sync_task::ViewSyncTaskDescription,
 };
 cross_tests!(
