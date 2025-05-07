@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use url::Url;
 
 use async_trait::async_trait;
 use committable::Committable;
 use espresso_types::{
     v0_99::{
-        BidTx, RollupRegistration, RollupRegistrationBody, RollupUpdate, RollupUpdatebody,
+        BidTx, NamespaceId, RollupRegistration, RollupRegistrationBody, RollupUpdate, RollupUpdatebody,
         SolverAuctionResults,
     },
     SeqTypes,
@@ -259,46 +260,102 @@ impl UpdateSolverState for GlobalState {
             .collect::<SolverResult<Vec<RollupRegistration>>>()
     }
 
+    /// Calculates auction results for permissionless auctions.
+    /// 
+    /// The auction winner selection process:
+    /// 1. Groups all bids by namespace
+    /// 2. For each namespace, selects the bid with the highest amount
+    /// 3. For namespaces without bids, includes reserve URLs if available
+    /// 
+    /// # Arguments
+    /// * `view_number` - The view number for which to calculate auction results
+    /// 
+    /// # Returns
+    /// * `SolverResult<SolverAuctionResults>` - The auction results containing winning bids and reserve URLs
     async fn calculate_auction_results_permissionless(
         &self,
         view_number: ViewNumber,
     ) -> SolverResult<SolverAuctionResults> {
-        // todo (ab): actual logic needs to implemented
-        // for we, we just return some default results
+        // Get all bids for this view
+        let bids = self
+            .solver
+            .bid_txs
+            .get(&view_number)
+            .map(|bids| bids.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
 
+        // Group bids by namespace
+        let mut namespace_bids: HashMap<NamespaceId, Vec<&BidTx>> = HashMap::new();
+        for bid in bids.iter() {
+            for namespace in &bid.body.namespaces {
+                namespace_bids
+                    .entry(*namespace)
+                    .or_default()
+                    .push(bid);
+            }
+        }
+
+        // Get all rollup registrations to check reserve prices
         let rollups = self.get_all_rollup_registrations().await?;
+        let reserve_prices: HashMap<NamespaceId, u64> = rollups
+            .iter()
+            .map(|r| (r.body.namespace_id, r.body.reserve_price))
+            .collect();
 
-        let results = SolverAuctionResults::new(
+        // Select winning bids (highest bid for each namespace that meets reserve price)
+        let mut winning_bids = HashSet::new();
+        for (namespace_id, bids) in namespace_bids.iter() {
+            if let Some(highest_bid) = bids.iter().max_by_key(|bid| bid.body.bid_amount) {
+                // Only select bid if it meets the reserve price
+                if let Some(reserve_price) = reserve_prices.get(namespace_id) {
+                    if highest_bid.body.bid_amount >= *reserve_price {
+                        winning_bids.insert((*highest_bid).clone());
+                    }
+                }
+            }
+        }
+
+        // Get reserve URLs for namespaces without winning bids
+        let reserve_bids: Vec<(NamespaceId, Url)> = rollups
+            .into_iter()
+            .filter_map(|r| {
+                let namespace_id = r.body.namespace_id;
+                // Only include reserve URL if there are no winning bids for this namespace
+                // and the rollup is active
+                if !namespace_bids.contains_key(&namespace_id) && r.body.active {
+                    r.body.reserve_url.map(|url| (namespace_id, url))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(SolverAuctionResults::new(
             view_number,
-            Vec::new(),
-            rollups
-                .into_iter()
-                .filter_map(|r| Some((r.body.namespace_id, r.body.reserve_url?)))
-                .collect(),
-        );
-
-        Ok(results)
+            winning_bids.into_iter().collect(),
+            reserve_bids,
+        ))
     }
+
+    /// Calculates auction results for permissioned auctions.
+    /// 
+    /// This method uses the same logic as permissionless auctions since signature verification
+    /// is handled at a higher level. The signature parameter is used for authentication only.
+    /// 
+    /// # Arguments
+    /// * `view_number` - The view number for which to calculate auction results
+    /// * `_signature` - The signature key for authentication
+    /// 
+    /// # Returns
+    /// * `SolverResult<SolverAuctionResults>` - The auction results containing winning bids and reserve URLs
     async fn calculate_auction_results_permissioned(
         &self,
         view_number: ViewNumber,
         _signature: <SeqTypes as NodeType>::SignatureKey,
     ) -> SolverResult<SolverAuctionResults> {
-        // todo (ab): actual logic needs to implemented
-        // for we, we just return some default results
-
-        let rollups = self.get_all_rollup_registrations().await?;
-
-        let results = SolverAuctionResults::new(
-            view_number,
-            Vec::new(),
-            rollups
-                .into_iter()
-                .filter_map(|r| Some((r.body.namespace_id, r.body.reserve_url?)))
-                .collect(),
-        );
-
-        Ok(results)
+        // For permissioned auctions, we use the same logic as permissionless
+        // since the signature verification is handled at a higher level
+        self.calculate_auction_results_permissionless(view_number).await
     }
 }
 
