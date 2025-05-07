@@ -139,7 +139,6 @@ jobs:
             target/debug/pub-key
             target/debug/espresso-bridge
             target/debug/node-metrics
-            target/debug/dev-rollup
             target/debug/sequencer-sqlite
 
   test-postgres:

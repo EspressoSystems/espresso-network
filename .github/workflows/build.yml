@@ -27,7 +27,6 @@ env:
     target/release/cdn-whitelist
     target/release/cli
     target/release/deploy
-    target/release/dev-rollup
     target/release/espresso-bridge
     target/release/espresso-dev-node
     target/release/keygen
@@ -128,7 +127,6 @@ jobs:
           - cdn-marshal
           - cdn-whitelist
           - deploy
-          - dev-rollup
           - espresso-dev-node
           - nasty-client
           - node-validator
