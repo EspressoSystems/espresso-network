@@ -7225,36 +7225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "marketplace-builder-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.0",
- "async-trait",
- "committable",
- "derive_more 1.0.0",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-example-types",
- "hotshot-macros",
- "hotshot-testing",
- "hotshot-types",
- "marketplace-builder-shared",
- "num_cpus",
- "sha2 0.10.8",
- "tagged-base64",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.19",
- "tracing-test 0.1.0",
- "url",
- "vbs",
-]
-
-[[package]]
 name = "marketplace-builder-shared"
 version = "0.1.0"
 dependencies = [
@@ -9818,7 +9788,6 @@ dependencies = [
  "jf-signature 0.2.0",
  "jf-vid",
  "libp2p",
- "marketplace-builder-core",
  "num_enum",
  "parking_lot",
  "portpicker",

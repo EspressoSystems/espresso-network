@@ -642,8 +642,8 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade, UpgradeMap,
+        EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -671,10 +671,6 @@ pub mod testing {
             signature_key::BuilderSignatureKey,
         },
         HotShotConfig, PeerConfig,
-    };
-    use marketplace_builder_core::{
-        hooks::NoHooks,
-        service::{BuilderConfig, GlobalState},
     };
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
@@ -766,73 +762,6 @@ pub mod testing {
 
         // Pass on the builder task to be injected in the testing harness
         (Box::new(LegacyBuilderImplementation { global_state }), url)
-    }
-
-    struct MarketplaceBuilderImplementation {
-        global_state: Arc<GlobalState<SeqTypes, NoHooks<SeqTypes>>>,
-    }
-
-    impl BuilderTask<SeqTypes> for MarketplaceBuilderImplementation {
-        fn start(
-            self: Box<Self>,
-            stream: Box<
-                dyn Stream<Item = hotshot::types::Event<SeqTypes>>
-                    + std::marker::Unpin
-                    + Send
-                    + 'static,
-            >,
-        ) {
-            spawn(async move {
-                let res = self.global_state.start_event_loop(stream).await;
-                tracing::error!(?res, "Testing marketplace builder service exited");
-            });
-        }
-    }
-
-    pub async fn run_marketplace_builder<const NUM_NODES: usize>(
-        port: Option<u16>,
-    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
-
-        // This should never fail.
-        let url: Url = format!("http://localhost:{port}")
-            .parse()
-            .expect("Failed to parse builder URL");
-
-        // create the global state
-        let global_state = GlobalState::new(
-            BuilderConfig {
-                builder_keys: (builder_key_pair.fee_account(), builder_key_pair),
-                api_timeout: Duration::from_secs(60),
-                tx_capture_timeout: Duration::from_millis(100),
-                txn_garbage_collect_duration: Duration::from_secs(60),
-                txn_channel_capacity: BUILDER_CHANNEL_CAPACITY_FOR_TEST,
-                tx_status_cache_capacity: 81920,
-                base_fee: 10,
-            },
-            NoHooks(PhantomData),
-        );
-
-        // Create and spawn the tide-disco app to serve the builder APIs
-        let app = Arc::clone(&global_state)
-            .into_app()
-            .expect("Failed to create builder tide-disco app");
-
-        spawn(
-            app.serve(
-                format!("http://0.0.0.0:{port}")
-                    .parse::<Url>()
-                    .expect("Failed to parse builder listener"),
-                MarketplaceVersion::instance(),
-            ),
-        );
-
-        // Pass on the builder task to be injected in the testing harness
-        (
-            Box::new(MarketplaceBuilderImplementation { global_state }),
-            url,
-        )
     }
 
     pub async fn run_test_builder<const NUM_NODES: usize>(
@@ -1211,7 +1140,7 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             bind_version: V,
             upgrades: BTreeMap<Version, Upgrade>,
-            marketplace_builder_url: Url,
+            builder_url: Url,
         ) -> SequencerContext<network::Memory, P::Persistence, V> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
@@ -1349,7 +1278,7 @@ pub mod testing {
                 bind_version,
                 MarketplaceConfig::<SeqTypes, Node<network::Memory, P::Persistence>> {
                     auction_results_provider: Arc::new(SolverAuctionResultsProvider::default()),
-                    fallback_builder_url: marketplace_builder_url,
+                    fallback_builder_url: builder_url,
                 },
                 Default::default(),
             )
