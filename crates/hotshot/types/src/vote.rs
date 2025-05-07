@@ -24,8 +24,7 @@ use crate::{
     message::UpgradeLock,
     simple_certificate::{LightClientStateUpdateCertificate, Threshold},
     simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
-    stake_table::HSStakeTable,
-    stake_table::StakeTableEntries,
+    stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         node_implementation::{NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
