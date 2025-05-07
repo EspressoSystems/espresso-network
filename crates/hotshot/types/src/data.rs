@@ -1946,9 +1946,6 @@ pub struct PackedBundle<TYPES: NodeType> {
 
     /// The sequencing fee for submitting bundles.
     pub sequencing_fees: Vec1<BuilderFee<TYPES>>,
-
-    /// The auction results for the block, if it was produced as the result of an auction
-    pub auction_result: Option<TYPES::AuctionResult>,
 }
 
 impl<TYPES: NodeType> PackedBundle<TYPES> {
@@ -1959,7 +1956,6 @@ impl<TYPES: NodeType> PackedBundle<TYPES> {
         view_number: TYPES::View,
         epoch_number: Option<TYPES::Epoch>,
         sequencing_fees: Vec1<BuilderFee<TYPES>>,
-        auction_result: Option<TYPES::AuctionResult>,
     ) -> Self {
         Self {
             encoded_transactions,
@@ -1967,7 +1963,6 @@ impl<TYPES: NodeType> PackedBundle<TYPES> {
             view_number,
             epoch_number,
             sequencing_fees,
-            auction_result,
         }
     }
 }

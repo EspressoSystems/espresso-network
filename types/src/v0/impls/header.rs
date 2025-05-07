@@ -37,7 +37,6 @@ use crate::{
     v0::{
         header::{EitherOrVersion, VersionedHeader},
         impls::reward::{find_validator_info, first_two_epochs},
-        MarketplaceVersion,
     },
     v0_1, v0_2, v0_3,
     v0_99::{self, ChainConfig, IterableFeeInfo, SolverAuctionResults},
@@ -489,27 +488,16 @@ impl Header {
             fee_amount,
         } in &builder_fee
         {
-            if version < MarketplaceVersion::version() {
-                ensure!(
-                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table)
-                        || fee_account.validate_fee_signature_with_vid_commitment(
-                            fee_signature,
-                            *fee_amount,
-                            &ns_table,
-                            &payload_commitment
-                        ),
-                    "invalid builder signature"
-                );
-            } else {
-                ensure!(
-                    fee_account.validate_sequencing_fee_signature_marketplace(
+            ensure!(
+                fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table)
+                    || fee_account.validate_fee_signature_with_vid_commitment(
                         fee_signature,
                         *fee_amount,
-                        view_number,
+                        &ns_table,
+                        &payload_commitment
                     ),
-                    "invalid builder signature"
-                );
-            }
+                "invalid builder signature"
+            );
 
             let fee_info = FeeInfo::new(*fee_account, *fee_amount);
             state

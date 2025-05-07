@@ -18,15 +18,13 @@ use futures::future::join_all;
 use hotshot::{
     traits::TestableNodeImplementation,
     types::{Event, SystemContextHandle},
-    HotShotInitializer, InitializerEpochInfo, MarketplaceConfig, SystemContext,
+    HotShotInitializer, InitializerEpochInfo, SystemContext,
 };
 use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider,
     block_types::TestBlockHeader,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
-use hotshot_fakeapi::fake_solver::FakeSolverState;
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
@@ -76,12 +74,7 @@ impl<
     > TestRunner<TYPES, I, V, N>
 where
     I: TestableNodeImplementation<TYPES>,
-    I: NodeImplementation<
-        TYPES,
-        Network = N,
-        Storage = TestStorage<TYPES>,
-        AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
-    >,
+    I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
 {
     /// execute test
     ///
@@ -135,7 +128,6 @@ where
         let TestRunner {
             launcher,
             nodes,
-            solver_server,
             late_start,
             next_node_id: _,
             _pd: _,
@@ -296,10 +288,6 @@ where
             handle.abort();
         }
         // Shutdown all of the servers at the end
-        // Aborting here doesn't cause any problems because we don't maintain any state
-        if let Some(solver_server) = solver_server {
-            solver_server.1.abort();
-        }
 
         let mut nodes = handles.write().await;
 
@@ -359,31 +347,6 @@ where
         (builder_tasks, builder_urls, fallback_builder_url)
     }
 
-    /// Add auction solver.
-    pub async fn add_solver(&mut self, builder_urls: Vec<Url>) {
-        let solver_error_pct = self.launcher.metadata.solver.error_pct;
-        let solver_port = portpicker::pick_unused_port().expect("No available ports");
-
-        // This should basically never fail
-        let solver_url: Url = format!("http://localhost:{solver_port}")
-            .parse()
-            .expect("Failed to parse solver URL");
-
-        // Initialize the solver API state
-        let solver_state = FakeSolverState::new(Some(solver_error_pct), builder_urls);
-
-        // Then, fire it up as a background thread.
-        self.solver_server = Some((
-            solver_url.clone(),
-            spawn(async move {
-                solver_state
-                    .run::<TYPES>(solver_url)
-                    .await
-                    .expect("Unable to run solver api");
-            }),
-        ));
-    }
-
     /// Add nodes.
     ///
     /// # Panics
@@ -401,10 +364,6 @@ where
         // in the builders for tests which don't update that field.
         let (mut builder_tasks, builder_urls, fallback_builder_url) =
             self.init_builders::<B>().await;
-
-        if self.launcher.metadata.start_solver {
-            self.add_solver(builder_urls.clone()).await;
-        }
 
         // Collect uninitialized nodes because we need to wait for all networks to be ready before starting the tasks
         let mut uninitialized_nodes = Vec::new();
@@ -426,18 +385,6 @@ where
 
             let network = (self.launcher.resource_generators.channel_generator)(node_id).await;
             let storage = (self.launcher.resource_generators.storage)(node_id);
-            let mut marketplace_config =
-                (self.launcher.resource_generators.marketplace_config)(node_id);
-            if let Some(solver_server) = &self.solver_server {
-                let mut new_auction_results_provider =
-                    marketplace_config.auction_results_provider.as_ref().clone();
-
-                new_auction_results_provider.broadcast_url = Some(solver_server.0.clone());
-
-                marketplace_config.auction_results_provider = new_auction_results_provider.into();
-            }
-
-            marketplace_config.fallback_builder_url = fallback_builder_url.clone();
 
             let network_clone = network.clone();
             let networks_ready_future = async move {
@@ -460,7 +407,6 @@ where
                                         config.known_da_nodes.clone(),
                                     ),
                                     config,
-                                    marketplace_config,
                                 },
                             ),
                         },
@@ -501,7 +447,6 @@ where
                         config,
                         validator_config,
                         storage,
-                        marketplace_config,
                     )
                     .await;
                     self.late_start.insert(
@@ -522,7 +467,6 @@ where
                     ),
                     config,
                     storage,
-                    marketplace_config,
                 ));
             }
 
@@ -547,9 +491,7 @@ where
         join_all(networks_ready).await;
 
         // Then start the necessary tasks
-        for (node_id, network, memberships, config, storage, marketplace_config) in
-            uninitialized_nodes
-        {
+        for (node_id, network, memberships, config, storage) in uninitialized_nodes {
             let handle = create_test_handle(
                 self.launcher.metadata.clone(),
                 node_id,
@@ -557,7 +499,6 @@ where
                 Arc::new(RwLock::new(memberships)),
                 config.clone(),
                 storage,
-                marketplace_config,
             )
             .await;
 
@@ -598,7 +539,6 @@ where
         config: HotShotConfig<TYPES>,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
-        marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> Arc<SystemContext<TYPES, I, V>> {
         // Get key pair for certificate aggregation
         let private_key = validator_config.private_key.clone();
@@ -621,7 +561,6 @@ where
             initializer,
             ConsensusMetricsValue::default(),
             storage,
-            marketplace_config,
         )
         .await
     }
@@ -638,7 +577,6 @@ where
         config: HotShotConfig<TYPES>,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
-        marketplace_config: MarketplaceConfig<TYPES, I>,
         internal_channel: (
             Sender<Arc<HotShotEvent<TYPES>>>,
             Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -662,7 +600,6 @@ where
             initializer,
             ConsensusMetricsValue::default(),
             storage,
-            marketplace_config,
             internal_channel,
             external_channel,
         )
@@ -691,9 +628,6 @@ pub struct LateNodeContextParameters<TYPES: NodeType, I: TestableNodeImplementat
 
     /// The config associated with this node.
     pub config: HotShotConfig<TYPES>,
-
-    /// The marketplace config for this node.
-    pub marketplace_config: MarketplaceConfig<TYPES, I>,
 }
 
 /// The late node context dictates how we're building a node that started late during the test.
@@ -731,8 +665,6 @@ pub struct TestRunner<
     pub(crate) launcher: TestLauncher<TYPES, I, V>,
     /// nodes in the test
     pub(crate) nodes: Vec<Node<TYPES, I, V>>,
-    /// the solver server running in the test
-    pub(crate) solver_server: Option<(Url, JoinHandle<()>)>,
     /// nodes with a late start
     pub(crate) late_start: HashMap<u64, LateStartNode<TYPES, I, V>>,
     /// the next node unique identifier

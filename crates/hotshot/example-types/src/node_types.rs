@@ -31,7 +31,6 @@ use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
 use crate::{
-    auction_results_provider_types::{TestAuctionResult, TestAuctionResultsProvider},
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
@@ -56,7 +55,6 @@ pub struct TestTypes;
 impl NodeType for TestTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -89,7 +87,6 @@ pub struct TestTypesRandomizedLeader;
 impl NodeType for TestTypesRandomizedLeader {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -120,7 +117,6 @@ pub struct TestTypesEpochCatchupTypes;
 impl NodeType for TestTypesEpochCatchupTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -156,7 +152,6 @@ pub struct TestTypesRandomizedCommitteeMembers<CONFIG: QuorumFilterConfig> {
 impl<CONFIG: QuorumFilterConfig> NodeType for TestTypesRandomizedCommitteeMembers<CONFIG> {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -190,7 +185,6 @@ pub struct TestConsecutiveLeaderTypes;
 impl NodeType for TestConsecutiveLeaderTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -223,7 +217,6 @@ pub struct TestTwoStakeTablesTypes;
 impl NodeType for TestTwoStakeTablesTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -263,25 +256,21 @@ pub type StaticMembership = StaticCommittee<TestTypes>;
 impl<TYPES: NodeType> NodeImplementation<TYPES> for PushCdnImpl {
     type Network = PushCdnNetwork<TYPES::SignatureKey>;
     type Storage = TestStorage<TYPES>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TYPES>;
 }
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for MemoryImpl {
     type Network = MemoryNetwork<TYPES::SignatureKey>;
     type Storage = TestStorage<TYPES>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TYPES>;
 }
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for CombinedImpl {
     type Network = CombinedNetworks<TYPES>;
     type Storage = TestStorage<TYPES>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TYPES>;
 }
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
     type Network = Libp2pNetwork<TYPES>;
     type Storage = TestStorage<TYPES>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TYPES>;
 }
 
 #[derive(Clone, Debug, Copy)]
