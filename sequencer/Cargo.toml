@@ -23,10 +23,15 @@ sqlite-unbundled = [
 fee = []
 pos = []
 marketplace = []
+nasty-client = ["reqwest", "bytesize"]
 
 [[bin]]
 name = "espresso-dev-node"
 required-features = ["testing", "embedded-db"]
+
+[[bin]]
+name = "nasty-client"
+required-features = ["nasty-client"]
 
 [dev-dependencies]
 escargot = "0.5.10"
@@ -135,6 +140,10 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+
+# Dependencies for nasty-client
+bytesize = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]
