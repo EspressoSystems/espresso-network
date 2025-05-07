@@ -167,7 +167,7 @@ pub mod mock {
         app.register_module("events_api", hotshot_events_api)
             .expect("Failed to register hotshot events API");
 
-        // cleanup with a function that takes in a a future
+        // cleanup with a function that takes in a future
         let events_api_handle = spawn({
             let url = url.clone();
             async move {

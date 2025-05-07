@@ -1344,7 +1344,7 @@ mod test {
     #[test]
     #[ignore]
     // TODO Currently we have some mismatch causing tests using
-    // `Leaf::genesis` to generate a a Header to
+    // `Leaf::genesis` to generate a Header to
     // fail. `NodeState::mock` is setting version to `v1` resulting in
     // an empty `bid_recipient` field on chain_config. We need a way to
     // pass in desired version, or so some other change before this can be enabled.
