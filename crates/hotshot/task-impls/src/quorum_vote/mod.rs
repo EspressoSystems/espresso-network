@@ -279,6 +279,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                         if maybe_current_epoch_vid_share.is_none() {
                             maybe_current_epoch_vid_share = Some(other_vid_share);
                         }
+                        if leaf.block_header().payload_commitment()
+                            == maybe_current_epoch_vid_share
+                                .unwrap()
+                                .data
+                                .payload_commitment()
+                        {
+                            tracing::error!(
+                                "We have both epochs vid shares but the leaf's vid commit doesn't \
+                                match the old epoch vid share's commit. It should never happen."
+                            );
+                            return;
+                        }
                     },
                     Err(e) => {
                         tracing::warn!(
