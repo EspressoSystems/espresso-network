@@ -1,6 +1,10 @@
 #![cfg(test)]
 
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    time::Duration,
+};
 
 use alloy::node_bindings::{Anvil, AnvilInstance};
 use anyhow::bail;
@@ -10,7 +14,7 @@ use cdn_broker::{
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
-use derivative::Derivative;
+use derive_more::Debug;
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, FeeAccount,
     MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
@@ -19,7 +23,7 @@ use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},
 };
-use hotshot::traits::implementations::derive_libp2p_peer_id;
+use hotshot::{traits::implementations::derive_libp2p_peer_id, HotShotInitializer, SystemContext};
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
@@ -58,6 +62,7 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
     setup_test();
 
     let mut network = TestNetwork::new(network.0, network.1, cdn).await;
+    network.start_event_task().await;
 
     // Let the network get going.
     network.check_progress().await;
@@ -229,7 +234,21 @@ impl NodeParams {
 }
 
 #[derive(Debug)]
+struct NodeInitializer<S: TestableSequencerDataSource> {
+    hotshot_initializer: HotShotInitializer<SeqTypes>,
+    #[debug(skip)]
+    hotshot_context: Arc<
+        SystemContext<
+            SeqTypes,
+            Node<network::Production, <S::Options as PersistenceOptions>::Persistence>,
+            MockSequencerVersions,
+        >,
+    >,
+}
+
+#[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
+    #[debug(skip)]
     storage: S::Storage,
     context: Option<
         SequencerContext<
@@ -241,6 +260,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    initializer: Option<NodeInitializer<S>>,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -312,7 +332,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             opt,
             num_nodes: network.peer_ports.len(),
             context: None,
+            initializer: None,
         }
+    }
+
+    // TODO review if we want this as a separate fn from `stop`.
+    fn soft_stop(&mut self) -> BoxFuture<()> {
+        self.store();
+        self.stop()
     }
 
     fn stop(&mut self) -> BoxFuture<()> {
@@ -325,6 +352,21 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
+    /// Store state of node, useful to restore node later.
+    async fn store(&mut self) {
+        let (hotshot_context, hotshot_initializer) =
+            self.context.clone().unwrap().into_initializer().await;
+
+        // TODO we may need more info than this.
+        let initializer = NodeInitializer {
+            hotshot_context,
+            hotshot_initializer,
+        };
+
+        self.initializer.replace(initializer); // then on start up `if let Some(_)`.
+    }
+
+    // TODO on start check if stored.get(id), if so `Context::new_from_channels`
     fn start(&mut self) -> BoxFuture<()>
     where
         S::Storage: Send,
@@ -433,6 +475,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 continue;
             };
             for leaf in leaf_chain.iter() {
+                // Leader rotation dictates that `node_id` will be proposing every `num_nodes`.
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
                     tracing::info!(
                         node_id,
@@ -499,6 +542,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     }
 }
 
+type LocalState = Arc<Mutex<HashMap<ViewNumber, EventType<SeqTypes>>>>;
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct TestNetwork {
@@ -509,6 +554,8 @@ struct TestNetwork {
     orchestrator_task: Option<JoinHandle<()>>,
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
+    event_task: Option<JoinHandle<()>>,
+    state: LocalState,
     #[derivative(Debug = "ignore")]
     _anvil: AnvilInstance,
 }
@@ -528,6 +575,45 @@ impl Drop for TestNetwork {
 }
 
 impl TestNetwork {
+    async fn start_event_task(&mut self) {
+        // let event_state = Arc::clone(&self.events);
+        let state = Arc::clone(&self.state);
+
+        let contexts: Vec<_> = self
+            .da_nodes
+            .iter()
+            .chain(self.regular_nodes.iter())
+            // since `context` implements `Clone`, it proved easier to
+            // get the stream from there rather than call
+            // `event_stream()` on the `TestNode`.
+            .filter_map(|node| node.context.clone())
+            .collect();
+
+        let streams = join_all(contexts.iter().map(|c| c.event_stream())).await;
+        let mut stream = futures::stream::iter(streams).flatten_unordered(None);
+
+        let task = spawn(async move {
+            loop {
+                let event = stream
+                    .next()
+                    .await
+                    .expect("event stream terminated unexpectedly");
+
+                let Event { view_number, event } = event;
+                tracing::error!(?view_number, "got event");
+
+                let EventType::Decide { .. } = event.clone() else {
+                    continue;
+                };
+
+                let mut event_state = state.lock().await;
+                tracing::error!(?view_number, "got decide event");
+                event_state.insert(view_number, event);
+            }
+        });
+        self.event_task = Some(task);
+    }
+
     async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
         let mut ports = PortPicker::default();
 
@@ -600,6 +686,7 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
+        let local_state = Arc::new(Mutex::new(HashMap::new()));
         let mut network = Self {
             da_nodes: join_all(
                 (0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i])),
@@ -615,6 +702,8 @@ impl TestNetwork {
             orchestrator_task,
             broker_task,
             marshal_task,
+            state: local_state,
+            event_task: None, // Some(event_task),
             _anvil: anvil,
         };
 
