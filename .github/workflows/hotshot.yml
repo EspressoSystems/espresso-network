@@ -23,6 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - id: set-matrix
         run: echo "matrix=$(just hotshot::matrix)" >> "$GITHUB_OUTPUT"
+
   test:
     needs: build-matrix
     strategy:
