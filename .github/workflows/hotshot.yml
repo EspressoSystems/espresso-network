@@ -24,6 +24,7 @@ jobs:
       - id: set-matrix
         run: echo "matrix=$(just hotshot::matrix)" >> "$GITHUB_OUTPUT"
   test:
+    needs: build-matrix
     strategy:
       matrix: ${{ fromJson(needs.build-matrix.outputs.matrix) }}
       fail-fast: false
