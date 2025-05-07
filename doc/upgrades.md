@@ -23,8 +23,8 @@ An upgrade consists of two parts:
 
 ## Enabling an Upgrade
 
-To enable an upgrade in Hotshot protocol, it is essential to define the base version, the upgrade version, and an upgrade
-hash:
+To enable an upgrade in Hotshot protocol, it is essential to define the base version, the upgrade version, and an
+upgrade hash:
 
 - **Base Version:** Represents the current version of the protocol (`0.1` in this example).
 - **Upgrade Version:** Specifies the version to which the protocol will upgrade once the process is successful (`0.2` in
