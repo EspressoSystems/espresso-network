@@ -29,6 +29,7 @@ use crate::{
         ViewSyncCommitData2, ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData,
         ViewSyncPreCommitData2, Voteable,
     },
+    stake_table::FullStakeTable,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{SignatureKey, StateSignatureKey},
@@ -182,7 +183,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     }
 
     /// Proxy's to `Membership.da_stake_table`
-    async fn stake_table(membership: &EpochMembership<TYPES>) -> Vec<PeerConfig<TYPES>> {
+    async fn stake_table(membership: &EpochMembership<TYPES>) -> FullStakeTable<TYPES> {
         membership.da_stake_table().await
     }
     /// Proxy's to `Membership.da_total_nodes`
@@ -259,7 +260,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     }
 
     /// Proxy's to `Membership.da_stake_table`
-    async fn stake_table(membership: &EpochMembership<TYPES>) -> Vec<PeerConfig<TYPES>> {
+    async fn stake_table(membership: &EpochMembership<TYPES>) -> FullStakeTable<TYPES> {
         membership.da_stake_table().await
     }
     /// Proxy's to `Membership.da_total_nodes`
@@ -341,7 +342,7 @@ impl<
         membership.stake(pub_key).await
     }
 
-    async fn stake_table(membership: &EpochMembership<TYPES>) -> Vec<PeerConfig<TYPES>> {
+    async fn stake_table(membership: &EpochMembership<TYPES>) -> FullStakeTable<TYPES> {
         membership.stake_table().await
     }
 

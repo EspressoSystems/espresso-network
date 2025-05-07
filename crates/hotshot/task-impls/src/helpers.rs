@@ -1255,7 +1255,7 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     let membership_success_threshold = epoch_membership.success_threshold().await;
 
     let mut state_key_map = HashMap::new();
-    membership_stake_table.into_iter().for_each(|config| {
+    membership_stake_table.0.into_iter().for_each(|config| {
         state_key_map.insert(
             config.state_ver_key.clone(),
             config.stake_table_entry.stake(),

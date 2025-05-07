@@ -13,7 +13,8 @@ use espresso_contract_deployer::network_config::{
 use espresso_types::{config::PublicNetworkConfig, SeqTypes};
 use futures::FutureExt;
 use hotshot_types::{
-    light_client::{one_honest_threshold, StateSignaturesBundle, StateVerKey},
+    light_client::{StateSignaturesBundle, StateVerKey},
+    stake_table::one_honest_threshold,
     traits::signature_key::{StakeTableEntryType, StateSignatureKey},
     utils::{epoch_from_block_number, is_gt_epoch_root},
     PeerConfig,
@@ -114,7 +115,7 @@ impl StateRelayServerState {
             .insert(first_epoch, one_honest_threshold(genesis_total_stake));
 
         let mut genesis_known_nodes = HashMap::<StateVerKey, U256>::new();
-        for entry in genesis_stake_table {
+        for entry in genesis_stake_table.0 {
             genesis_known_nodes
                 .insert(entry.state_ver_key.clone(), entry.stake_table_entry.stake());
         }

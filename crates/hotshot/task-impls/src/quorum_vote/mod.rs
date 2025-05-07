@@ -688,7 +688,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 );
 
                 let total_weight = vid_total_weight::<TYPES>(
-                    self.membership
+                    &self
+                        .membership
                         .membership_for_epoch(target_epoch)
                         .await?
                         .stake_table()
