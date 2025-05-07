@@ -9,14 +9,14 @@ use crate::database::PostgresClient;
 #[derive(Parser)]
 pub struct Options {
     /// Port to run the server on.
-    #[clap(short, long, env = "ESPRESSO_MARKETPLACE_SOLVER_API_PORT")]
+    #[arg(short, long, env = "ESPRESSO_MARKETPLACE_SOLVER_API_PORT")]
     pub solver_api_port: u16,
 
     /// Hotshot events service api URL
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_HOTSHOT_EVENT_API_URL")]
+    #[arg(short, long, env = "ESPRESSO_SEQUENCER_HOTSHOT_EVENT_API_URL")]
     pub events_api_url: Url,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     pub database_options: DatabaseOptions,
 }
 
@@ -24,45 +24,45 @@ pub struct Options {
 #[derive(Clone, Debug, Parser)]
 pub struct DatabaseOptions {
     // Postgres URL connection string
-    #[clap(long, env = "MARKETPLACE_SOLVER_POSTGRES_URL")]
+    #[arg(long, env = "MARKETPLACE_SOLVER_POSTGRES_URL")]
     pub url: Option<String>,
 
-    #[clap(long, env = "MARKETPLACE_SOLVER_POSTGRES_HOST")]
+    #[arg(long, env = "MARKETPLACE_SOLVER_POSTGRES_HOST")]
     pub host: Option<String>,
 
-    #[clap(long, env = "MARKETPLACE_SOLVER_POSTGRES_PORT")]
+    #[arg(long, env = "MARKETPLACE_SOLVER_POSTGRES_PORT")]
     pub port: Option<u16>,
 
-    #[clap(long, env = "MARKETPLACE_SOLVER_POSTGRES_DATABASE_NAME")]
+    #[arg(long, env = "MARKETPLACE_SOLVER_POSTGRES_DATABASE_NAME")]
     pub db_name: Option<String>,
 
-    #[clap(long, env = "MARKETPLACE_SOLVER_POSTGRES_USER")]
+    #[arg(long, env = "MARKETPLACE_SOLVER_POSTGRES_USER")]
     pub username: Option<String>,
 
-    #[clap(long, env = "MARKETPLACE_SOLVER_POSTGRES_PASSWORD")]
+    #[arg(long, env = "MARKETPLACE_SOLVER_POSTGRES_PASSWORD")]
     pub password: Option<String>,
 
-    #[clap(long, env = "MARKETPLACE_SOLVER_POSTGRES_MAX_CONNECTIONS")]
+    #[arg(long, env = "MARKETPLACE_SOLVER_POSTGRES_MAX_CONNECTIONS")]
     pub max_connections: Option<u32>,
 
-    #[clap(long,value_parser = parse_duration, env = "MARKETPLACE_SOLVER_DATABASE_ACQUIRE_TIMEOUT")]
+    #[arg(long,value_parser = parse_duration, env = "MARKETPLACE_SOLVER_DATABASE_ACQUIRE_TIMEOUT")]
     pub acquire_timeout: Option<Duration>,
 
-    #[clap(
+    #[arg(
         long,
         env = "MARKETPLACE_SOLVER_DATABASE_REQUIRE_SSL",
         default_value_t = false
     )]
     pub require_ssl: bool,
 
-    #[clap(
+    #[arg(
         long,
         env = "MARKETPLACE_SOLVER_DATABASE_RUN_MIGRATIONS",
         default_value_t = true
     )]
     pub migrations: bool,
 
-    #[clap(
+    #[arg(
         long,
         env = "MARKETPLACE_SOLVER_DATABASE_RESET",
         default_value_t = false

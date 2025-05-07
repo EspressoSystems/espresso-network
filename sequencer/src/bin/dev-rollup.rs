@@ -16,7 +16,7 @@ use url::Url;
 
 #[derive(Debug, Parser)]
 struct Options {
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 
     #[command(subcommand)]
@@ -32,40 +32,40 @@ enum Command {
 // Options for registering a rollup
 #[derive(Parser, Debug)]
 struct RegisterArgs {
-    #[clap(short, long, env = "ESPRESSO_MARKETPLACE_SOLVER_API_URL")]
+    #[arg(short, long, env = "ESPRESSO_MARKETPLACE_SOLVER_API_URL")]
     pub solver_url: Url,
 
-    #[clap(short, long = "ns")]
+    #[arg(short, long = "ns")]
     pub namespace_id: u64,
 
-    #[clap(long, env = "ESPRESSO_MARKETPLACE_RESERVE_BUILDER_URL")]
+    #[arg(long, env = "ESPRESSO_MARKETPLACE_RESERVE_BUILDER_URL")]
     pub reserve_url: Option<Url>,
 
-    #[clap(long, default_value_t = 200)]
+    #[arg(long, default_value_t = 200)]
     pub reserve_price: u64,
 
-    #[clap(long, default_value_t = false)]
+    #[arg(long, default_value_t = false)]
     pub active: bool,
 
-    #[clap(long, default_value = "test")]
+    #[arg(long, default_value = "test")]
     pub text: String,
 
     /// The private key is provided in tagged-base64 format.
     /// If not provided, a default private key with a seed of `[0; 32]` and an index of `9876` will be used.
-    #[clap(long = "privkey")]
+    #[arg(long = "privkey")]
     pub private_key: Option<String>,
 }
 
 // Options for updating an already registered rollup
 #[derive(Parser, Debug)]
 struct UpdateArgs {
-    #[clap(short, long, env = "ESPRESSO_MARKETPLACE_SOLVER_API_URL")]
+    #[arg(short, long, env = "ESPRESSO_MARKETPLACE_SOLVER_API_URL")]
     pub solver_url: Url,
 
-    #[clap(short, long = "ns")]
+    #[arg(short, long = "ns")]
     pub namespace_id: u64,
 
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_MARKETPLACE_RESERVE_BUILDER_URL",
         default_value = "",
@@ -73,18 +73,18 @@ struct UpdateArgs {
     )]
     pub reserve_url: Update<Option<Url>>,
 
-    #[clap(long, value_parser = parse_update::<u64>, default_value = "")]
+    #[arg(long, value_parser = parse_update::<u64>, default_value = "")]
     pub reserve_price: Update<u64>,
 
-    #[clap(long, value_parser = parse_update::<bool>, default_value = "")]
+    #[arg(long, value_parser = parse_update::<bool>, default_value = "")]
     pub active: Update<bool>,
 
-    #[clap(long, value_parser = parse_update::<String>, default_value = "")]
+    #[arg(long, value_parser = parse_update::<String>, default_value = "")]
     pub text: Update<String>,
 
     /// The private key is provided in tagged-base64 format.
     /// If not provided, a default private key with a seed of `[0; 32]` and an index of `9876` will be used.
-    #[clap(long = "privkey")]
+    #[arg(long = "privkey")]
     pub private_key: Option<String>,
 }
 

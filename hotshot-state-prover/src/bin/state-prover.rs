@@ -20,11 +20,11 @@ use vbs::version::StaticVersion;
 #[derive(Parser)]
 struct Args {
     /// Start the prover service daemon
-    #[clap(short, long, action)]
+    #[arg(short, long)]
     daemon: bool,
 
     /// Url of the state relay server
-    #[clap(
+    #[arg(
         long,
         default_value = "http://localhost:8083",
         env = "ESPRESSO_STATE_RELAY_SERVER_URL"
@@ -32,15 +32,15 @@ struct Args {
     relay_server: Url,
 
     /// The frequency of updating the light client state, expressed in update interval
-    #[clap(short, long = "freq", value_parser = parse_duration, default_value = "10m", env = "ESPRESSO_STATE_PROVER_UPDATE_INTERVAL")]
+    #[arg(short, long = "freq", value_parser = parse_duration, default_value = "10m", env = "ESPRESSO_STATE_PROVER_UPDATE_INTERVAL")]
     update_interval: Duration,
 
     /// Interval between retries if a state update fails
-    #[clap(long = "retry-freq", value_parser = parse_duration, default_value = "2s", env = "ESPRESSO_STATE_PROVER_RETRY_INTERVAL")]
+    #[arg(long = "retry-freq", value_parser = parse_duration, default_value = "2s", env = "ESPRESSO_STATE_PROVER_RETRY_INTERVAL")]
     retry_interval: Duration,
 
     /// Interval between retries if a state update fails
-    #[clap(
+    #[arg(
         long = "retries",
         default_value = "10",
         env = "ESPRESSO_STATE_PROVER_ONESHOT_RETRIES"
@@ -48,7 +48,7 @@ struct Args {
     max_retries: u64,
 
     /// URL of layer 1 Ethereum JSON-RPC provider.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
         default_value = "http://localhost:8545"
@@ -56,15 +56,15 @@ struct Args {
     l1_provider: Url,
 
     /// Address of LightClient contract on layer 1.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
     light_client_address: Address,
 
     /// Mnemonic phrase for a funded Ethereum wallet.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_ETH_MNEMONIC", default_value = None)]
+    #[arg(long, env = "ESPRESSO_SEQUENCER_ETH_MNEMONIC", default_value = None)]
     eth_mnemonic: String,
 
     /// Index of a funded account derived from eth-mnemonic.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX",
         default_value = "0"
@@ -73,7 +73,7 @@ struct Args {
 
     /// URL of a sequencer node that is currently providing the HotShot config.
     /// This is used to initialize the stake table.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_SEQUENCER_URL",
         default_value = "http://localhost:24000"
@@ -83,14 +83,14 @@ struct Args {
     /// If daemon and provided, the service will run a basic HTTP server on the given port.
     ///
     /// The server provides healthcheck and version endpoints.
-    #[clap(short, long, env = "ESPRESSO_PROVER_SERVICE_PORT")]
+    #[arg(short, long, env = "ESPRESSO_PROVER_SERVICE_PORT")]
     pub port: Option<u16>,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    #[arg(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 

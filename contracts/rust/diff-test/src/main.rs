@@ -39,7 +39,7 @@ struct Cli {
     #[arg(value_enum)]
     action: Action,
     /// Optional arguments for the `action`
-    #[arg(value_parser, num_args = 1.., value_delimiter = ' ')]
+    #[arg(num_args = 1.., value_delimiter = ' ')]
     args: Vec<String>,
 }
 
