@@ -15,7 +15,7 @@ use hotshot_types::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
-    stake_table::FullStakeTable,
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::NodeType,
@@ -30,10 +30,10 @@ use hotshot_utils::anytrace::*;
 /// The static committee election
 pub struct Committee<T: NodeType> {
     /// The nodes on the committee and their stake
-    stake_table: FullStakeTable<T>,
+    stake_table: HSStakeTable<T>,
 
     /// The nodes on the committee and their stake
-    da_stake_table: FullStakeTable<T>,
+    da_stake_table: HSStakeTable<T>,
 
     /// Stake tables randomized with the DRB, used (only) for leader election
     randomized_committee: RandomizedCommittee<<T::SignatureKey as SignatureKey>::StakeTableEntry>,
@@ -112,12 +112,12 @@ impl<TYPES: NodeType> Membership<TYPES> for Committee<TYPES> {
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> FullStakeTable<TYPES> {
+    fn stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         self.stake_table.clone()
     }
 
     /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> FullStakeTable<TYPES> {
+    fn da_stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         self.da_stake_table.clone()
     }
 

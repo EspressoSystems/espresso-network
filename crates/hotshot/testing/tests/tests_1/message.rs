@@ -68,8 +68,8 @@ async fn test_certificate2_validity() {
     use hotshot_testing::{helpers::build_system_handle, view_generator::TestViewGenerator};
     use hotshot_types::{
         data::{Leaf, Leaf2},
+        stake_table::StakeTableEntries,
         vote::Certificate,
-        StakeTableEntries,
     };
 
     hotshot::helpers::initialize_logging();

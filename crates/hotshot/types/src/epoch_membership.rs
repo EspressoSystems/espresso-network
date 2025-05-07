@@ -14,7 +14,7 @@ use hotshot_utils::{
 use crate::{
     data::Leaf2,
     drb::{compute_drb_result, DrbResult},
-    stake_table::FullStakeTable,
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
@@ -353,7 +353,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn stake_table(&self) -> FullStakeTable<TYPES> {
+    pub async fn stake_table(&self) -> HSStakeTable<TYPES> {
         self.coordinator
             .membership
             .read()
@@ -362,7 +362,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn da_stake_table(&self) -> FullStakeTable<TYPES> {
+    pub async fn da_stake_table(&self) -> HSStakeTable<TYPES> {
         self.coordinator
             .membership
             .read()

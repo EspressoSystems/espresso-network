@@ -105,10 +105,7 @@ impl StateRelayServerState {
 
         let genesis_stake_table =
             fetch_stake_table_from_sequencer(&self.sequencer_url, None).await?;
-        let genesis_total_stake = genesis_stake_table
-            .iter()
-            .map(|entry| entry.stake_table_entry.stake())
-            .sum();
+        let genesis_total_stake = genesis_stake_table.total_stakes();
 
         // init local state
         self.thresholds

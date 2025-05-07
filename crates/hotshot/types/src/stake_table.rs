@@ -48,15 +48,15 @@ impl<K: SignatureKey> StakeTableEntry<K> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub struct FullStakeTable<TYPES: NodeType>(pub Vec<PeerConfig<TYPES>>);
+pub struct HSStakeTable<TYPES: NodeType>(pub Vec<PeerConfig<TYPES>>);
 
-impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for FullStakeTable<TYPES> {
+impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for HSStakeTable<TYPES> {
     fn from(peers: Vec<PeerConfig<TYPES>>) -> Self {
         Self(peers)
     }
 }
 
-impl<TYPES: NodeType> std::ops::Deref for FullStakeTable<TYPES> {
+impl<TYPES: NodeType> std::ops::Deref for HSStakeTable<TYPES> {
     type Target = Vec<PeerConfig<TYPES>>;
 
     fn deref(&self) -> &Self::Target {
@@ -64,7 +64,7 @@ impl<TYPES: NodeType> std::ops::Deref for FullStakeTable<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> std::ops::DerefMut for FullStakeTable<TYPES> {
+impl<TYPES: NodeType> std::ops::DerefMut for HSStakeTable<TYPES> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -82,7 +82,16 @@ fn u256_to_field(amount: U256) -> CircuitField {
     CircuitField::from_le_bytes_mod_order(&amount_bytes)
 }
 
-impl<TYPES: NodeType> FullStakeTable<TYPES> {
+impl<TYPES: NodeType> std::iter::IntoIterator for HSStakeTable<TYPES> {
+    type Item = PeerConfig<TYPES>;
+    type IntoIter = std::vec::IntoIter<PeerConfig<TYPES>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<TYPES: NodeType> HSStakeTable<TYPES> {
     pub fn commitment(&self, stake_table_capacity: usize) -> anyhow::Result<StakeTableState> {
         if stake_table_capacity < self.0.len() {
             return Err(anyhow::anyhow!(
@@ -124,5 +133,37 @@ impl<TYPES: NodeType> FullStakeTable<TYPES> {
                 .unwrap()[0],
             threshold,
         })
+    }
+
+    pub fn total_stakes(&self) -> U256 {
+        self.0
+            .iter()
+            .map(|peer| peer.stake_table_entry.stake())
+            .sum()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, PeerConfig<TYPES>> {
+        self.0.iter()
+    }
+}
+
+pub struct StakeTableEntries<TYPES: NodeType>(
+    pub Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry>,
+);
+
+impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for StakeTableEntries<TYPES> {
+    fn from(peers: Vec<PeerConfig<TYPES>>) -> Self {
+        Self(
+            peers
+                .into_iter()
+                .map(|peer| peer.stake_table_entry)
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
+impl<TYPES: NodeType> From<HSStakeTable<TYPES>> for StakeTableEntries<TYPES> {
+    fn from(stake_table: HSStakeTable<TYPES>) -> Self {
+        Self::from(stake_table.0)
     }
 }

@@ -32,7 +32,7 @@ use hotshot_types::{
         StateSignaturesBundle, StateVerKey,
     },
     simple_certificate::LightClientStateUpdateCertificate,
-    stake_table::FullStakeTable,
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StateSignatureKey,
@@ -92,7 +92,7 @@ pub struct ProverServiceState {
     /// The current epoch number of the stake table
     pub epoch: Option<<SeqTypes as NodeType>::Epoch>,
     /// The stake table
-    pub stake_table: FullStakeTable<SeqTypes>,
+    pub stake_table: HSStakeTable<SeqTypes>,
     /// The current stake table state
     pub st_state: StakeTableState,
 }

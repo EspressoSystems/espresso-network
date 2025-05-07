@@ -10,7 +10,7 @@ use hotshot_contract_adapter::{
     sol_types::{LightClientStateSol, StakeTableStateSol},
 };
 use hotshot_types::{
-    stake_table::FullStakeTable,
+    stake_table::HSStakeTable,
     traits::node_implementation::{ConsensusTime, NodeType},
     PeerConfig,
 };
@@ -34,7 +34,7 @@ pub async fn light_client_genesis(
 pub async fn fetch_stake_table_from_sequencer(
     sequencer_url: &Url,
     epoch: Option<<SeqTypes as NodeType>::Epoch>,
-) -> Result<FullStakeTable<SeqTypes>> {
+) -> Result<HSStakeTable<SeqTypes>> {
     tracing::info!("Initializing stake table from node for epoch {epoch:?}");
 
     match epoch {
@@ -74,7 +74,7 @@ pub async fn fetch_stake_table_from_sequencer(
 #[inline]
 /// derive the genesis light client state and stake table state from initial set of `PeerConfig`
 pub fn light_client_genesis_from_stake_table(
-    st: &FullStakeTable<SeqTypes>,
+    st: &HSStakeTable<SeqTypes>,
     stake_table_capacity: usize,
 ) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
     let st_state = st.commitment(stake_table_capacity)?;

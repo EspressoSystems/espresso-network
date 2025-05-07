@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
-    stake_table::FullStakeTable,
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::NodeType,
@@ -29,10 +29,10 @@ pub struct StaticCommitteeLeaderForTwoViews<T: NodeType> {
     eligible_leaders: Vec<PeerConfig<T>>,
 
     /// The nodes on the committee and their stake
-    stake_table: FullStakeTable<T>,
+    stake_table: HSStakeTable<T>,
 
     /// The nodes on the committee and their stake
-    da_stake_table: FullStakeTable<T>,
+    da_stake_table: HSStakeTable<T>,
 
     /// The nodes on the committee and their stake, indexed by public key
     indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
@@ -98,12 +98,12 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommitteeLeaderForTwoViews<TYP
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> FullStakeTable<TYPES> {
+    fn stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         self.stake_table.clone()
     }
 
     /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> FullStakeTable<TYPES> {
+    fn da_stake_table(&self, _epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         self.da_stake_table.clone()
     }
 

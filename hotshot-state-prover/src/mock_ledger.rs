@@ -15,7 +15,7 @@ use hotshot_types::{
     light_client::{
         GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
     },
-    stake_table::{FullStakeTable, StakeTableEntry},
+    stake_table::{HSStakeTable, StakeTableEntry},
     utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
     PeerConfig,
 };
@@ -74,9 +74,9 @@ pub struct MockLedger {
     pub rng: StdRng,
     pub(crate) epoch: u64,
     pub(crate) state: GenericLightClientState<F>,
-    pub(crate) voting_st: FullStakeTable<SeqTypes>,
-    pub(crate) next_voting_st: FullStakeTable<SeqTypes>,
-    pub(crate) pending_st: FullStakeTable<SeqTypes>,
+    pub(crate) voting_st: HSStakeTable<SeqTypes>,
+    pub(crate) next_voting_st: HSStakeTable<SeqTypes>,
+    pub(crate) pending_st: HSStakeTable<SeqTypes>,
     pub(crate) qc_keys: Vec<BLSVerKey>,
     pub(crate) state_keys: Vec<(SchnorrSignKey, SchnorrVerKey)>,
     key_archive: HashMap<BLSVerKey, SchnorrSignKey>,
@@ -461,7 +461,7 @@ fn key_pairs_for_testing<R: CryptoRng + RngCore>(
 fn stake_table_for_testing(
     bls_keys: &[BLSVerKey],
     schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
-) -> FullStakeTable<SeqTypes> {
+) -> HSStakeTable<SeqTypes> {
     bls_keys
         .iter()
         .enumerate()

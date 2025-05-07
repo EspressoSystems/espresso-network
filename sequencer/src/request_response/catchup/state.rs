@@ -13,7 +13,7 @@ use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::ViewNumber,
     message::UpgradeLock,
-    stake_table::FullStakeTable,
+    stake_table::HSStakeTable,
     traits::{network::ConnectedNetwork, node_implementation::Versions},
     utils::verify_leaf_chain,
 };
@@ -37,7 +37,7 @@ impl<
         &self,
         _retry: usize,
         height: u64,
-        stake_table: FullStakeTable<SeqTypes>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Timeout after a few batches
@@ -205,7 +205,7 @@ impl<
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: FullStakeTable<SeqTypes>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         tracing::info!("Fetching leaf for height: {height}");

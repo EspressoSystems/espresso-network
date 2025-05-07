@@ -10,7 +10,6 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duratio
 use alloy::primitives::U256;
 use bincode::Options;
 use displaydoc::Display;
-use stake_table::FullStakeTable;
 use tracing::error;
 use traits::{
     node_implementation::NodeType,
@@ -168,27 +167,6 @@ impl<TYPES: NodeType> Default for PeerConfig<TYPES> {
     fn default() -> Self {
         let default_validator_config = ValidatorConfig::<TYPES>::default();
         default_validator_config.public_config()
-    }
-}
-
-pub struct StakeTableEntries<TYPES: NodeType>(
-    pub Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry>,
-);
-
-impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for StakeTableEntries<TYPES> {
-    fn from(peers: Vec<PeerConfig<TYPES>>) -> Self {
-        Self(
-            peers
-                .into_iter()
-                .map(|peer| peer.stake_table_entry)
-                .collect::<Vec<_>>(),
-        )
-    }
-}
-
-impl<TYPES: NodeType> From<FullStakeTable<TYPES>> for StakeTableEntries<TYPES> {
-    fn from(stake_table: FullStakeTable<TYPES>) -> Self {
-        Self::from(stake_table.0)
     }
 }
 

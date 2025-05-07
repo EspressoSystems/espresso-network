@@ -22,6 +22,7 @@ use hotshot_types::{
         EpochRootQuorumCertificate, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
+    stake_table::StakeTableEntries,
     traits::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
@@ -29,7 +30,6 @@ use hotshot_types::{
     },
     utils::{is_epoch_transition, EpochTransitionIndicator},
     vote::{Certificate, HasViewNumber},
-    StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;

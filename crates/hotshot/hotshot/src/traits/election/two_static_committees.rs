@@ -12,7 +12,7 @@ use std::{
 use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
-    stake_table::FullStakeTable,
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::NodeType,
@@ -26,7 +26,7 @@ use hotshot_utils::anytrace::Result;
 type EligibleLeaders<T> = (Vec<PeerConfig<T>>, Vec<PeerConfig<T>>);
 
 /// Tuple type for stake tables
-type StakeTables<T> = (FullStakeTable<T>, FullStakeTable<T>);
+type StakeTables<T> = (HSStakeTable<T>, HSStakeTable<T>);
 
 /// Tuple type for indexed stake tables
 type IndexedStakeTables<T> = (
@@ -171,7 +171,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> FullStakeTable<TYPES> {
+    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.stake_table.0.clone()
@@ -181,7 +181,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the stake table for the current view
-    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> FullStakeTable<TYPES> {
+    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.da_stake_table.0.clone()

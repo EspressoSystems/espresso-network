@@ -24,12 +24,13 @@ use crate::{
     message::UpgradeLock,
     simple_certificate::{LightClientStateUpdateCertificate, Threshold},
     simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
-    stake_table::FullStakeTable,
+    stake_table::HSStakeTable,
+    stake_table::StakeTableEntries,
     traits::{
         node_implementation::{NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
     },
-    PeerConfig, StakeTableEntries,
+    PeerConfig,
 };
 
 /// A simple vote that has a signer and commitment to the data voted on.
@@ -88,7 +89,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     /// Get  Stake Table from Membership implementation.
     fn stake_table(
         membership: &EpochMembership<TYPES>,
-    ) -> impl Future<Output = FullStakeTable<TYPES>> + Send;
+    ) -> impl Future<Output = HSStakeTable<TYPES>> + Send;
 
     /// Get Total Nodes from Membership implementation.
     fn total_nodes(membership: &EpochMembership<TYPES>) -> impl Future<Output = usize> + Send;
