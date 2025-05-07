@@ -560,7 +560,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
         stakeTable.claimValidatorExit(validator);
 
         // Undelegate after validator exit fails
-        vm.expectRevert(S.ValidatorInactive.selector);
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
         stakeTable.undelegate(validator, 1);
 
         // Claim validator exit after escrow period ok
