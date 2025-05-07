@@ -433,7 +433,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
     /// Get a `HotshotInitialized` to restore from later.
     // TODO most the values are fudged for now
-    pub async fn into_initializer(&self) -> HotShotInitializer<SeqTypes> {
+    pub async fn into_initializer(
+        &self,
+    ) -> (
+        Arc<SystemContext<SeqTypes, Node<N, P>, V>>,
+        HotShotInitializer<SeqTypes>,
+    ) {
         let node_state = self.node_state();
         let validated_state = self.decided_state().await;
         let hotshot = self.consensus().read().await.hotshot.clone();
@@ -445,12 +450,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             block_header: None,
         };
 
-        // TODO real hich_qc
+        // TODO real high_qc
         let high_qc =
             QuorumCertificate2::genesis::<MockSequencerVersions>(&*validated_state, &node_state)
                 .await;
         // TODO fudge
-        HotShotInitializer::<SeqTypes>::load(
+        let hs_initializer = HotShotInitializer::<SeqTypes>::load(
             node_state,
             hotshot.config.epoch_height,
             hotshot.config.epoch_start_block,
@@ -462,7 +467,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             BTreeMap::new(),
             None,
             None,
-        )
+        );
+
+        (hotshot, hs_initializer)
     }
 }
 

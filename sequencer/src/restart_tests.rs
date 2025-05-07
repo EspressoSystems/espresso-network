@@ -14,7 +14,7 @@ use cdn_broker::{
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
-use derivative::Derivative;
+use derive_more::Debug;
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, FeeAccount,
     MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
@@ -23,7 +23,7 @@ use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},
 };
-use hotshot::{traits::implementations::derive_libp2p_peer_id, HotShotInitializer};
+use hotshot::{traits::implementations::derive_libp2p_peer_id, HotShotInitializer, SystemContext};
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
@@ -234,7 +234,21 @@ impl NodeParams {
 }
 
 #[derive(Debug)]
+struct NodeInitializer<S: TestableSequencerDataSource> {
+    hotshot_initializer: HotShotInitializer<SeqTypes>,
+    #[debug(skip)]
+    hotshot_context: Arc<
+        SystemContext<
+            SeqTypes,
+            Node<network::Production, <S::Options as PersistenceOptions>::Persistence>,
+            MockSequencerVersions,
+        >,
+    >,
+}
+
+#[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
+    #[debug(skip)]
     storage: S::Storage,
     context: Option<
         SequencerContext<
@@ -246,7 +260,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
-    initializer: Option<HotShotInitializer<SeqTypes>>,
+    initializer: Option<NodeInitializer<S>>,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -340,8 +354,15 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
     /// Store state of node, useful to restore node later.
     async fn store(&mut self) {
-        let initializer = self.context.clone().unwrap().into_initializer().await;
-        // TODO we may need more than just the initializer
+        let (hotshot_context, hotshot_initializer) =
+            self.context.clone().unwrap().into_initializer().await;
+
+        // TODO we may need more info than this.
+        let initializer = NodeInitializer {
+            hotshot_context,
+            hotshot_initializer,
+        };
+
         self.initializer.replace(initializer); // then on start up `if let Some(_)`.
     }
 
