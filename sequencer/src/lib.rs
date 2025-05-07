@@ -50,6 +50,7 @@ use hotshot::{
         RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
+    MarketplaceConfig,
 };
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
@@ -204,7 +205,6 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
-    builder_url: Url,
     proposal_fetcher_config: ProposalFetcherConfig,
 ) -> anyhow::Result<SequencerContext<network::Production, P, V>>
 where
@@ -594,7 +594,6 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         seq_versions,
-        builder_url,
         proposal_fetcher_config,
     )
     .await?;
@@ -641,8 +640,8 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
-        Upgrade, UpgradeMap,
+        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
+        SeqTypes, Transaction, Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -1126,7 +1125,7 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             bind_version: V,
             upgrades: BTreeMap<Version, Upgrade>,
-            builder_url: Url,
+            marketplace_builder_url: Url,
         ) -> SequencerContext<network::Memory, P::Persistence, V> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
@@ -1262,7 +1261,6 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 bind_version,
-                builder_url,
                 Default::default(),
             )
             .await
