@@ -1877,8 +1877,9 @@ mod test {
         types::HeightIndexed,
     };
     use hotshot_types::{
+        data::EpochNumber,
         event::LeafInfo,
-        traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        traits::{election::Membership, metrics::NoMetrics, node_implementation::ConsensusTime},
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
@@ -3473,5 +3474,138 @@ mod test {
             .send()
             .await
             .expect("failed to get stake table");
+    }
+
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_epoch_stake_table_catchup() {
+        setup_test();
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // setup catchup peers
+        let catchup_peers = std::array::from_fn(|_| {
+            StatePeers::<StaticVersion<0, 1>>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                &NoMetrics,
+            )
+        });
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::with_port(port))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .catchups(catchup_peers)
+            .pos_hook::<PosVersion>(true)
+            .await
+            .unwrap()
+            .build();
+
+        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
+
+        // Wait for the peer 0 (node 1) to advance past three epochs
+        let mut events = network.peers[0].event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Node 0 decided at height: {}", height);
+                if height > EPOCH_HEIGHT * 3 {
+                    break;
+                }
+            }
+        }
+
+        // Shutdown and remove node 1 to simulate falling behind
+        tracing::info!("Shutting down node 0");
+        network.peers.remove(0);
+
+        // Wait for epochs to progress with node 1 offline
+        let mut events = network.server.event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Server decided at height: {}", height);
+                //  until 10 epochs
+                if height > EPOCH_HEIGHT * 10 {
+                    break;
+                }
+            }
+        }
+
+        // add node 1 to the network with fresh storage
+        let storage = SqlDataSource::create_storage().await;
+        let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        tracing::info!("Restarting node 0");
+        let node = network
+            .cfg
+            .init_node(
+                1,
+                ValidatedState::default(),
+                options,
+                Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )),
+                None,
+                &NoMetrics,
+                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                MockSequencerVersions::new(),
+                Default::default(),
+                "http://localhost".parse().unwrap(),
+            )
+            .await;
+
+        let coordinator = node.node_state().coordinator;
+
+        let server_node_state = network.server.node_state();
+        let server_coordinator = server_node_state.coordinator;
+
+        // Verify that the restarted node catches up for each epoch
+        for epoch_num in 1..=10 {
+            let epoch = EpochNumber::new(epoch_num);
+
+            if coordinator.membership_for_epoch(Some(epoch)).await.is_err() {
+                coordinator.wait_for_catchup(epoch).await.unwrap();
+            }
+
+            let node_stake_table = coordinator
+                .membership()
+                .read()
+                .await
+                .stake_table(Some(epoch));
+            let main_stake_table = server_coordinator
+                .membership()
+                .read()
+                .await
+                .stake_table(Some(epoch));
+
+            assert_eq!(
+                node_stake_table, main_stake_table,
+                "Stake table mismatch for epoch {epoch_num}",
+            );
+        }
     }
 }
