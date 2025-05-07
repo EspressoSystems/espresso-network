@@ -941,7 +941,6 @@ pub mod test_helpers {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
                         let upgrades_map = cfg.upgrades();
-                        let builder_url = builder_url.clone();
                         async move {
                             if i == 0 {
                                 opt.serve(|metrics, consumer, storage| {
@@ -959,7 +958,6 @@ pub mod test_helpers {
                                                 consumer,
                                                 bind_version,
                                                 upgrades_map,
-                                                builder_url,
                                             )
                                             .await)
                                     }
@@ -979,7 +977,6 @@ pub mod test_helpers {
                                     NullEventConsumer,
                                     bind_version,
                                     upgrades_map,
-                                    builder_url,
                                 )
                                 .await
                             }
@@ -2166,7 +2163,6 @@ mod test {
                 NullEventConsumer,
                 MockSequencerVersions::new(),
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
         let mut events = node.event_stream().await;
@@ -2288,7 +2284,6 @@ mod test {
                 NullEventConsumer,
                 MockSequencerVersions::new(),
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
         let mut events = node.event_stream().await;
@@ -2376,7 +2371,6 @@ mod test {
                 NullEventConsumer,
                 MockSequencerVersions::new(),
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
         let mut events = node.event_stream().await;
@@ -2472,7 +2466,6 @@ mod test {
                 NullEventConsumer,
                 MockSequencerVersions::new(),
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
         let mut events = node.event_stream().await;

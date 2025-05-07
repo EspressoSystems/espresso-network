@@ -50,7 +50,6 @@ use hotshot::{
         RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
-    MarketplaceConfig,
 };
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
@@ -640,8 +639,8 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade, UpgradeMap,
+        EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -1097,11 +1096,6 @@ pub mod testing {
                     NullEventConsumer,
                     bind_version,
                     Default::default(),
-                    Url::parse(&format!(
-                        "http://localhost:{}",
-                        self.builder_port.unwrap_or_default()
-                    ))
-                    .unwrap(),
                 )
                 .await
             }))
@@ -1125,7 +1119,6 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             bind_version: V,
             upgrades: BTreeMap<Version, Upgrade>,
-            marketplace_builder_url: Url,
         ) -> SequencerContext<network::Memory, P::Persistence, V> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
