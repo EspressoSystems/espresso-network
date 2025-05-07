@@ -73,6 +73,7 @@ fn internal<M: Display>(msg: M) -> Error {
 pub fn define_api<State, Ver: StaticVersionType + 'static>(
     options: &Options,
     _: Ver,
+    api_ver: semver::Version,
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
@@ -83,7 +84,7 @@ where
         include_str!("../api/status.toml"),
         options.extensions.clone(),
     )?;
-    api.with_version("0.0.1".parse().unwrap())
+    api.with_version(api_ver)
         .get("block_height", |_, state| {
             async { state.block_height().await.map_err(internal) }.boxed()
         })?
@@ -142,7 +143,12 @@ mod test {
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "status",
-            define_api(&Default::default(), MockBase::instance()).unwrap(),
+            define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "0.0.1".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap();
         network.spawn(
@@ -231,6 +237,7 @@ mod test {
                 ..Default::default()
             },
             MockBase::instance(),
+            "0.0.1".parse().unwrap(),
         )
         .unwrap();
         api.get("get_ext", |_, state| {

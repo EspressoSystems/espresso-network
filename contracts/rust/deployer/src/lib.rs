@@ -3,15 +3,59 @@ use std::{collections::HashMap, io::Write};
 use alloy::{
     contract::RawCallBuilder,
     hex::{FromHex, ToHexExt},
-    network::TransactionBuilder,
+    network::{Ethereum, EthereumWallet, TransactionBuilder},
     primitives::{Address, Bytes, U256},
-    providers::Provider,
+    providers::{
+        fillers::{FillProvider, JoinFill, WalletFiller},
+        utils::JoinedRecommendedFillers,
+        Provider, ProviderBuilder, RootProvider,
+    },
     rpc::types::TransactionReceipt,
+    signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+    transports::http::reqwest::Url,
 };
 use anyhow::{anyhow, Result};
 use clap::{builder::OsStr, Parser};
-use derive_more::Display;
+use derive_more::{derive::Deref, Display};
 use hotshot_contract_adapter::sol_types::*;
+
+pub mod builder;
+pub mod network_config;
+
+/// Type alias that connects to providers with recommended fillers and wallet
+/// use `<HttpProviderWithWallet as WalletProvider>::wallet()` to access internal wallet
+/// use `<HttpProviderWithWallet as WalletProvider>::default_signer_address(&provider)` to get wallet address
+pub type HttpProviderWithWallet = FillProvider<
+    JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
+    RootProvider,
+    Ethereum,
+>;
+
+/// a handy thin wrapper around wallet builder and provider builder that directly
+/// returns an instantiated `Provider` with default fillers with wallet, ready to send tx
+pub fn build_provider(mnemonic: String, account_index: u32, url: Url) -> HttpProviderWithWallet {
+    let signer = build_signer(mnemonic, account_index);
+    let wallet = EthereumWallet::from(signer);
+    ProviderBuilder::new().wallet(wallet).on_http(url)
+}
+
+pub fn build_signer(mnemonic: String, account_index: u32) -> PrivateKeySigner {
+    MnemonicBuilder::<English>::default()
+        .phrase(mnemonic)
+        .index(account_index)
+        .expect("wrong mnemonic or index")
+        .build()
+        .expect("fail to build signer")
+}
+
+/// similar to [`build_provider()`] but using a random wallet
+pub fn build_random_provider(url: Url) -> HttpProviderWithWallet {
+    let signer = MnemonicBuilder::<English>::default()
+        .build_random()
+        .expect("fail to build signer");
+    let wallet = EthereumWallet::from(signer);
+    ProviderBuilder::new().wallet(wallet).on_http(url)
+}
 
 // We pass this during `forge bind --libraries` as a placeholder for the actual deployed library address
 const LIBRARY_PLACEHOLDER_ADDRESS: &str = "ffffffffffffffffffffffffffffffffffffffff";
@@ -24,6 +68,9 @@ pub struct DeployedContracts {
     /// Use an already-deployed PlonkVerifier.sol instead of deploying a new one.
     #[clap(long, env = Contract::PlonkVerifier)]
     plonk_verifier: Option<Address>,
+    /// Timelock.sol
+    #[clap(long, env = Contract::Timelock)]
+    timelock: Option<Address>,
     /// PlonkVerifierV2.sol
     #[clap(long, env = Contract::PlonkVerifierV2)]
     plonk_verifier_v2: Option<Address>,
@@ -47,10 +94,6 @@ pub struct DeployedContracts {
     #[clap(long, env = Contract::FeeContractProxy)]
     fee_contract_proxy: Option<Address>,
 
-    /// Use an already-deployed PermissonedStakeTable.sol proxy instead of deploying a new one.
-    #[clap(long, env = Contract::PermissonedStakeTable)]
-    permissioned_stake_table: Option<Address>,
-
     /// Use an already-deployed EspToken.sol instead of deploying a new one.
     #[clap(long, env = Contract::EspToken)]
     esp_token: Option<Address>,
@@ -73,6 +116,8 @@ pub struct DeployedContracts {
 pub enum Contract {
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_ADDRESS")]
     PlonkVerifier,
+    #[display("ESPRESSO_SEQUENCER_TIMELOCK_CONTROLLER_ADDRESS")]
+    Timelock,
     #[display("ESPRESSO_SEQUENCER_PLONK_VERIFIER_V2_ADDRESS")]
     PlonkVerifierV2,
     #[display("ESPRESSO_SEQUENCER_LIGHT_CLIENT_ADDRESS")]
@@ -85,8 +130,6 @@ pub enum Contract {
     FeeContract,
     #[display("ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS")]
     FeeContractProxy,
-    #[display("ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS")]
-    PermissonedStakeTable,
     #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS")]
     EspToken,
     #[display("ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS")]
@@ -104,7 +147,7 @@ impl From<Contract> for OsStr {
 }
 
 /// Cache of contracts predeployed or deployed during this current run.
-#[derive(Debug, Clone, Default)]
+#[derive(Deref, Debug, Clone, Default)]
 pub struct Contracts(HashMap<Contract, Address>);
 
 impl From<DeployedContracts> for Contracts {
@@ -115,6 +158,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.plonk_verifier_v2 {
             m.insert(Contract::PlonkVerifierV2, addr);
+        }
+        if let Some(addr) = deployed.timelock {
+            m.insert(Contract::Timelock, addr);
         }
         if let Some(addr) = deployed.light_client {
             m.insert(Contract::LightClient, addr);
@@ -130,9 +176,6 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.fee_contract_proxy {
             m.insert(Contract::FeeContractProxy, addr);
-        }
-        if let Some(addr) = deployed.permissioned_stake_table {
-            m.insert(Contract::PermissonedStakeTable, addr);
         }
         if let Some(addr) = deployed.esp_token {
             m.insert(Contract::EspToken, addr);
@@ -213,6 +256,8 @@ pub(crate) async fn deploy_light_client_contract(
             PlonkVerifier::deploy_builder(&provider),
         )
         .await?;
+
+    assert!(is_contract(&provider, plonk_verifier_addr).await?);
 
     // when generate alloy's bindings, we supply a placeholder address, now we modify the actual
     // bytecode with deployed address of the library.
@@ -316,6 +361,21 @@ pub async fn deploy_light_client_proxy(
             .await?;
     }
 
+    // post deploy verification checks
+    assert_eq!(lc_proxy.getVersion().call().await?.majorVersion, 1);
+    assert_eq!(lc_proxy.owner().call().await?._0, admin);
+    if let Some(prover) = prover {
+        assert_eq!(lc_proxy.permissionedProver().call().await?._0, prover);
+    }
+    assert_eq!(
+        lc_proxy.stateHistoryRetentionPeriod().call().await?._0,
+        864000
+    );
+    assert_eq!(
+        lc_proxy.currentBlockNumber().call().await?._0,
+        U256::from(provider.get_block_number().await?)
+    );
+
     Ok(lc_proxy_addr)
 }
 
@@ -334,6 +394,8 @@ pub async fn upgrade_light_client_v2(
         None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
         Some(proxy_addr) => {
             let proxy = LightClient::new(proxy_addr, &provider);
+            let state_history_retention_period =
+                proxy.stateHistoryRetentionPeriod().call().await?._0;
             // first deploy PlonkVerifierV2.sol
             let pv2_addr = contracts
                 .deploy(
@@ -341,6 +403,9 @@ pub async fn upgrade_light_client_v2(
                     PlonkVerifierV2::deploy_builder(&provider),
                 )
                 .await?;
+
+            assert!(is_contract(&provider, pv2_addr).await?);
+
             // then deploy LightClientV2.sol
             let target_lcv2_bytecode = if is_mock {
                 LightClientV2Mock::BYTECODE.encode_hex()
@@ -396,6 +461,26 @@ pub async fn upgrade_light_client_v2(
                 .get_receipt()
                 .await?;
             if receipt.inner.is_success() {
+                // post deploy verification checks
+                let proxy_as_v2 = LightClientV2::new(proxy_addr, &provider);
+                assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+                assert_eq!(
+                    proxy_as_v2.blocksPerEpoch().call().await?._0,
+                    blocks_per_epoch
+                );
+                assert_eq!(
+                    proxy_as_v2.epochStartBlock().call().await?._0,
+                    epoch_start_block
+                );
+                assert_eq!(
+                    proxy_as_v2.stateHistoryRetentionPeriod().call().await?._0,
+                    state_history_retention_period
+                );
+                assert_eq!(
+                    proxy_as_v2.currentBlockNumber().call().await?._0,
+                    U256::from(provider.get_block_number().await?)
+                );
+
                 tracing::info!(%lcv2_addr, "LightClientProxy successfully upgrade to: ")
             } else {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", receipt);
@@ -440,24 +525,12 @@ pub async fn deploy_fee_contract_proxy(
         panic!("FeeContractProxy detected not as a proxy, report error!");
     }
 
-    Ok(fee_proxy_addr)
-}
+    // post deploy verification checks
+    let fee_proxy = FeeContract::new(fee_proxy_addr, &provider);
+    assert_eq!(fee_proxy.getVersion().call().await?.majorVersion, 1);
+    assert_eq!(fee_proxy.owner().call().await?._0, admin);
 
-/// The primary logic for deploying permissioned stake table contract.
-/// Return the contract address.
-pub async fn deploy_permissioned_stake_table(
-    provider: impl Provider,
-    contracts: &mut Contracts,
-    init_stake_table: Vec<NodeInfoSol>,
-) -> Result<Address> {
-    // deploy the permissioned stake table contract, with initStakers constructor
-    let stake_table_addr = contracts
-        .deploy(
-            Contract::PermissonedStakeTable,
-            PermissionedStakeTable::deploy_builder(&provider, init_stake_table),
-        )
-        .await?;
-    Ok(stake_table_addr)
+    Ok(fee_proxy_addr)
 }
 
 /// The primary logic for deploying and initializing an upgradable Espresso Token contract.
@@ -486,6 +559,20 @@ pub async fn deploy_token_proxy(
     if !is_proxy_contract(&provider, token_proxy_addr).await? {
         panic!("EspTokenProxy detected not as a proxy, report error!");
     }
+
+    // post deploy verification checks
+    let token_proxy = EspToken::new(token_proxy_addr, &provider);
+    assert_eq!(token_proxy.getVersion().call().await?.majorVersion, 1);
+    assert_eq!(token_proxy.owner().call().await?._0, owner);
+    assert_eq!(token_proxy.symbol().call().await?._0, "ESP");
+    assert_eq!(token_proxy.decimals().call().await?._0, 18);
+    assert_eq!(token_proxy.name().call().await?._0, "Espresso Token");
+    let total_supply = token_proxy.totalSupply().call().await?._0;
+    assert_eq!(
+        token_proxy.balanceOf(init_grant_recipient).call().await?._0,
+        total_supply
+    );
+
     Ok(token_proxy_addr)
 }
 
@@ -503,6 +590,13 @@ pub async fn deploy_stake_table_proxy(
         .await?;
     let stake_table = StakeTable::new(stake_table_addr, &provider);
 
+    // TODO: verify the light client address contains a contract
+    // See #3163, it's a cyclic dependency in the demo environment
+    // assert!(is_contract(&provider, light_client_addr).await?);
+
+    // verify the token address contains a contract
+    assert!(is_contract(&provider, token_addr).await?);
+
     let init_data = stake_table
         .initialize(token_addr, light_client_addr, exit_escrow_period, owner)
         .calldata()
@@ -517,6 +611,16 @@ pub async fn deploy_stake_table_proxy(
     if !is_proxy_contract(&provider, st_proxy_addr).await? {
         panic!("StakeTableProxy detected not as a proxy, report error!");
     }
+
+    let st_proxy = StakeTable::new(st_proxy_addr, &provider);
+    assert_eq!(st_proxy.getVersion().call().await?.majorVersion, 1);
+    assert_eq!(st_proxy.owner().call().await?._0, owner);
+    assert_eq!(st_proxy.token().call().await?._0, token_addr);
+    assert_eq!(st_proxy.lightClient().call().await?._0, light_client_addr);
+    assert_eq!(
+        st_proxy.exitEscrowPeriod().call().await?._0,
+        exit_escrow_period
+    );
 
     Ok(st_proxy_addr)
 }
@@ -542,15 +646,6 @@ pub async fn transfer_ownership(
             tracing::info!(%addr, %new_owner, "Transfer FeeContract ownership");
             let fee = FeeContract::new(addr, &provider);
             fee.transferOwnership(new_owner)
-                .send()
-                .await?
-                .get_receipt()
-                .await?
-        },
-        Contract::PermissonedStakeTable => {
-            tracing::info!(%addr, %new_owner, "Transfer PermissionedStakeTable ownership");
-            let st = PermissionedStakeTable::new(addr, &provider);
-            st.transferOwnership(new_owner)
                 .send()
                 .await?
                 .get_receipt()
@@ -596,13 +691,105 @@ pub async fn is_proxy_contract(provider: impl Provider, addr: Address) -> Result
     Ok(impl_address != Address::default())
 }
 
+pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bool> {
+    if address == Address::ZERO {
+        return Ok(false);
+    }
+
+    let code = provider.get_code_at(address).await?;
+    if code.is_empty() {
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+/// Deploy and initialize a Timelock contract
+///
+/// Parameters:
+/// - `min_delay`: The minimum delay for operations
+/// - `proposers`: The list of addresses that can propose
+/// - `executors`: The list of addresses that can execute
+/// - `admin`: The address that can perform admin actions
+pub async fn deploy_timelock(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    min_delay: U256,
+    proposers: Vec<Address>,
+    executors: Vec<Address>,
+    admin: Address,
+) -> Result<Address> {
+    let timelock_addr = contracts
+        .deploy(
+            Contract::Timelock,
+            Timelock::deploy_builder(
+                &provider,
+                min_delay,
+                proposers.clone(),
+                executors.clone(),
+                admin,
+            ),
+        )
+        .await?;
+
+    // Verify deployment
+    let timelock = Timelock::new(timelock_addr, &provider);
+
+    // Verify initialization parameters
+    assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+    assert!(
+        timelock
+            .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+            .call()
+            .await?
+            ._0
+    );
+    assert!(
+        timelock
+            .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+            .call()
+            .await?
+            ._0
+    );
+
+    // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
+    let default_admin_role = U256::ZERO;
+    assert!(
+        timelock
+            .hasRole(default_admin_role.into(), admin)
+            .call()
+            .await?
+            ._0
+    );
+
+    Ok(timelock_addr)
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
-    use hotshot::rand::{rngs::StdRng, SeedableRng};
 
     use super::*;
-    use crate::test_utils::setup_test;
+
+    #[tokio::test]
+    async fn test_is_contract() -> Result<(), anyhow::Error> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+
+        // test with zero address returns false
+        let zero_address = Address::ZERO;
+        assert!(!is_contract(&provider, zero_address).await?);
+
+        // Test with a non-contract address (e.g., a random address)
+        let random_address = Address::random();
+        assert!(!is_contract(&provider, random_address).await?);
+
+        // Deploy a contract and test with its address
+        let fee_contract = FeeContract::deploy(&provider).await?;
+        let contract_address = *fee_contract.address();
+        assert!(is_contract(&provider, contract_address).await?);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_is_proxy_contract() -> Result<()> {
@@ -637,7 +824,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_deploy_mock_light_client_proxy() -> Result<()> {
-        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -770,40 +956,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_deploy_permissioned_stake_table() -> Result<()> {
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
-        let mut contracts = Contracts::new();
-        let mut rng = StdRng::from_seed([42u8; 32]);
-
-        let mut init_stake_table = vec![];
-        for _ in 0..5 {
-            init_stake_table.push(NodeInfoSol::rand(&mut rng));
-        }
-        let st_addr =
-            deploy_permissioned_stake_table(&provider, &mut contracts, init_stake_table.clone())
-                .await?;
-
-        // check initialization is correct
-        let st = PermissionedStakeTable::new(st_addr, &provider);
-        for staker in init_stake_table {
-            assert!(st.isStaker(staker.blsVK).call().await?._0);
-        }
-
-        // test transfer ownership to multisig
-        let multisig = Address::random();
-        let _receipt = transfer_ownership(
-            &provider,
-            Contract::PermissonedStakeTable,
-            st_addr,
-            multisig,
-        )
-        .await?;
-        assert_eq!(st.owner().call().await?._0, multisig);
-
-        Ok(())
-    }
-
     async fn test_upgrade_light_client_to_v2_helper(is_mock: bool) -> Result<()> {
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
@@ -827,6 +979,12 @@ mod tests {
             Some(prover),
         )
         .await?;
+
+        let state_history_retention_period = LightClient::new(lc_proxy_addr, &provider)
+            .stateHistoryRetentionPeriod()
+            .call()
+            .await?
+            ._0;
 
         // then upgrade to v2
         upgrade_light_client_v2(
@@ -854,6 +1012,10 @@ mod tests {
         assert_eq!(lc.getVersion().call().await?.majorVersion, 2);
         assert_eq!(lc.blocksPerEpoch().call().await?._0, blocks_per_epoch);
         assert_eq!(lc.epochStartBlock().call().await?._0, epoch_start_block);
+        assert_eq!(
+            lc.stateHistoryRetentionPeriod().call().await?._0,
+            state_history_retention_period
+        );
 
         // test mock-specific functions
         if is_mock {
@@ -940,6 +1102,60 @@ mod tests {
         assert_eq!(stake_table.owner().call().await?._0, owner);
         assert_eq!(stake_table.token().call().await?._0, token_addr);
         assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deploy_timelock() -> Result<()> {
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        // Setup test parameters
+        let min_delay = U256::from(86400); // 1 day in seconds
+        let admin = provider.get_accounts().await?[0];
+        let proposers = vec![Address::random()];
+        let executors = vec![Address::random()];
+
+        let timelock_addr = deploy_timelock(
+            &provider,
+            &mut contracts,
+            min_delay,
+            proposers.clone(),
+            executors.clone(),
+            admin,
+        )
+        .await?;
+
+        // Verify deployment
+        let timelock = Timelock::new(timelock_addr, &provider);
+        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+
+        // Verify initialization parameters
+        assert_eq!(timelock.getMinDelay().call().await?._0, min_delay);
+        assert!(
+            timelock
+                .hasRole(timelock.PROPOSER_ROLE().call().await?._0, proposers[0])
+                .call()
+                .await?
+                ._0
+        );
+        assert!(
+            timelock
+                .hasRole(timelock.EXECUTOR_ROLE().call().await?._0, executors[0])
+                .call()
+                .await?
+                ._0
+        );
+
+        // test that the admin is in the default admin role where DEFAULT_ADMIN_ROLE = 0x00
+        let default_admin_role = U256::ZERO;
+        assert!(
+            timelock
+                .hasRole(default_admin_role.into(), admin)
+                .call()
+                .await?
+                ._0
+        );
         Ok(())
     }
 }

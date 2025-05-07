@@ -104,12 +104,17 @@ async fn test_certificate2_validity() {
     let qc = qc2.clone().to_qc();
 
     let epoch_mem = membership.membership_for_epoch(None).await.unwrap();
-    let membership_stake_table = epoch_mem.stake_table().await;
+    let membership_stake_table = epoch_mem
+        .stake_table()
+        .await
+        .into_iter()
+        .map(|config| config.stake_table_entry)
+        .collect::<Vec<_>>();
     let membership_success_threshold = epoch_mem.success_threshold().await;
 
     assert!(qc
         .is_valid_cert(
-            membership_stake_table.clone(),
+            &membership_stake_table,
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
@@ -118,7 +123,7 @@ async fn test_certificate2_validity() {
 
     assert!(qc2
         .is_valid_cert(
-            membership_stake_table,
+            &membership_stake_table,
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )

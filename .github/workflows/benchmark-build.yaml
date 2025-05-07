@@ -57,7 +57,6 @@ jobs:
             target/release/keygen
             target/release/permissionless-builder
             target/release/nasty-client
-            target/release/update-permissioned-stake-table
             target/release/espresso-dev-node
             target/release/pub-key
             target/release/espresso-bridge
@@ -100,7 +99,6 @@ jobs:
             target/release/keygen
             target/release/permissionless-builder
             target/release/nasty-client
-            target/release/update-permissioned-stake-table
             target/release/espresso-dev-node
             target/release/pub-key
             target/release/espresso-bridge
@@ -120,7 +118,6 @@ jobs:
       deploy-tag: ${{ steps.deploy.outputs.tags }}
       builder-tag: ${{ steps.builder.outputs.tags }}
       nasty-client-tag: ${{ steps.nasty-client.outputs.tags }}
-      update-permissioned-stake-table-tag: ${{ steps.update-permissioned-stake-table.outputs.tags }}
       espresso-dev-node-tag: ${{ steps.espresso-dev-node.outputs.tags }}
       bridge-tag: ${{ steps.bridge.outputs.tags }}
     steps:
@@ -225,13 +222,6 @@ jobs:
         id: nasty-client
         with:
           images: ghcr.io/espressosystems/espresso-sequencer/nasty-client
-          flavor: suffix=bench
-
-      - name: Generate update-permissioned-stake-table metadata
-        uses: docker/metadata-action@v5
-        id: update-permissioned-stake-table
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/update-permissioned-stake-table
           flavor: suffix=bench
 
       - name: Generate espresso-dev-node metadata
@@ -358,16 +348,6 @@ jobs:
           tags: ${{ steps.nasty-client.outputs.tags }}
           labels: ${{ steps.nasty-client.outputs.labels }}
 
-      - name: Build and push update-permissioned-stake-table docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/update-permissioned-stake-table.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.update-permissioned-stake-table.outputs.tags }}
-          labels: ${{ steps.update-permissioned-stake-table.outputs.labels }}
-
       - name: Build and push espresso-dev-node docker
         uses: docker/build-push-action@v6
         with:
@@ -410,7 +390,6 @@ jobs:
           docker pull ${{ needs.build-dockers.outputs.deploy-tag }}
           docker pull ${{ needs.build-dockers.outputs.builder-tag }}
           docker pull ${{ needs.build-dockers.outputs.nasty-client-tag }}
-          docker pull ${{ needs.build-dockers.outputs.update-permissioned-stake-table-tag }}
           docker pull ${{ needs.build-dockers.outputs.bridge-tag }}
       - name: Tag new docker images
         run: |
@@ -425,7 +404,6 @@ jobs:
           docker tag ${{ needs.build-dockers.outputs.deploy-tag }} ghcr.io/espressosystems/espresso-sequencer/deploy:main
           docker tag ${{ needs.build-dockers.outputs.builder-tag }} ghcr.io/espressosystems/espresso-sequencer/builder:main
           docker tag ${{ needs.build-dockers.outputs.nasty-client-tag }} ghcr.io/espressosystems/espresso-sequencer/nasty-client:main
-          docker tag ${{ needs.build-dockers.outputs.update-permissioned-stake-table-tag }} ghcr.io/espressosystems/espresso-sequencer/update-permissioned-stake-table:main
           docker tag ${{ needs.build-dockers.outputs.bridge-tag }} ghcr.io/espressosystems/espresso-sequencer/bridge:main
 
       - name: Test docker demo

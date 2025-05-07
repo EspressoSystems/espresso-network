@@ -154,7 +154,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
     }
     async fn is_valid_cert<V: Versions>(
         &self,
-        stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
@@ -231,7 +231,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2<TY
     }
     async fn is_valid_cert<V: Versions>(
         &self,
-        stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
@@ -311,7 +311,7 @@ impl<
     }
     async fn is_valid_cert<V: Versions>(
         &self,
-        stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Result<()> {
@@ -420,7 +420,7 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
             let membership_upgrade_threshold = membership.upgrade_threshold().await;
 
             cert.is_valid_cert(
-                StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
                 membership_upgrade_threshold,
                 upgrade_lock,
             )

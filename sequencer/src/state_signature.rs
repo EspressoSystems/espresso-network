@@ -52,7 +52,7 @@ pub struct StateSigner<ApiVer: StaticVersionType> {
     voting_stake_table_epoch: Option<<SeqTypes as NodeType>::Epoch>,
 
     /// Capacity of the stake table
-    stake_table_capacity: u64,
+    stake_table_capacity: usize,
 
     /// The state relay server url
     relay_server_client: Option<Client<ServerError, ApiVer>>,
@@ -64,7 +64,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         ver_key: StateVerKey,
         voting_stake_table: StakeTableState,
         voting_stake_table_epoch: Option<<SeqTypes as NodeType>::Epoch>,
-        stake_table_capacity: u64,
+        stake_table_capacity: usize,
     ) -> Self {
         Self {
             sign_key,
@@ -132,11 +132,19 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         );
                         return;
                     };
-                    self.voting_stake_table_epoch = option_state_epoch;
-                    self.voting_stake_table = compute_stake_table_commitment(
+                    match compute_stake_table_commitment(
                         &membership.stake_table().await,
-                        self.stake_table_capacity as usize,
-                    );
+                        self.stake_table_capacity,
+                    ) {
+                        Ok(stake_table_state) => {
+                            self.voting_stake_table_epoch = option_state_epoch;
+                            self.voting_stake_table = stake_table_state;
+                        },
+                        Err(err) => {
+                            tracing::error!("Failed to compute stake table commitment: {:?}", err);
+                            return;
+                        },
+                    }
                 }
 
                 let signature = self.sign_new_state(&state, self.voting_stake_table).await;

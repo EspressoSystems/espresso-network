@@ -6,7 +6,6 @@ use ark_std::{
     rand::{CryptoRng, RngCore},
 };
 /// BLS verification key, base field and Schnorr verification key
-pub use hotshot_stake_table::vec_based::config::QCVerKey;
 use hotshot_types::light_client::{
     CircuitField, LightClientState, PublicInput, StakeTableState, StateVerKey,
 };
@@ -116,12 +115,9 @@ mod tests {
         One, UniformRand,
     };
     use hotshot_types::{
-        light_client::LightClientState,
+        light_client::{compute_stake_table_commitment, LightClientState},
         signature_key::SchnorrPubKey,
-        traits::{
-            signature_key::StateSignatureKey,
-            stake_table::{SnapshotVersion, StakeTableScheme},
-        },
+        traits::signature_key::StateSignatureKey,
     };
     use jf_plonk::{
         proof_system::{PlonkKzgSnark, UniversalSNARK},
@@ -200,14 +196,19 @@ mod tests {
         let mut prng = test_rng();
 
         let (bls_keys, schnorr_keys) = key_pairs_for_testing(num_validators, &mut prng);
-        let st = stake_table_for_testing(ST_CAPACITY, &bls_keys, &schnorr_keys);
-        let st_state = st.voting_state().unwrap();
+        let st = stake_table_for_testing(&bls_keys, &schnorr_keys);
+        let st_state = compute_stake_table_commitment(&st, ST_CAPACITY)
+            .expect("Failed to compute stake table commitment");
         let next_st_state = st_state;
 
         let stake_table_entries = st
-            .try_iter(SnapshotVersion::LastEpochStart)
-            .unwrap()
-            .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
+            .iter()
+            .map(|config| {
+                (
+                    config.state_ver_key.clone(),
+                    config.stake_table_entry.stake_amount,
+                )
+            })
             .collect::<Vec<_>>();
 
         let lightclient_state = LightClientState {

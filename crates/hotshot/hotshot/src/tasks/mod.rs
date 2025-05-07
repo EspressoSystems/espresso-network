@@ -140,6 +140,7 @@ pub fn add_network_message_task<
         public_key: handle.public_key().clone(),
         transactions_cache: lru::LruCache::new(NonZeroUsize::new(100_000).unwrap()),
         upgrade_lock: upgrade_lock.clone(),
+        id: handle.hotshot.id,
     };
 
     let network = Arc::clone(channel);
@@ -197,11 +198,12 @@ pub fn add_network_event_task<
         view: TYPES::View::genesis(),
         epoch: genesis_epoch_from_version::<V, TYPES>(),
         membership_coordinator: handle.membership_coordinator.clone(),
-        storage: Arc::clone(&handle.storage()),
+        storage: handle.storage(),
         consensus: OuterConsensus::new(handle.consensus()),
         upgrade_lock: handle.hotshot.upgrade_lock.clone(),
         transmit_tasks: BTreeMap::new(),
         epoch_height: handle.epoch_height,
+        id: handle.hotshot.id,
     };
     let task = Task::new(
         network_state,
@@ -233,12 +235,14 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
             .as_ref()
             .is_some_and(|cert| V::Base::VERSION >= cert.data.new_version)
         {
+            tracing::warn!("Discarding loaded upgrade certificate due to version configuration.");
             *upgrade_certificate_lock = None;
         }
     }
 
     // only spawn the upgrade task if we are actually configured to perform an upgrade.
     if V::Base::VERSION < V::Upgrade::VERSION {
+        tracing::warn!("Consensus was started with an upgrade configured. Spawning upgrade task.");
         handle.add_task(UpgradeTaskState::<TYPES, V>::create_from(handle).await);
     }
 
@@ -358,7 +362,7 @@ where
             output_event_stream: output_event_stream.clone(),
             internal_event_stream: internal_event_stream.clone(),
             hotshot: Arc::clone(&hotshot),
-            storage: Arc::clone(&hotshot.storage),
+            storage: hotshot.storage.clone(),
             network: Arc::clone(&hotshot.network),
             membership_coordinator: memberships.clone(),
             epoch_height,

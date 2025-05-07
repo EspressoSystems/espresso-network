@@ -71,6 +71,7 @@ csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
 indexmap = { workspace = true }
@@ -82,13 +83,11 @@ hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }
-
 # Dependencies for feature `testing`
 hotshot-testing = { workspace = true, optional = true }
-
 hotshot-types = { workspace = true }
+
 include_dir = "0.7"
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
@@ -127,8 +126,8 @@ tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
-todo_by = "0.3"
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

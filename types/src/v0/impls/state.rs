@@ -1008,7 +1008,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
             // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
             .apply_header(
                 instance,
-                &instance.peers,
+                &instance.state_catchup,
                 parent_leaf,
                 proposed_header,
                 version,

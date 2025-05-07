@@ -11,7 +11,6 @@ use std::{
 };
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
@@ -60,22 +59,24 @@ pub struct NetworkMessageTaskState<TYPES: NodeType, V: Versions> {
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
+
+    /// Node's id
+    pub id: u64,
 }
 
 impl<TYPES: NodeType, V: Versions> NetworkMessageTaskState<TYPES, V> {
-    #[instrument(skip_all, name = "Network message task", level = "trace")]
+    #[instrument(skip_all, name = "Network message task", fields(id = self.id), level = "trace")]
     /// Handles a (deserialized) message from the network
     pub async fn handle_message(&mut self, message: Message<TYPES>) {
         match &message.kind {
-            MessageKind::Consensus(_) => tracing::debug!(
-                "Received consensus message from network:\n\n{:?}\n",
-                message
-            ),
+            MessageKind::Consensus(_) => {
+                tracing::debug!("Received consensus message from network: {:?}", message)
+            },
             MessageKind::Data(_) => {
-                tracing::trace!("Received data message from network:\n\n{:?}\n", message)
+                tracing::trace!("Received data message from network: {:?}", message)
             },
             MessageKind::External(_) => {
-                tracing::trace!("Received external message from network:\n\n{:?}\n", message)
+                tracing::trace!("Received external message from network: {:?}", message)
             },
         }
 
@@ -515,7 +516,7 @@ pub struct NetworkEventTaskState<
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// Storage to store actionable events
-    pub storage: Arc<RwLock<S>>,
+    pub storage: S,
 
     /// Shared consensus state
     pub consensus: OuterConsensus<TYPES>,
@@ -528,6 +529,9 @@ pub struct NetworkEventTaskState<
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// Node's id
+    pub id: u64,
 }
 
 #[async_trait]
@@ -564,7 +568,7 @@ impl<
     /// Handle the given event.
     ///
     /// Returns the completion status.
-    #[instrument(skip_all, fields(view = *self.view), name = "Network Task", level = "error")]
+    #[instrument(skip_all, fields(id = self.id, view = *self.view), name = "Network Task", level = "error")]
     pub async fn handle(&mut self, event: Arc<HotShotEvent<TYPES>>) {
         let mut maybe_action = None;
         if let Some((sender, message_kind, transmit)) =
@@ -645,7 +649,7 @@ impl<
         }
 
         let net = Arc::clone(&self.network);
-        let storage = Arc::clone(&self.storage);
+        let storage = self.storage.clone();
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
         spawn(async move {
             if NetworkEventTaskState::<TYPES, V, NET, S>::maybe_record_action(
@@ -672,7 +676,7 @@ impl<
     /// Record `HotShotAction` if available
     async fn maybe_record_action(
         maybe_action: Option<HotShotAction>,
-        storage: Arc<RwLock<S>>,
+        storage: S,
         consensus: OuterConsensus<TYPES>,
         view: <TYPES as NodeType>::View,
         epoch: Option<<TYPES as NodeType>::Epoch>,
@@ -686,12 +690,7 @@ impl<
             if matches!(action, HotShotAction::ViewSyncVote) {
                 action = HotShotAction::Vote;
             }
-            match storage
-                .write()
-                .await
-                .record_action(view, epoch, action)
-                .await
-            {
+            match storage.record_action(view, epoch, action).await {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     tracing::warn!("Not Sending {action:?} because of storage error: {e:?}");
@@ -1246,13 +1245,13 @@ impl<
         };
         let da_committee = mem.da_committee_members(view_number).await;
         let network = Arc::clone(&self.network);
-        let storage = Arc::clone(&self.storage);
+        let storage = self.storage.clone();
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
         let upgrade_lock = self.upgrade_lock.clone();
         let handle = spawn(async move {
             if NetworkEventTaskState::<TYPES, V, NET, S>::maybe_record_action(
                 maybe_action,
-                Arc::clone(&storage),
+                storage.clone(),
                 consensus,
                 view_number,
                 epoch,
@@ -1267,8 +1266,6 @@ impl<
             )) = &message.kind
             {
                 if storage
-                    .write()
-                    .await
                     .append_proposal2(&convert_proposal(prop.clone()))
                     .await
                     .is_err()

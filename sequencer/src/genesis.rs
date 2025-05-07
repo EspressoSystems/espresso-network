@@ -15,7 +15,7 @@ use vbs::version::Version;
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct StakeTableConfig {
-    pub capacity: u64,
+    pub capacity: usize,
 }
 
 /// An L1 block from which an Espresso chain should start syncing.
@@ -325,14 +325,11 @@ mod test {
         primitives::{B256, U256},
         providers::{layers::AnvilProvider, ProviderBuilder},
     };
+    use espresso_contract_deployer::{self as deployer, Contracts};
     use espresso_types::{
         L1BlockInfo, TimeBasedUpgrade, Timestamp, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
-    use sequencer_utils::{
-        deployer::{self, Contracts},
-        ser::FromStringOrInteger,
-        test_utils::setup_test,
-    };
+    use sequencer_utils::{ser::FromStringOrInteger, test_utils::setup_test};
     use toml::toml;
 
     use super::*;

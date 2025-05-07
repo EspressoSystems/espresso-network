@@ -345,11 +345,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug, V: Version
             view: TYPES::View::genesis(),
             epoch: None,
             membership_coordinator: handle.membership_coordinator.clone(),
-            storage: Arc::clone(&handle.storage()),
+            storage: handle.storage(),
             consensus: OuterConsensus::new(handle.consensus()),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             transmit_tasks: BTreeMap::new(),
             epoch_height: handle.epoch_height,
+            id: handle.hotshot.id,
         };
         let modified_network_state = NetworkEventTaskStateModifier {
             network_event_task_state: network_state,

@@ -7,7 +7,6 @@
 use std::{sync::Arc, time::Instant};
 
 use async_broadcast::{InactiveReceiver, Sender};
-use async_lock::RwLock;
 use chrono::Utc;
 use committable::Committable;
 use hotshot_types::{
@@ -201,7 +200,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
                 Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
                 &task_state.public_key,
                 version >= V::Epochs::VERSION,
-                task_state.membership.membership(),
+                &task_state.membership,
                 &task_state.storage,
             )
             .await
@@ -217,6 +216,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             version >= V::Epochs::VERSION,
             task_state.membership.membership(),
             &task_state.storage,
+            task_state.epoch_height,
         )
         .await
     };
@@ -257,8 +257,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
 
         let _ = task_state
             .storage
-            .write()
-            .await
             .update_decided_upgrade_certificate(Some(cert.clone()))
             .await;
     }
@@ -473,7 +471,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: UpgradeLock<TYPES, V>,
     view_number: TYPES::View,
-    storage: Arc<RwLock<I::Storage>>,
+    storage: I::Storage,
     leaf: Leaf2<TYPES>,
     vid_share: Proposal<TYPES, VidDisperseShare<TYPES>>,
     extended_vote: bool,
@@ -521,8 +519,6 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     let now = Instant::now();
     // Add to the storage.
     storage
-        .write()
-        .await
         .append_vid_general(&vid_share)
         .await
         .wrap()
@@ -554,7 +550,9 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         let next_stake_table_state = compute_stake_table_commitment(
             &next_membership.stake_table().await,
             hotshot_types::light_client::STAKE_TABLE_CAPACITY,
-        );
+        )
+        .wrap()
+        .context(error!("Failed to compute stake table commitment"))?;
         let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
             state_private_key,
             &light_client_state,

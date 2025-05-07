@@ -15,7 +15,10 @@ use alloy::{
 };
 use anyhow::{anyhow, Context, Result};
 use displaydoc::Display;
-use espresso_types::{config::PublicNetworkConfig, SeqTypes};
+use espresso_contract_deployer::{
+    is_proxy_contract, network_config::fetch_stake_table_from_sequencer,
+};
+use espresso_types::SeqTypes;
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
@@ -32,7 +35,6 @@ use hotshot_types::{
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StateSignatureKey,
-        stake_table::StakeTableError,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
@@ -42,7 +44,6 @@ use hotshot_types::{
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
-use sequencer_utils::deployer::is_proxy_contract;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
 use time::ext::InstantExt;
@@ -101,7 +102,8 @@ impl ProverServiceState {
         let stake_table = fetch_stake_table_from_sequencer(&config.sequencer_url, None)
             .await
             .with_context(|| "Failed to initialize stake table")?;
-        let st_state = compute_stake_table_commitment(&stake_table, config.stake_table_capacity);
+        let st_state = compute_stake_table_commitment(&stake_table, config.stake_table_capacity)
+            .with_context(|| "Failed to compute stake table commitment")?;
         Ok(Self {
             config,
             epoch: None,
@@ -119,7 +121,8 @@ impl ProverServiceState {
                 .await
                 .with_context(|| format!("Failed to update stake table for epoch: {:?}", epoch))?;
             self.st_state =
-                compute_stake_table_commitment(&self.stake_table, self.config.stake_table_capacity);
+                compute_stake_table_commitment(&self.stake_table, self.config.stake_table_capacity)
+                    .with_context(|| "Failed to compute stake table commitment")?;
             self.epoch = epoch;
         }
         Ok(())
@@ -139,139 +142,6 @@ impl StateProverConfig {
 
         Ok(())
     }
-}
-
-/// Get the epoch-related  from the sequencer's `PublicHotShotConfig` struct
-/// return (blocks_per_epoch, epoch_start_block)
-pub async fn fetch_epoch_config_from_sequencer(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
-    // Request the configuration until it is successful
-    let epoch_config = loop {
-        match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-            sequencer_url.clone(),
-        )
-        .get::<PublicNetworkConfig>("config/hotshot")
-        .send()
-        .await
-        {
-            Ok(resp) => {
-                let config = resp.hotshot_config();
-                break (config.blocks_per_epoch(), config.epoch_start_block());
-            },
-            Err(e) => {
-                tracing::error!("Failed to fetch the network config: {e}");
-                sleep(Duration::from_secs(5)).await;
-            },
-        }
-    };
-    Ok(epoch_config)
-}
-
-/// Initialize the stake table from a sequencer node given the epoch number
-///
-/// Does not error, runs until the stake table is provided.
-pub async fn fetch_stake_table_from_sequencer(
-    sequencer_url: &Url,
-    epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    // stake_table_capacity: usize,
-) -> Result<Vec<PeerConfig<SeqTypes>>> {
-    tracing::info!("Initializing stake table from node for epoch {epoch:?}");
-
-    match epoch {
-        Some(epoch) => loop {
-            match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-                sequencer_url.clone(),
-            )
-            .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", epoch.u64()))
-            .send()
-            .await
-            {
-                Ok(resp) => break Ok(resp),
-                Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5)).await;
-                },
-            }
-        },
-        None => loop {
-            match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-                sequencer_url.clone(),
-            )
-            .get::<PublicNetworkConfig>("config/hotshot")
-            .send()
-            .await
-            {
-                Ok(resp) => break Ok(resp.hotshot_config().known_nodes_with_stake()),
-                Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5)).await;
-                },
-            }
-        },
-    }
-}
-
-/// Returns both genesis light client state and stake table state
-pub async fn light_client_genesis(
-    sequencer_url: &Url,
-    stake_table_capacity: usize,
-) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let st = fetch_stake_table_from_sequencer(sequencer_url, None)
-        .await
-        .with_context(|| "Failed to initialize stake table")?;
-    light_client_genesis_from_stake_table(&st, stake_table_capacity)
-}
-
-#[inline]
-pub fn light_client_genesis_from_stake_table(
-    st: &[PeerConfig<SeqTypes>],
-    stake_table_capacity: usize,
-) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let st_state = compute_stake_table_commitment(st, stake_table_capacity);
-    Ok((
-        LightClientStateSol {
-            viewNum: 0,
-            blockHeight: 0,
-            blockCommRoot: U256::from(0u32),
-        },
-        StakeTableStateSol {
-            blsKeyComm: field_to_u256(st_state.bls_key_comm),
-            schnorrKeyComm: field_to_u256(st_state.schnorr_key_comm),
-            amountComm: field_to_u256(st_state.amount_comm),
-            threshold: field_to_u256(st_state.threshold),
-        },
-    ))
-}
-
-use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::{
-    light_client::one_honest_threshold,
-    signature_key::BLSPubKey,
-    traits::stake_table::{SnapshotVersion, StakeTableScheme},
-};
-
-#[inline]
-// We'll get rid of it someday
-pub fn legacy_light_client_genesis_from_stake_table(
-    st: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
-) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let (bls_comm, schnorr_comm, stake_comm) = st
-        .commitment(SnapshotVersion::LastEpochStart)
-        .expect("Commitment computation shouldn't fail.");
-    let threshold = one_honest_threshold(st.total_stake(SnapshotVersion::LastEpochStart)?);
-
-    Ok((
-        LightClientStateSol {
-            viewNum: 0,
-            blockHeight: 0,
-            blockCommRoot: U256::from(0u32),
-        },
-        StakeTableStateSol {
-            blsKeyComm: field_to_u256(bls_comm),
-            schnorrKeyComm: field_to_u256(schnorr_comm),
-            amountComm: field_to_u256(stake_comm),
-            threshold,
-        },
-    ))
 }
 
 pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
@@ -777,8 +647,6 @@ pub enum ProverError {
     ContractError(anyhow::Error),
     /// Error when communicating with the state relay server: {0}
     RelayServerError(ServerError),
-    /// Internal error with the stake table: {0}
-    StakeTableError(StakeTableError),
     /// Internal error when generating the SNARK proof: {0}
     PlonkError(PlonkError),
     /// Internal error: {0}
@@ -799,12 +667,6 @@ impl From<PlonkError> for ProverError {
     }
 }
 
-impl From<StakeTableError> for ProverError {
-    fn from(err: StakeTableError) -> Self {
-        Self::StakeTableError(err)
-    }
-}
-
 impl std::error::Error for ProverError {}
 
 #[cfg(test)]
@@ -812,12 +674,12 @@ mod test {
 
     use alloy::{node_bindings::Anvil, providers::layers::AnvilProvider, sol_types::SolValue};
     use anyhow::Result;
+    use espresso_contract_deployer::{
+        deploy_light_client_proxy, upgrade_light_client_v2, Contracts,
+    };
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use jf_utils::test_rng;
-    use sequencer_utils::{
-        deployer::{deploy_light_client_proxy, upgrade_light_client_v2, Contracts},
-        test_utils::setup_test,
-    };
+    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::mock_ledger::{

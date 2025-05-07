@@ -63,6 +63,7 @@ use hotshot_types::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeType, Versions},
         states::TestableState,
+        storage::storage_add_drb_result,
     },
     utils::genesis_epoch_from_version,
     HotShotConfig, PeerConfig, ValidatorConfig,
@@ -388,17 +389,23 @@ pub trait RunDa<
         };
         let epoch_height = config.config.epoch_height;
 
+        let storage = TestStorage::<TYPES>::default();
+
         SystemContext::init(
             pk,
             sk,
             state_sk,
             config.node_index,
             config.config,
-            EpochMembershipCoordinator::new(membership, epoch_height),
+            EpochMembershipCoordinator::new(
+                membership,
+                Some(storage_add_drb_result(storage.clone())),
+                epoch_height,
+            ),
             Arc::from(network),
             initializer,
             ConsensusMetricsValue::default(),
-            TestStorage::<TYPES>::default(),
+            storage,
             marketplace_config,
         )
         .await

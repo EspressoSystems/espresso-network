@@ -9,14 +9,16 @@ use ark_std::{
     rand::{rngs::StdRng, CryptoRng, Rng, RngCore},
     UniformRand,
 };
+use espresso_types::SeqTypes;
 use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
-use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
     light_client::{
-        GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
+        compute_stake_table_commitment, GenericLightClientState, GenericPublicInput,
+        GenericStakeTableState, LightClientState,
     },
-    traits::stake_table::{SnapshotVersion, StakeTableScheme},
+    stake_table::StakeTableEntry,
     utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
+    PeerConfig,
 };
 use itertools::izip;
 use jf_pcs::prelude::UnivariateUniversalParams;
@@ -73,7 +75,9 @@ pub struct MockLedger {
     pub rng: StdRng,
     pub(crate) epoch: u64,
     pub(crate) state: GenericLightClientState<F>,
-    pub(crate) st: StakeTable<BLSVerKey, SchnorrVerKey, F>,
+    pub(crate) voting_st: Vec<PeerConfig<SeqTypes>>,
+    pub(crate) next_voting_st: Vec<PeerConfig<SeqTypes>>,
+    pub(crate) pending_st: Vec<PeerConfig<SeqTypes>>,
     pub(crate) qc_keys: Vec<BLSVerKey>,
     pub(crate) state_keys: Vec<(SchnorrSignKey, SchnorrVerKey)>,
     key_archive: HashMap<BLSVerKey, SchnorrSignKey>,
@@ -89,7 +93,9 @@ impl MockLedger {
         for i in 0..qc_keys.len() {
             key_archive.insert(qc_keys[i], state_keys[i].0.clone());
         }
-        let st = stake_table_for_testing(&qc_keys, &state_keys);
+        let voting_st = stake_table_for_testing(&qc_keys, &state_keys);
+        let next_voting_st = voting_st.clone();
+        let pending_st = voting_st.clone();
 
         // arbitrary commitment values as they don't affect logic being tested
         let block_comm_root = F::from(1234);
@@ -104,7 +110,9 @@ impl MockLedger {
             rng,
             epoch: 0,
             state: genesis,
-            st,
+            voting_st,
+            next_voting_st,
+            pending_st,
             qc_keys,
             state_keys,
             key_archive,
@@ -161,7 +169,8 @@ impl MockLedger {
                 // simulate 2 new registration, 1 exit, this snapshot only take effect another 1 epoch later
                 self.sync_stake_table(2, 1);
                 self.epoch += 1;
-                self.st.advance();
+                self.voting_st = self.next_voting_st.clone();
+                self.next_voting_st = self.pending_st.clone();
             }
         } else {
             // before epoch activation, only advance at the end/last block of each epoch
@@ -187,7 +196,7 @@ impl MockLedger {
         self.state.view_number += 1;
     }
 
-    /// Update stake table with `num_reg` number of new registrations and `num_exit` number of exits on L1
+    /// Update the pending stake table with `num_reg` number of new registrations and `num_exit` number of exits on L1
     pub fn sync_stake_table(&mut self, num_reg: usize, num_exit: usize) {
         if !self.epoch_activated() {
             return;
@@ -196,20 +205,26 @@ impl MockLedger {
         let before_st_size = self.qc_keys.len();
         assert!(self.qc_keys.len() + num_reg - num_exit <= self.pp.st_cap);
 
+        let mut st_map: HashMap<_, _> = self
+            .pending_st
+            .iter()
+            .map(|config| (config.stake_table_entry.stake_key, config.clone()))
+            .collect();
+
         // process exits/deregister
         for _ in 0..num_exit {
             let exit_idx = self.rng.next_u32() as usize % self.qc_keys.len();
             let exit_qc_key = self.qc_keys[exit_idx];
 
-            self.st
-                .deregister(&exit_qc_key)
-                .unwrap_or_else(|_| panic!("failed to deregister {}-th key", exit_idx));
+            st_map.remove(&exit_qc_key).unwrap_or_else(|| {
+                panic!("failed to deregister {}-th key", exit_idx);
+            });
             self.qc_keys.remove(exit_idx);
             self.state_keys.remove(exit_idx);
         }
 
         // process register
-        for i in 0..num_reg {
+        for _ in 0..num_reg {
             let bls_key: BLSVerKey = BLSOverBN254CurveSignatureScheme::key_gen(&(), &mut self.rng)
                 .unwrap()
                 .1;
@@ -217,13 +232,22 @@ impl MockLedger {
                 SchnorrSignatureScheme::key_gen(&(), &mut self.rng).unwrap();
             let amount = U256::from(self.rng.gen_range(1..1000u32));
 
-            self.st
-                .register(bls_key, amount, schnorr_key.1.clone())
-                .unwrap_or_else(|_| panic!("failed to deregister {i}-th key"));
+            st_map.insert(
+                bls_key,
+                PeerConfig {
+                    stake_table_entry: StakeTableEntry {
+                        stake_key: bls_key,
+                        stake_amount: amount,
+                    },
+                    state_ver_key: schnorr_key.1.clone(),
+                },
+            );
             self.key_archive.insert(bls_key, schnorr_key.0.clone());
             self.qc_keys.push(bls_key);
             self.state_keys.push(schnorr_key);
         }
+
+        self.pending_st = st_map.into_values().collect();
 
         assert!(self.qc_keys.len() == self.state_keys.len());
         assert!(self.qc_keys.len() == before_st_size + num_reg - num_exit);
@@ -241,9 +265,15 @@ impl MockLedger {
         msg.extend_from_slice(&next_stake_msg);
 
         let st: Vec<(BLSVerKey, U256, SchnorrVerKey)> = self
-            .st
-            .try_iter(SnapshotVersion::LastEpochStart)
-            .unwrap()
+            .voting_st
+            .iter()
+            .map(|config| {
+                (
+                    config.stake_table_entry.stake_key,
+                    config.stake_table_entry.stake_amount,
+                    config.state_ver_key.clone(),
+                )
+            })
             .collect();
         let st_size = st.len();
 
@@ -294,10 +324,8 @@ impl MockLedger {
         };
         let (pk, _) = preprocess(&srs, STAKE_TABLE_CAPACITY_FOR_TEST)
             .expect("Fail to preprocess state prover circuit");
-        let stake_table_entries = self
-            .st
-            .try_iter(SnapshotVersion::LastEpochStart)
-            .unwrap()
+        let stake_table_entries = st
+            .into_iter()
             .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
             .collect::<Vec<_>>();
         let (proof, pi) = generate_state_update_proof(
@@ -327,7 +355,8 @@ impl MockLedger {
         let (adv_qc_keys, adv_state_keys) =
             key_pairs_for_testing(STAKE_TABLE_CAPACITY_FOR_TEST, &mut self.rng);
         let adv_st = stake_table_for_testing(&adv_qc_keys, &adv_state_keys);
-        let adv_st_state = adv_st.voting_state().unwrap();
+        let adv_st_state =
+            compute_stake_table_commitment(&adv_st, STAKE_TABLE_CAPACITY_FOR_TEST).unwrap();
 
         // replace new state with adversarial stake table commitment
         let mut msg = Vec::with_capacity(7);
@@ -362,9 +391,8 @@ impl MockLedger {
         let (pk, _) = preprocess(&srs, STAKE_TABLE_CAPACITY_FOR_TEST)
             .expect("Fail to preprocess state prover circuit");
         let stake_table_entries = adv_st
-            .try_iter(SnapshotVersion::LastEpochStart)
-            .unwrap()
-            .map(|(_, stake_amount, schnorr_key)| (schnorr_key, stake_amount))
+            .into_iter()
+            .map(|config| (config.state_ver_key, config.stake_table_entry.stake_amount))
             .collect::<Vec<_>>();
         let (proof, pi) = generate_state_update_proof::<_, _, _, _>(
             &mut self.rng,
@@ -379,19 +407,21 @@ impl MockLedger {
         )
         .expect("Fail to generate state proof");
 
-        (pi, proof, adv_st.voting_state().unwrap())
+        (pi, proof, adv_st_state)
     }
 
     /// Returns the stake table state for current voting
     pub fn voting_stake_table_state(&self) -> GenericStakeTableState<F> {
-        self.st.voting_state().unwrap()
+        compute_stake_table_commitment(&self.voting_st, STAKE_TABLE_CAPACITY_FOR_TEST)
+            .expect("Failed to compute stake table commitment")
     }
 
     /// Returns epoch-aware stake table state for the next block.
     /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
         if self.epoch_activated() && self.is_ge_epoch_root() {
-            self.st.next_voting_state().unwrap()
+            compute_stake_table_commitment(&self.next_voting_st, STAKE_TABLE_CAPACITY_FOR_TEST)
+                .expect("Failed to compute stake table commitment")
         } else {
             self.voting_stake_table_state()
         }
@@ -430,21 +460,19 @@ fn key_pairs_for_testing<R: CryptoRng + RngCore>(
 fn stake_table_for_testing(
     bls_keys: &[BLSVerKey],
     schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
-) -> StakeTable<BLSVerKey, SchnorrVerKey, F> {
-    let mut st = StakeTable::<BLSVerKey, SchnorrVerKey, F>::new(STAKE_TABLE_CAPACITY_FOR_TEST);
-    // Registering keys
+) -> Vec<PeerConfig<SeqTypes>> {
     bls_keys
         .iter()
         .enumerate()
         .zip(schnorr_keys)
-        .for_each(|((i, bls_key), schnorr_key)| {
-            st.register(*bls_key, U256::from((i + 10) as u32), schnorr_key.1.clone())
-                .unwrap()
-        });
-    // Freeze the stake table
-    st.advance();
-    st.advance();
-    st
+        .map(|((i, bls_key), (_, schnorr_key))| PeerConfig {
+            stake_table_entry: StakeTableEntry {
+                stake_key: *bls_key,
+                stake_amount: U256::from((i + 1) as u32),
+            },
+            state_ver_key: schnorr_key.clone(),
+        })
+        .collect()
 }
 
 // modify from <https://github.com/EspressoSystems/cape/blob/main/contracts/rust/src/plonk_verifier/helpers.rs>

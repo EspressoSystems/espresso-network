@@ -10,6 +10,6 @@ ignore = [
     # rustls is busted, dependency of unmaintained tide
     "RUSTSEC-2024-0336",
     # Some AES functions may panic when overflow checking is enabled.
-    # TODO: easy fix once ethers-rs depedency is removed in favor of alloy.
+    # TODO: easy fix once ethers-rs dependency is removed in favor of alloy.
     "RUSTSEC-2025-0009",
 ]

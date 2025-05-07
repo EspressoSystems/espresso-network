@@ -555,8 +555,10 @@ where
         "1.0.0".parse().unwrap(),
     )
     .map_err(Error::internal)?;
-    let node_api = node::define_api(&options.node, bind_version).map_err(Error::internal)?;
-    let status_api = status::define_api(&options.status, bind_version).map_err(Error::internal)?;
+    let node_api = node::define_api(&options.node, bind_version, "0.0.1".parse().unwrap())
+        .map_err(Error::internal)?;
+    let status_api = status::define_api(&options.status, bind_version, "0.0.1".parse().unwrap())
+        .map_err(Error::internal)?;
 
     // Create app.
     let data_source = Arc::new(data_source);
@@ -884,19 +886,29 @@ mod test {
             availability::define_api(
                 &Default::default(),
                 MockBase::instance(),
-                "1.0.0".parse().unwrap(),
+                "0.0.1".parse().unwrap(),
             )
             .unwrap(),
         )
         .unwrap()
         .register_module(
             "node",
-            node::define_api(&Default::default(), MockBase::instance()).unwrap(),
+            node::define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "0.0.1".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap()
         .register_module(
             "status",
-            status::define_api(&Default::default(), MockBase::instance()).unwrap(),
+            status::define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "0.0.1".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap()
         .module::<Error, MockBase>("mod", module_spec)

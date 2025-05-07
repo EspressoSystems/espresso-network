@@ -57,8 +57,9 @@ pub struct CombinedNetworks<TYPES: NodeType> {
     /// The two networks we'll use for send/recv
     networks: Arc<UnderlyingCombinedNetworks<TYPES>>,
 
-    /// Last n seen messages to prevent processing duplicates
-    message_cache: Arc<PlRwLock<LruCache<blake3::Hash, ()>>>,
+    /// The message deduplication cache that we use to prevent duplicate messages between
+    /// sources
+    message_deduplication_cache: Arc<PlRwLock<MessageDeduplicationCache>>,
 
     /// How many times primary failed to deliver
     primary_fail_counter: Arc<AtomicU64>,
@@ -96,9 +97,7 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
 
         Self {
             networks,
-            message_cache: Arc::new(PlRwLock::new(LruCache::new(
-                NonZeroUsize::new(COMBINED_NETWORK_CACHE_SIZE).unwrap(),
-            ))),
+            message_deduplication_cache: Arc::new(PlRwLock::new(MessageDeduplicationCache::new())),
             primary_fail_counter: Arc::new(AtomicU64::new(0)),
             primary_down: Arc::new(AtomicBool::new(false)),
             delay_duration: Arc::new(RwLock::new(
@@ -290,17 +289,16 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                     Arc::<Libp2pNetwork<TYPES>>::unwrap_or_clone(p2p),
                 );
 
-                // We want to use the same message cache between the two networks
-                let message_cache = Arc::new(PlRwLock::new(LruCache::new(
-                    NonZeroUsize::new(COMBINED_NETWORK_CACHE_SIZE).unwrap(),
-                )));
+                // Create a new message deduplication cache
+                let message_deduplication_cache =
+                    Arc::new(PlRwLock::new(MessageDeduplicationCache::new()));
 
                 // Combine the two networks with the same cache
                 let combined_network = Self {
                     networks: Arc::new(underlying_combined),
                     primary_fail_counter: Arc::new(AtomicU64::new(0)),
                     primary_down: Arc::new(AtomicBool::new(false)),
-                    message_cache: Arc::clone(&message_cache),
+                    message_deduplication_cache: Arc::clone(&message_deduplication_cache),
                     delay_duration: Arc::new(RwLock::new(secondary_network_delay)),
                     delayed_tasks_channels: Arc::default(),
                     no_delay_counter: Arc::new(AtomicU64::new(0)),
@@ -444,16 +442,17 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
             let mut secondary_fut = self.secondary().recv_message().fuse();
 
             // Wait for one to return a message
-            let message = select! {
-                p = primary_fut => p?,
-                s = secondary_fut => s?,
+            let (message, from_primary) = select! {
+                p = primary_fut => (p?, true),
+                s = secondary_fut => (s?, false),
             };
 
-            // Calculate hash of the message
-            let message_hash = blake3::hash(&message);
-
-            // Check if the hash is in the cache and update the cache
-            if self.message_cache.write().put(message_hash, ()).is_none() {
+            // See if we should process the message or not based on the cache
+            if self
+                .message_deduplication_cache
+                .write()
+                .is_unique(&message, from_primary)
+            {
                 break Ok(message);
             }
         }
@@ -501,5 +500,92 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     fn is_primary_down(&self) -> bool {
         self.primary_down.load(Ordering::Relaxed)
+    }
+}
+
+struct MessageDeduplicationCache {
+    /// Last n seen messages from the primary network (to prevent processing a duplicate
+    /// received from the secondary network)
+    primary_message_cache: LruCache<blake3::Hash, ()>,
+
+    /// Last n seen messages from the secondary network (to prevent processing a duplicate
+    /// received from the primary network)
+    secondary_message_cache: LruCache<blake3::Hash, ()>,
+}
+
+impl MessageDeduplicationCache {
+    /// Create a new, empty message cache
+    fn new() -> Self {
+        Self {
+            primary_message_cache: LruCache::new(
+                NonZeroUsize::new(COMBINED_NETWORK_CACHE_SIZE).unwrap(),
+            ),
+            secondary_message_cache: LruCache::new(
+                NonZeroUsize::new(COMBINED_NETWORK_CACHE_SIZE).unwrap(),
+            ),
+        }
+    }
+
+    /// Determine if a message is unique between two sources
+    fn is_unique(&mut self, message: &[u8], from_primary: bool) -> bool {
+        // Calculate the hash of the message
+        let message_hash = blake3::hash(message);
+
+        // Determine which cache to use based on the source of the message
+        let (this_cache, other_cache) = if from_primary {
+            (
+                &mut self.primary_message_cache,
+                &mut self.secondary_message_cache,
+            )
+        } else {
+            (
+                &mut self.secondary_message_cache,
+                &mut self.primary_message_cache,
+            )
+        };
+
+        // Check if we've seen this message from the other source. We want to use `pop` because we
+        // still want to process the message if it gets received again from the same source.
+        if other_cache.pop(&message_hash).is_some() {
+            // We've seen this message from the other source, don't process it again
+            false
+        } else {
+            // First time seeing from this source or already processed duplicate
+            this_cache.put(message_hash, ());
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_message_deduplication() {
+        let message = b"hello";
+
+        // Process one message from both. Only the first one should be unique
+        let mut cache = MessageDeduplicationCache::new();
+        assert!(cache.is_unique(message, true));
+        assert!(!cache.is_unique(message, false));
+
+        // Since we've already received it once on both, it should continue to be unique
+        // on the second receive
+        assert!(cache.is_unique(message, true));
+        assert!(!cache.is_unique(message, false));
+
+        // Try both of the above tests the other way around
+        assert!(cache.is_unique(message, false));
+        assert!(!cache.is_unique(message, true));
+        assert!(cache.is_unique(message, false));
+        assert!(!cache.is_unique(message, true));
+
+        // The same message from the same source a few times should always be treated as unique
+        assert!(cache.is_unique(message, true));
+        assert!(cache.is_unique(message, true));
+        assert!(cache.is_unique(message, true));
+        assert!(!cache.is_unique(message, false));
+        assert!(cache.is_unique(message, false));
     }
 }

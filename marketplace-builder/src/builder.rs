@@ -8,6 +8,7 @@ use async_lock::RwLock;
 use espresso_types::{
     eth_signature_key::EthKeyPair,
     v0_1::NoStorage,
+    v0_3::StakeTableFetcher,
     v0_99::{ChainConfig, RollupRegistration},
     EpochCommittees, FeeAmount, L1Client, MarketplaceVersion, MockSequencerVersions, NamespaceId,
     NodeState, Payload, SeqTypes, SequencerVersions, ValidatedState, V0_1,
@@ -74,23 +75,29 @@ pub fn build_instance_state<V: Versions>(
         &NoMetrics,
     ));
 
+    let fetcher = StakeTableFetcher::new(
+        peers.clone(),
+        Arc::new(async_lock::Mutex::new(NoStorage)),
+        l1_client.clone(),
+        chain_config,
+    );
+    let coordinator = EpochMembershipCoordinator::new(
+        Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            fetcher,
+        ))),
+        None,
+        100,
+    );
+
     NodeState::new(
         u64::MAX, // dummy node ID, only used for debugging
         chain_config,
         l1_client.clone(),
         peers.clone(),
         V::Base::version(),
-        EpochMembershipCoordinator::new(
-            Arc::new(RwLock::new(EpochCommittees::new_stake(
-                vec![],
-                vec![],
-                l1_client,
-                chain_config,
-                peers,
-                NoStorage,
-            ))),
-            10,
-        ),
+        coordinator,
     )
 }
 
@@ -538,9 +545,7 @@ mod test {
         let (ports, urls) = pick_urls_and_start_network().await;
 
         // Run the network.
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let tmpdir = TempDir::new().unwrap();
         let config = TestNetworkConfigBuilder::default()
             .api_config(
@@ -660,9 +665,7 @@ mod test {
         let (ports, urls) = pick_urls_and_start_network().await;
 
         // Run the network.
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
         let tmpdir = TempDir::new().unwrap();
         let config = TestNetworkConfigBuilder::default()
             .api_config(

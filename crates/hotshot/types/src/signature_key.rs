@@ -30,10 +30,11 @@ use crate::{
     },
 };
 
-/// BLS private key used to sign a message
+/// BLS private key used to sign a consensus message
 pub type BLSPrivKey = SignKey;
-/// BLS public key used to verify a signature
+/// BLS public key used to verify a consensus signature
 pub type BLSPubKey = VerKey;
+/// BLS key pair used to sign and verify a consensus message
 pub type BLSKeyPair = KeyPair;
 /// Public parameters for BLS signature scheme
 pub type BLSPublicParam = ();
@@ -55,8 +56,11 @@ impl PrivateSignatureKey for BLSPrivKey {
 impl SignatureKey for BLSPubKey {
     type PrivateKey = BLSPrivKey;
     type StakeTableEntry = StakeTableEntry<VerKey>;
-    type QcParams =
-        QcParams<BLSPubKey, <BLSOverBN254CurveSignatureScheme as SignatureScheme>::PublicParameter>;
+    type QcParams<'a> = QcParams<
+        'a,
+        BLSPubKey,
+        <BLSOverBN254CurveSignatureScheme as SignatureScheme>::PublicParameter,
+    >;
     type PureAssembledSignatureType =
         <BLSOverBN254CurveSignatureScheme as SignatureScheme>::Signature;
     type QcType = (Self::PureAssembledSignatureType, BitVec);
@@ -116,9 +120,9 @@ impl SignatureKey for BLSPubKey {
     }
 
     fn public_parameter(
-        stake_entries: Vec<Self::StakeTableEntry>,
+        stake_entries: &'_ [Self::StakeTableEntry],
         threshold: U256,
-    ) -> Self::QcParams {
+    ) -> Self::QcParams<'_> {
         QcParams {
             stake_entries,
             threshold,
@@ -127,7 +131,7 @@ impl SignatureKey for BLSPubKey {
     }
 
     fn check(
-        real_qc_pp: &Self::QcParams,
+        real_qc_pp: &Self::QcParams<'_>,
         data: &[u8],
         qc: &Self::QcType,
     ) -> Result<(), SignatureError> {
@@ -140,7 +144,7 @@ impl SignatureKey for BLSPubKey {
     }
 
     fn assemble(
-        real_qc_pp: &Self::QcParams,
+        real_qc_pp: &Self::QcParams<'_>,
         signers: &BitSlice,
         sigs: &[Self::PureAssembledSignatureType],
     ) -> Self::QcType {

@@ -243,7 +243,7 @@ dependencies = [
  "itoa",
  "serde",
  "serde_json",
- "winnow 0.7.4",
+ "winnow",
 ]
 
 [[package]]
@@ -475,7 +475,7 @@ dependencies = [
  "lru 0.13.0",
  "parking_lot",
  "pin-project",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
@@ -542,7 +542,7 @@ dependencies = [
  "async-stream",
  "futures",
  "pin-project",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -729,7 +729,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d162f8524adfdfb0e4bd0505c734c985f3e2474eb022af32eef0d52a4f3935c"
 dependencies = [
  "serde",
- "winnow 0.7.4",
+ "winnow",
 ]
 
 [[package]]
@@ -775,7 +775,7 @@ checksum = "4cc3079a33483afa1b1365a3add3ea3e21c75b10f704870198ba7846627d10f2"
 dependencies = [
  "alloy-json-rpc",
  "alloy-transport",
- "reqwest 0.12.15",
+ "reqwest",
  "serde_json",
  "tower 0.5.2",
  "tracing",
@@ -1957,7 +1957,7 @@ dependencies = [
  "bitflags 2.9.0",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "lazy_static",
  "lazycell",
  "proc-macro2",
@@ -2285,16 +2285,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cargo_toml"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "599aa35200ffff8f04c1925aa1acc92fa2e08874379ef42e210a80e527e60838"
-dependencies = [
- "serde",
- "toml 0.7.8",
-]
-
-[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2442,7 +2432,7 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
- "tokio-rustls 0.26.2",
+ "tokio-rustls",
  "tracing",
  "url",
  "warp",
@@ -2476,7 +2466,7 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
- "tokio-rustls 0.26.2",
+ "tokio-rustls",
  "tracing",
  "url",
  "warp",
@@ -2820,7 +2810,7 @@ dependencies = [
  "rust-ini",
  "serde",
  "serde_json",
- "toml 0.8.20",
+ "toml",
  "yaml-rust2",
 ]
 
@@ -3833,6 +3823,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "escargot"
+version = "0.5.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05a3ac187a16b5382fef8c69fd1bad123c67b7cf3932240a2d43dcdd32cded88"
+dependencies = [
+ "log",
+ "once_cell",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "espresso-contract-deployer"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap 4.5.34",
+ "derive_builder",
+ "derive_more 1.0.0",
+ "espresso-types",
+ "hotshot-contract-adapter",
+ "hotshot-types",
+ "surf-disco",
+ "tide-disco",
+ "tokio",
+ "tracing",
+ "vbs",
+]
+
+[[package]]
 name = "espresso-macros"
 version = "0.1.0"
 source = "git+https://github.com/EspressoSystems/espresso-macros.git?tag=0.1.0#9e0b0258c99757c567676c4dd92f1501db0cf580"
@@ -3866,6 +3887,8 @@ dependencies = [
  "cld",
  "committable",
  "derive_more 1.0.0",
+ "espresso-contract-deployer",
+ "espresso-types",
  "ethers-core",
  "fluent-asserter",
  "futures",
@@ -4353,8 +4376,8 @@ dependencies = [
  "ark-srs",
  "clap",
  "hotshot-contract-adapter",
- "hotshot-stake-table",
  "hotshot-state-prover",
+ "hotshot-types",
  "jf-pcs",
 ]
 
@@ -4861,7 +4884,7 @@ dependencies = [
  "tagged-base64",
  "thiserror 1.0.69",
  "tide-disco",
- "toml 0.8.20",
+ "toml",
  "vbs",
  "workspace-hack",
 ]
@@ -4977,12 +5000,13 @@ dependencies = [
  "hotshot-types",
  "portpicker",
  "rand 0.8.5",
+ "semver 1.0.26",
  "serde",
  "snafu 0.8.5",
  "surf-disco",
  "tide-disco",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-test 0.2.5",
  "vbs",
@@ -5001,7 +5025,7 @@ dependencies = [
  "hotshot-types",
  "jf-vid",
  "rand 0.8.5",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "sha2 0.10.8",
  "sha3",
@@ -5039,7 +5063,7 @@ dependencies = [
  "surf-disco",
  "time 0.3.41",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
  "url",
@@ -5059,7 +5083,7 @@ dependencies = [
  "rand 0.8.5",
  "tide-disco",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "vbs",
  "workspace-hack",
 ]
@@ -5123,7 +5147,7 @@ dependencies = [
  "surf-disco",
  "tide-disco",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "vbs",
  "workspace-hack",
@@ -5167,7 +5191,7 @@ dependencies = [
  "rand 0.8.5",
  "refinery",
  "refinery-core",
- "reqwest 0.12.15",
+ "reqwest",
  "semver 1.0.26",
  "serde",
  "serde_json",
@@ -5179,35 +5203,13 @@ dependencies = [
  "tide-disco",
  "time 0.3.41",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
  "trait-variant",
  "url",
  "vbs",
  "vec1",
-]
-
-[[package]]
-name = "hotshot-stake-table"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "ark-bn254",
- "ark-ed-on-bn254",
- "ark-ff 0.4.2",
- "ark-serialize 0.4.2",
- "ark-std 0.4.0",
- "digest 0.10.7",
- "hotshot-types",
- "jf-crhf 0.1.0",
- "jf-rescue",
- "jf-signature 0.2.0",
- "jf-utils",
- "rand_chacha 0.3.1",
- "serde",
- "tagged-base64",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5224,11 +5226,11 @@ dependencies = [
  "ark-std 0.4.0",
  "clap",
  "displaydoc",
+ "espresso-contract-deployer",
  "espresso-types",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
- "hotshot-stake-table",
  "hotshot-types",
  "itertools 0.12.1",
  "jf-crhf 0.1.0",
@@ -5238,14 +5240,14 @@ dependencies = [
  "jf-rescue",
  "jf-signature 0.2.0",
  "jf-utils",
- "reqwest 0.12.15",
+ "reqwest",
  "sequencer-utils",
  "serde",
  "surf-disco",
  "tide-disco",
  "time 0.3.41",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "url",
  "vbs",
@@ -5327,7 +5329,7 @@ dependencies = [
  "lru 0.12.5",
  "portpicker",
  "rand 0.8.5",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "sha2 0.10.8",
  "tagged-base64",
@@ -5390,7 +5392,7 @@ dependencies = [
  "thiserror 1.0.69",
  "time 0.3.41",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "typenum",
  "url",
@@ -5565,20 +5567,6 @@ dependencies = [
 
 [[package]]
 name = "hyper-rustls"
-version = "0.24.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
-dependencies = [
- "futures-util",
- "http 0.2.12",
- "hyper 0.14.32",
- "rustls 0.21.12",
- "tokio",
- "tokio-rustls 0.24.1",
-]
-
-[[package]]
-name = "hyper-rustls"
 version = "0.27.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d191583f3da1305256f22463b9bb0471acad48a4e534a5218b9963e9c1f59b2"
@@ -5590,7 +5578,7 @@ dependencies = [
  "rustls 0.23.25",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.2",
+ "tokio-rustls",
  "tower-service",
 ]
 
@@ -5884,7 +5872,7 @@ dependencies = [
  "netlink-proto",
  "netlink-sys",
  "rtnetlink",
- "system-configuration 0.6.1",
+ "system-configuration",
  "tokio",
  "windows 0.53.0",
 ]
@@ -6186,8 +6174,8 @@ dependencies = [
 
 [[package]]
 name = "jf-merkle-tree"
-version = "0.2.1"
-source = "git+https://github.com/EspressoSystems/jellyfish?rev=bd6098da2c4a53bf7f4042c96630e2d3cb1d844b#bd6098da2c4a53bf7f4042c96630e2d3cb1d844b"
+version = "0.2.2"
+source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.2.2#ab298f4ca35253a1e83f62e2a76bbf3f86560bc0"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -7218,7 +7206,6 @@ dependencies = [
  "hotshot-events-service",
  "hotshot-orchestrator",
  "hotshot-query-service",
- "hotshot-stake-table",
  "hotshot-types",
  "jf-merkle-tree 0.1.0",
  "jf-signature 0.2.0",
@@ -7335,7 +7322,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tide-disco",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "vbs",
 ]
@@ -7724,18 +7711,17 @@ dependencies = [
  "hotshot",
  "hotshot-example-types",
  "hotshot-query-service",
- "hotshot-stake-table",
  "hotshot-types",
  "node-metrics",
  "prometheus-parse",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "serde_json",
  "surf-disco",
  "tide-disco",
  "time 0.3.41",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "url",
  "vbs",
@@ -8495,7 +8481,7 @@ version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edce586971a4dfaa28950c6f18ed55e0406c1ab88bbce2c6f6293a7aaba73d35"
 dependencies = [
- "toml_edit 0.22.24",
+ "toml_edit",
 ]
 
 [[package]]
@@ -8654,7 +8640,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -9075,7 +9061,7 @@ dependencies = [
  "time 0.3.41",
  "tokio",
  "tokio-postgres",
- "toml 0.8.20",
+ "toml",
  "url",
  "walkdir",
 ]
@@ -9170,47 +9156,6 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.11.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd67538700a17451e7cba03ac727fb961abb7607553461627b97de0b89cf4a62"
-dependencies = [
- "base64 0.21.7",
- "bytes 1.10.1",
- "encoding_rs",
- "futures-core",
- "futures-util",
- "h2 0.3.26",
- "http 0.2.12",
- "http-body 0.4.6",
- "hyper 0.14.32",
- "hyper-rustls 0.24.2",
- "ipnet",
- "js-sys",
- "log",
- "mime",
- "once_cell",
- "percent-encoding",
- "pin-project-lite 0.2.16",
- "rustls 0.21.12",
- "rustls-pemfile 1.0.4",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper 0.1.2",
- "system-configuration 0.5.1",
- "tokio",
- "tokio-rustls 0.24.1",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "webpki-roots 0.25.4",
- "winreg",
-]
-
-[[package]]
-name = "reqwest"
 version = "0.12.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d19c46a6fdd48bc4dab94b6103fccc55d34c67cc0ad04653aad4ea2a07cd7bbb"
@@ -9225,7 +9170,7 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.6.0",
- "hyper-rustls 0.27.5",
+ "hyper-rustls",
  "hyper-tls",
  "hyper-util",
  "ipnet",
@@ -9236,12 +9181,12 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "pin-project-lite 0.2.16",
- "rustls-pemfile 2.2.0",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 1.0.2",
- "system-configuration 0.6.1",
+ "system-configuration",
  "tokio",
  "tokio-native-tls",
  "tower 0.5.2",
@@ -9605,20 +9550,8 @@ dependencies = [
  "base64 0.13.1",
  "log",
  "ring 0.16.20",
- "sct 0.6.1",
+ "sct",
  "webpki",
-]
-
-[[package]]
-name = "rustls"
-version = "0.21.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f56a14d1f48b391359b22f731fd4bd7e43c97f3c50eee276f3aa09c94784d3e"
-dependencies = [
- "log",
- "ring 0.17.14",
- "rustls-webpki 0.101.7",
- "sct 0.7.1",
 ]
 
 [[package]]
@@ -9634,15 +9567,6 @@ dependencies = [
  "rustls-webpki 0.103.1",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
-dependencies = [
- "base64 0.21.7",
 ]
 
 [[package]]
@@ -9784,16 +9708,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sct"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
-dependencies = [
- "ring 0.17.14",
- "untrusted 0.9.0",
-]
-
-[[package]]
 name = "seahash"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9905,6 +9819,8 @@ dependencies = [
  "derivative",
  "derive_more 1.0.0",
  "dotenvy",
+ "escargot",
+ "espresso-contract-deployer",
  "espresso-macros",
  "espresso-types",
  "futures",
@@ -9916,7 +9832,6 @@ dependencies = [
  "hotshot-libp2p-networking",
  "hotshot-orchestrator",
  "hotshot-query-service",
- "hotshot-stake-table",
  "hotshot-state-prover",
  "hotshot-testing",
  "hotshot-types",
@@ -9940,7 +9855,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_distr",
  "request-response",
- "reqwest 0.12.15",
+ "reqwest",
  "semver 1.0.26",
  "sequencer",
  "sequencer-utils",
@@ -9957,9 +9872,9 @@ dependencies = [
  "tempfile",
  "tide-disco",
  "time 0.3.41",
- "todo_by",
  "tokio",
- "toml 0.8.20",
+ "tokio-util",
+ "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
  "url",
@@ -9978,21 +9893,15 @@ dependencies = [
  "async-trait",
  "clap",
  "committable",
- "derive_more 1.0.0",
  "hotshot",
- "hotshot-contract-adapter",
  "hotshot-example-types",
- "hotshot-types",
  "log-panics",
  "portpicker",
- "reqwest 0.11.27",
  "serde",
  "serde_json",
  "surf",
- "tempfile",
  "tokio",
- "toml 0.8.20",
- "tower-service",
+ "toml",
  "tracing",
  "url",
 ]
@@ -10377,7 +10286,7 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03c3c6b7927ffe7ecaa769ee0e3994da3b8cafc8f444578982c83ecb161af917"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -10650,10 +10559,12 @@ dependencies = [
  "derive_more 1.0.0",
  "directories 6.0.0",
  "dotenvy",
+ "espresso-contract-deployer",
  "espresso-types",
  "futures-util",
  "git-version",
  "hotshot-contract-adapter",
+ "hotshot-state-prover",
  "hotshot-types",
  "jf-signature 0.2.0",
  "portpicker",
@@ -10667,7 +10578,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-subscriber 0.3.19",
  "url",
@@ -10829,16 +10740,16 @@ dependencies = [
 
 [[package]]
 name = "surf-disco"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14e00ab9d939d04110f14281d5a1e45b6c8acdfbc42e720cbfaef33007c907e6"
+checksum = "2bcf4981d3d4dc702a855914e80a9ea4f348b5a2c634cd64eed7bd583a14e26d"
 dependencies = [
  "async-std",
  "async-tungstenite",
  "derivative",
  "futures",
  "hex",
- "reqwest 0.12.15",
+ "reqwest",
  "serde",
  "serde_json",
  "tide-disco",
@@ -11000,34 +10911,13 @@ dependencies = [
 
 [[package]]
 name = "system-configuration"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba3a3adc5c275d719af8cb4272ea1c4a6d668a777f37e115f6d11ddbc1c8e0e7"
-dependencies = [
- "bitflags 1.3.2",
- "core-foundation",
- "system-configuration-sys 0.5.0",
-]
-
-[[package]]
-name = "system-configuration"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
 dependencies = [
  "bitflags 2.9.0",
  "core-foundation",
- "system-configuration-sys 0.6.0",
-]
-
-[[package]]
-name = "system-configuration-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75fb188eb626b924683e3b95e3a48e63551fcfb51949de2f06a9d91dbee93c9"
-dependencies = [
- "core-foundation-sys",
- "libc",
+ "system-configuration-sys",
 ]
 
 [[package]]
@@ -11095,7 +10985,7 @@ dependencies = [
  "dotenvy",
  "espresso-types",
  "futures",
- "reqwest 0.12.15",
+ "reqwest",
  "surf-disco",
  "tempfile",
  "tokio",
@@ -11212,7 +11102,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "rand 0.8.5",
- "reqwest 0.12.15",
+ "reqwest",
  "routefinder",
  "semver 1.0.26",
  "serde",
@@ -11227,7 +11117,7 @@ dependencies = [
  "tagged-base64",
  "tide",
  "tide-websockets",
- "toml 0.8.20",
+ "toml",
  "tracing",
  "tracing-distributed",
  "tracing-futures",
@@ -11371,20 +11261,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
-name = "todo_by"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e25529b77ab1841ec52a4e8356632b417698b53ea9ad62c6be7d04d5e420dc4"
-dependencies = [
- "cargo_toml",
- "chrono",
- "proc-macro2",
- "quote",
- "semver 1.0.26",
- "syn 2.0.100",
-]
-
-[[package]]
 name = "tokio"
 version = "1.44.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11461,16 +11337,6 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c28327cf380ac148141087fbfb9de9d7bd4e84ab5d2c28fbc911d753de8a7081"
-dependencies = [
- "rustls 0.21.12",
- "tokio",
-]
-
-[[package]]
-name = "tokio-rustls"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e727b36a1a0e8b74c376ac2211e40c2c8af09fb4013c60d910495810f008e9b"
@@ -11502,7 +11368,7 @@ dependencies = [
  "rustls 0.23.25",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.2",
+ "tokio-rustls",
  "tungstenite 0.26.2",
  "webpki-roots 0.26.8",
 ]
@@ -11524,18 +11390,6 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd79e69d3b627db300ff956027cc6c3798cef26d22526befdfcd12feeb6d2257"
-dependencies = [
- "serde",
- "serde_spanned",
- "toml_datetime",
- "toml_edit 0.19.15",
-]
-
-[[package]]
-name = "toml"
 version = "0.8.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd87a5cdd6ffab733b2f74bc4fd7ee5fff6634124999ac278c35fc78c6120148"
@@ -11543,7 +11397,7 @@ dependencies = [
  "serde",
  "serde_spanned",
  "toml_datetime",
- "toml_edit 0.22.24",
+ "toml_edit",
 ]
 
 [[package]]
@@ -11557,19 +11411,6 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.19.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b5bb770da30e5cbfde35a2d7b9b8a2c4b8ef89548a7a6aeab5c9a576e3e7421"
-dependencies = [
- "indexmap 2.8.0",
- "serde",
- "serde_spanned",
- "toml_datetime",
- "winnow 0.5.40",
-]
-
-[[package]]
-name = "toml_edit"
 version = "0.22.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17b4795ff5edd201c7cd6dca065ae59972ce77d1b80fa0a84d94950ece7d1474"
@@ -11578,7 +11419,7 @@ dependencies = [
  "serde",
  "serde_spanned",
  "toml_datetime",
- "winnow 0.7.4",
+ "winnow",
 ]
 
 [[package]]
@@ -12202,7 +12043,7 @@ dependencies = [
  "criterion",
  "displaydoc",
  "jf-crhf 0.1.1",
- "jf-merkle-tree 0.2.1",
+ "jf-merkle-tree 0.2.2",
  "jf-poseidon2",
  "jf-utils",
  "p3-maybe-rayon",
@@ -12441,12 +12282,6 @@ checksum = "aabe153544e473b775453675851ecc86863d2a81d786d741f6b76778f2a48940"
 dependencies = [
  "webpki",
 ]
-
-[[package]]
-name = "webpki-roots"
-version = "0.25.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f20c57d8d7db6d3b86154206ae5d8fba62dd39573114de97c2cb0578251f8e1"
 
 [[package]]
 name = "webpki-roots"
@@ -12846,15 +12681,6 @@ checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 
 [[package]]
 name = "winnow"
-version = "0.5.40"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f593a95398737aeed53e489c785df13f3618e41dbcd6718c6addbf1395aa6876"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "winnow"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e97b544156e9bebe1a0ffbc03484fc1ffe3100cbce3ffb17eac35f7cdd7ab36"
@@ -12958,7 +12784,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml_datetime",
- "toml_edit 0.22.24",
+ "toml_edit",
  "tracing",
  "tracing-core",
  "tracing-log 0.2.0",

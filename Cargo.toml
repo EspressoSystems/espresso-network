@@ -12,6 +12,7 @@ members = [
     "builder",
     "client",
     "contracts/rust/adapter",
+    "contracts/rust/deployer",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/hotshot/builder-api",
@@ -22,7 +23,6 @@ members = [
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
     "crates/hotshot/orchestrator",
-    "crates/hotshot/stake-table",
     "crates/hotshot/task",
     "crates/hotshot/task-impls",
     "crates/hotshot/testing",
@@ -104,6 +104,7 @@ es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch
 dotenvy = "0.15"
 ethers = { version = "2.0", features = ["solc", "ws"] }
 futures = "0.3"
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread",
     "macros",
@@ -144,7 +145,6 @@ hotshot-events-service = { path = "hotshot-events-service" }
 hotshot-utils = { path = "crates/hotshot/utils" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
-hotshot-stake-table = { path = "crates/hotshot/stake-table" }
 hotshot-state-prover = { version = "0.1.0", path = "hotshot-state-prover" }
 hotshot-task = { path = "crates/hotshot/task" }
 hotshot-testing = { path = "crates/hotshot/testing" }

@@ -257,7 +257,10 @@ pub mod testing {
                 Arc<RwLock<EventsStreamer<SeqTypes>>>,
                 SeqTypes,
                 StaticVersion<0, 1>,
-            >(&EventStreamingApiOptions::default())
+            >(
+                &EventStreamingApiOptions::default(),
+                "0.0.1".parse().unwrap(),
+            )
             .expect("Failed to define hotshot eventsAPI");
 
             let mut app = App::<_, EventStreamApiError>::with_state(source);

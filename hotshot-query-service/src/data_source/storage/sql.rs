@@ -22,10 +22,7 @@ use futures::future::FutureExt;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidShare},
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
-    traits::{
-        metrics::Metrics,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    traits::{metrics::Metrics, node_implementation::NodeType},
     vid::advz::{ADVZCommon, ADVZShare},
 };
 use itertools::Itertools;
@@ -685,6 +682,26 @@ impl PruneStorage for SqlStorage {
         Ok(size as u64)
     }
 
+    /// Trigger incremental vacuum to free up space in the SQLite database.
+    /// Note: We don't vacuum the Postgres database,
+    /// as there is no manual trigger for incremental vacuum,
+    /// and a full vacuum can take a lot of time.
+    #[cfg(feature = "embedded-db")]
+    async fn vacuum(&self) -> anyhow::Result<()> {
+        let config = self.get_pruning_config().ok_or(QueryError::Error {
+            message: "Pruning config not found".to_string(),
+        })?;
+        let mut conn = self.pool().acquire().await?;
+        query(&format!(
+            "PRAGMA incremental_vacuum({})",
+            config.incremental_vacuum_pages()
+        ))
+        .execute(conn.as_mut())
+        .await?;
+        conn.close().await?;
+        Ok(())
+    }
+
     /// Note: The prune operation may not immediately free up space even after rows are deleted.
     /// This is because a vacuum operation may be necessary to reclaim more space.
     /// PostgreSQL already performs auto vacuuming, so we are not including it here
@@ -734,17 +751,9 @@ impl PruneStorage for SqlStorage {
                 tx.commit().await.map_err(|e| QueryError::Error {
                     message: format!("failed to commit {e}"),
                 })?;
-
                 pruner.pruned_height = Some(height);
                 return Ok(Some(height));
             }
-        }
-
-        #[cfg(feature = "embedded-db")]
-        {
-            let mut conn = self.pool().acquire().await?;
-            query("VACUUM").execute(conn.as_mut()).await?;
-            conn.close().await?;
         }
 
         // If threshold is set, prune data exceeding minimum retention in batches
@@ -781,12 +790,7 @@ impl PruneStorage for SqlStorage {
                             message: format!("failed to commit {e}"),
                         })?;
 
-                        #[cfg(feature = "embedded-db")]
-                        {
-                            let mut conn = self.pool().acquire().await?;
-                            query("VACUUM").execute(conn.as_mut()).await?;
-                            conn.close().await?;
-                        }
+                        self.vacuum().await?;
 
                         pruner.pruned_height = Some(height);
 
@@ -837,7 +841,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
         // After each batch insert, it is updated with the number of rows migrated.
         // This is necessary to resume from the same point in case of a restart.
         let (is_migration_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from types_migration LIMIT 1 ",
+            "SELECT completed, migrated_rows from types_migration WHERE id = 1 ",
         )
         .fetch_one(tx.as_mut())
         .await?;
@@ -917,7 +921,6 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                 ));
                 leaf_rows.push((
                     leaf2.height() as i64,
-                    leaf2.view_number().u64() as i64,
                     commit.to_string(),
                     leaf2.block_header().commit().to_string(),
                     leaf2_json,
@@ -926,9 +929,8 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
             }
 
             // migrate leaf2
-            let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
-                "INSERT INTO leaf2 (height, view, hash, block_hash, leaf, qc) ",
-            );
+            let mut query_builder: sqlx::QueryBuilder<Db> =
+                sqlx::QueryBuilder::new("INSERT INTO leaf2 (height, hash, block_hash, leaf, qc) ");
 
             // Advance the `offset` to the highest `leaf.height` processed in this batch.
             // This ensures the next iteration starts from the next unseen leaf
@@ -939,8 +941,7 @@ impl<Types: NodeType> MigrateTypes<Types> for SqlStorage {
                     .push_bind(row.1)
                     .push_bind(row.2)
                     .push_bind(row.3)
-                    .push_bind(row.4)
-                    .push_bind(row.5);
+                    .push_bind(row.4);
             });
 
             query_builder.push(" ON CONFLICT DO NOTHING");
@@ -1416,12 +1417,16 @@ mod test {
     }
 
     async fn vacuum(storage: &SqlStorage) {
+        #[cfg(feature = "embedded-db")]
+        let query = "PRAGMA incremental_vacuum(16000)";
+        #[cfg(not(feature = "embedded-db"))]
+        let query = "VACUUM";
         storage
             .pool
             .acquire()
             .await
             .unwrap()
-            .execute("VACUUM")
+            .execute(query)
             .await
             .unwrap();
     }

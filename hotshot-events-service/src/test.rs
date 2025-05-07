@@ -54,11 +54,12 @@ mod tests {
         // Start the web server.
         let mut app = App::<_, Error>::with_state(events_streamer.clone());
 
-        let hotshot_events_api =
-            define_api::<Arc<RwLock<EventsStreamer<TestTypes>>>, TestTypes, StaticVersion<0, 1>>(
-                &Options::default(),
-            )
-            .expect("Failed to define hotshot eventsAPI");
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "0.0.1".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
 
         app.register_module("hotshot_events", hotshot_events_api)
             .expect("Failed to register hotshot events API");
@@ -113,11 +114,12 @@ mod tests {
         // Start the web server.
         let mut app = App::<_, Error>::with_state(events_streamer.clone());
 
-        let hotshot_events_api =
-            define_api::<Arc<RwLock<EventsStreamer<TestTypes>>>, TestTypes, StaticVersion<0, 1>>(
-                &Options::default(),
-            )
-            .expect("Failed to define hotshot eventsAPI");
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "0.0.1".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
 
         app.register_module("api", hotshot_events_api)
             .expect("Failed to register hotshot events API");
@@ -157,11 +159,12 @@ mod tests {
         // Start the web server.
         let mut app = App::<_, Error>::with_state(events_streamer.clone());
 
-        let hotshot_events_api =
-            define_api::<Arc<RwLock<EventsStreamer<TestTypes>>>, TestTypes, StaticVersion<0, 1>>(
-                &Options::default(),
-            )
-            .expect("Failed to define hotshot eventsAPI");
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "1.0.0".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
 
         app.register_module("hotshot_events", hotshot_events_api)
             .expect("Failed to register hotshot events API");

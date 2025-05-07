@@ -45,12 +45,11 @@ env:
     target/release/state-prover
     target/release/state-relay-server
     target/release/submit-transactions
-    target/release/update-permissioned-stake-table
     target/release/utils
 
 jobs:
   build:
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -61,7 +60,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
-          cache-provider: buildjet
+          cache-provider: github
 
       - name: Build
         # Build in release without `testing` feature, this should work without `hotshot_example` config.
@@ -143,7 +142,6 @@ jobs:
           - staking-cli
           - state-relay-server
           - submit-transactions
-          - update-permissioned-stake-table
 
     needs: [build, build-arm]
     # if build_arm is skipped, run this job anyway
