@@ -27,7 +27,6 @@ use espresso_types::{
     SolverAuctionResultsProvider, ValidatedState,
 };
 use genesis::L1Finalized;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
 use hotshot_query_service::data_source::storage::SqlStorage;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
@@ -544,7 +543,7 @@ where
     let network = {
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
-            DhtNoPersistence,
+            persistence.clone(),
             coordinator.membership().clone(),
             gossip_config,
             request_response_config,
