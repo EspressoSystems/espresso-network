@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use committable::Committable;
@@ -263,42 +263,62 @@ impl UpdateSolverState for GlobalState {
         &self,
         view_number: ViewNumber,
     ) -> SolverResult<SolverAuctionResults> {
-        // todo (ab): actual logic needs to implemented
-        // for we, we just return some default results
-
+        // Get all rollup registrations to include as reserve bids
         let rollups = self.get_all_rollup_registrations().await?;
+        let reserve_bids = rollups
+            .into_iter()
+            .filter_map(|r| Some((r.body.namespace_id, r.body.reserve_url?)))
+            .collect::<Vec<_>>();
+
+        // Get all bids for the current view number
+        let winning_bids = match self.solver.bid_txs.get(&view_number) {
+            Some(bids_map) => {
+                // Create a map to track which namespaces have been claimed
+                let mut claimed_namespaces = HashSet::new();
+                let mut winners = Vec::new();
+                
+                // Sort bids by amount (highest first)
+                let mut bids = bids_map.values().collect::<Vec<_>>();
+                bids.sort_by(|a, b| b.amount().cmp(&a.amount()));
+                
+                // Process bids in order of highest amount
+                for bid in bids {
+                    let namespaces = &bid.body.namespaces;
+                    
+                    // Check if any of the namespaces in this bid are already claimed
+                    let has_conflict = namespaces.iter().any(|ns| claimed_namespaces.contains(ns));
+                    
+                    if !has_conflict {
+                        // If no conflicts, this bid wins
+                        for namespace in namespaces {
+                            claimed_namespaces.insert(*namespace);
+                        }
+                        winners.push(bid.clone());
+                    }
+                }
+                
+                winners
+            }
+            None => Vec::new(),
+        };
 
         let results = SolverAuctionResults::new(
             view_number,
-            Vec::new(),
-            rollups
-                .into_iter()
-                .filter_map(|r| Some((r.body.namespace_id, r.body.reserve_url?)))
-                .collect(),
+            winning_bids,
+            reserve_bids,
         );
 
         Ok(results)
     }
+    
     async fn calculate_auction_results_permissioned(
         &self,
         view_number: ViewNumber,
         _signature: <SeqTypes as NodeType>::SignatureKey,
     ) -> SolverResult<SolverAuctionResults> {
-        // todo (ab): actual logic needs to implemented
-        // for we, we just return some default results
-
-        let rollups = self.get_all_rollup_registrations().await?;
-
-        let results = SolverAuctionResults::new(
-            view_number,
-            Vec::new(),
-            rollups
-                .into_iter()
-                .filter_map(|r| Some((r.body.namespace_id, r.body.reserve_url?)))
-                .collect(),
-        );
-
-        Ok(results)
+        // For permissioned calculation, we use the same logic as permissionless
+        // but we could add additional validation based on the signature if needed
+        self.calculate_auction_results_permissionless(view_number).await
     }
 }
 
@@ -349,5 +369,316 @@ impl SolverState {
             },
             bid_txs: Default::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::BidTxBody;
+    use hotshot_types::traits::signature_key::DummySignatureKey;
+    use std::sync::Arc;
+    use url::Url;
+
+    // Helper function to create a test bid
+    fn create_test_bid(
+        view: ViewNumber,
+        amount: u64,
+        namespaces: Vec<NamespaceId>,
+        account_id: u64,
+    ) -> BidTx {
+        BidTx {
+            body: BidTxBody {
+                view,
+                amount,
+                namespaces,
+            },
+            signature: DummySignatureKey::from(account_id),
+        }
+    }
+
+    // Helper function to create a test URL
+    fn create_test_url(id: u64) -> Url {
+        Url::parse(&format!("https://example.com/{}", id)).unwrap()
+    }
+
+    // Helper function to create a test rollup registration
+    fn create_test_rollup_registration(
+        namespace_id: NamespaceId,
+        reserve_url: Option<Url>,
+    ) -> RollupRegistration {
+        let mut registration = RollupRegistration::default();
+        registration.body.namespace_id = namespace_id;
+        registration.body.reserve_url = reserve_url;
+        registration
+    }
+
+    #[tokio::test]
+    async fn test_empty_bids() {
+        // Arrange
+        let mut state = SolverState::mock();
+        let view_number = ViewNumber::from(1);
+        let global_state = GlobalState {
+            solver: state,
+            database: PostgresClient::Empty,
+        };
+
+        // Act
+        let results = global_state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+
+        // Assert
+        assert_eq!(results.view(), view_number);
+        assert!(results.winning_bids().is_empty());
+        assert!(results.reserve_bids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_highest_bid_wins() {
+        // Arrange
+        let mut state = SolverState::mock();
+        let view_number = ViewNumber::from(1);
+        let namespace_id = NamespaceId::from(100);
+        
+        // Create bids for the same namespace with different amounts
+        let low_bid = create_test_bid(view_number, 100, vec![namespace_id], 1);
+        let high_bid = create_test_bid(view_number, 200, vec![namespace_id], 2);
+        
+        let mut bids_map = HashMap::new();
+        bids_map.insert(low_bid.signature.clone(), low_bid.clone());
+        bids_map.insert(high_bid.signature.clone(), high_bid.clone());
+        
+        state.bid_txs.insert(view_number, bids_map);
+        
+        let global_state = GlobalState {
+            solver: state,
+            database: PostgresClient::Empty,
+        };
+
+        // Act
+        let results = global_state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+
+        // Assert
+        assert_eq!(results.winning_bids().len(), 1);
+        assert_eq!(results.winning_bids()[0].amount(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_all_or_nothing_bidding() {
+        // Arrange
+        let mut state = SolverState::mock();
+        let view_number = ViewNumber::from(1);
+        
+        // Create namespaces
+        let namespace1 = NamespaceId::from(100);
+        let namespace2 = NamespaceId::from(101);
+        let namespace3 = NamespaceId::from(102);
+        
+        // Create a bid for multiple namespaces
+        let multi_bid = create_test_bid(
+            view_number, 
+            150, 
+            vec![namespace1, namespace2], 
+            1
+        );
+        
+        // Create higher bids for individual namespaces
+        let higher_bid1 = create_test_bid(view_number, 200, vec![namespace1], 2);
+        let higher_bid2 = create_test_bid(view_number, 200, vec![namespace3], 3);
+        
+        let mut bids_map = HashMap::new();
+        bids_map.insert(multi_bid.signature.clone(), multi_bid.clone());
+        bids_map.insert(higher_bid1.signature.clone(), higher_bid1.clone());
+        bids_map.insert(higher_bid2.signature.clone(), higher_bid2.clone());
+        
+        state.bid_txs.insert(view_number, bids_map);
+        
+        let global_state = GlobalState {
+            solver: state,
+            database: PostgresClient::Empty,
+        };
+
+        // Act
+        let results = global_state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+
+        // Assert - higher_bid1 should win for namespace1, and higher_bid2 for namespace3
+        assert_eq!(results.winning_bids().len(), 2);
+        
+        // Check that the winning bids include the higher individual bids
+        let winning_accounts: Vec<_> = results.winning_bids().iter().map(|b| b.account()).collect();
+        assert!(winning_accounts.contains(&higher_bid1.account()));
+        assert!(winning_accounts.contains(&higher_bid2.account()));
+        assert!(!winning_accounts.contains(&multi_bid.account()));
+    }
+
+    #[tokio::test]
+    async fn test_namespace_conflict_resolution() {
+        // Arrange
+        let mut state = SolverState::mock();
+        let view_number = ViewNumber::from(1);
+        
+        // Create namespaces
+        let namespace1 = NamespaceId::from(100);
+        let namespace2 = NamespaceId::from(101);
+        let namespace3 = NamespaceId::from(102);
+        
+        // Create several bids with conflicting namespaces but different amounts
+        let bid1 = create_test_bid(view_number, 300, vec![namespace1, namespace2], 1);
+        let bid2 = create_test_bid(view_number, 200, vec![namespace2, namespace3], 2);
+        let bid3 = create_test_bid(view_number, 100, vec![namespace3], 3);
+        
+        let mut bids_map = HashMap::new();
+        bids_map.insert(bid1.signature.clone(), bid1.clone());
+        bids_map.insert(bid2.signature.clone(), bid2.clone());
+        bids_map.insert(bid3.signature.clone(), bid3.clone());
+        
+        state.bid_txs.insert(view_number, bids_map);
+        
+        let global_state = GlobalState {
+            solver: state,
+            database: PostgresClient::Empty,
+        };
+
+        // Act
+        let results = global_state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+
+        // Assert - bid1 should win for namespace1 and namespace2, making bid2 invalid
+        // bid3 should lose to bid2, but bid2 loses to bid1, so no winner for namespace3
+        assert_eq!(results.winning_bids().len(), 1);
+        assert_eq!(results.winning_bids()[0].account(), bid1.account());
+    }
+
+    #[tokio::test]
+    async fn test_reserve_bids_inclusion() {
+        // Arrange
+        let mut state = SolverState::mock();
+        let view_number = ViewNumber::from(1);
+        
+        // Create a namespace and URL for reserve bid
+        let namespace_id = NamespaceId::from(100);
+        let reserve_url = create_test_url(1);
+        
+        // Create a custom GlobalState for this test
+        struct TestGlobalState {
+            solver: SolverState,
+            database: PostgresClient,
+        }
+        
+        // Implement just what we need for this test
+        #[async_trait]
+        impl UpdateSolverState for TestGlobalState {
+            async fn submit_bid_tx(&mut self, _bid_tx: BidTx) -> SolverResult<()> {
+                unimplemented!()
+            }
+            
+            async fn register_rollup(
+                &self,
+                _registration: RollupRegistration,
+            ) -> SolverResult<RollupRegistration> {
+                unimplemented!()
+            }
+            
+            async fn update_rollup_registration(
+                &self,
+                _update: RollupUpdate,
+            ) -> SolverResult<RollupRegistration> {
+                unimplemented!()
+            }
+            
+            async fn get_all_rollup_registrations(&self) -> SolverResult<Vec<RollupRegistration>> {
+                // Return our test registration
+                Ok(vec![create_test_rollup_registration(
+                    NamespaceId::from(100),
+                    Some(create_test_url(1)),
+                )])
+            }
+            
+            async fn calculate_auction_results_permissionless(
+                &self,
+                view_number: ViewNumber,
+            ) -> SolverResult<SolverAuctionResults> {
+                // Get all rollup registrations to include as reserve bids
+                let rollups = self.get_all_rollup_registrations().await?;
+                let reserve_bids = rollups
+                    .into_iter()
+                    .filter_map(|r| Some((r.body.namespace_id, r.body.reserve_url?)))
+                    .collect::<Vec<_>>();
+
+                // Get all bids for the current view number
+                let winning_bids = match self.solver.bid_txs.get(&view_number) {
+                    Some(bids_map) => {
+                        // Create a map to track which namespaces have been claimed
+                        let mut claimed_namespaces = HashSet::new();
+                        let mut winners = Vec::new();
+                        
+                        // Sort bids by amount (highest first)
+                        let mut bids = bids_map.values().collect::<Vec<_>>();
+                        bids.sort_by(|a, b| b.amount().cmp(&a.amount()));
+                        
+                        // Process bids in order of highest amount
+                        for bid in bids {
+                            let namespaces = &bid.body.namespaces;
+                            
+                            // Check if any of the namespaces in this bid are already claimed
+                            let has_conflict = namespaces.iter().any(|ns| claimed_namespaces.contains(ns));
+                            
+                            if !has_conflict {
+                                // If no conflicts, this bid wins
+                                for namespace in namespaces {
+                                    claimed_namespaces.insert(*namespace);
+                                }
+                                winners.push(bid.clone());
+                            }
+                        }
+                        
+                        winners
+                    }
+                    None => Vec::new(),
+                };
+
+                let results = SolverAuctionResults::new(
+                    view_number,
+                    winning_bids,
+                    reserve_bids,
+                );
+
+                Ok(results)
+            }
+            
+            async fn calculate_auction_results_permissioned(
+                &self,
+                view_number: ViewNumber,
+                _signature: <SeqTypes as NodeType>::SignatureKey,
+            ) -> SolverResult<SolverAuctionResults> {
+                self.calculate_auction_results_permissionless(view_number).await
+            }
+        }
+        
+        let test_global_state = TestGlobalState {
+            solver: state,
+            database: PostgresClient::Empty,
+        };
+
+        // Act
+        let results = test_global_state
+            .calculate_auction_results_permissionless(view_number)
+            .await
+            .unwrap();
+
+        // Assert
+        assert_eq!(results.reserve_bids.len(), 1);
+        assert_eq!(results.reserve_bids[0].0, namespace_id);
+        assert_eq!(results.reserve_bids[0].1.to_string(), reserve_url.to_string());
     }
 }
