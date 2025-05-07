@@ -143,7 +143,7 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     pub(crate) external_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
 
     /// Anchored leaf provided by the initializer.
-    anchored_leaf: Leaf2<TYPES>,
+    pub anchored_leaf: Leaf2<TYPES>,
 
     /// access to the internal event stream, in case we need to, say, shut something down
     #[allow(clippy::type_complexity)]
@@ -1028,7 +1028,7 @@ pub struct InitializerEpochInfo<TYPES: NodeType> {
     pub block_header: Option<TYPES::BlockHeader>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// initializer struct for creating starting block
 pub struct HotShotInitializer<TYPES: NodeType> {
     /// Instance-level state.
