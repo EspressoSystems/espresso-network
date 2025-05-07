@@ -99,7 +99,6 @@ jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-vid = { workspace = true }
 libp2p = { workspace = true }
 marketplace-builder-core = { workspace = true, optional = true }
-marketplace-solver = { path = "../marketplace-solver" }
 num_enum = "0.7"
 parking_lot = "0.12"
 portpicker = { workspace = true }
