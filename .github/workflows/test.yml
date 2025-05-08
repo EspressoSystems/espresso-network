@@ -19,7 +19,6 @@ concurrency:
 
 env:
   RUST_LOG: info,libp2p=off,node=error
-  RUSTFLAGS: "--cfg feature=\"fee\" --cfg feature=\"marketplace\""
   CARGO_TERM_COLOR: always
   # Save the process compose logs
   PC_LOGS: /tmp/pc.log
@@ -139,10 +138,7 @@ jobs:
             target/debug/espresso-dev-node
             target/debug/pub-key
             target/debug/espresso-bridge
-            target/debug/marketplace-solver
-            target/debug/marketplace-builder
             target/debug/node-metrics
-            target/debug/dev-rollup
             target/debug/sequencer-sqlite
 
   test-postgres:
