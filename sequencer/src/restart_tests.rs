@@ -372,6 +372,33 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         self.initializer.replace(initializer); // then on start up `if let Some(_)`.
     }
 
+    fn restore(&mut self) {
+        if let Some(initialzer) = self.initializer.take() {
+            // let hotshot = SystemContext::new_from_channels();
+            // let context = initialzer.sequencer_context;
+            // do the opposite of `context.shut_down`
+            // * what tasks are spawned
+            //
+            // let mut tasks = TaskList::default();
+            // from context.rs:
+            //         // Spawn event handling loop.
+            // ctx.spawn(
+            //     "event handler",
+            //     handle_events(
+            //         ctx.handle.clone(),
+            //         node_id,
+            //         events,
+            //         persistence,
+            //         ctx.state_signer.clone(),
+            //         external_event_handler,
+            //         Some(event_streamer.clone()),
+            //         event_consumer,
+            //         anchor_view,
+            //     ),
+            // );
+        }
+    }
+
     // TODO on start check if stored.get(id), if so `Context::new_from_channels`
     fn start(&mut self) -> BoxFuture<()>
     where
