@@ -571,30 +571,6 @@ processes:
         path: /healthcheck
       failure_threshold: 100
 
-  marketplace-solver:
-    command: marketplace-solver
-    environment:
-      - ESPRESSO_MARKETPLACE_SOLVER_API_PORT=$ESPRESSO_MARKETPLACE_SOLVER_API_PORT
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_API_URL=http://localhost:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
-      - MARKETPLACE_SOLVER_POSTGRES_HOST=localhost
-      - MARKETPLACE_SOLVER_POSTGRES_USER=root
-      - MARKETPLACE_SOLVER_POSTGRES_PASSWORD=password
-      - MARKETPLACE_SOLVER_POSTGRES_DATABASE_NAME=solver
-    depends_on:
-      sequencer0:
-        condition: process_healthy
-      solver-db:
-        condition: process_healthy
-
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: localhost
-        port: $ESPRESSO_MARKETPLACE_SOLVER_API_PORT
-        path: /healthcheck
-      period_seconds: 1
-      failure_threshold: 100
-
   sequencer-db-0:
     command:
       docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p $ESPRESSO_SEQUENCER0_DB_PORT:5432 postgres
@@ -623,24 +599,6 @@ processes:
     readiness_probe:
       exec:
         command: pg_isready -h localhost -p $ESPRESSO_SEQUENCER1_DB_PORT
-      initial_delay_seconds: 5
-      period_seconds: 5
-      timeout_seconds: 4
-      # Postgres can be falsely "ready" once before running init scripts.
-      # See https://github.com/docker-library/postgres/issues/146 for discussion.
-      success_threshold: 2
-      failure_threshold: 20
-
-  solver-db:
-    command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p $MARKETPLACE_SOLVER_POSTGRES_PORT:5432 postgres
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_USER=root
-      - POSTGRES_DB=solver
-    readiness_probe:
-      exec:
-        command: pg_isready -h localhost -p $MARKETPLACE_SOLVER_POSTGRES_PORT
       initial_delay_seconds: 5
       period_seconds: 5
       timeout_seconds: 4

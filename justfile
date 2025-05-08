@@ -31,9 +31,6 @@ build profile="dev" features="":
     cargo build --profile {{profile}} {{features}}
     cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
 
-demo-native-mp *args: (build "test" "--features fee,marketplace")
-    scripts/demo-native -f process-compose.yaml -f process-compose-mp.yml {{args}}
-
 demo-native-pos *args: (build "test" "--features fee,pos")
     ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
 
@@ -85,9 +82,6 @@ test-all:
 
 test-integration: (build "test" "--features fee")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
-
-test-integration-mp: (build "test" "--features fee,marketplace")
-    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
 
 clippy:
     @echo 'features: "embedded-db"'

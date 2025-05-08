@@ -183,14 +183,17 @@ where
             anytrace::bail!("get epoch root failed for epoch {:?}", root_epoch);
         };
 
-        let updater = self
-            .membership
-            .read()
-            .await
-            .add_epoch_root(epoch, root_leaf.block_header().clone())
-            .await
-            .ok_or(anytrace::warn!("add epoch root failed"))?;
-        updater(&mut *(self.membership.write().await));
+        let add_epoch_root_updater = {
+            let membership_read = self.membership.read().await;
+            membership_read
+                .add_epoch_root(epoch, root_leaf.block_header().clone())
+                .await
+        };
+
+        if let Some(updater) = add_epoch_root_updater {
+            let mut membership_write = self.membership.write().await;
+            updater(&mut *(membership_write));
+        };
 
         let drb_membership = match root_membership.next_epoch_stake_table().await {
             Ok(drb_membership) => drb_membership,
