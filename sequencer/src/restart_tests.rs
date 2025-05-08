@@ -233,7 +233,7 @@ impl NodeParams {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NodeInitializer<S: TestableSequencerDataSource> {
     hotshot_initializer: HotShotInitializer<SeqTypes>,
     #[debug(skip)]
@@ -243,6 +243,11 @@ struct NodeInitializer<S: TestableSequencerDataSource> {
             Node<network::Production, <S::Options as PersistenceOptions>::Persistence>,
             MockSequencerVersions,
         >,
+    >,
+    sequencer_context: SequencerContext<
+        network::Production,
+        <S::Options as PersistenceOptions>::Persistence,
+        MockSequencerVersions,
     >,
 }
 
@@ -361,6 +366,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let initializer = NodeInitializer {
             hotshot_context,
             hotshot_initializer,
+            sequencer_context: self.context.clone().unwrap(),
         };
 
         self.initializer.replace(initializer); // then on start up `if let Some(_)`.
@@ -373,6 +379,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     {
         async {
             tracing::info!("starting node");
+
+            // TODO self.restore();
 
             // If we are starting a node which had already been started and stopped, we may need to
             // delay a bit for the OS to reclaim the node's P2P port. Otherwise initialization of
