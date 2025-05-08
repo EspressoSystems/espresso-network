@@ -37,7 +37,7 @@ use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, wait_for_second_vid_share},
+    helpers::{broadcast_event, broadcast_view_change, wait_for_second_vid_share},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
 };
 
@@ -104,6 +104,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// The time this view started
     pub view_start_time: Instant,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -342,14 +345,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             // We're voting for the proposal that will probably form the eQC. We don't want to change
             // the view here because we will probably change it when we form the eQC.
             // The main reason is to handle view change event only once in the transaction task.
-            tracing::trace!(
-                "Sending ViewChange for view {} and epoch {:?}",
-                leaf.view_number() + 1,
-                cur_epoch
-            );
-            broadcast_event(
-                Arc::new(HotShotEvent::ViewChange(leaf.view_number() + 1, cur_epoch)),
+            broadcast_view_change(
                 &self.sender,
+                leaf.view_number() + 1,
+                cur_epoch,
+                self.first_epoch,
             )
             .await;
         }
@@ -426,6 +426,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// View timeout from config.
     pub timeout: u64,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -534,6 +537,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 state_private_key: self.state_private_key.clone(),
                 timeout: self.timeout,
                 view_start_time: Instant::now(),
+                first_epoch: self.first_epoch,
             },
         );
         self.vote_dependencies
@@ -742,6 +746,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     task.abort();
                 }
                 self.vote_dependencies = current_tasks;
+            },
+            HotShotEvent::SetFirstEpoch(view, epoch) => {
+                self.first_epoch = Some((*view, *epoch));
             },
             _ => {},
         }

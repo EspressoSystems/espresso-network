@@ -1374,3 +1374,27 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     };
     Ok(second_vid_share.clone())
 }
+
+pub async fn broadcast_view_change<TYPES: NodeType>(
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    new_view_number: TYPES::View,
+    epoch: Option<TYPES::Epoch>,
+    first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+) {
+    let mut broadcast_epoch = epoch;
+    if let Some((first_epoch_view, first_epoch)) = first_epoch {
+        if new_view_number == first_epoch_view && broadcast_epoch != Some(first_epoch) {
+            broadcast_epoch = Some(first_epoch);
+        }
+    }
+    tracing::trace!(
+        "Sending ViewChange for view {} and epoch {:?}",
+        new_view_number,
+        broadcast_epoch
+    );
+    broadcast_event(
+        Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
+        sender,
+    )
+    .await
+}
