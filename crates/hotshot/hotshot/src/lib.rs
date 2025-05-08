@@ -398,6 +398,59 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         inner
     }
 
+    /// Instantiate Hotshot from Hotshot ;). "It's just crazy enough to work (or not)".
+    pub async fn new_from_context(
+        &self,
+        initializer: HotShotInitializer<TYPES>,
+        internal_reciever: Receiver<Arc<HotShotEvent<TYPES>>>,
+        external_reciever: Receiver<Event<TYPES>>,
+    ) -> Arc<Self> {
+        let SystemContext {
+            public_key,
+            private_key,
+            state_private_key,
+            config,
+            network,
+            membership_coordinator,
+            storage,
+            metrics,
+            marketplace_config,
+            external_event_stream,
+            internal_event_stream,
+            ..
+        } = self.clone();
+
+        let (internal_sender, _) = internal_event_stream;
+        let (external_sender, _) = external_event_stream;
+
+        let storage = if let Ok(storage) =
+            Arc::<RwLock<<I as NodeImplementation<TYPES>>::Storage>>::try_unwrap(storage)
+        {
+            storage.into_inner()
+        } else {
+            panic!("failed to unwrap storage")
+        };
+
+        let metrics = Arc::<ConsensusMetricsValue>::try_unwrap(metrics).unwrap();
+
+        Self::new_from_channels(
+            public_key,
+            private_key,
+            state_private_key,
+            1, // TODO nonce?
+            config,
+            membership_coordinator,
+            network,
+            initializer,
+            metrics,
+            storage,
+            marketplace_config,
+            (internal_sender, internal_reciever),
+            (external_sender, external_reciever),
+        )
+        .await
+    }
+
     /// "Starts" consensus by sending a `Qc2Formed`, `ViewChange` events
     ///
     /// # Panics
