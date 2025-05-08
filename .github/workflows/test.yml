@@ -140,6 +140,7 @@ jobs:
             target/debug/espresso-bridge
             target/debug/node-metrics
             target/debug/sequencer-sqlite
+            target/debug/staking-cli
 
   test-postgres:
     needs: build-test-artifacts-postgres
