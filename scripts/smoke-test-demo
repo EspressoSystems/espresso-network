@@ -14,11 +14,7 @@ error_handler() {
 # load env vars in .env
 set -a; source .env; set +a;
 
-if [ "$MARKETPLACE_SMOKE_TEST" = true ] ; then
-    LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_FALLBACK_PORT
-else
-    LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
-fi
+LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
 
 L1_PROVIDER=http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
 SEQUENCER_API=http://localhost:$ESPRESSO_SEQUENCER1_API_PORT

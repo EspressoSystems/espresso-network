@@ -50,7 +50,6 @@ use hotshot::{
         RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
-    MarketplaceConfig,
 };
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
@@ -205,7 +204,6 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
-    marketplace_config: MarketplaceConfig<SeqTypes, Node<network::Production, P>>,
     proposal_fetcher_config: ProposalFetcherConfig,
 ) -> anyhow::Result<SequencerContext<network::Production, P, V>>
 where
@@ -595,7 +593,6 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         seq_versions,
-        marketplace_config,
         proposal_fetcher_config,
     )
     .await?;
@@ -642,8 +639,8 @@ pub mod testing {
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, Event, FeeAccount, L1Client, MarketplaceVersion, NetworkConfig, PubKey,
-        SeqTypes, Transaction, Upgrade, UpgradeMap,
+        EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -671,10 +668,6 @@ pub mod testing {
             signature_key::BuilderSignatureKey,
         },
         HotShotConfig, PeerConfig,
-    };
-    use marketplace_builder_core::{
-        hooks::NoHooks,
-        service::{BuilderConfig, GlobalState},
     };
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
@@ -768,73 +761,6 @@ pub mod testing {
         (Box::new(LegacyBuilderImplementation { global_state }), url)
     }
 
-    struct MarketplaceBuilderImplementation {
-        global_state: Arc<GlobalState<SeqTypes, NoHooks<SeqTypes>>>,
-    }
-
-    impl BuilderTask<SeqTypes> for MarketplaceBuilderImplementation {
-        fn start(
-            self: Box<Self>,
-            stream: Box<
-                dyn Stream<Item = hotshot::types::Event<SeqTypes>>
-                    + std::marker::Unpin
-                    + Send
-                    + 'static,
-            >,
-        ) {
-            spawn(async move {
-                let res = self.global_state.start_event_loop(stream).await;
-                tracing::error!(?res, "Testing marketplace builder service exited");
-            });
-        }
-    }
-
-    pub async fn run_marketplace_builder<const NUM_NODES: usize>(
-        port: Option<u16>,
-    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
-
-        // This should never fail.
-        let url: Url = format!("http://localhost:{port}")
-            .parse()
-            .expect("Failed to parse builder URL");
-
-        // create the global state
-        let global_state = GlobalState::new(
-            BuilderConfig {
-                builder_keys: (builder_key_pair.fee_account(), builder_key_pair),
-                api_timeout: Duration::from_secs(60),
-                tx_capture_timeout: Duration::from_millis(100),
-                txn_garbage_collect_duration: Duration::from_secs(60),
-                txn_channel_capacity: BUILDER_CHANNEL_CAPACITY_FOR_TEST,
-                tx_status_cache_capacity: 81920,
-                base_fee: 10,
-            },
-            NoHooks(PhantomData),
-        );
-
-        // Create and spawn the tide-disco app to serve the builder APIs
-        let app = Arc::clone(&global_state)
-            .into_app()
-            .expect("Failed to create builder tide-disco app");
-
-        spawn(
-            app.serve(
-                format!("http://0.0.0.0:{port}")
-                    .parse::<Url>()
-                    .expect("Failed to parse builder listener"),
-                MarketplaceVersion::instance(),
-            ),
-        );
-
-        // Pass on the builder task to be injected in the testing harness
-        (
-            Box::new(MarketplaceBuilderImplementation { global_state }),
-            url,
-        )
-    }
-
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
@@ -870,7 +796,6 @@ pub mod testing {
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
-        marketplace_builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
@@ -892,11 +817,6 @@ pub mod testing {
     impl<const NUM_NODES: usize> TestConfigBuilder<NUM_NODES> {
         pub fn builder_port(mut self, builder_port: Option<u16>) -> Self {
             self.builder_port = builder_port;
-            self
-        }
-
-        pub fn marketplace_builder_port(mut self, port: Option<u16>) -> Self {
-            self.marketplace_builder_port = port;
             self
         }
 
@@ -1021,7 +941,6 @@ pub mod testing {
                 l1_url: self.l1_url,
                 signer: self.signer,
                 state_relay_url: self.state_relay_url,
-                marketplace_builder_port: self.marketplace_builder_port,
                 builder_port: self.builder_port,
                 upgrades: self.upgrades,
                 anvil_provider: self.anvil_provider,
@@ -1102,7 +1021,6 @@ pub mod testing {
                 signer,
                 state_relay_url: None,
                 builder_port: None,
-                marketplace_builder_port: None,
                 upgrades: Default::default(),
             }
         }
@@ -1119,7 +1037,6 @@ pub mod testing {
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
-        marketplace_builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
@@ -1134,10 +1051,6 @@ pub mod testing {
 
         pub fn set_builder_urls(&mut self, builder_urls: vec1::Vec1<Url>) {
             self.config.builder_urls = builder_urls;
-        }
-
-        pub fn marketplace_builder_port(&self) -> Option<u16> {
-            self.marketplace_builder_port
         }
 
         pub fn builder_port(&self) -> Option<u16> {
@@ -1183,11 +1096,6 @@ pub mod testing {
                     NullEventConsumer,
                     bind_version,
                     Default::default(),
-                    Url::parse(&format!(
-                        "http://localhost:{}",
-                        self.marketplace_builder_port.unwrap_or_default()
-                    ))
-                    .unwrap(),
                 )
                 .await
             }))
@@ -1211,7 +1119,6 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             bind_version: V,
             upgrades: BTreeMap<Version, Upgrade>,
-            marketplace_builder_url: Url,
         ) -> SequencerContext<network::Memory, P::Persistence, V> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
@@ -1347,10 +1254,6 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 bind_version,
-                MarketplaceConfig::<SeqTypes, Node<network::Memory, P::Persistence>> {
-                    auction_results_provider: Arc::new(SolverAuctionResultsProvider::default()),
-                    fallback_builder_url: marketplace_builder_url,
-                },
                 Default::default(),
             )
             .await

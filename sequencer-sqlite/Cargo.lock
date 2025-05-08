@@ -6870,34 +6870,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "marketplace-solver"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-lock 3.4.0",
- "async-trait",
- "bincode",
- "clap 4.5.34",
- "committable",
- "espresso-types",
- "futures",
- "hotshot",
- "hotshot-events-service",
- "hotshot-types",
- "rand 0.8.5",
- "serde",
- "sqlx",
- "surf-disco",
- "thiserror 1.0.69",
- "tide-disco",
- "tokio",
- "toml",
- "tracing",
- "vbs",
-]
-
-[[package]]
 name = "matchers"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9297,7 +9269,6 @@ dependencies = [
  "jf-signature 0.2.0",
  "jf-vid",
  "libp2p",
- "marketplace-solver",
  "num_enum",
  "parking_lot",
  "portpicker",
