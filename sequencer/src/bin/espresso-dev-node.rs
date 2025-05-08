@@ -23,12 +23,15 @@ use espresso_contract_deployer::{
     DeployedContracts, HttpProviderWithWallet,
 };
 use espresso_types::{
-    parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
+    parse_duration, v0_99::ChainConfig, EpochVersion, SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_state_prover::service::{run_prover_service, StateProverConfig};
-use hotshot_types::{light_client::one_honest_threshold, utils::epoch_from_block_number};
+use hotshot_types::{
+    stake_table::{one_honest_threshold, HSStakeTable},
+    utils::epoch_from_block_number,
+};
 use itertools::izip;
 use portpicker::pick_unused_port;
 use sequencer::{
@@ -298,18 +301,14 @@ async fn main() -> anyhow::Result<()> {
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
 
-    let initial_stake_table = network_config
+    let initial_stake_table: HSStakeTable<SeqTypes> = network_config
         .hotshot_config()
         .known_nodes_with_stake
-        .clone();
-    let initial_total_stakes = initial_stake_table
-        .iter()
-        .map(|config| config.stake_table_entry.stake_amount)
-        .sum();
-    let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
-        network_config.known_nodes_with_stake(),
-        STAKE_TABLE_CAPACITY_FOR_TEST,
-    )?;
+        .clone()
+        .into();
+    let initial_total_stakes = initial_stake_table.total_stakes();
+    let (genesis_state, genesis_stake) =
+        light_client_genesis_from_stake_table(&initial_stake_table, STAKE_TABLE_CAPACITY_FOR_TEST)?;
 
     let mut l1_contracts: Contracts = contracts.into();
     let mut light_client_addresses = vec![];

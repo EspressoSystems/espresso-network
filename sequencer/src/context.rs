@@ -10,7 +10,7 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
-    NodeState, PubKey, Transaction, ValidatedState,
+    NodeState, PubKey, SolverAuctionResultsProvider, Transaction, ValidatedState,
 };
 use futures::{
     future::{join_all, Future},
@@ -27,7 +27,6 @@ use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    light_client::compute_stake_table_commitment,
     network::NetworkConfig,
     traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
     PeerConfig, ValidatorConfig,
@@ -106,7 +105,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         _: V,
-        marketplace_config: MarketplaceConfig<SeqTypes, Node<N, P>>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
@@ -126,12 +124,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             .load_consensus_state::<V>(instance_state.clone())
             .await?;
 
-        let stake_table_commit =
-            compute_stake_table_commitment(&config.known_nodes_with_stake, stake_table_capacity)?;
+        let stake_table = config.hotshot_stake_table();
+        let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
         let stake_table_epoch = None;
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
-            config.known_nodes_with_stake.clone(),
+            stake_table.0,
             0,
         )));
 
@@ -146,7 +144,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             initializer,
             ConsensusMetricsValue::new(metrics),
             Arc::clone(&persistence),
-            marketplace_config,
+            // TODO: MA: will be removed when more marketplace code is removed,
+            // at the moment we need to pass in a config to hotshot.
+            MarketplaceConfig {
+                auction_results_provider: Arc::new(SolverAuctionResultsProvider::default()),
+                fallback_builder_url: "http://dummy".parse().unwrap(),
+            },
         )
         .await?
         .0;

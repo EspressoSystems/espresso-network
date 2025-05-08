@@ -29,6 +29,7 @@ use hotshot_types::{
         QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::HasEpoch,
+    stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
@@ -42,7 +43,6 @@ use hotshot_types::{
         option_epoch_from_block_number, Terminator, View, ViewInner,
     },
     vote::{Certificate, HasViewNumber},
-    StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
 use tokio::time::timeout;
@@ -314,7 +314,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
 
     // If we don't have the proposals parent return early
     let Some(parent_info) = consensus_reader
-        .parent_leaf_info(&proposed_leaf, public_key, membership)
+        .parent_leaf_info(&proposed_leaf, public_key)
         .await
     else {
         return res;
@@ -322,7 +322,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     // Get the parents parent and check if it's consecutive in view to the parent, if so we can decided
     // the grandparents view.  If not we're done.
     let Some(grand_parent_info) = consensus_reader
-        .parent_leaf_info(&parent_info.leaf, public_key, membership)
+        .parent_leaf_info(&parent_info.leaf, public_key)
         .await
     else {
         return res;
@@ -373,7 +373,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         }
 
         current_leaf_info = consensus_reader
-            .parent_leaf_info(&info.leaf, public_key, membership)
+            .parent_leaf_info(&info.leaf, public_key)
             .await;
         res.leaf_views.push(info.clone());
     }

@@ -228,7 +228,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .stake_table_for_epoch(epoch)
             .await?;
 
-        Ok(mem.stake_table().await)
+        Ok(mem.stake_table().await.0)
     }
 
     /// Get the stake table for the current epoch and return it along with the epoch number
@@ -651,7 +651,7 @@ pub mod test_helpers {
     };
     use espresso_types::{
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, MarketplaceVersion, MockSequencerVersions, NamespaceId, ValidatedState,
+        EpochVersion, MockSequencerVersions, NamespaceId, ValidatedState,
     };
     use futures::{
         future::{join_all, FutureExt},
@@ -679,10 +679,7 @@ pub mod test_helpers {
         catchup::NullStateCatchup,
         network,
         persistence::no_storage,
-        testing::{
-            run_legacy_builder, run_marketplace_builder, wait_for_decide_on_handle, TestConfig,
-            TestConfigBuilder,
-        },
+        testing::{run_legacy_builder, wait_for_decide_on_handle, TestConfig, TestConfigBuilder},
     };
 
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
@@ -829,7 +826,7 @@ pub mod test_helpers {
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
             let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
-                &network_config.hotshot_config().known_nodes_with_stake,
+                &network_config.hotshot_config().hotshot_stake_table(),
                 STAKE_TABLE_CAPACITY_FOR_TEST,
             )
             .unwrap();
@@ -918,33 +915,20 @@ pub mod test_helpers {
             bind_version: V,
         ) -> Self {
             let mut cfg = cfg;
-            let mut marketplace_builder_url = "http://example.com".parse().unwrap();
             let mut builder_tasks = Vec::new();
 
-            if <V as Versions>::Base::VERSION < MarketplaceVersion::VERSION {
-                let chain_config = cfg.state[0].chain_config.resolve();
-                if chain_config.is_none() {
-                    tracing::warn!("Chain config is not set, using default max_block_size");
-                }
-                let (task, url) = run_legacy_builder::<{ NUM_NODES }>(
-                    cfg.network_config.builder_port(),
-                    chain_config.map(|c| *c.max_block_size),
-                )
-                .await;
-                builder_tasks.push(task);
-                cfg.network_config.set_builder_urls(vec1::vec1![url]);
-            };
-
-            if <V as Versions>::Upgrade::VERSION >= MarketplaceVersion::VERSION
-                || <V as Versions>::Base::VERSION >= MarketplaceVersion::VERSION
-            {
-                let (task, url) = run_marketplace_builder::<{ NUM_NODES }>(
-                    cfg.network_config.marketplace_builder_port(),
-                )
-                .await;
-                builder_tasks.push(task);
-                marketplace_builder_url = url;
-            };
+            let chain_config = cfg.state[0].chain_config.resolve();
+            if chain_config.is_none() {
+                tracing::warn!("Chain config is not set, using default max_block_size");
+            }
+            let (task, builder_url) = run_legacy_builder::<{ NUM_NODES }>(
+                cfg.network_config.builder_port(),
+                chain_config.map(|c| *c.max_block_size),
+            )
+            .await;
+            builder_tasks.push(task);
+            cfg.network_config
+                .set_builder_urls(vec1::vec1![builder_url.clone()]);
 
             // add default storage if none is provided as query module is now required
             let mut opt = cfg.api_config.clone();
@@ -966,8 +950,6 @@ pub mod test_helpers {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
                         let upgrades_map = cfg.upgrades();
-
-                        let marketplace_builder_url = marketplace_builder_url.clone();
                         async move {
                             if i == 0 {
                                 opt.serve(|metrics, consumer, storage| {
@@ -985,7 +967,6 @@ pub mod test_helpers {
                                                 consumer,
                                                 bind_version,
                                                 upgrades_map,
-                                                marketplace_builder_url,
                                             )
                                             .await)
                                     }
@@ -1005,7 +986,6 @@ pub mod test_helpers {
                                     NullEventConsumer,
                                     bind_version,
                                     upgrades_map,
-                                    marketplace_builder_url,
                                 )
                                 .await
                             }
@@ -2193,7 +2173,6 @@ mod test {
                 NullEventConsumer,
                 MockSequencerVersions::new(),
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
         let mut events = node.event_stream().await;
@@ -2315,7 +2294,6 @@ mod test {
                 NullEventConsumer,
                 MockSequencerVersions::new(),
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
         let mut events = node.event_stream().await;
@@ -2403,7 +2381,6 @@ mod test {
                 NullEventConsumer,
                 MockSequencerVersions::new(),
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
         let mut events = node.event_stream().await;
@@ -2499,7 +2476,6 @@ mod test {
                 NullEventConsumer,
                 MockSequencerVersions::new(),
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
         let mut events = node.event_stream().await;

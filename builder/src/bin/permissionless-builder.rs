@@ -120,38 +120,23 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(all(feature = "fee", feature = "pos"))]
         (espresso_types::FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
             run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
-                genesis, opt
-            )
-            .await
-        }
-        #[cfg(feature = "pos")]
-        (espresso_types::EpochVersion::VERSION, _) => {
-            run::<SequencerVersions<espresso_types::EpochVersion, espresso_types::V0_0>>(
                 genesis, opt,
             )
             .await
-        }
-        #[cfg(all(feature = "fee", feature = "marketplace"))]
-        (espresso_types::FeeVersion::VERSION, espresso_types::MarketplaceVersion::VERSION) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::MarketplaceVersion>>(
-                genesis, opt
+        },
+        #[cfg(feature = "pos")]
+        (espresso_types::EpochVersion::VERSION, _) => {
+            // Specifying V0_0 disables upgrades
+            run::<SequencerVersions<espresso_types::EpochVersion, espresso_types::V0_0>>(
+                genesis, opt,
             )
             .await
         },
         #[cfg(feature = "fee")]
         (espresso_types::FeeVersion::VERSION, _) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::V0_0>>(
-                genesis, opt
-            )
-            .await
-        },
-        #[cfg(feature = "marketplace")]
-        (espresso_types::MarketplaceVersion::VERSION, _) => {
-            run::<SequencerVersions<espresso_types::MarketplaceVersion, espresso_types::V0_0>>(
-                genesis, opt
-            )
-            .await
-
+            // Specifying V0_0 disables upgrades
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::V0_0>>(genesis, opt)
+                .await
         },
         _ => panic!(
             "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."
