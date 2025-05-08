@@ -8,6 +8,7 @@
 
 use alloy::primitives::U256;
 use ark_ff::PrimeField;
+use derive_more::derive::{Deref, DerefMut};
 use jf_crhf::CRHF;
 use jf_rescue::crhf::VariableLengthRescueCRHF;
 use serde::{Deserialize, Serialize};
@@ -47,26 +48,12 @@ impl<K: SignatureKey> StakeTableEntry<K> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Deref, DerefMut)]
 pub struct HSStakeTable<TYPES: NodeType>(pub Vec<PeerConfig<TYPES>>);
 
 impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for HSStakeTable<TYPES> {
     fn from(peers: Vec<PeerConfig<TYPES>>) -> Self {
         Self(peers)
-    }
-}
-
-impl<TYPES: NodeType> std::ops::Deref for HSStakeTable<TYPES> {
-    type Target = Vec<PeerConfig<TYPES>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<TYPES: NodeType> std::ops::DerefMut for HSStakeTable<TYPES> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
@@ -140,10 +127,6 @@ impl<TYPES: NodeType> HSStakeTable<TYPES> {
             .iter()
             .map(|peer| peer.stake_table_entry.stake())
             .sum()
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<'_, PeerConfig<TYPES>> {
-        self.0.iter()
     }
 }
 

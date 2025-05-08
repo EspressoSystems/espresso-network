@@ -10,6 +10,7 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duratio
 use alloy::primitives::U256;
 use bincode::Options;
 use displaydoc::Display;
+use stake_table::HSStakeTable;
 use tracing::error;
 use traits::{
     node_implementation::NodeType,
@@ -238,5 +239,10 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
         self.stop_proposing_time = u64::MAX;
         self.start_voting_time = 0;
         self.stop_voting_time = u64::MAX;
+    }
+
+    /// Return the `known_nodes_with_stake` as a `HSStakeTable`
+    pub fn hotshot_stake_table(&self) -> HSStakeTable<TYPES> {
+        self.known_nodes_with_stake.clone().into()
     }
 }
