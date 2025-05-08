@@ -471,6 +471,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
         (hotshot, hs_initializer)
     }
+
+    #[cfg(any(test, feature = "testing"))]
+    /// Replace Consensus Handle
+    pub fn replace_handle(&mut self, handle: Consensus<N, P, V>) {
+        self.handle = Arc::new(RwLock::new(handle));
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop
