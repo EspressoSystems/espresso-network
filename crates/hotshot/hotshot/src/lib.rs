@@ -398,12 +398,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         inner
     }
 
-    /// Instantiate Hotshot from Hotshot ;). "It's just crazy enough to work (or not)".
-    pub async fn new_from_context(
+    /// Instantiate Hotshot from Hotshot.
+    pub async fn into_self_cloned(
         &self,
         initializer: HotShotInitializer<TYPES>,
-        internal_reciever: Receiver<Arc<HotShotEvent<TYPES>>>,
-        external_reciever: Receiver<Event<TYPES>>,
+        // external_reciever: Receiver<Event<TYPES>>,
     ) -> Arc<Self> {
         let SystemContext {
             public_key,
@@ -420,8 +419,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             ..
         } = self.clone();
 
-        let (internal_sender, _) = internal_event_stream;
-        let (external_sender, _) = external_event_stream;
+        let (internal_sender, internal_reciever) = internal_event_stream;
+        let (external_sender, external_reciever) = external_event_stream;
 
         let storage = if let Ok(storage) =
             Arc::<RwLock<<I as NodeImplementation<TYPES>>::Storage>>::try_unwrap(storage)
@@ -445,8 +444,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             metrics,
             storage,
             marketplace_config,
-            (internal_sender, internal_reciever),
-            (external_sender, external_reciever),
+            (internal_sender, internal_reciever.activate()), // I think we don't need this one anyway
+            (external_sender, external_reciever.activate()), // TODO probably not the correct place to activate
         )
         .await
     }

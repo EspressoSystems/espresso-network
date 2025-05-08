@@ -374,7 +374,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
     fn restore(&mut self) {
         if let Some(initialzer) = self.initializer.take() {
-            // let hotshot = SystemContext::new_from_channels();
             // let context = initialzer.sequencer_context;
             // do the opposite of `context.shut_down`
             // * what tasks are spawned
@@ -407,7 +406,16 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         async {
             tracing::info!("starting node");
 
-            // TODO self.restore();
+            let hotshot = if let Some(initializer) = self.initializer.take() {
+                let hotshot = initializer
+                    .hotshot_context
+                    .into_self_cloned(initializer.hotshot_initializer)
+                    .await;
+                // TODO wrap `hotshot` in a `SystemContextHandle`
+                Some(hotshot)
+            } else {
+                None
+            };
 
             // If we are starting a node which had already been started and stopped, we may need to
             // delay a bit for the OS to reclaim the node's P2P port. Otherwise initialization of
@@ -441,6 +449,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             };
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");
+
+            // if let Some(hotshot) = hotshot {
+            //     ctx.replace_handle(*hotshot);
+            // }
+
             ctx.start_consensus().await;
             self.context = Some(ctx);
         }
