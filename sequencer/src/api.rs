@@ -3561,7 +3561,6 @@ mod test {
                 NullEventConsumer,
                 EpochsTestVersions {},
                 Default::default(),
-                "http://localhost".parse().unwrap(),
             )
             .await;
 
