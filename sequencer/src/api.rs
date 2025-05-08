@@ -666,7 +666,7 @@ pub mod test_helpers {
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use staking_cli::demo::setup_stake_table_contract_for_test;
+    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -798,7 +798,7 @@ pub mod test_helpers {
         /// stake table address to state. Must be called before `build()`.
         pub async fn pos_hook<V: Versions>(
             self,
-            multiple_delegators: bool,
+            delegation_config: DelegationConfig,
         ) -> anyhow::Result<Self> {
             if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
                 && <V as Versions>::Base::VERSION < EpochVersion::VERSION
@@ -851,7 +851,7 @@ pub mod test_helpers {
                 stake_table_address,
                 token_addr,
                 network_config.staking_priv_keys(),
-                multiple_delegators,
+                delegation_config,
             )
             .await
             .expect("stake table setup failed");
@@ -1885,6 +1885,7 @@ mod test {
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
+    use staking_cli::demo::DelegationConfig;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
@@ -3021,7 +3022,7 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config.clone())
-            .pos_hook::<PosVersion>(false)
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts)
             .await
             .expect("Pos Deployment")
             .build();
@@ -3120,7 +3121,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(false)
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts)
             .await
             .unwrap()
             .build();
@@ -3212,7 +3213,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .unwrap()
             .build();
@@ -3331,7 +3332,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .unwrap()
             .build();
@@ -3439,7 +3440,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .unwrap()
             .build();
