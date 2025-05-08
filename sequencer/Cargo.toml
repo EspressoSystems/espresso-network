@@ -9,7 +9,6 @@ edition = "2021"
 default = ["fee", "pos"]
 testing = [
     "hotshot-testing",
-    "marketplace-builder-core",
     "espresso-types/testing",
     "sequencer-utils/testing",
     "hotshot-query-service/testing",
@@ -22,7 +21,6 @@ sqlite-unbundled = [
 ]
 fee = []
 pos = []
-marketplace = []
 
 [[bin]]
 name = "espresso-dev-node"
@@ -98,8 +96,6 @@ jf-rescue = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-vid = { workspace = true }
 libp2p = { workspace = true }
-marketplace-builder-core = { workspace = true, optional = true }
-marketplace-solver = { path = "../marketplace-solver" }
 num_enum = "0.7"
 parking_lot = "0.12"
 portpicker = { workspace = true }
