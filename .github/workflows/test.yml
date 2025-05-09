@@ -208,14 +208,10 @@ jobs:
     needs: [build-test-bins, build-test-artifacts-postgres]
     strategy:
       matrix:
-        #version: [02,99]
-        version: [02]
         include:
-          - version: 02
-            test-name: test_native_demo_basic
-
-          # - version: 99
-          #   test-name: test_native_demo_upgrade
+          - test-name: test_native_demo_base
+          - test-name: test_native_demo_pos_base
+          - test-name: test_native_demo_pos_upgrade
 
       fail-fast: false
     runs-on: ubuntu-latest
@@ -248,11 +244,10 @@ jobs:
         env:
           RUST_LOG: debug
           NEXTEST_PROFILE: integration
-          INTEGRATION_TEST_SEQUENCER_VERSION: ${{ matrix.version }}
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
           --workspace-remap $PWD ${{ matrix.test-name }}
-        timeout-minutes: 10
+        timeout-minutes: 20
 
       - name: Show end of logs
         if: always()
@@ -263,7 +258,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: process-compose-logs-integration-v${{ matrix.version  }}
+          name: process-compose-logs-integration-v${{ matrix.test-name  }}
           path: ${{ env.PC_LOGS }}
 
 

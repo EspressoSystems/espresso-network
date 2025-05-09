@@ -1,32 +1,37 @@
+use std::time::Duration;
+
 use anyhow::Result;
-use espresso_types::{FeeVersion, MarketplaceVersion};
+use espresso_types::{EpochVersion, FeeVersion};
 use futures::{future::join_all, StreamExt};
 use vbs::version::StaticVersionType;
 
 use crate::{
-    common::{NativeDemo, TestConfig},
+    common::{NativeDemo, TestConfig, TestRequirements},
     smoke::assert_native_demo_works,
 };
 
-const SEQUENCER_BLOCKS_TIMEOUT: u64 = 200;
+// The number of blocks we will wait for the upgrade to complete before we panic. Needs to be large
+// than "start_proposing_view" set in the "demo-pos.toml" genesis file.
+//
+// With the current config
+//
+// epoch_height = 200
+// epoch_start_block = 321
+// start_proposing_view = 200
+//
+// the upgrade happens usually at height 316.
+const POS_UPGRADE_WAIT_UNTIL_HEIGHT: u64 = 350;
+const MIN_BLOCK_INCREMENT_WITH_POS: u64 = 400; // 2 epochs
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_upgrade() -> Result<()> {
-    let _demo = NativeDemo::run(Some(
-        "-f process-compose.yaml -f process-compose-mp.yml".to_string(),
-    ))?;
-
-    assert_native_demo_works().await?;
-
+async fn assert_pos_upgrade_happens() -> Result<()> {
     dotenvy::dotenv()?;
 
-    let testing = TestConfig::new().await.unwrap();
+    // TODO we don't really want to use the requirements here
+    let testing = TestConfig::new(Default::default()).await.unwrap();
+    println!("Testing upgrade {:?}", testing);
 
-    let versions = if testing.sequencer_version as u16 >= MarketplaceVersion::version().minor {
-        (FeeVersion::version(), MarketplaceVersion::version())
-    } else {
-        panic!("Invalid sequencer version provided for upgrade test.");
-    };
+    let base_version = FeeVersion::version();
+    let upgrade_version = EpochVersion::version();
 
     println!("Waiting on readiness");
     let _ = testing.readiness().await?;
@@ -56,19 +61,42 @@ async fn test_native_demo_upgrade() -> Result<()> {
         // TODO is it possible to discover the view at which upgrade should be finished?
         // First few views should be `Base` version.
         if header.height() <= 20 {
-            assert_eq!(header.version(), versions.0)
+            assert_eq!(header.version(), base_version);
         }
 
-        if header.version() == versions.1 {
+        if header.version() == upgrade_version {
             println!("header version matched! height={:?}", header.height());
             break;
         }
 
-        if header.height() > SEQUENCER_BLOCKS_TIMEOUT {
+        if header.height() > POS_UPGRADE_WAIT_UNTIL_HEIGHT {
             panic!("Exceeded maximum block height. Upgrade should have finished by now :(");
         }
     }
 
-    // TODO assert transactions are incrementing
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_pos_upgrade() -> Result<()> {
+    let _demo = NativeDemo::run(
+        None,
+        Some(vec![(
+            "ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE".to_string(),
+            "data/genesis/demo-pos.toml".to_string(),
+        )]),
+    )?;
+
+    assert_native_demo_works(Default::default()).await?;
+    assert_pos_upgrade_happens().await?;
+
+    // verify native demo continues to work after upgrade
+    let requirements = TestRequirements {
+        block_height_increment: MIN_BLOCK_INCREMENT_WITH_POS,
+        txn_count_increment: 100, // a bit arbitrary but we wait for many blocks
+        timeout: Duration::from_secs(MIN_BLOCK_INCREMENT_WITH_POS * 2),
+    };
+    assert_native_demo_works(requirements).await?;
+
     Ok(())
 }
