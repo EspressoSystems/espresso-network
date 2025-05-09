@@ -78,12 +78,12 @@ pub fn compute_drb_result(
     let mut iteration = drb_input.iteration;
     let remaining_iterations = DIFFICULTY_LEVEL
       .checked_sub(iteration)
-      .expect(
-        format!(
+      .unwrap_or_else( ||
+        panic!(
           "DRB difficulty level {} exceeds the iteration {} of the input we were given. This is a fatal error", 
           DIFFICULTY_LEVEL,
           iteration
-        ).as_str()
+        )
       );
 
     let final_checkpoint = remaining_iterations / DRB_CHECKPOINT_INTERVAL;
@@ -107,8 +107,10 @@ pub fn compute_drb_result(
         });
     }
 
+    let final_checkpoint_iteration = iteration;
+
     // perform the remaining iterations
-    for _ in iteration..DIFFICULTY_LEVEL {
+    for _ in final_checkpoint_iteration..DIFFICULTY_LEVEL {
         hash = Sha256::digest(hash).to_vec();
         iteration += 1;
     }
