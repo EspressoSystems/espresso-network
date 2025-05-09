@@ -3387,12 +3387,11 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_rewards() -> anyhow::Result<()> {
-        // Tests the reward distribution across multiple epochs and verifies the consistency of reward calculations.
-        //
-        // The test simulates a network with multiple delegators for each validator
-        // It verifies that no rewards are distributed in the first two epochs and that rewards are correctly allocated starting from the third epoch.
-        // The test also checks that the total stake of delegators matches the recorded stake of the validator
-        // and that the calculated rewards match those obtained via the client API.
+        // The test registers multiple delegators for each validator
+        // It verifies that no rewards are distributed in the first two epochs
+        // and that rewards are correctly allocated starting from the third epoch.
+        // also checks that the total stake of delegators matches the stake of the validator
+        // and that the calculated rewards match those obtained via the merklized state api
         setup_test();
         const EPOCH_HEIGHT: u64 = 20;
 
