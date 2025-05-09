@@ -1,0 +1,213 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: espresso-sequencer-<release>          # e.g. espresso-sequencer-mainnet
+  namespace: <namespace>                     # e.g. monitoring
+  labels:
+    app: espresso
+    release: <prom_stack_release>            # e.g. kube-prometheus-stack
+    chain: espresso-sequencer
+    client: <helm_release_name>
+spec:
+  groups:
+  - name: espresso-sequencer.rules
+    rules:
+
+    ########################################################################
+    #                              P3  -  urgent                           #
+    ########################################################################
+
+    - alert: espressoLeaderTimeouts
+      expr: increase(consensus_number_of_timeouts_as_leader[2h]) > 6
+      for: 5m
+      labels:
+        severity: P3
+      annotations:
+        summary: Espresso Leader Timeout Increasing
+        description: >
+          Espresso pod {{`{{ .Labels.pod }}`}} (release {{`{{ .Labels.release }}`}})
+          recorded {{`{{ $value }}`}} leader-timeouts in the last two hours.
+
+    - alert: espressoCDNFailedMessagesAndNoPeers
+      expr: (increase(consensus_cdn_num_failed_messages[5m]) > 0)
+             and (consensus_libp2p_num_connected_peers == 0)
+      for: 5m
+      labels:
+        severity: P3
+      annotations:
+        summary: CDN failures & zero Libp2p peers
+        description: >
+          {{`{{ .Labels.instance }}`}} is isolated: all Libp2p peers lost and
+          CDN messages failing.
+
+    - alert: espressoLibp2pNotReady
+      expr: (time() - process_start_time_seconds{}) > 300
+             and consensus_libp2p_is_ready == 0
+      for: 5m
+      labels:
+        severity: P3
+      annotations:
+        summary: Libp2p stack not ready
+        description: >
+          Libp2p subsystem on pod {{`{{ .Labels.pod }}`}} has not become
+          ready for 5 minutes after start-up.
+
+    ########################################################################
+    #                        P4  -  business-hours only                    #
+    ########################################################################
+
+    - alert: espressoNodeProgression
+      expr: delta(consensus_current_view{namespace=~"<namespace>"}[10m]) == 0
+      for: 5m
+      labels:
+        severity: P4
+      annotations:
+        summary: Espresso Node Not Progressing
+        description: >
+          Espresso pod {{`{{ .Labels.pod }}`}} (release {{`{{ .Labels.release }}`}})
+          hasn't progressed for 10 minutes.
+
+    - alert: espressoLastVotedViewStalled
+      expr: increase(consensus_last_voted_view[5m]) == 0
+      for: 10m
+      labels:
+        severity: P4
+      annotations:
+        summary: Last-voted view not advancing
+        description: >
+          No new votes for 10 minutes - node or entire network may be stalled
+          or disconnected.
+
+    - alert: espressoNoP2PPeers
+      expr: consensus_libp2p_num_connected_peers == 0
+      for: 10m
+      labels:
+        severity: P4
+      annotations:
+        summary: Node has zero P2P peers
+        description: >
+          Currently routed only through the CDN; investigate if persistent.
+
+    - alert: espressoNodeLowPeerCount
+      expr: consensus_libp2p_num_connected_peers < 10
+      for: 30m
+      labels:
+        severity: P4
+      annotations:
+        summary: Espresso Node Low Peer Count
+        description: >
+          Pod {{`{{ .Labels.pod }}`}} has fewer than 10 peers for >30 minutes.
+
+    - alert: espressoL1HeadStalled
+      expr: increase(consensus_l1_head[15m]) == 0
+      for: 15m
+      labels:
+        severity: P4
+      annotations:
+        summary: L1 head stalled
+        description: >
+          No new L1 blocks for 15 minutes; upstream provider may be unhealthy.
+
+    - alert: espressoOutstandingTransactionsGrowing
+      expr: increase(consensus_outstanding_transactions[1h]) > 10
+      for: 30m
+      labels:
+        severity: P4
+      annotations:
+        summary: Outstanding transactions growing
+        description: >
+          Outstanding-transaction count rising for 1 hour; GC may be lagging.
+
+    - alert: espressoViewsSinceLastDecideHigh
+      expr: consensus_number_of_views_since_last_decide > 20
+      for: 10m
+      labels:
+        severity: P4
+      annotations:
+        summary: Many views per decide event
+        description: >
+          Node needed >20 views to reach a "decide" - repeated timeouts.
+
+    - alert: espressoEventQueueBacklog
+      expr: consensus_internal_event_queue_len > 50
+      for: 5m
+      labels:
+        severity: P4
+      annotations:
+        summary: Consensus event queue backlog
+        description: >
+          Internal event queue >50 for 5 minutes - task may be CPU-starved.
+
+    - alert: espressoCatchupFailureRatioHigh
+      expr: |
+        (rate(consensus_catchup_request_failures[5m])
+         / clamp_max(rate(consensus_catchup_requests[5m]), 0.01)) > 0.1
+      for: 15m
+      labels:
+        severity: P4
+      annotations:
+        summary: Catch-up failure ratio >10 %
+        description: >
+          More than 10 % of catch-up requests failed over the last 15 minutes.
+
+    - alert: espressoInvalidQC
+      expr: consensus_invalid_qc > 0
+      for: 1m
+      labels:
+        severity: P4
+      annotations:
+        summary: Invalid quorum certificate detected
+        description: >
+          Node flagged an invalid QC - investigate consensus safety.
+
+    - alert: espressoLibp2pMessageFailures
+      expr: rate(consensus_libp2p_num_failed_messages[10m]) > 5
+      for: 10m
+      labels:
+        severity: P4
+      annotations:
+        summary: Libp2p message failures
+        description: >
+          >5 failed Libp2p messages in 10 minutes - possible congestion.
+
+    - alert: espressoProposalFetcherQueueHigh
+      expr: consensus_proposal_fetcher_queue_len > 50
+      for: 10m
+      labels:
+        severity: P4
+      annotations:
+        summary: Proposal fetcher queue high
+        description: >
+          >50 proposals waiting to be fetched for 10 minutes.
+
+    - alert: espressoProposalFetcherFailureRatioHigh
+      expr: |
+        (rate(consensus_proposal_fetcher_failed[10m])
+         / clamp_max(rate(consensus_proposal_fetcher_fetched[10m]), 0.01)) > 0.05
+      for: 15m
+      labels:
+        severity: P4
+      annotations:
+        summary: Proposal fetch failure ratio >5 %
+        description: >
+          Proposal fetcher failures exceeding 5 % over 15 minutes.
+
+    - alert: espressoOutstandingTxnMemoryHigh
+      expr: consensus_outstanding_transactions_memory_size > 100000000
+      for: 10m
+      labels:
+        severity: P4
+      annotations:
+        summary: Outstanding-txn memory >100 MB
+        description: >
+          Large outstanding-txn set; garbage collection may be lagging.
+
+    - alert: espressoSoftwareRevisionOld
+      expr: (time() - timestamp(consensus_version{rev!=""})) > 30*24*60*60
+      for: 6h
+      labels:
+        severity: P4
+      annotations:
+        summary: Node software revision >30 days old
+        description: >
+          Node is running a build older than 30 days - plan an upgrade.

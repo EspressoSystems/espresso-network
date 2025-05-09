@@ -1,0 +1,182 @@
+{
+    "title": "Espresso Sequencer",
+    "version": 1,
+    "schemaVersion": 39,
+    "editable": true,
+    "time": { "from": "now-1h", "to": "now" },
+    "refresh": "10s",
+    "timepicker": {
+      "refresh_intervals": [ "10s", "30s", "1m", "5m", "15m", "30m", "1h" ],
+      "time_options": [ "5m", "15m", "1h", "6h", "12h", "24h", "7d", "30d" ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Consensus Last Decided View",
+        "datasource": { "type": "prometheus", "uid": "${prometheusDS}" },
+        "targets": [
+          {
+            "expr": "rate(consensus_last_decided_view[1m])",
+            "legendFormat": "{{release}}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "reduceOptions": { "calcs": [ "lastNotNull" ] }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "red",   "value": 80 }
+              ]
+            }
+          }
+        },
+        "gridPos": { "h": 4, "w": 3, "x": 0, "y": 0 }
+      },
+      {
+        "id": 2,
+        "type": "timeseries",
+        "title": "Current View vs Last Decided View",
+        "datasource": { "type": "prometheus", "uid": "${prometheusDS}" },
+        "targets": [
+          { "expr": "rate(consensus_current_view[1m])",       "legendFormat": "{{release}}-current", "refId": "A" },
+          { "expr": "rate(consensus_last_decided_view[1m])",  "legendFormat": "{{release}}-last",    "refId": "B" }
+        ],
+        "options": {
+          "legend": { "showLegend": true, "placement": "bottom" },
+          "tooltip": { "mode": "single" }
+        },
+        "gridPos": { "h": 8, "w": 21, "x": 3, "y": 0 }
+      },
+      {
+        "id": 3,
+        "type": "stat",
+        "title": "Consensus Current View",
+        "datasource": { "type": "prometheus", "uid": "${prometheusDS}" },
+        "targets": [
+          { "expr": "rate(consensus_current_view[1m])", "legendFormat": "{{release}}", "refId": "A" }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "reduceOptions": { "calcs": [ "lastNotNull" ] }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [ { "color": "green" } ]
+            }
+          }
+        },
+        "gridPos": { "h": 4, "w": 3, "x": 0, "y": 4 }
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "Outstanding Transactions",
+        "datasource": { "type": "prometheus", "uid": "${prometheusDS}" },
+        "targets": [
+          { "expr": "consensus_outstanding_transactions", "legendFormat": "{{release}}", "refId": "A" }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "reduceOptions": { "calcs": [ "lastNotNull" ] }
+        },
+        "fieldConfig": {
+          "defaults": { "color": { "mode": "thresholds" } }
+        },
+        "gridPos": { "h": 7, "w": 3, "x": 0, "y": 8 }
+      },
+      {
+        "id": 5,
+        "type": "timeseries",
+        "title": "Last Decided Time",
+        "datasource": { "type": "prometheus", "uid": "${prometheusDS}" },
+        "targets": [
+          { "expr": "consensus_last_decided_time", "legendFormat": "{{release}}", "refId": "A" }
+        ],
+        "options": {
+          "legend": { "showLegend": true, "placement": "bottom" },
+          "tooltip": { "mode": "single" }
+        },
+        "gridPos": { "h": 7, "w": 21, "x": 3, "y": 8 }
+      },
+      {
+        "id": 6,
+        "type": "stat",
+        "title": "Libp2p Connected Peers",
+        "datasource": { "type": "prometheus", "uid": "${prometheusDS}" },
+        "targets": [
+          { "expr": "consensus_libp2p_num_connected_peers", "legendFormat": "{{release}}", "refId": "A" }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "reduceOptions": { "calcs": [ "lastNotNull" ] }
+        },
+        "fieldConfig": {
+          "defaults": { "color": { "mode": "thresholds" } }
+        },
+        "gridPos": { "h": 7, "w": 3, "x": 0, "y": 15 }
+      },
+      {
+        "id": 7,
+        "type": "histogram",
+        "title": "View Duration as Leader",
+        "datasource": { "type": "prometheus", "uid": "${prometheusDS}" },
+        "targets": [
+          { "expr": "consensus_view_duration_as_leader_bucket", "legendFormat": "{{release}}", "refId": "A" }
+        ],
+        "options": {
+          "legend": { "showLegend": true, "placement": "bottom" }
+        },
+        "fieldConfig": {
+          "defaults": { "color": { "mode": "thresholds" } }
+        },
+        "gridPos": { "h": 7, "w": 21, "x": 3, "y": 15 }
+      },
+      {
+        "id": 8,
+        "type": "timeseries",
+        "title": "Timeouts as Leader",
+        "datasource": { "type": "prometheus", "uid": "${prometheusDS}" },
+        "targets": [
+          { "expr": "consensus_number_of_timeouts_as_leader", "legendFormat": "{{release}}", "refId": "A" }
+        ],
+        "options": {
+          "legend": { "showLegend": true, "placement": "bottom" },
+          "tooltip": { "mode": "single" }
+        },
+        "gridPos": { "h": 8, "w": 21, "x": 3, "y": 22 }
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "prometheusDS",
+          "type": "datasource",
+          "query": "prometheus",
+          "regex": "",
+          "current": {},
+          "hide": 0,
+          "includeAll": false,
+          "multi": false,
+          "refresh": 1,
+          "label": "Prometheus Data Source"
+        }
+      ]
+    },
+    "annotations": { "list": [] }
+}
+  
