@@ -536,17 +536,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             },
             HotShotEvent::ViewChange(view, epoch) => {
                 let view = TYPES::View::new(std::cmp::max(1, **view));
-                let epoch = if self.upgrade_lock.epochs_enabled(view).await {
-                    // #3967 REVIEW NOTE: Double check this logic
-                    Some(TYPES::Epoch::new(std::cmp::max(
-                        1,
-                        epoch.map(|x| *x).unwrap_or(0),
-                    )))
-                } else {
-                    *epoch
-                };
                 ensure!(
-                    *view > *self.cur_view && epoch >= self.cur_epoch,
+                    *view > *self.cur_view && *epoch >= self.cur_epoch,
                     debug!(
                       "Received a view change to an older view and epoch: tried to change view to {:?}\
                       and epoch {:?} though we are at view {:?} and epoch {:?}",
@@ -554,16 +545,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                     )
                 );
                 self.cur_view = view;
-                self.cur_epoch = epoch;
+                self.cur_epoch = *epoch;
 
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(epoch)
+                    .membership_for_epoch(*epoch)
                     .await?
                     .leader(view)
                     .await?;
                 if leader == self.public_key {
-                    self.handle_view_change(&event_stream, view, epoch).await;
+                    self.handle_view_change(&event_stream, view, *epoch).await;
                     return Ok(());
                 }
             },

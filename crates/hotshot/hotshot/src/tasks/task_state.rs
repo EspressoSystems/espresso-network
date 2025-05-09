@@ -181,6 +181,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             last_garbage_collected_view: TYPES::View::new(0),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+            first_epoch: None,
         }
     }
 }
@@ -249,6 +250,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             consensus_metrics,
+            first_epoch: None,
         }
     }
 }
@@ -303,6 +305,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
+            first_epoch: None,
         }
     }
 }

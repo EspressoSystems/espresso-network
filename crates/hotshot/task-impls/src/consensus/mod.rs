@@ -34,7 +34,7 @@ use self::handlers::{
 };
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, validate_qc_and_next_epoch_qc},
+    helpers::{broadcast_view_change, validate_qc_and_next_epoch_qc},
     vote_collection::{EpochRootVoteCollectorsMap, VoteCollectorsMap},
 };
 
@@ -43,7 +43,6 @@ mod handlers;
 
 /// Task state for the Consensus task.
 pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
     /// Our public key
     pub public_key: TYPES::SignatureKey,
 
@@ -112,6 +111,9 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
 
     /// The time this view started
     pub view_start_time: Instant,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskState<TYPES, I, V> {
@@ -149,15 +151,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 self.first_epoch = Some((*view, *epoch));
             },
             HotShotEvent::ViewChange(new_view_number, epoch_number) => {
-                if let Some((view, epoch)) = self.first_epoch {
-                    if *new_view_number == view && *epoch_number != Some(epoch) {
-                        broadcast_event(
-                            Arc::new(HotShotEvent::ViewChange(*new_view_number, Some(epoch))),
-                            &sender,
-                        )
-                        .await;
-                    }
-                }
                 if let Err(e) =
                     handle_view_change(*new_view_number, *epoch_number, &sender, self).await
                 {
@@ -182,11 +175,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 );
                 // Transition to the new epoch by sending ViewChange
                 let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
-                broadcast_event(
-                    Arc::new(HotShotEvent::ViewChange(cert_view + 1, Some(next_epoch))),
-                    &sender,
-                )
-                .await;
+                broadcast_view_change(&sender, cert_view + 1, Some(next_epoch), self.first_epoch)
+                    .await;
                 tracing::info!("Entering new epoch: {:?}", next_epoch);
                 tracing::info!(
                     "Stake table for epoch {:?}:\n\n{:?}",
@@ -255,12 +245,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     // Send ViewChange indicating new view and new epoch.
                     let next_epoch = high_qc.data.epoch().map(|x| x + 1);
                     tracing::info!("Entering new epoch: {:?}", next_epoch);
-                    broadcast_event(
-                        Arc::new(HotShotEvent::ViewChange(
-                            high_qc.view_number() + 1,
-                            next_epoch,
-                        )),
+                    broadcast_view_change(
                         &sender,
+                        high_qc.view_number() + 1,
+                        next_epoch,
+                        self.first_epoch,
                     )
                     .await;
                 }
