@@ -57,7 +57,7 @@ impl<Types: NodeType> Display for BlockIdentifier<Types> {
     }
 }
 
-/// TransactionIdentifier is an enum that represents multiple ways of of
+/// TransactionIdentifier is an enum that represents multiple ways of
 /// identifying a specific Transaction.  These use cases are specific to a
 /// Block Explorer and can be used to **ideally** uniquely identify a
 /// `Transaction` within the Block Chain.
