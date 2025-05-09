@@ -535,4 +535,43 @@ pub mod tests {
             .to_string()
             .contains("must not exceed"));
     }
+
+    #[test]
+    fn test_compute_rewards_validator_commission() {
+        let mut validator = Validator::mock();
+        validator.commission = 0;
+        let rewards = compute_rewards(validator.clone()).unwrap();
+
+        let validator_reward = rewards
+            .iter()
+            .find(|(a, _)| *a == validator.account)
+            .unwrap()
+            .1;
+        let percentage =
+            validator_reward.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
+        assert_eq!(percentage, U256::ZERO);
+
+        // 3%
+        validator.commission = 300;
+        let rewards = compute_rewards(validator.clone()).unwrap();
+        let validator_reward = rewards
+            .iter()
+            .find(|(a, _)| *a == validator.account)
+            .unwrap()
+            .1;
+        let percentage =
+            validator_reward.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
+        println!("percentage: {percentage:?}");
+        assert_eq!(percentage, U256::from(300));
+
+        //100%
+        validator.commission = 10000;
+        let rewards = compute_rewards(validator.clone()).unwrap();
+        let validator_reward = rewards
+            .iter()
+            .find(|(a, _)| *a == validator.account)
+            .unwrap()
+            .1;
+        assert_eq!(validator_reward, block_reward());
+    }
 }
