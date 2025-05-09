@@ -1,6 +1,4 @@
 //! Mock implementation of persistence, for testing.
-#![cfg(any(test, feature = "testing"))]
-
 use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::bail;

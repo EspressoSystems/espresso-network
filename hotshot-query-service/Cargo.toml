@@ -58,6 +58,9 @@ anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
+
+# Dependencies enabled by feature "file-system-data-source".
+atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5", optional = true }
 backoff = "0.4"
 bincode = { workspace = true }
 chrono = { workspace = true }
@@ -66,10 +69,17 @@ custom_debug = "0.6"
 derivative = { workspace = true }
 derive_more = { workspace = true }
 either = { workspace = true }
+
+# Dependencies enabled by feature "testing".
+espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0", optional = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
+hotshot-example-types = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
+
+# Dependencies enabled by feature "sql-data-source".
+include_dir = { version = "0.7", optional = true }
 itertools = "0.12.1"
 jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
     "std",
@@ -79,13 +89,25 @@ jf-vid = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfis
     "parallel",
 ] }
 lazy_static = "1"
+log = { version = "0.4", optional = true }
+portpicker = { version = "0.1", optional = true }
 prometheus = { version = "0.13", default-features = false }
+rand = { version = "0.8", optional = true }
+refinery = { version = "0.8", features = ["tokio-postgres"], optional = true }
+refinery-core = { version = "0.8", optional = true }
 semver = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 snafu = "0.8"
+sqlx = { version = "0.8", features = [
+    "bit-vec",
+    "postgres",
+    "runtime-tokio",
+    "tls-native-tls",
+], optional = true }
 surf-disco = "0.9"
 tagged-base64 = "0.4"
+tempfile = { version = "3.10", optional = true }
 tide-disco = "0.9"
 time = "0.3"
 tokio = { version = "1", default-features = false, features = [
@@ -101,28 +123,6 @@ trait-variant = "0.1"
 url = "2"
 vbs = "0.1"
 vec1 = "1.12"
-
-# Dependencies enabled by feature "file-system-data-source".
-atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5", optional = true }
-
-# Dependencies enabled by feature "sql-data-source".
-include_dir = { version = "0.7", optional = true }
-log = { version = "0.4", optional = true }
-refinery = { version = "0.8", features = ["tokio-postgres"], optional = true }
-refinery-core = { version = "0.8", optional = true }
-sqlx = { version = "0.8", features = [
-    "bit-vec",
-    "postgres",
-    "runtime-tokio",
-    "tls-native-tls",
-], optional = true }
-
-# Dependencies enabled by feature "testing".
-espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0", optional = true }
-hotshot-example-types = { workspace = true }
-portpicker = { version = "0.1", optional = true }
-rand = { version = "0.8", optional = true }
-tempfile = { version = "3.10", optional = true }
 
 # Dependencies enabled by feature "backtrace-on-stack-overflow".
 #

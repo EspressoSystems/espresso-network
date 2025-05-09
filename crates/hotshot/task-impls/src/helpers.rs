@@ -18,7 +18,7 @@ use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
-    drb::{DrbResult, DrbSeedInput},
+    drb::{DrbInput, DrbResult, DrbSeedInput},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
     message::{Proposal, UpgradeLock},
@@ -34,7 +34,7 @@ use hotshot_types::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
-        storage::Storage,
+        storage::{store_drb_progress_fn, Storage},
         BlockPayload, ValidatedState,
     },
     utils::{
@@ -177,10 +177,16 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 ) {
     let membership = membership.clone();
     let storage = storage.clone();
+    let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
     let consensus = consensus.clone();
+    let drb_input = DrbInput {
+        epoch: *epoch,
+        iteration: 0,
+        value: seed,
+    };
     tokio::spawn(async move {
         let drb_result = tokio::task::spawn_blocking(move || {
-            hotshot_types::drb::compute_drb_result::<TYPES>(seed)
+            hotshot_types::drb::compute_drb_result(drb_input, store_drb_progress_fn)
         })
         .await
         .unwrap();

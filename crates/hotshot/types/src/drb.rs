@@ -8,7 +8,19 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::traits::node_implementation::{ConsensusTime, NodeType};
+use crate::traits::{
+    node_implementation::{ConsensusTime, NodeType},
+    storage::StoreDrbProgressFn,
+};
+
+pub struct DrbInput {
+    /// The epoch we are calculating the result for
+    pub epoch: u64,
+    /// The iteration this seed is from. For fresh calculations, this should be `0`.
+    pub iteration: u64,
+    /// the value of the drb calculation at the current iteration
+    pub value: [u8; 32],
+}
 
 // TODO: Add the following consts once we bench the hash time.
 // <https://github.com/EspressoSystems/HotShot/issues/3880>
@@ -21,7 +33,10 @@ use crate::traits::node_implementation::{ConsensusTime, NodeType};
 // the hash time.
 // <https://github.com/EspressoSystems/HotShot/issues/3880>
 /// Arbitrary number of times the hash function will be repeatedly called.
-const DIFFICULTY_LEVEL: u64 = 10;
+pub const DIFFICULTY_LEVEL: u64 = 10;
+
+/// Interval at which to store the results
+pub const DRB_CHECKPOINT_INTERVAL: u64 = 3;
 
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
@@ -55,12 +70,49 @@ pub fn difficulty_level() -> u64 {
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
 #[must_use]
-pub fn compute_drb_result<TYPES: NodeType>(drb_seed_input: DrbSeedInput) -> DrbResult {
-    let mut hash = drb_seed_input.to_vec();
-    for _iter in 0..DIFFICULTY_LEVEL {
-        // TODO: This may be optimized to avoid memcopies after we bench the hash time.
-        // <https://github.com/EspressoSystems/HotShot/issues/3880>
+pub fn compute_drb_result(
+    drb_input: DrbInput,
+    store_drb_progress: StoreDrbProgressFn,
+) -> DrbResult {
+    let mut hash = drb_input.value.to_vec();
+    let mut iteration = drb_input.iteration;
+    let remaining_iterations = DIFFICULTY_LEVEL
+      .checked_sub(iteration)
+      .unwrap_or_else( ||
+        panic!(
+          "DRB difficulty level {} exceeds the iteration {} of the input we were given. This is a fatal error", 
+          DIFFICULTY_LEVEL,
+          iteration
+        )
+      );
+
+    let final_checkpoint = remaining_iterations / DRB_CHECKPOINT_INTERVAL;
+
+    // loop up to, but not including, the `final_checkpoint`
+    for _ in 0..final_checkpoint {
+        for _ in 0..DRB_CHECKPOINT_INTERVAL {
+            // TODO: This may be optimized to avoid memcopies after we bench the hash time.
+            // <https://github.com/EspressoSystems/HotShot/issues/3880>
+            hash = Sha256::digest(hash).to_vec();
+        }
+
+        let mut partial_drb_result = [0u8; 32];
+        partial_drb_result.copy_from_slice(&hash);
+
+        iteration += DRB_CHECKPOINT_INTERVAL;
+
+        let storage = store_drb_progress.clone();
+        tokio::spawn(async move {
+            storage(drb_input.epoch, iteration, partial_drb_result).await;
+        });
+    }
+
+    let final_checkpoint_iteration = iteration;
+
+    // perform the remaining iterations
+    for _ in final_checkpoint_iteration..DIFFICULTY_LEVEL {
         hash = Sha256::digest(hash).to_vec();
+        iteration += 1;
     }
 
     // Convert the hash to the DRB result.

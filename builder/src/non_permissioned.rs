@@ -60,14 +60,15 @@ pub fn build_instance_state<V: Versions>(
         l1_client.clone(),
         chain_config,
     );
+
     let coordinator = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
             vec![],
             fetcher,
         ))),
-        None,
         100,
+        &Arc::new(sequencer::persistence::no_storage::NoStorage),
     );
 
     NodeState::new(
