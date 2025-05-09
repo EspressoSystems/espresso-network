@@ -27,7 +27,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
         storage::Storage,
     },
-    utils::{is_epoch_transition, EpochTransitionIndicator},
+    utils::{is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{Certificate, HasViewNumber},
     StakeTableEntries,
 };
@@ -445,8 +445,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         let epoch_number = self.cur_epoch;
-        let epoch_transition_indicator = if self.consensus.read().await.is_high_qc_for_last_block()
-        {
+        let maybe_high_qc_block_number = self.consensus.read().await.high_qc().data.block_number;
+        let epoch_transition_indicator = if maybe_high_qc_block_number.is_some_and(|bn| {
+            is_epoch_transition(bn, self.epoch_height) && !is_last_block(bn, self.epoch_height)
+        }) {
             EpochTransitionIndicator::InTransition
         } else {
             EpochTransitionIndicator::NotInTransition
