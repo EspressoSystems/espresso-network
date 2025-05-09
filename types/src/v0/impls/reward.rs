@@ -346,8 +346,8 @@ pub fn apply_rewards(
     Ok(reward_state)
 }
 
-/// Computes the distribution of rewards for a validator and its delegators
-/// based on the commission rate and total block reward.
+/// Computes the reward in a block for the validator and its delegators
+/// based on the commission rate, individual delegator stake, and total block reward.
 ///
 /// The block reward is distributed among the delegators first based on their stake,
 /// with the remaining amount from the block reward given to the validator as the commission.
