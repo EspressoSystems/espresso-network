@@ -69,7 +69,7 @@ processes:
       sequencer1:
         condition: process_healthy
 
-  stake:
+  stake-for-demo:
     command: staking-cli stake-for-demo
     namespace: setup
     environment:
@@ -78,6 +78,8 @@ processes:
       - ACCOUNT_INDEX=$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX
       - ESP_TOKEN_ADDRESS=$ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
       - STAKE_TABLE_ADDRESS=$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
+    availability:
+      restart: "exit_on_failure"
     depends_on:
       deploy-sequencer-contracts:
         condition: process_completed

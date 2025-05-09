@@ -12,6 +12,7 @@ use std::{
 use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::NodeType,
@@ -25,7 +26,7 @@ use hotshot_utils::anytrace::Result;
 type EligibleLeaders<T> = (Vec<PeerConfig<T>>, Vec<PeerConfig<T>>);
 
 /// Tuple type for stake tables
-type StakeTables<T> = (Vec<PeerConfig<T>>, Vec<PeerConfig<T>>);
+type StakeTables<T> = (HSStakeTable<T>, HSStakeTable<T>);
 
 /// Tuple type for indexed stake tables
 type IndexedStakeTables<T> = (
@@ -162,15 +163,15 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
 
         Self {
             eligible_leaders: (eligible_leaders1, eligible_leaders2),
-            stake_table: (members1, members2),
-            da_stake_table: (da_members1, da_members2),
+            stake_table: (members1.into(), members2.into()),
+            da_stake_table: (da_members1.into(), da_members2.into()),
             indexed_stake_table: (indexed_stake_table1, indexed_stake_table2),
             indexed_da_stake_table: (indexed_da_stake_table1, indexed_da_stake_table2),
         }
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.stake_table.0.clone()
@@ -180,7 +181,7 @@ impl<TYPES: NodeType> Membership<TYPES> for TwoStaticCommittees<TYPES> {
     }
 
     /// Get the stake table for the current view
-    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         let epoch = epoch.expect("epochs cannot be disabled with TwoStaticCommittees");
         if *epoch != 0 && *epoch % 2 == 0 {
             self.da_stake_table.0.clone()

@@ -25,13 +25,13 @@ use hotshot_types::{
         HasEpoch, ViewSyncCommitData2, ViewSyncCommitVote2, ViewSyncFinalizeData2,
         ViewSyncFinalizeVote2, ViewSyncPreCommitData2, ViewSyncPreCommitVote2,
     },
+    stake_table::StakeTableEntries,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::SignatureKey,
     },
     utils::EpochTransitionIndicator,
     vote::{Certificate, HasViewNumber, Vote},
-    StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
 use tokio::{spawn, task::JoinHandle, time::sleep};

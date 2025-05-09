@@ -75,7 +75,7 @@ services:
       sequencer1:
         condition: service_healthy
 
-  stake:
+  stake-for-demo:
     image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
     command: staking-cli stake-for-demo
     environment:

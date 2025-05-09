@@ -15,7 +15,6 @@ use hotshot_types::{
     drb::{DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
-    light_client::compute_stake_table_commitment,
     message::{Proposal, UpgradeLock},
     simple_vote::{EpochRootQuorumVote, LightClientStateUpdateVote, QuorumData2, QuorumVote2},
     traits::{
@@ -547,12 +546,12 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .wrap()
             .context(error!("Failed to generate light client state"))?;
         let next_membership = membership.next_epoch_stake_table().await?;
-        let next_stake_table_state = compute_stake_table_commitment(
-            &next_membership.stake_table().await,
-            hotshot_types::light_client::STAKE_TABLE_CAPACITY,
-        )
-        .wrap()
-        .context(error!("Failed to compute stake table commitment"))?;
+        let next_stake_table_state = next_membership
+            .stake_table()
+            .await
+            .commitment(hotshot_types::light_client::STAKE_TABLE_CAPACITY)
+            .wrap()
+            .context(error!("Failed to compute stake table commitment"))?;
         let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(
             state_private_key,
             &light_client_state,

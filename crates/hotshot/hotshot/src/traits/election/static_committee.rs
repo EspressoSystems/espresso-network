@@ -12,6 +12,7 @@ use std::{
 use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::NodeType,
@@ -30,10 +31,10 @@ pub struct StaticCommittee<T: NodeType> {
     eligible_leaders: Vec<PeerConfig<T>>,
 
     /// The nodes on the committee and their stake
-    stake_table: Vec<PeerConfig<T>>,
+    stake_table: HSStakeTable<T>,
 
     /// The nodes on the committee and their stake
-    da_stake_table: Vec<PeerConfig<T>>,
+    da_stake_table: HSStakeTable<T>,
 
     /// The nodes on the committee and their stake, indexed by public key
     indexed_stake_table: BTreeMap<T::SignatureKey, PeerConfig<T>>,
@@ -105,8 +106,8 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
 
         Self {
             eligible_leaders,
-            stake_table: members,
-            da_stake_table: da_members,
+            stake_table: members.into(),
+            da_stake_table: da_members.into(),
             indexed_stake_table,
             indexed_da_stake_table,
             first_epoch: None,
@@ -114,13 +115,13 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         self.check_first_epoch(epoch);
         self.stake_table.clone()
     }
 
     /// Get the stake table for the current view
-    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         self.check_first_epoch(epoch);
         self.da_stake_table.clone()
     }

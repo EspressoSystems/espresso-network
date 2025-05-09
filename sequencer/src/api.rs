@@ -228,7 +228,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             .stake_table_for_epoch(epoch)
             .await?;
 
-        Ok(mem.stake_table().await)
+        Ok(mem.stake_table().await.0)
     }
 
     /// Get the stake table for the current epoch and return it along with the epoch number
@@ -817,7 +817,7 @@ pub mod test_helpers {
             let blocks_per_epoch = network_config.hotshot_config().epoch_height;
             let epoch_start_block = network_config.hotshot_config().epoch_start_block;
             let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
-                &network_config.hotshot_config().known_nodes_with_stake,
+                &network_config.hotshot_config().hotshot_stake_table(),
                 STAKE_TABLE_CAPACITY_FOR_TEST,
             )
             .unwrap();

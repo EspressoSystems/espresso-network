@@ -12,6 +12,7 @@ use std::{
 use alloy::primitives::U256;
 use hotshot_types::{
     drb::DrbResult,
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
@@ -155,7 +156,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+    fn stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         if let Some(epoch) = epoch {
             let filter = self.make_quorum_filter(epoch);
             //self.stake_table.clone()s
@@ -168,10 +169,11 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         } else {
             self.stake_table.clone()
         }
+        .into()
     }
 
     /// Get the da stake table for the current view
-    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> Vec<PeerConfig<TYPES>> {
+    fn da_stake_table(&self, epoch: Option<<TYPES as NodeType>::Epoch>) -> HSStakeTable<TYPES> {
         if let Some(epoch) = epoch {
             let filter = self.make_da_quorum_filter(epoch);
             //self.stake_table.clone()s
@@ -184,6 +186,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
         } else {
             self.da_stake_table.clone()
         }
+        .into()
     }
 
     /// Get all members of the committee for the current view
