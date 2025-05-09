@@ -178,7 +178,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     debug!("We were not chosen for consensus committee for view {view_number} in epoch {epoch_number:?}")
                 );
                 let total_weight =
-                    vid_total_weight::<TYPES>(membership.stake_table().await, epoch_number);
+                    vid_total_weight::<TYPES>(&membership.stake_table().await, epoch_number);
 
                 let version = self.upgrade_lock.version_infallible(view_number).await;
 
@@ -201,7 +201,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     && epoch_number.is_some()
                 {
                     let next_epoch_total_weight = vid_total_weight::<TYPES>(
-                        membership
+                        &membership
                             .next_epoch_stake_table()
                             .await?
                             .stake_table()

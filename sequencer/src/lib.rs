@@ -866,7 +866,7 @@ pub mod testing {
                     let epoch_start_block = self.config.epoch_start_block;
 
                     let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
-                        &self.config.known_nodes_with_stake,
+                        &self.config.hotshot_stake_table(),
                         STAKE_TABLE_CAPACITY_FOR_TEST,
                     )
                     .unwrap();

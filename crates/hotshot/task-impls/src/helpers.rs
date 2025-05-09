@@ -29,6 +29,7 @@ use hotshot_types::{
         QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::HasEpoch,
+    stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
@@ -42,7 +43,6 @@ use hotshot_types::{
         option_epoch_from_block_number, Terminator, View, ViewInner,
     },
     vote::{Certificate, HasViewNumber},
-    StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
 use tokio::time::timeout;

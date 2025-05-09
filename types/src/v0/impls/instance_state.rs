@@ -387,7 +387,7 @@ pub mod mock {
     use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
-    use hotshot_types::{data::ViewNumber, PeerConfig};
+    use hotshot_types::{data::ViewNumber, stake_table::HSStakeTable};
     use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
     use super::*;
@@ -418,7 +418,7 @@ pub mod mock {
             &self,
             _retry: usize,
             _height: u64,
-            _stake_table: Vec<PeerConfig<SeqTypes>>,
+            _stake_table: HSStakeTable<SeqTypes>,
             _success_threshold: U256,
         ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))

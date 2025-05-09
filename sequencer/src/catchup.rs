@@ -30,6 +30,7 @@ use hotshot_types::{
     data::ViewNumber,
     message::UpgradeLock,
     network::NetworkConfig,
+    stake_table::HSStakeTable,
     traits::{
         metrics::{Counter, CounterFamily, Metrics},
         network::ConnectedNetwork,
@@ -37,7 +38,7 @@ use hotshot_types::{
         ValidatedState as ValidatedStateTrait,
     },
     utils::{verify_leaf_chain, View, ViewInner},
-    PeerConfig, ValidatorConfig,
+    ValidatorConfig,
 };
 use itertools::Itertools;
 use jf_merkle_tree::{prelude::MerkleNode, ForgetableMerkleTreeScheme, MerkleTreeScheme};
@@ -338,7 +339,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         &self,
         retry: usize,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Get the leaf chain
@@ -573,7 +574,7 @@ where
         &self,
         _retry: usize,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Get the leaf chain
@@ -756,7 +757,7 @@ impl StateCatchup for NullStateCatchup {
         &self,
         _retry: usize,
         _height: u64,
-        _stake_table: Vec<PeerConfig<SeqTypes>>,
+        _stake_table: HSStakeTable<SeqTypes>,
         _success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         bail!("state catchup is disabled")
@@ -934,7 +935,7 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         retry: usize,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Try fetching the leaf on the local providers first
@@ -1221,7 +1222,7 @@ impl StateCatchup for ParallelStateCatchup {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Try fetching the leaf on the local providers first

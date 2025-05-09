@@ -28,10 +28,11 @@ use hotshot_query_service::availability::StateCertQueryData;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
-        compute_stake_table_commitment, CircuitField, LightClientState, PublicInput,
-        StakeTableState, StateSignature, StateSignaturesBundle, StateVerKey,
+        CircuitField, LightClientState, PublicInput, StakeTableState, StateSignature,
+        StateSignaturesBundle, StateVerKey,
     },
     simple_certificate::LightClientStateUpdateCertificate,
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StateSignatureKey,
@@ -39,7 +40,6 @@ use hotshot_types::{
     utils::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
     },
-    PeerConfig,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
@@ -92,7 +92,7 @@ pub struct ProverServiceState {
     /// The current epoch number of the stake table
     pub epoch: Option<<SeqTypes as NodeType>::Epoch>,
     /// The stake table
-    pub stake_table: Vec<PeerConfig<SeqTypes>>,
+    pub stake_table: HSStakeTable<SeqTypes>,
     /// The current stake table state
     pub st_state: StakeTableState,
 }
@@ -102,7 +102,8 @@ impl ProverServiceState {
         let stake_table = fetch_stake_table_from_sequencer(&config.sequencer_url, None)
             .await
             .with_context(|| "Failed to initialize stake table")?;
-        let st_state = compute_stake_table_commitment(&stake_table, config.stake_table_capacity)
+        let st_state = stake_table
+            .commitment(config.stake_table_capacity)
             .with_context(|| "Failed to compute stake table commitment")?;
         Ok(Self {
             config,
@@ -120,9 +121,10 @@ impl ProverServiceState {
             self.stake_table = fetch_stake_table_from_sequencer(&self.config.sequencer_url, epoch)
                 .await
                 .with_context(|| format!("Failed to update stake table for epoch: {:?}", epoch))?;
-            self.st_state =
-                compute_stake_table_commitment(&self.stake_table, self.config.stake_table_capacity)
-                    .with_context(|| "Failed to compute stake table commitment")?;
+            self.st_state = self
+                .stake_table
+                .commitment(self.config.stake_table_capacity)
+                .with_context(|| "Failed to compute stake table commitment")?;
             self.epoch = epoch;
         }
         Ok(())
