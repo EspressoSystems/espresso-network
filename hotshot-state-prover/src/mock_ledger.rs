@@ -13,10 +13,9 @@ use espresso_types::SeqTypes;
 use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
 use hotshot_types::{
     light_client::{
-        compute_stake_table_commitment, GenericLightClientState, GenericPublicInput,
-        GenericStakeTableState, LightClientState,
+        GenericLightClientState, GenericPublicInput, GenericStakeTableState, LightClientState,
     },
-    stake_table::StakeTableEntry,
+    stake_table::{HSStakeTable, StakeTableEntry},
     utils::{epoch_from_block_number, is_epoch_root, is_ge_epoch_root, is_last_block},
     PeerConfig,
 };
@@ -75,9 +74,9 @@ pub struct MockLedger {
     pub rng: StdRng,
     pub(crate) epoch: u64,
     pub(crate) state: GenericLightClientState<F>,
-    pub(crate) voting_st: Vec<PeerConfig<SeqTypes>>,
-    pub(crate) next_voting_st: Vec<PeerConfig<SeqTypes>>,
-    pub(crate) pending_st: Vec<PeerConfig<SeqTypes>>,
+    pub(crate) voting_st: HSStakeTable<SeqTypes>,
+    pub(crate) next_voting_st: HSStakeTable<SeqTypes>,
+    pub(crate) pending_st: HSStakeTable<SeqTypes>,
     pub(crate) qc_keys: Vec<BLSVerKey>,
     pub(crate) state_keys: Vec<(SchnorrSignKey, SchnorrVerKey)>,
     key_archive: HashMap<BLSVerKey, SchnorrSignKey>,
@@ -247,7 +246,7 @@ impl MockLedger {
             self.state_keys.push(schnorr_key);
         }
 
-        self.pending_st = st_map.into_values().collect();
+        self.pending_st = st_map.into_values().collect::<Vec<_>>().into();
 
         assert!(self.qc_keys.len() == self.state_keys.len());
         assert!(self.qc_keys.len() == before_st_size + num_reg - num_exit);
@@ -355,8 +354,7 @@ impl MockLedger {
         let (adv_qc_keys, adv_state_keys) =
             key_pairs_for_testing(STAKE_TABLE_CAPACITY_FOR_TEST, &mut self.rng);
         let adv_st = stake_table_for_testing(&adv_qc_keys, &adv_state_keys);
-        let adv_st_state =
-            compute_stake_table_commitment(&adv_st, STAKE_TABLE_CAPACITY_FOR_TEST).unwrap();
+        let adv_st_state = adv_st.commitment(STAKE_TABLE_CAPACITY_FOR_TEST).unwrap();
 
         // replace new state with adversarial stake table commitment
         let mut msg = Vec::with_capacity(7);
@@ -391,6 +389,7 @@ impl MockLedger {
         let (pk, _) = preprocess(&srs, STAKE_TABLE_CAPACITY_FOR_TEST)
             .expect("Fail to preprocess state prover circuit");
         let stake_table_entries = adv_st
+            .0
             .into_iter()
             .map(|config| (config.state_ver_key, config.stake_table_entry.stake_amount))
             .collect::<Vec<_>>();
@@ -412,7 +411,8 @@ impl MockLedger {
 
     /// Returns the stake table state for current voting
     pub fn voting_stake_table_state(&self) -> GenericStakeTableState<F> {
-        compute_stake_table_commitment(&self.voting_st, STAKE_TABLE_CAPACITY_FOR_TEST)
+        self.voting_st
+            .commitment(STAKE_TABLE_CAPACITY_FOR_TEST)
             .expect("Failed to compute stake table commitment")
     }
 
@@ -420,7 +420,8 @@ impl MockLedger {
     /// This will be the same most of the time as `self.voting_st_state()` except during epoch change
     pub fn next_stake_table_state(&self) -> GenericStakeTableState<F> {
         if self.epoch_activated() && self.is_ge_epoch_root() {
-            compute_stake_table_commitment(&self.next_voting_st, STAKE_TABLE_CAPACITY_FOR_TEST)
+            self.next_voting_st
+                .commitment(STAKE_TABLE_CAPACITY_FOR_TEST)
                 .expect("Failed to compute stake table commitment")
         } else {
             self.voting_stake_table_state()
@@ -460,7 +461,7 @@ fn key_pairs_for_testing<R: CryptoRng + RngCore>(
 fn stake_table_for_testing(
     bls_keys: &[BLSVerKey],
     schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
-) -> Vec<PeerConfig<SeqTypes>> {
+) -> HSStakeTable<SeqTypes> {
     bls_keys
         .iter()
         .enumerate()
@@ -472,7 +473,8 @@ fn stake_table_for_testing(
             },
             state_ver_key: schnorr_key.clone(),
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .into()
 }
 
 // modify from <https://github.com/EspressoSystems/cape/blob/main/contracts/rust/src/plonk_verifier/helpers.rs>

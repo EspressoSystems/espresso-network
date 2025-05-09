@@ -866,7 +866,7 @@ pub mod testing {
                     let epoch_start_block = self.config.epoch_start_block;
 
                     let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
-                        &self.config.known_nodes_with_stake,
+                        &self.config.hotshot_stake_table(),
                         STAKE_TABLE_CAPACITY_FOR_TEST,
                     )
                     .unwrap();
@@ -1209,8 +1209,11 @@ pub mod testing {
             let membership = Arc::new(RwLock::new(membership));
             let persistence = Arc::new(persistence);
 
-            let coordinator =
-                EpochMembershipCoordinator::new(membership, 100, &persistence.clone());
+            let coordinator = EpochMembershipCoordinator::new(
+                membership,
+                config.epoch_height,
+                &persistence.clone(),
+            );
 
             let node_state = NodeState::new(
                 i as u64,

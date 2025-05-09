@@ -10,7 +10,7 @@ use hotshot_contract_adapter::{
     sol_types::{LightClientStateSol, StakeTableStateSol},
 };
 use hotshot_types::{
-    light_client::compute_stake_table_commitment,
+    stake_table::HSStakeTable,
     traits::node_implementation::{ConsensusTime, NodeType},
     PeerConfig,
 };
@@ -34,7 +34,7 @@ pub async fn light_client_genesis(
 pub async fn fetch_stake_table_from_sequencer(
     sequencer_url: &Url,
     epoch: Option<<SeqTypes as NodeType>::Epoch>,
-) -> Result<Vec<PeerConfig<SeqTypes>>> {
+) -> Result<HSStakeTable<SeqTypes>> {
     tracing::info!("Initializing stake table from node for epoch {epoch:?}");
 
     match epoch {
@@ -46,7 +46,7 @@ pub async fn fetch_stake_table_from_sequencer(
             .send()
             .await
             {
-                Ok(resp) => break Ok(resp),
+                Ok(resp) => break Ok(resp.into()),
                 Err(e) => {
                     tracing::error!("Failed to fetch the stake table: {e}");
                     sleep(Duration::from_secs(5)).await;
@@ -61,7 +61,7 @@ pub async fn fetch_stake_table_from_sequencer(
             .send()
             .await
             {
-                Ok(resp) => break Ok(resp.hotshot_config().known_nodes_with_stake()),
+                Ok(resp) => break Ok(resp.hotshot_config().known_nodes_with_stake().into()),
                 Err(e) => {
                     tracing::error!("Failed to fetch the network config: {e}");
                     sleep(Duration::from_secs(5)).await;
@@ -74,10 +74,10 @@ pub async fn fetch_stake_table_from_sequencer(
 #[inline]
 /// derive the genesis light client state and stake table state from initial set of `PeerConfig`
 pub fn light_client_genesis_from_stake_table(
-    st: &[PeerConfig<SeqTypes>],
+    st: &HSStakeTable<SeqTypes>,
     stake_table_capacity: usize,
 ) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let st_state = compute_stake_table_commitment(st, stake_table_capacity)?;
+    let st_state = st.commitment(stake_table_capacity)?;
     Ok((
         LightClientStateSol {
             viewNum: 0,

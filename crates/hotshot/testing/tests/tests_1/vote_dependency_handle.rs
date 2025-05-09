@@ -26,7 +26,7 @@ const TIMEOUT: Duration = Duration::from_millis(35);
 #[cfg(test)]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_vote_dependency_handle() {
-    use std::{sync::Arc, time::Instant};
+    use std::sync::Arc;
 
     hotshot::helpers::initialize_logging();
 
@@ -97,8 +97,6 @@ async fn test_vote_dependency_handle() {
                 id: handle.hotshot.id,
                 epoch_height: handle.hotshot.config.epoch_height,
                 state_private_key: handle.state_private_key().clone(),
-                timeout: handle.hotshot.config.next_view_timeout,
-                view_start_time: Instant::now(),
             };
 
         vote_dependency_handle_state

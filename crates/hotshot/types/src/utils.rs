@@ -32,12 +32,13 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     data::{Leaf2, VidCommitment},
+    stake_table::StakeTableEntries,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         ValidatedState,
     },
     vote::{Certificate, HasViewNumber},
-    PeerConfig, StakeTableEntries,
+    PeerConfig,
 };
 
 /// A view's state

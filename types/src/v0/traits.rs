@@ -24,13 +24,13 @@ use hotshot_types::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
     },
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::Storage,
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
-    PeerConfig,
 };
 use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
@@ -53,7 +53,7 @@ pub trait StateCatchup: Send + Sync {
         &self,
         retry: usize,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2>;
 
@@ -61,7 +61,7 @@ pub trait StateCatchup: Send + Sync {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         self.backoff()
@@ -232,7 +232,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         &self,
         retry: usize,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         (**self)
@@ -243,7 +243,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         (**self)
