@@ -14,22 +14,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: taiki-e/install-action@just
+      - uses: actions/checkout@v4
+      - id: set-matrix
+        run: echo "matrix=$(just hotshot::matrix)" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: build-matrix
     strategy:
-      matrix:
-        test_suites:
-          - test-ci-1
-          - test-ci-2
-          - test-ci-3
-          - test-ci-4
-          - test-ci-5
-          - test-ci-6-1
-          - test-ci-6-2
-          - test-ci-6-3
-          - test-ci-6-4
-          - test-ci-6-5
-          - test-ci-6-6
-          - test-ci-rest
+      matrix: ${{ fromJson(needs.build-matrix.outputs.matrix) }}
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
