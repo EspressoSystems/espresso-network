@@ -92,10 +92,7 @@ jobs:
             ${{ env.CARGO_TARGET_DIR }}/${{ env.TARGET_TRIPLET }}/release/pub-key
             ${{ env.CARGO_TARGET_DIR }}/${{ env.TARGET_TRIPLET }}/release/espresso-bridge
             ${{ env.CARGO_TARGET_DIR }}/${{ env.TARGET_TRIPLET }}/release/espresso-dev-node
-            ${{ env.CARGO_TARGET_DIR }}/${{ env.TARGET_TRIPLET }}/release/marketplace-solver
-            ${{ env.CARGO_TARGET_DIR }}/${{ env.TARGET_TRIPLET }}/release/marketplace-builder
             ${{ env.CARGO_TARGET_DIR }}/${{ env.TARGET_TRIPLET }}/release/node-metrics
-            ${{ env.CARGO_TARGET_DIR }}/${{ env.TARGET_TRIPLET }}/release/dev-rollup 
             ${{ env.CARGO_TARGET_DIR }}/${{ env.TARGET_TRIPLET }}/release/sequencer-sqlite
   static-dockers:
     runs-on: ubuntu-latest
@@ -204,19 +201,6 @@ jobs:
           images: ghcr.io/espressosystems/espresso-sequencer/bridge
           flavor: suffix=musl
 
-      - name: Generate marketplace-solver metadata
-        uses: docker/metadata-action@v5
-        id: marketplace-solver
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/marketplace-solver
-          flavor: suffix=musl
-      - name: Generate marketplace-builder metadata
-        uses: docker/metadata-action@v5
-        id: marketplace-builder
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder
-          flavor: suffix=musl
-
       - name: Generate node-validator metadata
         uses: docker/metadata-action@v5
         id: node-validator
@@ -224,13 +208,6 @@ jobs:
           images: ghcr.io/espressosystems/espresso-sequencer/node-validator
           flavor: suffix=musl
       
-      - name: Generate dev-rollup metadata
-        uses: docker/metadata-action@v5
-        id: dev-rollup
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/dev-rollup
-          flavor: suffix=musl
-
       - name: Build and push sequencer docker
         uses: docker/build-push-action@v6
         with:
@@ -341,26 +318,6 @@ jobs:
           tags: ${{ steps.bridge.outputs.tags }}
           labels: ${{ steps.bridge.outputs.labels }}
 
-      - name: Build and push marketplace-solver docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/marketplace-solver.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.marketplace-solver.outputs.tags }}
-          labels: ${{ steps.marketplace-solver.outputs.labels }}
-
-      - name: Build and push marketplace-builder docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/marketplace-builder.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.marketplace-builder.outputs.tags }}
-          labels: ${{ steps.marketplace-builder.outputs.labels }}
-
       - name: Build and push node-validator docker
         uses: docker/build-push-action@v6
         with:
@@ -370,13 +327,3 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.node-validator.outputs.tags }}
           labels: ${{ steps.node-validator.outputs.labels }}
-
-      - name: Build and push dev-rollup docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/dev-rollup.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.dev-rollup.outputs.tags }}
-          labels: ${{ steps.dev-rollup.outputs.labels }}

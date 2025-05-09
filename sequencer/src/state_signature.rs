@@ -11,8 +11,8 @@ use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_types::{
     event::LeafInfo,
     light_client::{
-        compute_stake_table_commitment, LightClientState, StakeTableState, StateSignKey,
-        StateSignature, StateSignatureRequestBody, StateVerKey,
+        LightClientState, StakeTableState, StateSignKey, StateSignature, StateSignatureRequestBody,
+        StateVerKey,
     },
     traits::{
         block_contents::BlockHeader,
@@ -132,10 +132,11 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         );
                         return;
                     };
-                    match compute_stake_table_commitment(
-                        &membership.stake_table().await,
-                        self.stake_table_capacity,
-                    ) {
+                    match membership
+                        .stake_table()
+                        .await
+                        .commitment(self.stake_table_capacity)
+                    {
                         Ok(stake_table_state) => {
                             self.voting_stake_table_epoch = option_state_epoch;
                             self.voting_stake_table = stake_table_state;

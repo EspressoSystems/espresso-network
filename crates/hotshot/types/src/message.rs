@@ -723,10 +723,9 @@ impl<TYPES: NodeType, V: Versions> UpgradeLock<TYPES, V> {
 
         let expected_version = self.version(view).await?;
 
-        ensure!(
-            actual_version == expected_version,
-            "Message has invalid version number for its view. Expected: {expected_version}, Actual: {actual_version}, View: {view:?}"
-        );
+        if actual_version != expected_version {
+            return Err(error!(format!("Message has invalid version number for its view. Expected: {expected_version}, Actual: {actual_version}, View: {view:?}")));
+        };
 
         Ok(deserialized_message)
     }

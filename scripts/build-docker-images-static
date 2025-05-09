@@ -37,12 +37,9 @@ binaries=(
   cdn-marshal
   cdn-whitelist
   deploy
-  dev-rollup
   espresso-bridge
   espresso-dev-node
   keygen
-  marketplace-builder
-  marketplace-solver
   nasty-client
   node-metrics
   orchestrator
@@ -92,10 +89,7 @@ images=(
  cdn-marshal
  cdn-whitelist
  deploy
- dev-rollup
  espresso-dev-node
- marketplace-builder
- marketplace-solver
  nasty-client
  node-validator
  orchestrator

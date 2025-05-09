@@ -32,6 +32,7 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
+    stake_table::StakeTableEntries,
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
@@ -40,7 +41,7 @@ use hotshot_types::{
     },
     utils::{option_epoch_from_block_number, View, ViewInner},
     vote::{Certificate, HasViewNumber, Vote},
-    StakeTableEntries, ValidatorConfig,
+    ValidatorConfig,
 };
 use serde::Serialize;
 use vbs::version::Version;

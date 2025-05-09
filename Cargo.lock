@@ -7225,73 +7225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "marketplace-builder"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.0",
- "async-trait",
- "clap 4.5.34",
- "committable",
- "espresso-types",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-events-service",
- "hotshot-orchestrator",
- "hotshot-query-service",
- "hotshot-types",
- "jf-merkle-tree 0.1.0",
- "jf-signature 0.2.0",
- "marketplace-builder-core",
- "marketplace-builder-shared",
- "marketplace-solver",
- "portpicker",
- "sequencer",
- "sequencer-utils",
- "surf",
- "surf-disco",
- "tempfile",
- "tide-disco",
- "tokio",
- "tracing",
- "url",
- "vbs",
-]
-
-[[package]]
-name = "marketplace-builder-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.0",
- "async-trait",
- "committable",
- "derive_more 1.0.0",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-example-types",
- "hotshot-macros",
- "hotshot-testing",
- "hotshot-types",
- "marketplace-builder-shared",
- "num_cpus",
- "sha2 0.10.8",
- "tagged-base64",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.19",
- "tracing-test 0.1.0",
- "url",
- "vbs",
-]
-
-[[package]]
 name = "marketplace-builder-shared"
 version = "0.1.0"
 dependencies = [
@@ -7330,37 +7263,6 @@ dependencies = [
  "url",
  "vbs",
  "vec1",
-]
-
-[[package]]
-name = "marketplace-solver"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-lock 3.4.0",
- "async-trait",
- "bincode",
- "clap 4.5.34",
- "committable",
- "espresso-types",
- "futures",
- "hotshot",
- "hotshot-events-service",
- "hotshot-query-service",
- "hotshot-types",
- "marketplace-solver",
- "portpicker",
- "rand 0.8.5",
- "serde",
- "sqlx",
- "surf-disco",
- "thiserror 1.0.69",
- "tide-disco",
- "tokio",
- "toml",
- "tracing",
- "vbs",
 ]
 
 [[package]]
@@ -9886,8 +9788,6 @@ dependencies = [
  "jf-signature 0.2.0",
  "jf-vid",
  "libp2p",
- "marketplace-builder-core",
- "marketplace-solver",
  "num_enum",
  "parking_lot",
  "portpicker",

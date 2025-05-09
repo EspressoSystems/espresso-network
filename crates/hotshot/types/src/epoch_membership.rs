@@ -14,6 +14,7 @@ use hotshot_utils::{
 use crate::{
     data::Leaf2,
     drb::{compute_drb_result, DrbResult},
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
@@ -183,14 +184,17 @@ where
             anytrace::bail!("get epoch root failed for epoch {:?}", root_epoch);
         };
 
-        let updater = self
-            .membership
-            .read()
-            .await
-            .add_epoch_root(epoch, root_leaf.block_header().clone())
-            .await
-            .ok_or(anytrace::warn!("add epoch root failed"))?;
-        updater(&mut *(self.membership.write().await));
+        let add_epoch_root_updater = {
+            let membership_read = self.membership.read().await;
+            membership_read
+                .add_epoch_root(epoch, root_leaf.block_header().clone())
+                .await
+        };
+
+        if let Some(updater) = add_epoch_root_updater {
+            let mut membership_write = self.membership.write().await;
+            updater(&mut *(membership_write));
+        };
 
         let drb_membership = match root_membership.next_epoch_stake_table().await {
             Ok(drb_membership) => drb_membership,
@@ -351,7 +355,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn stake_table(&self) -> Vec<PeerConfig<TYPES>> {
+    pub async fn stake_table(&self) -> HSStakeTable<TYPES> {
         self.coordinator
             .membership
             .read()
@@ -360,7 +364,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn da_stake_table(&self) -> Vec<PeerConfig<TYPES>> {
+    pub async fn da_stake_table(&self) -> HSStakeTable<TYPES> {
         self.coordinator
             .membership
             .read()
