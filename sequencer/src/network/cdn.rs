@@ -78,8 +78,7 @@ impl<T: SignatureKey> SignatureScheme for WrappedSignatureKey<T> {
             Err(_) => return false,
         };
 
-        public_key.0.validate(&signature, message)
-            || public_key.0.validate(&signature, &namespaced_message)
+        public_key.0.validate(&signature, &namespaced_message)
     }
 }
 
