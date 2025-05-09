@@ -99,6 +99,7 @@ async fn test_vote_dependency_handle() {
                 state_private_key: handle.state_private_key().clone(),
                 timeout: handle.hotshot.config.next_view_timeout,
                 view_start_time: Instant::now(),
+                first_epoch: None,
             };
 
         vote_dependency_handle_state
