@@ -30,7 +30,7 @@ rand_chacha = { workspace = true }
 rust_decimal = "1.36.0"
 sequencer-utils = { version = "0.1.0", path = "../utils" }
 serde = { workspace = true }
-sysinfo = "0.33.1"
+sysinfo = "0.35.0"
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
