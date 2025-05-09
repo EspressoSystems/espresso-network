@@ -3582,8 +3582,7 @@ mod test {
                 .context("overflow")?;
 
             assert!(
-                (*leader_commission_amount).0 - calculated_leader_reward_amount
-                    <= U256::from(10_u64)
+                leader_commission_amount.0 - calculated_leader_reward_amount <= U256::from(10_u64)
             );
 
             // Aggregate reward amounts by address in the map.
