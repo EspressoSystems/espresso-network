@@ -233,17 +233,18 @@ pub mod election {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use alloy::primitives::U256;
+    use rand::RngCore;
+    use sha2::{Digest, Sha256};
+
+    use super::election::{generate_stake_cdf, select_randomized_leader};
     use crate::{
         signature_key::BLSPubKey,
         stake_table::StakeTableEntry,
         traits::signature_key::{BuilderSignatureKey, StakeTableEntryType},
     };
-    use alloy::primitives::U256;
-    use rand::RngCore;
-    use sha2::{Digest, Sha256};
-    use std::collections::HashMap;
-
-    use super::election::{generate_stake_cdf, select_randomized_leader};
 
     #[test]
     fn test_randomized_leader() {
