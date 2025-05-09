@@ -738,7 +738,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         self.append_quorum_proposal2(proposal).await
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         drb_result: DrbResult,
@@ -855,12 +855,12 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
             .await
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
-        (**self).add_drb_result(epoch, drb_result).await
+        (**self).store_drb_result(epoch, drb_result).await
     }
 
     async fn add_epoch_root(

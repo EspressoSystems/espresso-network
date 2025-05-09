@@ -387,7 +387,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn add_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()> {
+    async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()> {
         let mut inner = self.inner.write().await;
 
         inner.drb_results.insert(epoch, drb_result);

@@ -61,7 +61,7 @@ use hotshot_types::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
-        storage::{storage_add_drb_result, Storage},
+        storage::{storage_store_drb_result, Storage},
     },
     utils::BuilderCommitment,
     ValidatorConfig,
@@ -520,7 +520,7 @@ where
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
-        Some(storage_add_drb_result(persistence.clone())),
+        Some(storage_store_drb_result(persistence.clone())),
         network_config.config.epoch_height,
     );
 
@@ -1211,7 +1211,7 @@ pub mod testing {
 
             let coordinator = EpochMembershipCoordinator::new(
                 membership,
-                Some(storage_add_drb_result(persistence.clone())),
+                Some(storage_store_drb_result(persistence.clone())),
                 100,
             );
 

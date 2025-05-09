@@ -63,7 +63,7 @@ use hotshot_types::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, NodeType, Versions},
         states::TestableState,
-        storage::storage_add_drb_result,
+        storage::storage_store_drb_result,
     },
     utils::genesis_epoch_from_version,
     HotShotConfig, PeerConfig, ValidatorConfig,
@@ -399,7 +399,7 @@ pub trait RunDa<
             config.config,
             EpochMembershipCoordinator::new(
                 membership,
-                Some(storage_add_drb_result(storage.clone())),
+                Some(storage_store_drb_result(storage.clone())),
                 epoch_height,
             ),
             Arc::from(network),

@@ -160,8 +160,8 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     let mut consensus_writer = consensus.write().await;
     consensus_writer.drb_results.store_result(epoch, drb_result);
     drop(consensus_writer);
-    tracing::debug!("Calling add_drb_result for epoch {epoch}");
-    if let Err(e) = storage.add_drb_result(epoch, drb_result).await {
+    tracing::debug!("Calling store_drb_result for epoch {epoch}");
+    if let Err(e) = storage.store_drb_result(epoch, drb_result).await {
         tracing::error!("Failed to store drb result for epoch {epoch}: {e}");
     }
 
