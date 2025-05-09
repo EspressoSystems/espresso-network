@@ -18,6 +18,65 @@ This command will run the minimal setup of the dev node with the default options
 Espresso network. For example, hit http://localhost:8770/v0/status/metrics to check the status of the node and use
 http://localhost:8770/v0/availability to query blockchain data.
 
+## Using Pre-deployed Contracts
+
+The espresso-dev-node supports three different modes for L1 contract deployment, controlled by the `ESPRESSO_DEV_NODE_L1_DEPLOYMENT` environment variable:
+
+1. `deploy` (default): Deploy all contracts when starting the node
+2. `dump`: Deploy all contracts and then dump the L1 state to stdout, then exit
+3. `skip`: Skip L1 contract deployment, assuming contracts are pre-deployed
+
+This feature can be used to significantly speed up test environments where you want to avoid redeploying contracts on every test run. The workflow is as follows:
+
+### Step 1: Deploy and Dump Contract State
+
+First, run the dev node with `l1_deployment` set to `dump`:
+
+```bash
+espresso-dev-node --l1-deployment dump > contract_state.json
+```
+
+This will deploy all necessary contracts to your L1 chain, output the contract addresses and state to stdout, and then exit.
+
+### Step 2: Extract Contract Addresses
+
+From the dumped contract state, you need to extract the deployed contract addresses. The output includes contract addresses with their names. For example:
+
+```json
+{
+  "0xb075b82c7a23e0994df4793422a1f03dbcf9136f": {
+    "nonce": 1,
+    "code": "0x...",
+    "storage": {...},
+    "balance": "0x0",
+    "name": "LightClientProxy"
+  },
+  ...
+}
+```
+
+### Step 3: Start Dev Node with Pre-deployed Contracts
+
+Now you can start the dev node with `l1_deployment` set to `skip` and provide the contract addresses:
+
+```bash
+espresso-dev-node \
+  --l1-deployment skip \
+  --contract-light-client-proxy 0xb075b82c7a23e0994df4793422a1f03dbcf9136f
+```
+
+Or with environment variables:
+
+```bash
+ESPRESSO_DEV_NODE_L1_DEPLOYMENT=skip \
+ESPRESSO_CONTRACT_LIGHT_CLIENT_PROXY=0xb075b82c7a23e0994df4793422a1f03dbcf9136f \
+espresso-dev-node
+```
+
+This configuration will skip the deployment step, making the dev node start much faster, especially in testing environments.
+
+Note: This feature only works with the same version of the dev node and the same configuration that was used to generate the contract state dump. The `dump` option currently only works with an internal Anvil node and cannot be used with external L1 providers.
+
 ## Parameters
 
 While the command above is sufficient to run the dev node with the default settings, there are many options for
@@ -28,6 +87,7 @@ customizing the node, depending on what type of testing you are trying to do.
 | `rpc_url`                       | `Option<Url>`   | `ESPRESSO_SEQUENCER_L1_PROVIDER`             | Automatically launched Anvil node if not provided.            | The JSON-RPC endpoint of the L1. If not provided, an Anvil node will be launched automatically.                                                                                                |
 | `mnemonic`                      | `String`        | `ESPRESSO_SEQUENCER_ETH_MNEMONIC`            | `test test test test test test test test test test test junk` | Mnemonic for an L1 wallet. This wallet is used to deploy the contracts, so the account indicated by`ACCOUNT_INDEX` must be funded with ETH.                                                    |
 | `account_index`                 | `u32`           | `ESPRESSO_DEPLOYER_ACCOUNT_INDEX`            | `0`                                                           | Account index of the L1 wallet generated from`MNEMONIC`. Used when deploying contracts.                                                                                                        |
+| `l1_deployment`                 | `L1Deployment`  | `ESPRESSO_DEV_NODE_L1_DEPLOYMENT`            | `deploy`                                                      | L1 deployment mode. Options: `deploy` (normal deployment), `dump` (deploy and dump state), `skip` (use pre-deployed contracts).                                                                |
 | `sequencer_api_port`            | `u16`           | `ESPRESSO_SEQUENCER_API_PORT`                | Required                                                      | Port that the HTTP API will use.                                                                                                                                                               |
 | `sequencer_api_max_connections` | `Option<usize>` | `ESPRESSO_SEQUENCER_MAX_CONNECTIONS`         | None                                                          | Maximum concurrent connections allowed by the HTTP API server.                                                                                                                                 |
 | `builder_port`                  | `Option<u16>`   | `ESPRESSO_BUILDER_PORT`                      | An unused port                                                | Port for connecting to the builder.                                                                                                                                                            |
@@ -40,6 +100,14 @@ customizing the node, depending on what type of testing you are trying to do.
 | `alt_account_indices`           | `Vec<u32>`      | `ESPRESSO_SEQUENCER_DEPLOYER_ALT_INDICES`    | `None`                                                        | Optional list of account indices to use when deploying the contracts. If there are fewer indices provided than chains, the base ACCOUNT_INDEX will be used.                                    |
 | `alt_prover_update_intervals`   | `Vec<Duration>` | `ESPRESSO_STATE_PROVER_ALT_UPDATE_INTERVALS` | `None`                                                        | The frequency of updating the light client state for alternate chains. If there are fewer provided than chains, the base update_interval will be used.                                         |
 | `alt_prover_retry_intervals`    | `Vec<Duration>` | `ESPRESSO_STATE_PROVER_ALT_RETRY_INTERVALS`  | `None`                                                        | Interval between retries if a state update fails for alternate chains. If there are fewer intervals provided than chains, the base retry_interval will be used.                                |
+
+### Contract Addresses for Pre-deployment Mode
+
+When using `l1_deployment: skip`, you must specify the addresses of pre-deployed contracts:
+
+| Name                          | Environment Variable                    | Description                                                    |
+| ----------------------------- | --------------------------------------- | -------------------------------------------------------------- |
+| `contract_light_client_proxy` | `ESPRESSO_CONTRACT_LIGHT_CLIENT_PROXY`  | Address of the pre-deployed Light Client Proxy contract on L1. |
 
 ## APIs
 
