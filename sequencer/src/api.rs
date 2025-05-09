@@ -1854,14 +1854,18 @@ mod api_tests {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashSet, time::Duration};
+    use std::{
+        collections::{HashMap, HashSet},
+        time::Duration,
+    };
 
     use alloy::primitives::U256;
     use committable::{Commitment, Committable};
     use espresso_types::{
+        compute_rewards,
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
-        v0_1::{block_reward, RewardAmount},
+        v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::StakeTableFetcher,
         validators_from_l1_events, EpochVersion, FeeAmount, Header, L1ClientOptions,
         MarketplaceVersion, MockSequencerVersions, SequencerVersions, ValidatedState,
@@ -1877,7 +1881,11 @@ mod test {
         types::HeightIndexed,
     };
     use hotshot_types::{
-        data::EpochNumber, event::LeafInfo, traits::{metrics::NoMetrics, node_implementation::ConsensusTime}, utils::epoch_from_block_number, ValidatorConfig
+        data::EpochNumber,
+        event::LeafInfo,
+        traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        utils::epoch_from_block_number,
+        ValidatorConfig,
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
@@ -3403,24 +3411,25 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_rewards() -> anyhow::Result<()> {
-        // This test registers 5 validators and multiple delegators for each validator.
-        // One of the delegators is also a validator.
-        // The test verifies that the cumulative reward at each block height equals the total block reward,
-        // which is a constant.
-
+        // Tests the reward distribution across multiple epochs and verifies the consistency of reward calculations.
+        //
+        // The test simulates a network with multiple delegators for each validator
+        // It verifies that no rewards are distributed in the first two epochs and that rewards are correctly allocated starting from the third epoch.
+        // The test also checks that the total stake of delegators matches the recorded stake of the validator
+        // and that the calculated rewards match those obtained via the client API.
         setup_test();
-        let epoch_height = 20;
+        const EPOCH_HEIGHT: u64 = 20;
 
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
         let network_config = TestConfigBuilder::default()
-            .epoch_height(epoch_height)
+            .epoch_height(EPOCH_HEIGHT)
             .build();
 
         let api_port = pick_unused_port().expect("No ports free for query service");
 
-        const NUM_NODES: usize = 3;
-        // Initialize nodes.
+        const NUM_NODES: usize = 7;
+
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
             .iter()
@@ -3452,43 +3461,51 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        // wait for atleast 62 blocks
-        let _blocks = client
-            .socket("availability/stream/blocks/0")
-            .subscribe::<BlockQueryData<SeqTypes>>()
-            .await
-            .unwrap()
-            .take(62)
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
+        // Wait for 3 epochs to allow rewards distribution to take effect.
+        let mut events = network.peers[0].event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Node 0 decided at height: {}", height);
+                if height > EPOCH_HEIGHT * 3 {
+                    break;
+                }
+            }
+        }
 
+        // Verify that there are no validators for epoch # 1 and epoch # 2
+        {
+            client
+                .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/1")
+                .send()
+                .await
+                .unwrap()
+                .is_empty();
+
+            client
+                .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/2")
+                .send()
+                .await
+                .unwrap()
+                .is_empty();
+        }
+
+        // Get the epoch # 3 validators
         let validators = client
-            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/4")
+            .get::<IndexMap<Address, Validator<BLSPubKey>>>("node/validators/3")
             .send()
             .await
             .expect("validators");
 
-        for validator in validators.values() {
-            let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
-
-            assert_eq!(delegator_stake_sum, validator.stake);
-        }
-
-        // insert all the address in a map
-        // We will query the reward-balance at each block height for all the addresses
-        // We don't know which validator was the leader because we don't have access to Membership
+        // Collect addresses to track rewards for all participants.
         let mut addresses = HashSet::new();
         for v in validators.values() {
             addresses.insert(v.account);
             addresses.extend(v.clone().delegators.keys().collect::<Vec<_>>());
         }
 
-        // check none of the address has any rewards distributed for first two epochs
-
-        // Check Cumulative rewards for epoch 3
-        // i.e block height 41 to 59
-        for block in 0..=40 {
+        // Verify no rewards are distributed in the first two epochs.
+        for block in 0..=EPOCH_HEIGHT * 2 {
             for address in addresses.clone() {
                 let amount = client
                     .get::<Option<RewardAmount>>(&format!(
@@ -3502,47 +3519,99 @@ mod test {
             }
         }
 
+        // Collect leaves for epoch 3 to 5 to verify reward calculations.
+        let leaves = client
+            .socket("availability/stream/leaves/41")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take((EPOCH_HEIGHT * 3).try_into().unwrap())
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
 
-         // wait for atleast 62 blocks
-         let leaves = client
-         .socket("availability/stream/leaves/41")
-         .subscribe::<LeafQueryData<SeqTypes>>()
-         .await
-         .unwrap()
-         .take(20)
-         .try_collect::<Vec<_>>()
-         .await
-         .unwrap();
-
-         let node_state = network.server.node_state();
+        let node_state = network.server.node_state();
         let coordinator = node_state.coordinator;
-         for leaf in leaves {
 
-            let membership  = coordinator.membership().read().await;
-            let epoch = epoch_from_block_number(leaf.height(), 20);
-            let epoch_number  = EpochNumber::new(epoch);
-            let leader = membership.leader(leaf.leaf().view_number(), Some(epoch_number)).expect("leader");
-            let address = membership.address(&epoch_number, leader).expect("address");
-            let validator = validators.get(&address).expect("leader not found");
+        let mut rewards_map = HashMap::new();
 
-            // validator is also the delegator
-            let block  = leaf.height();
-            let leader_reward = client
+        for leaf in leaves {
+            let block = leaf.height();
+            tracing::info!("verify rewards for block={block:?}");
+            let membership = coordinator.membership().read().await;
+            let epoch = epoch_from_block_number(block, EPOCH_HEIGHT);
+            let epoch_number = EpochNumber::new(epoch);
+            let leader = membership
+                .leader(leaf.leaf().view_number(), Some(epoch_number))
+                .expect("leader");
+            let leader_eth_address = membership.address(&epoch_number, leader).expect("address");
+            drop(membership);
+
+            let validators = client
+                .get::<IndexMap<Address, Validator<BLSPubKey>>>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("validators");
+
+            let leader_validator = validators
+                .get(&leader_eth_address)
+                .expect("leader not found");
+
+            // Verify that the sum of delegator stakes equals the validator's total stake.
+            for validator in validators.values() {
+                let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
+
+                assert_eq!(delegator_stake_sum, validator.stake);
+            }
+
+            let rewards = compute_rewards(leader_validator.clone()).expect("reward computation");
+
+            // Verify that the leader commission amount is within the tolerated range.
+            // Due to potential rounding errors in decimal calculations for delegator rewards,
+            // the actual distributed commission
+            // amount may differ very slightly from the calculated value.
+            // this asserts that it is within 10wei tolerance level.
+            // 10 wei is 10* 10E-18
+            let (_, leader_commission_amount) = rewards.last().unwrap();
+            let total_reward = block_reward().0;
+            let leader_comission_basis_points = U256::from(leader_validator.commission);
+            let calculated_leader_reward_amount = leader_comission_basis_points
+                .checked_mul(total_reward)
+                .context("overflow")?
+                .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+                .context("overflow")?;
+
+            assert!(
+                (*leader_commission_amount).0 - calculated_leader_reward_amount
+                    <= U256::from(10_u64)
+            );
+
+            // Aggregate reward amounts by address in the map.
+            // This is necessary because there can be two entries for a leader address:
+            // - One entry for commission rewards.
+            // - Another for delegator rewards when the leader is delegating.
+            // Also, rewards are accumulated for the same addresses
+            for (address, amount) in rewards {
+                rewards_map
+                    .entry(address)
+                    .and_modify(|entry| *entry += amount)
+                    .or_insert(amount);
+            }
+
+            // assert that the reward matches to what is in the reward merkle tree
+            for (address, calculated_amount) in rewards_map.iter() {
+                let amount_from_api = client
                     .get::<Option<RewardAmount>>(&format!(
                         "reward-state/reward-balance/{block}/{address}"
                     ))
                     .send()
                     .await
                     .ok()
-                    .flatten().expect("amount");
-            
-            let commission = validator.commission
-            
-
-
-            // check that balance is expected one
-
-         }
+                    .flatten()
+                    .expect("amount");
+                assert_eq!(amount_from_api, *calculated_amount)
+            }
+        }
 
         Ok(())
     }
