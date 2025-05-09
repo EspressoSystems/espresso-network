@@ -1,3 +1,5 @@
+use std::fmt;
+
 use alloy::{
     network::{EthereumWallet, TransactionBuilder as _},
     primitives::{
@@ -9,6 +11,7 @@ use alloy::{
     signers::local::PrivateKeySigner,
 };
 use anyhow::Result;
+use clap::ValueEnum;
 use espresso_contract_deployer::{build_provider, build_random_provider, build_signer};
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
@@ -26,6 +29,26 @@ use crate::{
     Config,
 };
 
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum DelegationConfig {
+    EqualAmounts,
+    #[default]
+    VariableAmounts,
+    MultipleDelegators,
+}
+
+// Manual implementation to match parsing of clap's ValueEnum
+impl fmt::Display for DelegationConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DelegationConfig::EqualAmounts => "equal-amounts",
+            DelegationConfig::VariableAmounts => "variable-amounts",
+            DelegationConfig::MultipleDelegators => "multiple-delegators",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 /// Setup validator by sending them tokens and ethers, and registering them on stake table
 pub async fn setup_stake_table_contract_for_test(
     rpc_url: Url,
@@ -33,7 +56,7 @@ pub async fn setup_stake_table_contract_for_test(
     stake_table_address: Address,
     token_address: Address,
     validators: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
-    multiple_delegators: bool,
+    config: DelegationConfig,
 ) -> Result<()> {
     tracing::info!(%stake_table_address, "staking to stake table contract for demo");
 
@@ -82,7 +105,12 @@ pub async fn setup_stake_table_contract_for_test(
         let commission = Commission::try_from(100u64 + 10u64 * val_index as u64)?;
 
         // delegate 100 to 500 ESP
-        let delegate_amount = parse_ether("100")? * U256::from(val_index % 5 + 1);
+        let delegate_amount = match config {
+            DelegationConfig::EqualAmounts => parse_ether("100")?,
+            DelegationConfig::MultipleDelegators | DelegationConfig::VariableAmounts => {
+                parse_ether("100")? * U256::from(val_index % 5 + 1)
+            },
+        };
         let delegate_amount_esp = format_ether(delegate_amount);
 
         tracing::info!("validator {val_index} address: {validator_address}, balance: {bal}");
@@ -132,21 +160,24 @@ pub async fn setup_stake_table_contract_for_test(
         .await?;
         assert!(receipt.status());
 
-        if multiple_delegators {
-            tracing::info!("adding multiple delegators for validator  {val_index} ");
-
-            let num_delegators = rng.gen_range(2..=5);
-
-            add_multiple_delegators(
-                &rpc_url,
-                validator_address,
-                token_holder,
-                stake_table_address,
-                token_address,
-                &mut rng,
-                num_delegators,
-            )
-            .await?;
+        match config {
+            DelegationConfig::EqualAmounts | DelegationConfig::VariableAmounts => {
+                tracing::debug!("not adding extra delegators");
+            },
+            DelegationConfig::MultipleDelegators => {
+                tracing::info!("adding multiple delegators for validator {val_index} ");
+                let num_delegators = rng.gen_range(2..=5);
+                add_multiple_delegators(
+                    &rpc_url,
+                    validator_address,
+                    token_holder,
+                    stake_table_address,
+                    token_address,
+                    &mut rng,
+                    num_delegators,
+                )
+                .await?;
+            },
         }
     }
     tracing::info!("completed staking for demo");
@@ -233,7 +264,11 @@ async fn add_multiple_delegators(
 /// loaded directly from the environment.
 ///
 /// Account indexes 20+ of the dev mnemonic are used for the validator accounts.
-pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> {
+pub async fn stake_for_demo(
+    config: &Config,
+    num_validators: u16,
+    delegation_config: DelegationConfig,
+) -> Result<()> {
     tracing::info!("staking to stake table contract for demo");
 
     // let grant_recipient = mk_signer(config.signer.account_index.unwrap())?;
@@ -280,10 +315,111 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
         config.stake_table_address,
         config.token_address,
         validator_keys,
-        false,
+        delegation_config,
     )
     .await?;
 
     tracing::info!("completed staking for demo");
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use espresso_types::v0_3::Validator;
+    use hotshot_types::signature_key::BLSPubKey;
+    use rand::rngs::StdRng;
+    use sequencer_utils::test_utils::setup_test;
+
+    use super::*;
+    use crate::{deploy::TestSystem, info::stake_table_info};
+
+    async fn shared_setup(
+        config: DelegationConfig,
+    ) -> Result<(Validator<BLSPubKey>, Validator<BLSPubKey>)> {
+        setup_test();
+        let system = TestSystem::deploy().await?;
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let keys = vec![
+            TestSystem::gen_keys(&mut rng),
+            TestSystem::gen_keys(&mut rng),
+        ];
+
+        setup_stake_table_contract_for_test(
+            system.rpc_url.clone(),
+            &system.provider,
+            system.stake_table,
+            system.token,
+            keys,
+            config,
+        )
+        .await?;
+
+        let l1_block_number = system.provider.get_block_number().await?;
+        let st = stake_table_info(system.rpc_url, system.stake_table, l1_block_number).await?;
+
+        // The stake table should have 2 validators
+        assert_eq!(st.len(), 2);
+        let val1 = st[0].clone();
+        let val2 = st[1].clone();
+
+        // The validators are not the same
+        assert_ne!(val1.account, val2.account);
+
+        Ok((val1, val2))
+    }
+
+    #[tokio::test]
+    async fn test_stake_for_demo_equal_amounts() -> Result<()> {
+        let (val1, val2) = shared_setup(DelegationConfig::EqualAmounts).await?;
+
+        // The total stake of the validator is equal to it's own delegation
+        assert_eq!(val1.delegators.get(&val1.account), Some(&val1.stake));
+        assert_eq!(val2.delegators.get(&val2.account), Some(&val2.stake));
+
+        // The are no other delegators
+        assert_eq!(val1.delegators.len(), 1);
+        assert_eq!(val2.delegators.len(), 1);
+
+        // The stake amounts are equal
+        assert_eq!(val1.stake, val2.stake);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stake_for_demo_variable_amounts() -> Result<()> {
+        let (val1, val2) = shared_setup(DelegationConfig::VariableAmounts).await?;
+
+        // The total stake of the validator is equal to it's own delegation
+        assert_eq!(val1.delegators.get(&val1.account), Some(&val1.stake));
+        assert_eq!(val2.delegators.get(&val2.account), Some(&val2.stake));
+
+        // The are no other delegators
+        assert_eq!(val1.delegators.len(), 1);
+        assert_eq!(val2.delegators.len(), 1);
+
+        // The stake amounts are not equal
+        assert_ne!(val1.stake, val2.stake);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stake_for_demo_multiple_delegators() -> Result<()> {
+        let (val1, val2) = shared_setup(DelegationConfig::MultipleDelegators).await?;
+
+        // The total stake of the validator is not equal to it's own delegation
+        assert_ne!(val1.delegators.get(&val1.account), Some(&val1.stake));
+        assert_ne!(val2.delegators.get(&val2.account), Some(&val2.stake));
+
+        // The are other delegators
+        assert!(val1.delegators.len() > 1);
+        assert!(val2.delegators.len() > 1);
+
+        // The stake amounts are not equal
+        assert_ne!(val1.stake, val2.stake);
+
+        Ok(())
+    }
 }

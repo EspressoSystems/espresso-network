@@ -308,9 +308,16 @@ pub async fn main() -> Result<()> {
             tracing::info!("Claiming validator exit for {validator_address}");
             claim_validator_exit(&provider, stake_table_addr, validator_address).await
         },
-        Commands::StakeForDemo { num_validators } => {
-            tracing::info!("Staking for demo with {num_validators} validators");
-            stake_for_demo(&config, num_validators).await.unwrap();
+        Commands::StakeForDemo {
+            num_validators,
+            delegation_config,
+        } => {
+            tracing::info!(
+                "Staking for demo with {num_validators} validators and config {delegation_config}"
+            );
+            stake_for_demo(&config, num_validators, delegation_config)
+                .await
+                .unwrap();
             return Ok(());
         },
         Commands::TokenBalance { address } => {

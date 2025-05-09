@@ -11,9 +11,12 @@ use alloy::{
         Provider as _, ProviderBuilder, RootProvider, WalletProvider,
     },
     rpc::types::TransactionRequest,
+    signers::local::PrivateKeySigner,
 };
 use anyhow::Result;
+use espresso_contract_deployer::build_signer;
 use hotshot_contract_adapter::sol_types::{ERC1967Proxy, EspToken, StakeTable};
+use hotshot_types::light_client::StateKeyPair;
 use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng as _};
 use url::Url;
 
@@ -30,13 +33,14 @@ type SchnorrKeyPair = jf_signature::schnorr::KeyPair<ark_ed_on_bn254::EdwardsCon
 #[derive(Debug, Clone)]
 pub struct TestSystem {
     pub provider: TestProvider,
+    pub signer: PrivateKeySigner,
     pub deployer_address: Address,
     pub token: Address,
     pub stake_table: Address,
     pub exit_escrow_period: Duration,
     pub rpc_url: Url,
     pub bls_key_pair: BLSKeyPair,
-    pub schnorr_key_pair: SchnorrKeyPair,
+    pub state_key_pair: StateKeyPair,
     pub commission: Commission,
     pub approval_amount: U256,
 }
@@ -51,6 +55,14 @@ impl TestSystem {
         })?;
         let rpc_url = format!("http://localhost:{}", port).parse()?;
         let deployer_address = provider.default_signer_address();
+        // I don't know how to get the signer out of the provider, by default anvil uses the dev
+        // mnemonic and the default signer is the first account.
+        let signer = build_signer(DEV_MNEMONIC.to_string(), 0);
+        assert_eq!(
+            signer.address(),
+            deployer_address,
+            "Signer address mismatch"
+        );
 
         // `EspToken.sol`
         let token_impl = EspToken::deploy(provider.clone()).await?;
@@ -89,26 +101,32 @@ impl TestSystem {
         assert!(receipt.status());
 
         let mut rng = StdRng::from_seed([42u8; 32]);
-        let (bls_key_pair, schnorr_key_pair) = Self::gen_consensus_keys(&mut rng);
+        let (_, bls_key_pair, state_key_pair) = Self::gen_keys(&mut rng);
 
         Ok(Self {
             provider,
+            signer,
             deployer_address,
             token: *token_proxy.address(),
             stake_table: *st_proxy.address(),
             exit_escrow_period,
             rpc_url,
             bls_key_pair,
-            schnorr_key_pair,
+            state_key_pair,
             commission: Commission::try_from("12.34")?,
             approval_amount,
         })
     }
 
-    pub fn gen_consensus_keys(
+    /// Note: Generates random keys, the Ethereum key won't match the deployer key.
+    pub fn gen_keys(
         rng: &mut (impl RngCore + CryptoRng),
-    ) -> (BLSKeyPair, SchnorrKeyPair) {
-        (BLSKeyPair::generate(rng), SchnorrKeyPair::generate(rng))
+    ) -> (PrivateKeySigner, BLSKeyPair, StateKeyPair) {
+        (
+            PrivateKeySigner::random_with(rng),
+            BLSKeyPair::generate(rng),
+            SchnorrKeyPair::generate(rng).into(),
+        )
     }
 
     pub async fn register_validator(&self) -> Result<()> {
@@ -118,7 +136,7 @@ impl TestSystem {
             self.commission,
             self.deployer_address,
             self.bls_key_pair.clone(),
-            self.schnorr_key_pair.ver_key(),
+            self.state_key_pair.ver_key(),
         )
         .await?;
         assert!(receipt.status());
