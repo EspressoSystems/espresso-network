@@ -1212,7 +1212,7 @@ pub mod testing {
             let coordinator = EpochMembershipCoordinator::new(
                 membership,
                 Some(storage_add_drb_result(persistence.clone())),
-                100,
+                config.epoch_height,
             );
 
             let node_state = NodeState::new(

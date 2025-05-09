@@ -7,14 +7,13 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use alloy::primitives::U256;
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
-use either::Either;
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -1109,64 +1108,6 @@ pub async fn broadcast_event<E: Clone + std::fmt::Debug>(event: E, sender: &Send
     }
 }
 
-/// Gets the next epoch QC corresponding to this epoch QC from the shared consensus state;
-/// if it's not yet available, waits for it with a given timeout.
-pub async fn wait_for_next_epoch_qc<TYPES: NodeType>(
-    high_qc: &QuorumCertificate2<TYPES>,
-    consensus: &OuterConsensus<TYPES>,
-    timeout: u64,
-    view_start_time: Instant,
-    receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
-) -> Result<NextEpochQuorumCertificate2<TYPES>> {
-    tracing::debug!("getting the next epoch QC");
-    if let Some(next_epoch_qc) = consensus.read().await.next_epoch_high_qc() {
-        if next_epoch_qc.data.leaf_commit == high_qc.data.leaf_commit {
-            // We have it already, no reason to wait
-            return Ok(next_epoch_qc.clone());
-        }
-    };
-
-    let wait_duration = Duration::from_millis(timeout / 2);
-
-    // TODO configure timeout
-    let Some(time_spent) = Instant::now().checked_duration_since(view_start_time) else {
-        // Shouldn't be possible, now must be after the start
-        return Err(warn!(
-            "Now is earlier than the view start time. Shouldn't be possible."
-        ));
-    };
-    let Some(time_left) = wait_duration.checked_sub(time_spent) else {
-        // No time left
-        return Err(warn!("Run out of time waiting for the next epoch QC."));
-    };
-    let receiver = receiver.clone();
-    let Ok(Some(event)) = tokio::time::timeout(time_left, async move {
-        let this_epoch_high_qc = high_qc.clone();
-        EventDependency::new(
-            receiver,
-            Box::new(move |event| {
-                let event = event.as_ref();
-                if let HotShotEvent::NextEpochQc2Formed(Either::Left(qc)) = event {
-                    qc.data.leaf_commit == this_epoch_high_qc.data.leaf_commit
-                } else {
-                    false
-                }
-            }),
-        )
-        .completed()
-        .await
-    })
-    .await
-    else {
-        return Err(warn!("Error while waiting for the next epoch QC."));
-    };
-    let HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) = event.as_ref() else {
-        // this shouldn't happen
-        return Err(warn!("Received event is not NextEpochQc2Formed but we checked it earlier. Shouldn't be possible."));
-    };
-    Ok(next_epoch_qc.clone())
-}
-
 /// Validates qc's signatures and, if provided, validates next_epoch_qc's signatures and whether it
 /// corresponds to the provided high_qc.
 pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
@@ -1178,25 +1119,22 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
     epoch_height: u64,
 ) -> Result<()> {
     let mut epoch_membership = membership_coordinator
-        .membership_for_epoch(qc.data.epoch)
+        .stake_table_for_epoch(qc.data.epoch)
         .await?;
 
     let membership_stake_table = epoch_membership.stake_table().await;
     let membership_success_threshold = epoch_membership.success_threshold().await;
 
-    {
-        let consensus_reader = consensus.read().await;
-        qc.is_valid_cert(
+    if let Err(e) = qc
+        .is_valid_cert(
             &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
             membership_success_threshold,
             upgrade_lock,
         )
         .await
-        .context(|e| {
-            consensus_reader.metrics.invalid_qc.update(1);
-
-            warn!("Invalid certificate: {e}")
-        })?;
+    {
+        consensus.read().await.metrics.invalid_qc.update(1);
+        return Err(warn!("Invalid certificate: {e}"));
     }
 
     if upgrade_lock.epochs_enabled(qc.view_number()).await {
@@ -1304,8 +1242,6 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
     da_cert: &DaCertificate2<TYPES>,
     consensus: &OuterConsensus<TYPES>,
-    timeout: u64,
-    view_start_time: Instant,
     receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<Proposal<TYPES, VidDisperseShare<TYPES>>> {
     tracing::debug!("getting the second VID share for epoch {:?}", target_epoch);
@@ -1328,42 +1264,26 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         }
     }
 
-    let wait_duration = Duration::from_millis(timeout / 2);
-
-    // TODO configure timeout
-    let Some(time_spent) = Instant::now().checked_duration_since(view_start_time) else {
-        // Shouldn't be possible, now must be after the start
-        return Err(warn!(
-            "Now is earlier than the view start time. Shouldn't be possible."
-        ));
-    };
-    let Some(time_left) = wait_duration.checked_sub(time_spent) else {
-        // No time left
-        return Err(warn!("Run out of time waiting for the second VID share."));
-    };
     let receiver = receiver.clone();
-    let Ok(Some(event)) = tokio::time::timeout(time_left, async move {
-        let da_cert_clone = da_cert.clone();
-        EventDependency::new(
-            receiver,
-            Box::new(move |event| {
-                let event = event.as_ref();
-                if let HotShotEvent::VidShareValidated(second_vid_share) = event {
-                    if target_epoch == da_cert_clone.epoch() {
-                        second_vid_share.data.payload_commitment()
-                            == da_cert_clone.data().payload_commit
-                    } else {
-                        Some(second_vid_share.data.payload_commitment())
-                            == da_cert_clone.data().next_epoch_payload_commit
-                    }
+    let da_cert_clone = da_cert.clone();
+    let Some(event) = EventDependency::new(
+        receiver,
+        Box::new(move |event| {
+            let event = event.as_ref();
+            if let HotShotEvent::VidShareValidated(second_vid_share) = event {
+                if target_epoch == da_cert_clone.epoch() {
+                    second_vid_share.data.payload_commitment()
+                        == da_cert_clone.data().payload_commit
                 } else {
-                    false
+                    Some(second_vid_share.data.payload_commitment())
+                        == da_cert_clone.data().next_epoch_payload_commit
                 }
-            }),
-        )
-        .completed()
-        .await
-    })
+            } else {
+                false
+            }
+        }),
+    )
+    .completed()
     .await
     else {
         return Err(warn!("Error while waiting for the second VID share."));
