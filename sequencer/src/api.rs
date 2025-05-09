@@ -3472,6 +3472,8 @@ mod test {
             .await
             .expect("validators");
 
+        assert!(!validators.is_empty());
+
         // Collect addresses to track rewards for all participants.
         let mut addresses = HashSet::new();
         for v in validators.values() {
