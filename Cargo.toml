@@ -33,8 +33,6 @@ members = [
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
-    "marketplace-builder",
-    "marketplace-solver",
     "node-metrics",
     "request-response",
     "sequencer",
@@ -132,7 +130,6 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
-marketplace-builder-core = { path = "marketplace-builder-core" }
 marketplace-builder-shared = { path = "marketplace-builder-shared" }
 hotshot-builder-core = { path = "hotshot-builder-core" }
 

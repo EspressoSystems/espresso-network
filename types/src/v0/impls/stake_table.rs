@@ -23,7 +23,7 @@ use hotshot_types::{
         election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
     },
-    stake_table::StakeTableEntry,
+    stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
@@ -1041,12 +1041,12 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     /// Get the stake table for the current view
-    fn stake_table(&self, epoch: Option<Epoch>) -> Vec<PeerConfig<SeqTypes>> {
-        self.get_stake_table(&epoch).unwrap_or_default()
+    fn stake_table(&self, epoch: Option<Epoch>) -> HSStakeTable<SeqTypes> {
+        self.get_stake_table(&epoch).unwrap_or_default().into()
     }
     /// Get the stake table for the current view
-    fn da_stake_table(&self, _epoch: Option<Epoch>) -> Vec<PeerConfig<SeqTypes>> {
-        self.non_epoch_committee.da_members.clone()
+    fn da_stake_table(&self, _epoch: Option<Epoch>) -> HSStakeTable<SeqTypes> {
+        self.non_epoch_committee.da_members.clone().into()
     }
 
     /// Get all members of the committee for the current view

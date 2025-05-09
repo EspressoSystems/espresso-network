@@ -341,7 +341,7 @@ mod tests {
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_std::UniformRand;
     use hotshot_types::{
-        light_client::{compute_stake_table_commitment, LightClientState, StakeTableState},
+        light_client::{LightClientState, StakeTableState},
         signature_key::SchnorrPubKey,
         traits::signature_key::StateSignatureKey,
     };
@@ -363,7 +363,7 @@ mod tests {
 
         let (qc_keys, state_keys) = key_pairs_for_testing(num_validators, &mut prng);
         let st = stake_table_for_testing(&qc_keys, &state_keys);
-        let st_state = compute_stake_table_commitment(&st, ST_CAPACITY).unwrap();
+        let st_state = st.commitment(ST_CAPACITY).unwrap();
         let next_st_state = st_state;
 
         let entries = st

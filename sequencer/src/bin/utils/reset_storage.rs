@@ -6,15 +6,13 @@ use sequencer::{
 
 /// Options for resetting persistent storage.
 ///
-/// This will remove all the persistent storage of a sequencer node or marketplace solver, effectively resetting it to
-/// its genesis state. Do not run this program while the sequencer or solver is running.
+/// This will remove all the persistent storage of a sequencer node effectively resetting it to
+/// its genesis state. Do not run this program while the sequencer is running.
 #[derive(Clone, Debug, Subcommand)]
 pub enum Commands {
     /// Contains subcommands for resetting sequencer storage.
     #[command(subcommand)]
     Sequencer(SequencerStorage),
-    /// resetting marketplace solver storage.
-    Solver(marketplace_solver::DatabaseOptions),
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -36,14 +34,6 @@ pub async fn run(opt: Commands) -> anyhow::Result<()> {
                 tracing::warn!("resetting sequencer SQL storage {opt:?}");
                 reset_storage(*opt).await
             },
-        },
-
-        Commands::Solver(opt) => {
-            tracing::warn!("resetting solver SQL storage {opt:?}");
-            let opts = opt.reset();
-            opts.connect().await?;
-
-            Ok(())
         },
     }
 }
