@@ -282,6 +282,8 @@ mod tests {
             tvd += (expected - actual).abs();
         }
 
+        // sanity check
+        assert!(tvd >= 0.0);
         // Allow a small margin of error
         assert!(tvd < 0.03);
     }
