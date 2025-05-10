@@ -129,7 +129,8 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
 /// Version 0.1
 pub mod v0_1 {
     use hotshot_builder_api::v0_1::block_info::{
-        AvailableBlockData, AvailableBlockHeaderInputV2, AvailableBlockHeaderInputV2Legacy,
+        AvailableBlockData, AvailableBlockHeaderInputV2, AvailableBlockHeaderInputV2Either,
+        AvailableBlockHeaderInputV2Legacy,
     };
     pub use hotshot_builder_api::v0_1::Version;
     use hotshot_types::{
@@ -179,6 +180,29 @@ pub mod v0_1 {
             sender: TYPES::SignatureKey,
             signature: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
         ) -> Result<AvailableBlockHeaderInputV2Legacy<TYPES>, BuilderClientError> {
+            let encoded_signature: TaggedBase64 = signature.clone().into();
+            self.client
+                .get(&format!(
+                    "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/{sender}/{encoded_signature}"
+                ))
+                .send()
+                .await
+                .map_err(Into::into)
+        }
+
+        /// Claim block header input, preferring the current `AvailableBlockHeaderInputV2` type but falling back to
+        /// the `AvailableBlockHeaderInputV2Legacy` type
+        ///
+        /// # Errors
+        /// - [`BuilderClientError::BlockNotFound`] if block isn't available
+        /// - [`BuilderClientError::Api`] if API isn't responding or responds incorrectly
+        pub async fn claim_either_block_header_input(
+            &self,
+            block_hash: BuilderCommitment,
+            view_number: u64,
+            sender: TYPES::SignatureKey,
+            signature: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+        ) -> Result<AvailableBlockHeaderInputV2Either<TYPES>, BuilderClientError> {
             let encoded_signature: TaggedBase64 = signature.clone().into();
             self.client
                 .get(&format!(
