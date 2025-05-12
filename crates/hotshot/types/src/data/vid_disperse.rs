@@ -20,6 +20,7 @@ use crate::{
     impl_has_epoch,
     message::Proposal,
     simple_vote::HasEpoch,
+    stake_table::HSStakeTable,
     traits::{
         block_contents::EncodeBytes,
         node_implementation::NodeType,
@@ -31,7 +32,6 @@ use crate::{
         avidm::{init_avidm_param, AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare},
     },
     vote::HasViewNumber,
-    PeerConfig,
 };
 
 impl_has_epoch!(
@@ -292,7 +292,7 @@ struct Weights {
 }
 
 pub fn vid_total_weight<TYPES: NodeType>(
-    stake_table: Vec<PeerConfig<TYPES>>,
+    stake_table: &HSStakeTable<TYPES>,
     epoch: Option<TYPES::Epoch>,
 ) -> usize {
     if epoch.is_none() {
@@ -307,7 +307,7 @@ pub fn vid_total_weight<TYPES: NodeType>(
     }
 }
 
-fn approximate_weights<TYPES: NodeType>(stake_table: Vec<PeerConfig<TYPES>>) -> Weights {
+fn approximate_weights<TYPES: NodeType>(stake_table: &HSStakeTable<TYPES>) -> Weights {
     let total_stake = stake_table.iter().fold(U256::ZERO, |acc, entry| {
         acc + entry.stake_table_entry.stake()
     });
@@ -408,7 +408,7 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
     ) -> Result<Self> {
         let target_mem = membership.membership_for_epoch(target_epoch).await?;
         let stake_table = target_mem.stake_table().await;
-        let approximate_weights = approximate_weights(stake_table);
+        let approximate_weights = approximate_weights(&stake_table);
 
         let txns = payload.encode();
         let num_txns = txns.len();

@@ -47,7 +47,6 @@ use crate::{
     helpers::{
         broadcast_event, check_qc_state_cert_correspondence, parent_leaf_and_state,
         validate_light_client_state_update_certificate, validate_qc_and_next_epoch_qc,
-        wait_for_next_epoch_qc,
     },
     quorum_proposal::{QuorumProposalTaskState, UpgradeLock, Versions},
 };
@@ -134,6 +133,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         mut rx: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Option<(
         QuorumCertificate2<TYPES>,
+        Option<NextEpochQuorumCertificate2<TYPES>>,
         Option<LightClientStateUpdateCertificate<TYPES>>,
     )> {
         while let Ok(event) = rx.recv_direct().await {
@@ -186,7 +186,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 } else {
                     maybe_state_cert = None;
                 }
-                return Some((qc.clone(), maybe_state_cert));
+                return Some((qc.clone(), maybe_next_epoch_qc.clone(), maybe_state_cert));
             }
         }
         None
@@ -292,6 +292,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         &self,
     ) -> Result<(
         QuorumCertificate2<TYPES>,
+        Option<NextEpochQuorumCertificate2<TYPES>>,
         Option<LightClientStateUpdateCertificate<TYPES>>,
     )> {
         tracing::debug!("waiting for QC");
@@ -309,6 +310,23 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
             .is_some_and(|bn| is_epoch_root(bn, self.epoch_height))
         {
             consensus_reader.state_cert().cloned()
+        } else {
+            None
+        };
+        let mut next_epoch_qc = if highest_qc
+            .data
+            .block_number
+            .is_some_and(|bn| is_last_block(bn, self.epoch_height))
+        {
+            let maybe_neqc = consensus_reader.next_epoch_high_qc().cloned();
+            if maybe_neqc
+                .as_ref()
+                .is_some_and(|neqc| neqc.data.leaf_commit == highest_qc.data.leaf_commit)
+            {
+                maybe_neqc
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -371,6 +389,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 }
                 if qc.view_number() > highest_qc.view_number() {
                     highest_qc = qc.clone();
+                    next_epoch_qc = maybe_next_epoch_qc.clone();
                     state_cert = maybe_state_cert;
                 }
             }
@@ -388,17 +407,18 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 tokio::time::timeout(time_left, self.wait_for_qc_event(rx.clone())).await
             else {
                 tracing::info!("Some nodes did not respond with their HighQc in time. Continuing with the highest QC that we received: {highest_qc:?}");
-                return Ok((highest_qc, state_cert));
+                return Ok((highest_qc, next_epoch_qc, state_cert));
             };
-            let Some((qc, maybe_state_cert)) = maybe_qc_state_cert else {
+            let Some((qc, maybe_next_epoch_qc, maybe_state_cert)) = maybe_qc_state_cert else {
                 continue;
             };
             if qc.view_number() > highest_qc.view_number() {
                 highest_qc = qc;
+                next_epoch_qc = maybe_next_epoch_qc;
                 state_cert = maybe_state_cert;
             }
         }
-        Ok((highest_qc, state_cert))
+        Ok((highest_qc, next_epoch_qc, state_cert))
     }
     /// Publishes a proposal given the [`CommitmentAndMetadata`], [`VidDisperse`]
     /// and high qc [`hotshot_types::simple_certificate::QuorumCertificate`],
@@ -560,24 +580,14 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         let next_epoch_qc = if self.upgrade_lock.epochs_enabled(self.view_number).await
             && is_high_qc_for_transition_block
         {
-            if maybe_next_epoch_qc.is_some() {
+            ensure!(
                 maybe_next_epoch_qc
-            } else {
-                Some(
-                    wait_for_next_epoch_qc(
-                        &parent_qc,
-                        &self.consensus,
-                        self.timeout,
-                        self.view_start_time,
-                        &self.receiver,
-                    )
-                    .await
-                    .context(
-                        "Jusify QC on our proposal is for an epoch transition block \
-                    but we don't have the corresponding next epoch QC. Do not propose.",
-                    )?,
-                )
-            }
+                    .as_ref()
+                    .is_some_and(|neqc| neqc.data.leaf_commit == parent_qc.data.leaf_commit),
+                "Jusify QC on our proposal is for an epoch transition block \
+                    but we don't have the corresponding next epoch QC. Do not propose."
+            );
+            maybe_next_epoch_qc
         } else {
             None
         };
@@ -727,14 +737,26 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
             }
         };
 
-        let mut maybe_next_epoch_qc = next_epoch_qc;
-
-        let (parent_qc, maybe_state_cert) = if let Some(qc) = parent_qc {
-            (qc, state_cert)
+        let (parent_qc, maybe_next_epoch_qc, maybe_state_cert) = if let Some(qc) = parent_qc {
+            if qc
+                .data
+                .block_number
+                .is_some_and(|bn| is_transition_block(bn, self.epoch_height))
+                && next_epoch_qc
+                    .as_ref()
+                    .is_none_or(|neqc| neqc.data.leaf_commit != qc.data.leaf_commit)
+            {
+                tracing::error!(
+                    "We've formed a transition QC but we haven't formed \
+                    the corresponding next epoch QC. Do not propose."
+                );
+                return;
+            }
+            (qc, next_epoch_qc, state_cert)
         } else if version < V::Epochs::VERSION {
-            (self.consensus.read().await.high_qc().clone(), None)
+            (self.consensus.read().await.high_qc().clone(), None, None)
         } else if proposal_cert.is_some() {
-            // If we have a view change evidence, we need to wait need to propose with the transition QC
+            // If we have a view change evidence, we need to wait to propose with the transition QC
             if let Ok(Some((qc, next_epoch_qc))) = self.wait_for_transition_qc().await {
                 let Some(epoch) = maybe_epoch else {
                     tracing::error!(
@@ -747,11 +769,12 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     .block_number
                     .is_some_and(|bn| epoch_from_block_number(bn, self.epoch_height) == *epoch)
                 {
-                    maybe_next_epoch_qc = Some(next_epoch_qc);
-                    (qc, None)
+                    (qc, Some(next_epoch_qc), None)
                 } else {
                     match self.wait_for_highest_qc().await {
-                        Ok((qc, maybe_state_cert)) => (qc, maybe_state_cert),
+                        Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) => {
+                            (qc, maybe_next_epoch_qc, maybe_state_cert)
+                        },
                         Err(e) => {
                             tracing::error!("Error while waiting for highest QC: {e:?}");
                             return;
@@ -759,7 +782,9 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     }
                 }
             } else {
-                let Ok((qc, maybe_state_cert)) = self.wait_for_highest_qc().await else {
+                let Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) =
+                    self.wait_for_highest_qc().await
+                else {
                     tracing::error!("Error while waiting for highest QC");
                     return;
                 };
@@ -770,11 +795,13 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     tracing::error!("High is in transition but we need to propose with transition QC, do nothing");
                     return;
                 }
-                (qc, maybe_state_cert)
+                (qc, maybe_next_epoch_qc, maybe_state_cert)
             }
         } else {
             match self.wait_for_highest_qc().await {
-                Ok((qc, maybe_state_cert)) => (qc, maybe_state_cert),
+                Ok((qc, maybe_next_epoch_qc, maybe_state_cert)) => {
+                    (qc, maybe_next_epoch_qc, maybe_state_cert)
+                },
                 Err(e) => {
                     tracing::error!("Error while waiting for highest QC: {e:?}");
                     return;

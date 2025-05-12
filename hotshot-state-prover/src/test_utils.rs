@@ -2,7 +2,10 @@ use alloy::primitives::U256;
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_std::rand::{CryptoRng, RngCore};
 use espresso_types::SeqTypes;
-use hotshot_types::{stake_table::StakeTableEntry, PeerConfig};
+use hotshot_types::{
+    stake_table::{HSStakeTable, StakeTableEntry},
+    PeerConfig,
+};
 use jf_signature::{
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey as BLSVerKey},
     schnorr::SchnorrSignatureScheme,
@@ -35,7 +38,7 @@ pub(crate) fn key_pairs_for_testing<R: CryptoRng + RngCore>(
 pub(crate) fn stake_table_for_testing(
     bls_keys: &[BLSVerKey],
     schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
-) -> Vec<PeerConfig<SeqTypes>> {
+) -> HSStakeTable<SeqTypes> {
     bls_keys
         .iter()
         .enumerate()
@@ -47,5 +50,6 @@ pub(crate) fn stake_table_for_testing(
             },
             state_ver_key: schnorr_key.clone(),
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .into()
 }

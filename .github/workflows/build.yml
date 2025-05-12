@@ -27,12 +27,9 @@ env:
     target/release/cdn-whitelist
     target/release/cli
     target/release/deploy
-    target/release/dev-rollup
     target/release/espresso-bridge
     target/release/espresso-dev-node
     target/release/keygen
-    target/release/marketplace-builder
-    target/release/marketplace-solver
     target/release/nasty-client
     target/release/node-metrics
     target/release/orchestrator
@@ -130,10 +127,7 @@ jobs:
           - cdn-marshal
           - cdn-whitelist
           - deploy
-          - dev-rollup
           - espresso-dev-node
-          - marketplace-builder
-          - marketplace-solver
           - nasty-client
           - node-validator
           - orchestrator

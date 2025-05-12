@@ -121,7 +121,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
         &mut self,
         event: Arc<HotShotEvent<TYPES>>,
         sender: Sender<Arc<HotShotEvent<TYPES>>>,
-        receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         match event.as_ref() {
             HotShotEvent::QuorumVoteRecv(ref vote) => {
@@ -160,8 +159,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     }
                 }
                 if let Err(e) =
-                    handle_view_change(*new_view_number, *epoch_number, &sender, &receiver, self)
-                        .await
+                    handle_view_change(*new_view_number, *epoch_number, &sender, self).await
                 {
                     tracing::trace!("Failed to handle ViewChange event; error = {e}");
                 }
@@ -284,9 +282,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
         &mut self,
         event: Arc<Self::Event>,
         sender: &Sender<Arc<Self::Event>>,
-        receiver: &Receiver<Arc<Self::Event>>,
+        _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
-        self.handle(event, sender.clone(), receiver.clone()).await
+        self.handle(event, sender.clone()).await
     }
 
     /// Joins all subtasks.

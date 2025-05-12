@@ -428,6 +428,7 @@ pub trait StateSignatureKey:
     + PartialEq
     + Eq
     + Display
+    + Default
     + ToFieldsLightClientCompat
     + for<'a> TryFrom<&'a TaggedBase64>
     + Into<TaggedBase64>

@@ -94,3 +94,23 @@ jobs:
         run: |
           just hotshot::example all-push-cdn -- --config_file ./crates/hotshot/orchestrator/run-config.toml
         timeout-minutes: 20
+
+  # This job enables having a single required status check in github for all hotshot tests.
+  aggregate-hotshot-tests:
+    needs: [test, test-examples]
+    runs-on: ubuntu-latest
+    # explicitly run and fail the job if dependencies failed
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Aggregate hotshot test results
+        run: |
+          # useful for debugging
+          echo "All results: ${{ toJson(needs) }}"
+
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "One or more jobs failed."
+            exit 1
+          else
+            echo "All jobs succeeded."
+            exit 0
+          fi

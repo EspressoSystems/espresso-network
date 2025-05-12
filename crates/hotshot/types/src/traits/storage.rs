@@ -22,7 +22,7 @@ use crate::{
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
         VidCommitment, VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -33,7 +33,7 @@ use crate::{
 
 /// Abstraction for storing a variety of consensus payload datum.
 #[async_trait]
-pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
+pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a proposal to the stored VID proposals.
     async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()>;
     /// Add a proposal to the stored VID proposals.
@@ -150,6 +150,35 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
         epoch: TYPES::Epoch,
         block_header: TYPES::BlockHeader,
     ) -> Result<()>;
+    async fn add_drb_input(&self, _epoch: u64, _iteration: u64, _drb_input: [u8; 32]) {}
+    async fn load_drb_input(&self, _epoch: u64) -> Result<DrbInput> {
+        Err(anyhow::anyhow!("load_drb_input unimplemented"))
+    }
+}
+
+pub async fn store_drb_input_impl<TYPES: NodeType>(
+    storage: impl Storage<TYPES>,
+    epoch: u64,
+    iteration: u64,
+    value: [u8; 32],
+) {
+    storage.add_drb_input(epoch, iteration, value).await
+}
+
+pub type StoreDrbProgressFn =
+    std::sync::Arc<dyn Fn(u64, u64, DrbResult) -> BoxFuture<'static, ()> + Send + Sync>;
+
+pub fn store_drb_progress_fn<TYPES: NodeType>(
+    storage: impl Storage<TYPES> + 'static,
+) -> StoreDrbProgressFn {
+    Arc::new(move |epoch, iteration, value| {
+        let storage = storage.clone();
+        Box::pin(store_drb_input_impl(storage, epoch, iteration, value))
+    })
+}
+
+pub fn null_store_drb_progress_fn() -> StoreDrbProgressFn {
+    Arc::new(move |_epoch, _iteration, _value| Box::pin(async {}))
 }
 
 pub type StorageAddDrbResultFn<TYPES> = Arc<

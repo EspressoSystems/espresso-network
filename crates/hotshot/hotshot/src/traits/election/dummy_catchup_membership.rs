@@ -6,6 +6,7 @@ use async_lock::RwLock;
 use hotshot_types::{
     data::Leaf2,
     drb::DrbResult,
+    stake_table::HSStakeTable,
     traits::{election::Membership, node_implementation::NodeType},
 };
 
@@ -58,12 +59,12 @@ where
         }
     }
 
-    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<hotshot_types::PeerConfig<TYPES>> {
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES> {
         self.assert_has_stake_table(epoch);
         self.inner.stake_table(epoch)
     }
 
-    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<hotshot_types::PeerConfig<TYPES>> {
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES> {
         self.assert_has_stake_table(epoch);
         self.inner.da_stake_table(epoch)
     }
