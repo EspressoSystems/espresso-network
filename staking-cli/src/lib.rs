@@ -10,6 +10,7 @@ use alloy::{
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
+use demo::DelegationConfig;
 pub(crate) use hotshot_types::{
     light_client::{StateSignKey, StateVerKey},
     signature_key::BLSPrivKey,
@@ -330,5 +331,8 @@ pub enum Commands {
         /// The default (5) works for the local native and docker demos.
         #[clap(long, default_value_t = 5)]
         num_validators: u16,
+
+        #[arg(long, value_enum, default_value_t = DelegationConfig::default())]
+        delegation_config: DelegationConfig,
     },
 }

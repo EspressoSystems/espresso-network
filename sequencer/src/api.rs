@@ -404,7 +404,7 @@ impl<
         match self.as_ref().get_leaf_chain(height).await {
             Ok(cf) => return Ok(cf),
             Err(err) => {
-                tracing::info!("chain config is not in memory, trying storage: {err:#}");
+                tracing::info!("leaf chain is not in memory, trying storage: {err:#}");
             },
         }
 
@@ -666,7 +666,7 @@ pub mod test_helpers {
     use jf_merkle_tree::{MerkleCommitment, MerkleTreeScheme};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use staking_cli::demo::setup_stake_table_contract_for_test;
+    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
     use tempfile::TempDir;
     use tide_disco::{error::ServerError, Api, App, Error, StatusCode};
@@ -704,6 +704,15 @@ pub mod test_helpers {
         api_config: Options,
     }
 
+    impl<const NUM_NODES: usize, P, C> TestNetworkConfig<{ NUM_NODES }, P, C>
+    where
+        P: PersistenceOptions,
+        C: StateCatchup + 'static,
+    {
+        pub fn states(&self) -> [ValidatedState; NUM_NODES] {
+            self.state.clone()
+        }
+    }
     #[derive(Clone)]
     pub struct TestNetworkConfigBuilder<const NUM_NODES: usize, P, C>
     where
@@ -795,7 +804,7 @@ pub mod test_helpers {
         /// stake table address to state. Must be called before `build()`.
         pub async fn pos_hook<V: Versions>(
             self,
-            multiple_delegators: bool,
+            delegation_config: DelegationConfig,
         ) -> anyhow::Result<Self> {
             if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
                 && <V as Versions>::Base::VERSION < EpochVersion::VERSION
@@ -848,7 +857,7 @@ pub mod test_helpers {
                 stake_table_address,
                 token_addr,
                 network_config.staking_priv_keys(),
-                multiple_delegators,
+                delegation_config,
             )
             .await
             .expect("stake table setup failed");
@@ -1863,13 +1872,14 @@ mod test {
     use hotshot_types::{
         data::EpochNumber,
         event::LeafInfo,
-        traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
+        traits::{election::Membership, metrics::NoMetrics, node_implementation::ConsensusTime},
         utils::epoch_from_block_number,
         ValidatorConfig,
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
+    use staking_cli::demo::DelegationConfig;
     use surf_disco::Client;
     use test_helpers::{
         catchup_test_helper, state_signature_test_helper, status_test_helper, submit_test_helper,
@@ -3002,7 +3012,7 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config.clone())
-            .pos_hook::<PosVersion>(false)
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts)
             .await
             .expect("Pos Deployment")
             .build();
@@ -3101,7 +3111,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(false)
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts)
             .await
             .unwrap()
             .build();
@@ -3193,7 +3203,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .unwrap()
             .build();
@@ -3312,7 +3322,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .unwrap()
             .build();
@@ -3629,7 +3639,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .unwrap()
             .build();
@@ -3663,5 +3673,144 @@ mod test {
             .send()
             .await
             .expect("failed to get stake table");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_epoch_stake_table_catchup() {
+        setup_test();
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 6;
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // setup catchup peers
+        let catchup_peers = std::array::from_fn(|_| {
+            StatePeers::<StaticVersion<0, 1>>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                &NoMetrics,
+            )
+        });
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .catchups(catchup_peers)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .await
+            .unwrap()
+            .build();
+
+        let state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
+
+        // Wait for the peer 0 (node 1) to advance past three epochs
+        let mut events = network.peers[0].event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Node 0 decided at height: {}", height);
+                if height > EPOCH_HEIGHT * 3 {
+                    break;
+                }
+            }
+        }
+
+        // Shutdown and remove node 1 to simulate falling behind
+        tracing::info!("Shutting down peer 0");
+        network.peers.remove(0);
+
+        // Wait for epochs to progress with node 1 offline
+        let mut events = network.server.event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Server decided at height: {}", height);
+                //  until 7 epochs
+                if height > EPOCH_HEIGHT * 7 {
+                    break;
+                }
+            }
+        }
+
+        // add node 1 to the network with fresh storage
+        let storage = SqlDataSource::create_storage().await;
+        let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        tracing::info!("Restarting peer 0");
+        let node = network
+            .cfg
+            .init_node(
+                1,
+                state,
+                options,
+                Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )),
+                None,
+                &NoMetrics,
+                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                EpochsTestVersions {},
+                Default::default(),
+            )
+            .await;
+
+        let coordinator = node.node_state().coordinator;
+
+        let server_node_state = network.server.node_state();
+        let server_coordinator = server_node_state.coordinator;
+
+        // Verify that the restarted node catches up for each epoch
+        for epoch_num in 1..=7 {
+            println!("getting stake table for epoch = {epoch_num}");
+            let epoch = EpochNumber::new(epoch_num);
+            let membership_for_epoch = coordinator.membership_for_epoch(Some(epoch)).await;
+            if membership_for_epoch.is_err() {
+                coordinator.wait_for_catchup(epoch).await.unwrap();
+            }
+
+            println!("have stake table for epoch = {epoch_num}");
+
+            let node_stake_table = coordinator
+                .membership()
+                .read()
+                .await
+                .stake_table(Some(epoch));
+            let stake_table = server_coordinator
+                .membership()
+                .read()
+                .await
+                .stake_table(Some(epoch));
+
+            println!("asserting stake table for epoch = {epoch_num}");
+
+            assert_eq!(
+                node_stake_table, stake_table,
+                "Stake table mismatch for epoch {epoch_num}",
+            );
+        }
     }
 }
