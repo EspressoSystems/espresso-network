@@ -3503,7 +3503,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .unwrap()
             .build();
