@@ -275,23 +275,18 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     }
 
     function ensureValidatorActive(address validator) internal view {
-        if (validators[validator].status == ValidatorStatus.Exited) {
-            revert ValidatorAlreadyExited();
-        }
-        if (!(validators[validator].status == ValidatorStatus.Active)) {
+        ValidatorStatus status = validators[validator].status;
+        if (status == ValidatorStatus.Unknown) {
             revert ValidatorInactive();
+        }
+        if (status == ValidatorStatus.Exited) {
+            revert ValidatorAlreadyExited();
         }
     }
 
     function ensureValidatorNotRegistered(address validator) internal view {
         if (validators[validator].status != ValidatorStatus.Unknown) {
             revert ValidatorAlreadyRegistered();
-        }
-    }
-
-    function ensureValidatorNotExited(address validator) internal view {
-        if (validatorExits[validator] != 0) {
-            revert ValidatorAlreadyExited();
         }
     }
 
