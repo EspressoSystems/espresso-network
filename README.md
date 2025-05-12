@@ -175,18 +175,6 @@ In order to profile the gas consumption of the light client contract do the foll
 4. Use the hash of the transaction generated in step two when calling the function `newFinalizedState` in order to
    obtain the gas profile.
 
-## Misc
-
-### Authenticate with GitHub container registry
-
-This is only necessary to fetch private images.
-
-- Go to your github profile
-- Developer Settings > Personal access tokens > Personal access tokens (classic)
-- Generate a new token
-  - for the scope options of the token, tick the _repo_ box.
-- Run `docker login ghcr.io --username <you_github_id> --password <your_personal_access_token>`
-
 # License
 
 ## Copyright

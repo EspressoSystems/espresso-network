@@ -98,7 +98,7 @@ mod persistence_tests {
     use indexmap::IndexMap;
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
-    use staking_cli::demo::setup_stake_table_contract_for_test;
+    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
     use testing::TestablePersistence;
     use tide_disco::error::ServerError;
@@ -1229,7 +1229,7 @@ mod persistence_tests {
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .expect("Pos deployment failed")
             .build();
@@ -1410,7 +1410,12 @@ mod persistence_tests {
             async move {
                 {
                     setup_stake_table_contract_for_test(
-                        l1_url, &deployer, st_addr, token_addr, validators, true,
+                        l1_url,
+                        &deployer,
+                        st_addr,
+                        token_addr,
+                        validators,
+                        DelegationConfig::MultipleDelegators,
                     )
                     .await
                     .expect("stake table setup failed");
