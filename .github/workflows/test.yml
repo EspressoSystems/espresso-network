@@ -295,3 +295,22 @@ jobs:
           set -o pipefail
           scripts/demo-native --tui=false &
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+  # This job enables having a single required status check in github for all GCL tests.
+  aggregate-gcl-tests:
+    needs: [test-postgres, test-sqlite, demo-native, test-integration]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Aggregate GCL test results
+        run: |
+          # useful for debugging
+          echo "All results: ${{ toJson(needs) }}"
+
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "All jobs succeeded."
+            exit 0
+          else
+            echo "One or more jobs failed."
+            exit 1
+          fi
