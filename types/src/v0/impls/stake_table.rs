@@ -405,21 +405,24 @@ impl StakeTableFetcher {
                     "Attempting to fetch stake table at L1 block {finalized_block:?}",
                 );
 
-           loop  {  match self_clone
+                loop {
+                    match self_clone
                         .fetch_and_store_stake_table_events(stake_contract_address, finalized_block)
                         .await
-                    {
-                        Ok(events) => {
-                            tracing::info!("Successfully fetched and stored stake table events at block={finalized_block:?}");
-                            tracing::debug!("events={events:?}");
-                            break;
-                        },
-                        Err(e) => {
-                            tracing::error!(
-                                "Error fetching stake table at block {finalized_block:?}. err= {e:#}",
-                            );
-                        },
-                    }}
+                        {
+                            Ok(events) => {
+                                tracing::info!("Successfully fetched and stored stake table events at block={finalized_block:?}");
+                                tracing::debug!("events={events:?}");
+                                break;
+                            },
+                            Err(e) => {
+                                tracing::error!(
+                                    "Error fetching stake table at block {finalized_block:?}. err= {e:#}",
+                                );
+                                sleep(l1_retry).await;
+                            },
+                        }
+                    }
 
                 tracing::debug!(
                     "Waiting {update_delay:?} before next stake table update...",
