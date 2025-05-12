@@ -3393,8 +3393,6 @@ mod test {
         Ok(())
     }
 
-    use hotshot_types::traits::election::Membership;
-
     #[tokio::test(flavor = "multi_thread")]
     async fn test_rewards() -> anyhow::Result<()> {
         // The test registers multiple delegators for each validator
@@ -3437,7 +3435,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .unwrap()
             .build();
