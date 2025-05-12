@@ -2108,11 +2108,7 @@ impl MembershipPersistence for Persistence {
         tracing::debug!("Max l1 = {max_l1:?}");
 
         if max_l1 > events.last().map(|((l1_block, _), _)| *l1_block as i64) {
-            tracing::debug!(
-                ?max_l1,
-                ?events,
-                "stored events max l1 is greater"
-            );
+            tracing::debug!(?max_l1, ?events, "stored events max l1 is greater");
             return Ok(());
         }
 
