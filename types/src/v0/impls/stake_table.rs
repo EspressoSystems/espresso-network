@@ -9,7 +9,7 @@ use alloy::{
     primitives::{Address, U256},
     rpc::types::Log,
 };
-use anyhow::{bail, Context};
+use anyhow::{bail, ensure, Context};
 use async_lock::{Mutex, RwLock};
 use committable::Committable;
 use futures::stream::{self, StreamExt};
@@ -114,7 +114,7 @@ impl StakeTableEvents {
             ));
         }
 
-        events.sort_by_key(|(key, _)| (key.0, key.1));
+        events.sort_by_key(|(key, _)| *key);
         Ok(events)
     }
 }
@@ -405,24 +405,21 @@ impl StakeTableFetcher {
                     "Attempting to fetch stake table at L1 block {finalized_block:?}",
                 );
 
-                // Retry stake table fetch until it succeeds
-                loop {
-                    match self_clone
+           loop  {  match self_clone
                         .fetch_and_store_stake_table_events(stake_contract_address, finalized_block)
                         .await
                     {
-                        Ok(_) => {
+                        Ok(events) => {
                             tracing::info!("Successfully fetched and stored stake table events at block={finalized_block:?}");
+                            tracing::debug!("events={events:?}");
                             break;
                         },
                         Err(e) => {
                             tracing::error!(
                                 "Error fetching stake table at block {finalized_block:?}. err= {e:#}",
                             );
-                            sleep(l1_retry).await;
                         },
-                    }
-                }
+                    }}
 
                 tracing::debug!(
                     "Waiting {update_delay:?} before next stake table update...",
@@ -439,15 +436,25 @@ impl StakeTableFetcher {
         to_block: u64,
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
         let persistence_lock = self.persistence.lock().await;
-        let res = persistence_lock.load_events().await?;
+        let persistence_events = persistence_lock.load_events(to_block).await?;
         drop(persistence_lock);
 
-        let from_block = res
-            .as_ref()
-            .map(|(block, _)| block + 1)
-            .filter(|from| *from <= to_block); // Only use from_block if it's less than to_block
+        tracing::info!("loaded events from storage to_block={to_block:?}");
 
-        tracing::info!("loaded events from storage from_block={from_block:?}");
+        let persistence_max_l1 = persistence_events.last().map(|((l1_block, _), _)| l1_block);
+
+        // No need to fetch from contract
+        // if persistence returns all the events that we need
+        if persistence_max_l1 == Some(&to_block) {
+            return Ok(persistence_events);
+        }
+
+        let from_block = persistence_max_l1.map(|l1| *l1 + 1);
+
+        ensure!(
+            Some(to_block) >= from_block,
+            "to_block {to_block:?} is less than from_block {from_block:?}"
+        );
 
         let contract_events = Self::fetch_events_from_contract(
             self.l1_client.clone(),
@@ -460,12 +467,12 @@ impl StakeTableFetcher {
         tracing::info!("loading events from contract to_block={to_block:?}");
 
         let contract_events = contract_events.sort_events()?;
-        let mut events = match (from_block, res) {
-            (Some(_), Some((_, persistence_events))) => persistence_events
+        let mut events = match from_block {
+            Some(_) => persistence_events
                 .into_iter()
                 .chain(contract_events)
                 .collect(),
-            _ => contract_events,
+            None => contract_events,
         };
 
         // There are no duplicates because the RPC returns all events,
@@ -681,7 +688,7 @@ impl StakeTableFetcher {
         {
             let persistence_lock = self.persistence.lock().await;
             persistence_lock
-                .store_events(to_block, events.clone())
+                .store_events(events.clone())
                 .await
                 .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
         }

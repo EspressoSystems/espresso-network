@@ -1449,45 +1449,122 @@ impl MembershipPersistence for Persistence {
         )
     }
 
-    async fn store_events(
-        &self,
-        l1_block: u64,
-        events: Vec<(EventKey, StakeTableEvent)>,
-    ) -> anyhow::Result<()> {
+    async fn store_events(&self, events: Vec<(EventKey, StakeTableEvent)>) -> anyhow::Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
         let events_dir = dir_path.join("events");
 
         fs::create_dir_all(events_dir.clone()).context("failed to create events dir")?;
+        let max_l1 = events.last().context("empty events")?.0 .0;
 
-        let file_path = events_dir.with_extension("txt");
+        // Read the existing max_l1 from events.txt
+        let max_l1_file_path = dir_path.join("events.txt");
+
+        if max_l1_file_path.exists() {
+            let bytes = fs::read(max_l1_file_path).context("read")?;
+            let mut buf = [0; 8];
+            bytes.as_slice().read_exact(&mut buf[..8])?;
+
+            let stored_l1 = u64::from_le_bytes(buf);
+
+            if stored_l1 > max_l1 {
+                return Ok(());
+            }
+        }
+
+        for (event_key, event) in events {
+            let (block_number, event_index) = event_key;
+            let filename = format!("{}_{}", block_number, event_index);
+            let file_path = events_dir.join(filename).with_extension("json");
+
+            let file = File::create(&file_path).context("Failed to create event file")?;
+            let writer = BufWriter::new(file);
+
+            serde_json::to_writer_pretty(writer, &event)
+                .context("Failed to write event to file")?;
+        }
+
+        // update max l1 block event into events.txt
+        let file_path = dir_path.join("events").with_extension("txt");
 
         inner.replace(
             &file_path,
             |_| Ok(true),
-            |file| {
-                let writer = BufWriter::new(file);
-                serde_json::to_writer_pretty(writer, &(l1_block, events))?;
+            |mut file| {
+                let bytes = max_l1.to_le_bytes();
+                file.write_all(&bytes)?;
+
                 Ok(())
             },
         )
     }
 
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
-        let inner = self.inner.write().await;
-        let dir_path = &inner.stake_table_dir_path();
+    async fn load_events(
+        &self,
+        for_block: u64,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.stake_table_dir_path();
         let events_dir = dir_path.join("events");
 
-        let file_path = events_dir.with_extension("txt");
+        let max_l1_file_path = dir_path.join("events.txt");
 
-        if !file_path.exists() {
-            return Ok(None);
+        if !max_l1_file_path.exists() || !events_dir.exists() {
+            return Ok(Vec::new());
         }
 
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let (l1_block, events) = serde_json::from_reader(reader)?;
-        Ok(Some((l1_block, events)))
+        let mut events = Vec::new();
+
+        for entry in fs::read_dir(&events_dir).context("events directory")? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+
+            if path
+                .extension()
+                .context(format!("extension for path={path:?}"))?
+                != "json"
+            {
+                continue;
+            }
+
+            let filename = path
+                .file_stem()
+                .and_then(|f| f.to_str())
+                .unwrap_or_default();
+
+            let parts: Vec<&str> = filename.split('_').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+
+            let block_number = parts[0].parse::<u64>()?;
+            let log_index = parts[1].parse::<u64>()?;
+
+            if block_number > for_block {
+                continue;
+            }
+
+            let file =
+                File::open(&path).context(format!("Failed to open event file. path={path:?}"))?;
+            let reader = BufReader::new(file);
+
+            let event: StakeTableEvent = serde_json::from_reader(reader)
+                .context(format!("Failed to deserialize event at path={path:?}"))?;
+
+            events.push(((block_number, log_index), event));
+        }
+
+        events.sort_by_key(|(key, _)| *key);
+
+        Ok(events)
     }
 }
 

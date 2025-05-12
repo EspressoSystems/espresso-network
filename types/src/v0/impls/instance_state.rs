@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
+use anyhow::bail;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -86,15 +87,15 @@ impl MembershipPersistence for NoStorage {
         Ok(())
     }
 
-    async fn store_events(
-        &self,
-        _l1_block: u64,
-        _events: Vec<(EventKey, StakeTableEvent)>,
-    ) -> anyhow::Result<()> {
+    async fn store_events(&self, _events: Vec<(EventKey, StakeTableEvent)>) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
-        Ok(None)
+
+    async fn load_events(
+        &self,
+        _l1_block: u64,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        bail!("unimplemented")
     }
 }
 
