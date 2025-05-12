@@ -101,7 +101,8 @@ jobs:
   aggregate-hotshot-tests:
     needs: [test, test-examples]
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() }}
+    # explicitly run and fail the job if dependencies failed
+    if: ${{ always() && !cancelled() }}
     steps:
       - name: Aggregate hotshot test results
         run: |

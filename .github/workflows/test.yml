@@ -300,7 +300,8 @@ jobs:
   aggregate-gcl-tests:
     needs: [test-postgres, test-sqlite, demo-native, test-integration]
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() }}
+    # explicitly run and fail the job if dependencies failed
+    if: ${{ always() && !cancelled() }}
     steps:
       - name: Aggregate GCL test results
         run: |
