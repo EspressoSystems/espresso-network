@@ -308,9 +308,9 @@ jobs:
           echo "All results: ${{ toJson(needs) }}"
 
           if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
-            echo "All jobs succeeded."
-            exit 0
-          else
             echo "One or more jobs failed."
             exit 1
+          else
+            echo "All jobs succeeded."
+            exit 0
           fi
