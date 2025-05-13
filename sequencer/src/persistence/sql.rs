@@ -2192,7 +2192,7 @@ impl MembershipPersistence for Persistence {
         };
 
         let rows = query("SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER BY l1_block ASC, log_index ASC")
-        .bind(l1_block)
+            .bind(query_l1_block)
             .fetch_all(tx.as_mut())
             .await?;
 

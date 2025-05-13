@@ -1587,13 +1587,7 @@ impl MembershipPersistence for Persistence {
 
         events.sort_by_key(|(key, _)| *key);
 
-        let bytes = fs::read(&last_l1_finalized_path).context("read")?;
-        let mut buf = [0; 8];
-        bytes.as_slice().read_exact(&mut buf[..8])?;
-
-        let last_l1_finalized = u64::from_le_bytes(buf);
-
-        Ok((Some(last_l1_finalized), events))
+        Ok((Some(query_l1_block), events))
     }
 }
 
