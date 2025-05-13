@@ -372,7 +372,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         self.initializer.replace(initializer); // then on start up `if let Some(_)`.
     }
 
-    // TODO on start check if stored.get(id), if so `Context::new_from_channels`
     fn start(&mut self) -> BoxFuture<()>
     where
         S::Storage: Send,
@@ -380,6 +379,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         async {
             tracing::info!("starting node");
 
+            // Check if we have a stored config for soft-restart.
             let hotshot = if let Some(initializer) = self.initializer.take() {
                 let hotshot = initializer
                     .hotshot_context
