@@ -42,8 +42,8 @@ contract StakeTableV2 is StakeTable {
     ///
     /// @param blsVK The BLS verification key
     /// @param schnorrVK The Schnorr verification key
-    /// @param blsSig The BLS signature that authenticates the ethereum account
-    /// @param schnorrSig The Schnorr signature that authenticates the ethereum account
+    /// @param blsSig The BLS signature that authenticates the BLS VK
+    /// @param schnorrSig The Schnorr signature that authenticates the Schnorr VK
     /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
     function registerValidator(
         BN254.G2Point memory blsVK,
@@ -57,13 +57,6 @@ contract StakeTableV2 is StakeTable {
         ensureValidatorNotRegistered(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
         ensureNewKey(blsVK);
-
-        // Verify that the validator can sign for that blsVK
-        bytes memory message = abi.encode(validator);
-        BLSSig.verifyBlsSig(message, blsSig, blsVK);
-
-        // TODO: Add Schnorr signature verification
-        // This will be implemented in a future update
 
         if (commission > 10000) {
             revert InvalidCommission();
@@ -79,8 +72,8 @@ contract StakeTableV2 is StakeTable {
     ///
     /// @param blsVK The new BLS verification key
     /// @param schnorrVK The new Schnorr verification key
-    /// @param blsSig The BLS signature that authenticates the ethereum account
-    /// @param schnorrSig The Schnorr signature that authenticates the ethereum account
+    /// @param blsSig The BLS signature that authenticates the blsVK
+    /// @param schnorrSig The Schnorr signature that authenticates the schnorrVK
     function updateConsensusKeys(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
@@ -92,13 +85,6 @@ contract StakeTableV2 is StakeTable {
         ensureValidatorActive(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
         ensureNewKey(blsVK);
-
-        // Verify that the validator can sign for that blsVK
-        bytes memory message = abi.encode(validator);
-        BLSSig.verifyBlsSig(message, blsSig, blsVK);
-
-        // TODO: Add Schnorr signature verification
-        // This will be implemented in a future update
 
         blsKeys[_hashBlsKey(blsVK)] = true;
 
