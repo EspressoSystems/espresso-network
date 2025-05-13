@@ -369,7 +369,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             sequencer_context: self.context.clone().unwrap(),
         };
 
-        self.initializer.replace(initializer); // then on start up `if let Some(_)`.
+        self.initializer.replace(initializer);
     }
 
     fn start(&mut self) -> BoxFuture<()>
@@ -381,9 +381,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             // Check if we have a stored config for soft-restart.
             let hotshot = if let Some(initializer) = self.initializer.take() {
+                let node_id = initializer.sequencer_context.node_id();
                 let hotshot = initializer
                     .hotshot_context
-                    .into_self_cloned(initializer.hotshot_initializer)
+                    .into_self_cloned(initializer.hotshot_initializer, node_id)
                     .await;
                 // TODO wrap `hotshot` in a `SystemContextHandle`
                 Some(hotshot)

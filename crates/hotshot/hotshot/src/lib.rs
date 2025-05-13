@@ -405,6 +405,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     pub async fn into_self_cloned(
         &self,
         initializer: HotShotInitializer<TYPES>,
+        node_id: u64,
         // external_reciever: Receiver<Event<TYPES>>,
     ) -> Arc<Self> {
         let Self {
@@ -431,7 +432,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             public_key,
             private_key,
             state_private_key,
-            1, // TODO nonce?
+            node_id, // in tests nonce is node_id
             config,
             membership_coordinator,
             network,
