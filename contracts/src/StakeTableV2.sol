@@ -58,6 +58,11 @@ contract StakeTableV2 is StakeTable {
         ensureNonZeroSchnorrKey(schnorrVK);
         ensureNewKey(blsVK);
 
+        // Verify that the validator can sign for that blsVK. This prevents rogue public-key
+        // attacks.
+        bytes memory message = abi.encode(validator);
+        BLSSig.verifyBlsSig(message, blsSig, blsVK);
+
         if (commission > 10000) {
             revert InvalidCommission();
         }
@@ -85,6 +90,11 @@ contract StakeTableV2 is StakeTable {
         ensureValidatorActive(validator);
         ensureNonZeroSchnorrKey(schnorrVK);
         ensureNewKey(blsVK);
+
+        // Verify that the validator can sign for that blsVK. This prevents rogue public-key
+        // attacks.
+        bytes memory message = abi.encode(validator);
+        BLSSig.verifyBlsSig(message, blsSig, blsVK);
 
         blsKeys[_hashBlsKey(blsVK)] = true;
 
