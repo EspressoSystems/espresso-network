@@ -8,7 +8,7 @@ use std::{
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{Address, U256},
+    primitives::{utils::format_units, Address, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
@@ -83,6 +83,8 @@ pub struct StateProverConfig {
     pub epoch_start_block: u64,
     /// Maximum number of retires for one-shot prover
     pub max_retries: u64,
+    /// optional gas price cap **in wei** to prevent prover sending updates during jammed base layer
+    pub max_gas_price: Option<u128>,
 }
 
 #[derive(Debug, Clone)]
@@ -419,6 +421,24 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
     let provider = ProviderBuilder::new()
         .wallet(wallet)
         .on_http(state.config.provider_endpoint.clone());
+
+    // only sync light client state when gas price is sane
+    if let Some(max_gas_price) = state.config.max_gas_price {
+        let cur_gas_price = provider
+            .get_gas_price()
+            .await
+            .map_err(|e| ProverError::NetworkError(anyhow!("{e}")))?;
+        if cur_gas_price > max_gas_price {
+            tracing::debug!(
+                "Current gas price too high: cur={} gwei, max={} gwei",
+                format_units(cur_gas_price, "gwei")
+                    .map_err(|e| ProverError::Internal(format!("{e}")))?,
+                format_units(max_gas_price, "gwei")
+                    .map_err(|e| ProverError::Internal(format!("{e}")))?,
+            );
+            return Ok(());
+        }
+    }
 
     tracing::info!(
         ?light_client_address,
