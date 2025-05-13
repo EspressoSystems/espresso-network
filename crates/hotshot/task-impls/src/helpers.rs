@@ -18,7 +18,7 @@ use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
-    drb::{DrbResult, DrbSeedInput},
+    drb::{DrbInput, DrbResult, DrbSeedInput},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
     message::{Proposal, UpgradeLock},
@@ -34,7 +34,7 @@ use hotshot_types::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
-        storage::Storage,
+        storage::{store_drb_progress_fn, Storage},
         BlockPayload, ValidatedState,
     },
     utils::{
@@ -177,10 +177,16 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 ) {
     let membership = membership.clone();
     let storage = storage.clone();
+    let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
     let consensus = consensus.clone();
+    let drb_input = DrbInput {
+        epoch: *epoch,
+        iteration: 0,
+        value: seed,
+    };
     tokio::spawn(async move {
         let drb_result = tokio::task::spawn_blocking(move || {
-            hotshot_types::drb::compute_drb_result::<TYPES>(seed)
+            hotshot_types::drb::compute_drb_result(drb_input, store_drb_progress_fn)
         })
         .await
         .unwrap();
@@ -1293,4 +1299,28 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         return Err(warn!("Received event is not VidShareValidated but we checked it earlier. Shouldn't be possible."));
     };
     Ok(second_vid_share.clone())
+}
+
+pub async fn broadcast_view_change<TYPES: NodeType>(
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    new_view_number: TYPES::View,
+    epoch: Option<TYPES::Epoch>,
+    first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+) {
+    let mut broadcast_epoch = epoch;
+    if let Some((first_epoch_view, first_epoch)) = first_epoch {
+        if new_view_number == first_epoch_view && broadcast_epoch != Some(first_epoch) {
+            broadcast_epoch = Some(first_epoch);
+        }
+    }
+    tracing::trace!(
+        "Sending ViewChange for view {} and epoch {:?}",
+        new_view_number,
+        broadcast_epoch
+    );
+    broadcast_event(
+        Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
+        sender,
+    )
+    .await
 }

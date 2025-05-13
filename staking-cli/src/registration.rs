@@ -98,8 +98,7 @@ mod test {
         let system = TestSystem::deploy().await?;
         let validator_address = system.deployer_address;
         let (bls_vk_sol, _) = prepare_bls_payload(&system.bls_key_pair, validator_address);
-        let schnorr_vk_sol: EdOnBN254PointSol =
-            system.schnorr_key_pair.ver_key().to_affine().into();
+        let schnorr_vk_sol: EdOnBN254PointSol = system.state_key_pair.ver_key().to_affine().into();
 
         let receipt = register_validator(
             &system.provider,
@@ -107,7 +106,7 @@ mod test {
             system.commission,
             validator_address,
             system.bls_key_pair,
-            system.schnorr_key_pair.ver_key(),
+            system.state_key_pair.ver_key(),
         )
         .await?;
         assert!(receipt.status());
@@ -145,7 +144,7 @@ mod test {
         system.register_validator().await?;
         let validator_address = system.deployer_address;
         let mut rng = StdRng::from_seed([43u8; 32]);
-        let (new_bls, new_schnorr) = TestSystem::gen_consensus_keys(&mut rng);
+        let (_, new_bls, new_schnorr) = TestSystem::gen_keys(&mut rng);
         let (bls_vk_sol, _) = prepare_bls_payload(&new_bls, validator_address);
         let schnorr_vk_sol: EdOnBN254PointSol = new_schnorr.ver_key().to_affine().into();
 

@@ -61,7 +61,7 @@ use hotshot_types::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
-        storage::{storage_add_drb_result, Storage},
+        storage::Storage,
     },
     utils::BuilderCommitment,
     ValidatorConfig,
@@ -520,8 +520,8 @@ where
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
-        Some(storage_add_drb_result(persistence.clone())),
         network_config.config.epoch_height,
+        &persistence.clone(),
     );
 
     let instance_state = NodeState {
@@ -672,7 +672,7 @@ pub mod testing {
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::setup_stake_table_contract_for_test;
+    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -904,7 +904,7 @@ pub mod testing {
                         st_addr,
                         token_addr,
                         validators,
-                        false,
+                        DelegationConfig::default(),
                     )
                     .await
                     .expect("stake table setup failed");
@@ -1211,8 +1211,8 @@ pub mod testing {
 
             let coordinator = EpochMembershipCoordinator::new(
                 membership,
-                Some(storage_add_drb_result(persistence.clone())),
-                100,
+                config.epoch_height,
+                &persistence.clone(),
             );
 
             let node_state = NodeState::new(
