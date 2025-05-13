@@ -463,8 +463,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             hotshot.config.epoch_start_block,
             vec![iei],
             hotshot.anchored_leaf.clone(),
-            (ViewNumber::new(0), None),
-            (high_qc, None),
+            (ViewNumber::new(0), None), // TODO
+            (high_qc, None),            // TODO
             BTreeMap::new(),
             BTreeMap::new(),
             None,

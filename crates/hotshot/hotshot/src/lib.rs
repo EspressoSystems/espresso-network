@@ -398,9 +398,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         inner
     }
 
-    /// Instantiate Hotshot from Hotshot, taking a `HotshotIntializer` and event
-    /// stream as arguments.  This allows us to create a new Hotshot with a
-    /// previously existing event-stream. Untimatly, we can use this for soft
+    /// Instantiate Hotshot from Hotshot, taking a `HotshotIntializer` as
+    /// argument. This allows us to create a new Hotshot with a previously
+    /// existing event-stream with the ultimate objective of using this for soft
     /// restarts.
     pub async fn into_self_cloned(
         &self,
