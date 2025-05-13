@@ -1404,7 +1404,7 @@ mod persistence_tests {
         let persistence = P::options(&storage).create().await.unwrap();
 
         let l1_client = L1ClientOptions {
-            stake_table_update_interval: Duration::from_secs(1),
+            stake_table_update_interval: Duration::from_secs(7),
             l1_retry_delay: Duration::from_millis(10),
             l1_events_max_block_range: 10000,
             ..Default::default()
@@ -1432,7 +1432,7 @@ mod persistence_tests {
         for _i in 0..10 {
             // Wait for more than update interval to assert that persistence was updated
             // L1 update interval is 2s in this test
-            tokio::time::sleep(std::time::Duration::from_secs(9)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
             let block = anvil_provider
                 .get_block_number()

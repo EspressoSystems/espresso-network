@@ -13,5 +13,5 @@ CREATE TABLE stake_table_events (
 -- This tracking is necessary to determine the starting point for fetching new contract events. 
 CREATE TABLE stake_table_events_l1_block (
   id INTEGER PRIMARY KEY CHECK (id = 0),
-  last_l1_block INTEGER NOT NULL
+  last_l1_block BIGINT NOT NULL
 );

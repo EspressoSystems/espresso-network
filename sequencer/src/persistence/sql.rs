@@ -2106,11 +2106,12 @@ impl MembershipPersistence for Persistence {
         let mut tx = self.db.write().await?;
 
         // check last l1 block if there is any
-        let (last_l1,) = query_as::<(Option<i64>,)>(
+        let last_l1 = query_as::<(i64,)>(
             "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
         )
-        .fetch_one(tx.as_mut())
-        .await?;
+        .fetch_optional(tx.as_mut())
+        .await?
+        .map(|(l1,)| l1);
 
         tracing::debug!("last l1 finalizes in database = {last_l1:?}");
 
@@ -2149,7 +2150,7 @@ impl MembershipPersistence for Persistence {
             "stake_table_events_l1_block",
             ["id", "last_l1_block"],
             ["id"],
-            [(0_i64, l1_finalized as i64)],
+            [(0_i32, l1_finalized as i64)],
         )
         .await?;
 
@@ -2165,13 +2166,13 @@ impl MembershipPersistence for Persistence {
         let mut tx = self.db.write().await?;
 
         // check last l1 block if there is any
-        let (last_l1,) = query_as::<(Option<i64>,)>(
+        let res = query_as::<(i64,)>(
             "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
         )
-        .fetch_one(tx.as_mut())
+        .fetch_optional(tx.as_mut())
         .await?;
 
-        let Some(last_l1) = last_l1 else {
+        let Some((last_l1,)) = res else {
             // this just means we dont have any events stored
             return Ok((None, Vec::new()));
         };
