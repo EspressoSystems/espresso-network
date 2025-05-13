@@ -1511,7 +1511,7 @@ impl MembershipPersistence for Persistence {
 
     async fn load_events(
         &self,
-        for_block: u64,
+        l1_block: u64,
     ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)> {
         let inner = self.inner.read().await;
         let dir_path = inner.stake_table_dir_path();
@@ -1526,6 +1526,21 @@ impl MembershipPersistence for Persistence {
         }
 
         let mut events = Vec::new();
+
+        let bytes = fs::read(&last_l1_finalized_path).context("read")?;
+        let mut buf = [0; 8];
+        bytes.as_slice().read_exact(&mut buf[..8])?;
+
+        let last_l1 = u64::from_le_bytes(buf);
+
+        // Determine the L1 block for querying events.
+        // If the last stored L1 block is greater than the requested block, limit the query to the requested block.
+        // Otherwise, query up to the last stored block.
+        let query_l1_block = if last_l1 > l1_block {
+            l1_block
+        } else {
+            last_l1
+        };
 
         for entry in fs::read_dir(&events_dir).context("events directory")? {
             let entry = entry?;
@@ -1556,7 +1571,7 @@ impl MembershipPersistence for Persistence {
             let block_number = parts[0].parse::<u64>()?;
             let log_index = parts[1].parse::<u64>()?;
 
-            if block_number > for_block {
+            if block_number > query_l1_block {
                 continue;
             }
 

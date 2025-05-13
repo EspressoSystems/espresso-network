@@ -439,19 +439,18 @@ impl StakeTableFetcher {
         to_block: u64,
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
         let persistence_lock = self.persistence.lock().await;
-        let (persistence_last_l1, persistence_events) =
-            persistence_lock.load_events(to_block).await?;
+        let (queried_l1, persistence_events) = persistence_lock.load_events(to_block).await?;
         drop(persistence_lock);
 
         tracing::info!("loaded events from storage to_block={to_block:?}");
 
         // No need to fetch from contract
         // if persistence returns all the events that we need
-        if persistence_last_l1 == Some(to_block) {
+        if queried_l1 == Some(to_block) {
             return Ok(persistence_events);
         }
 
-        let from_block = persistence_last_l1.map(|l1| l1 + 1);
+        let from_block = queried_l1.map(|l1| l1 + 1);
 
         ensure!(
             Some(to_block) >= from_block,

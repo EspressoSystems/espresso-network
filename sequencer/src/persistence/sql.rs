@@ -2177,6 +2177,16 @@ impl MembershipPersistence for Persistence {
             return Ok((None, Vec::new()));
         };
 
+        // Determine the L1 block for querying events.
+        // If the last stored L1 block is greater than the requested block, limit the query to the requested block.
+        // Otherwise, query up to the last stored block.
+        let l1_block = l1_block.try_into()?;
+        let query_l1_block = if last_l1 > l1_block {
+            l1_block
+        } else {
+            last_l1
+        };
+
         let rows = query("SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER BY l1_block ASC, log_index ASC").bind(l1_block as i64)
             .fetch_all(tx.as_mut())
             .await?;
@@ -2192,7 +2202,7 @@ impl MembershipPersistence for Persistence {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        Ok((Some(last_l1.try_into()?), events))
+        Ok((Some(query_l1_block.try_into()?), events))
     }
 }
 
