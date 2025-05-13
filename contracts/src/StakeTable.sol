@@ -148,20 +148,26 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     // === Structs ===
 
-    /// @notice Represents an Espresso validator and tracks funds currently delegated to them.
+    /// @notice Delegation info and status of a Validator.
     ///
     /// @notice The `delegatedAmount` excludes funds that are currently marked for withdrawal via
     /// undelegation or validator exit.
-    struct Validator {
+    struct ValidatorInfo {
         uint256 delegatedAmount;
         ValidatorStatus status;
     }
 
     /// @notice The status of a validator.
     ///
-    /// By default a validator is in the `Unknown` state. This means it has never registered. Upon
-    /// registration the status will become `Active` and if the validator deregisters its status
-    /// becomes `Exited`.
+    /// @notice By default a validator is in the `Unknown` state. This means it has never
+    /// registered. Upon registration the status will become `Active` and if the validator
+    /// deregisters its status becomes `Exited`.
+    ///
+    /// @notice Validators become "Active" in this contract upon successfully sending the
+    /// transaction
+    /// to register. This does not mean they will necessarily be part of the active stake table in
+    /// the GCL. To be part of the active validator set in the GCL stake table their registration
+    /// data needs to be correct and delegators must delegate funds to them.
     enum ValidatorStatus {
         Unknown,
         Active,
@@ -169,6 +175,13 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     }
 
     /// @notice Tracks an undelegation from a validator.
+    ///
+    /// @notice The `unlocksAt` timestamp is of the same unit as `block.timestamp`, e. g. seconds
+    /// since 1970-01-01.
+    ///
+    /// @notice Undelegations are deleted when they are successfully claimed.
+    ///
+    /// @notice A delegator can only have one pending undelegation per validator.
     struct Undelegation {
         uint256 amount;
         uint256 unlocksAt;
@@ -186,7 +199,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     ERC20 public token;
 
     /// @notice All validators the contract knows about.
-    mapping(address account => Validator validator) public validators;
+    mapping(address account => ValidatorInfo validator) public validators;
 
     /// BLS keys that have been seen by the contract
     ///
@@ -349,7 +362,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
 
         blsKeys[_hashBlsKey(blsVK)] = true;
-        validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
+        validators[validator] =
+            ValidatorInfo({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
         emit ValidatorRegistered(validator, blsVK, schnorrVK, commission);
     }
@@ -368,6 +382,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Delegate to a validator
     /// @param validator The validator to delegate to
     /// @param amount The amount to delegate
+    // TODO: add non-reentrant modifier
     function delegate(address validator, uint256 amount) external virtual {
         ensureValidatorActive(validator);
         address delegator = msg.sender;
@@ -393,6 +408,8 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @param validator The validator to undelegate from
     /// @param amount The amount to undelegate
     function undelegate(address validator, uint256 amount) external virtual {
+        // Undelegations are only allowed from active validators because exiting validators have all
+        // delegated funds marked for withdrawal upon exit.
         ensureValidatorActive(validator);
         address delegator = msg.sender;
 
@@ -423,6 +440,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// @notice Withdraw previously delegated funds after an undelegation.
     /// @param validator The validator to withdraw from
+    // TODO: add non-reentrant modifier
     function claimWithdrawal(address validator) external virtual {
         address delegator = msg.sender;
         // If entries are missing at any of the levels of the mapping this will return zero
@@ -445,6 +463,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// @notice Withdraw previously delegated funds after a validator has exited
     /// @param validator The validator to withdraw from
+    // TODO: add non-reentrant modifier
     function claimValidatorExit(address validator) external virtual {
         address delegator = msg.sender;
         uint256 unlocksAt = validatorExits[validator];
