@@ -96,11 +96,10 @@ pub struct AvailableBlockHeaderInputV2Legacy<TYPES: NodeType> {
 /// either version of the AvailableBlockHeaderInputV2 type. Note that we try to deserialize legacy first,
 /// as that has extra fields that are not present in the current version. When presented with a legacy
 /// input, we'll first try to validate its signature as the current version.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(untagged, bound = "")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AvailableBlockHeaderInputV2Either<TYPES: NodeType> {
-    Legacy(AvailableBlockHeaderInputV2Legacy<TYPES>),
     Current(AvailableBlockHeaderInputV2<TYPES>),
+    Legacy(AvailableBlockHeaderInputV2Legacy<TYPES>),
 }
 
 impl<TYPES: NodeType> AvailableBlockHeaderInputV2Legacy<TYPES> {
@@ -143,12 +142,12 @@ impl<TYPES: NodeType> AvailableBlockHeaderInputV2Either<TYPES> {
                 // Note that "legacy" as a variable name might be misleading here, as in the first case
                 // we're treating the 'legacy' struct as 'current' with extra fields. This mirrors the previous
                 // behavior of the code.
-                //if legacy.sender.validate_fee_signature(
-                //    &legacy.fee_signature,
-                //    offered_fee,
-                //    metadata,
-                //) || legacy.validate_signature(offered_fee, metadata)
-                if legacy.validate_signature(offered_fee, metadata) {
+                if legacy.sender.validate_fee_signature(
+                    &legacy.fee_signature,
+                    offered_fee,
+                    metadata,
+                ) || legacy.validate_signature(offered_fee, metadata)
+                {
                     Some(AvailableBlockHeaderInputV2 {
                         fee_signature: legacy.fee_signature.clone(),
                         sender: legacy.sender.clone(),

@@ -139,6 +139,7 @@ pub mod v0_1 {
         utils::BuilderCommitment,
     };
     use tagged_base64::TaggedBase64;
+    use vbs::BinarySerializer;
 
     use super::BuilderClientError;
 
@@ -204,13 +205,31 @@ pub mod v0_1 {
             signature: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
         ) -> Result<AvailableBlockHeaderInputV2Either<TYPES>, BuilderClientError> {
             let encoded_signature: TaggedBase64 = signature.clone().into();
-            self.client
-                .get(&format!(
+            let result = self.client
+                .get::<Vec<u8>>(&format!(
                     "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/{sender}/{encoded_signature}"
                 ))
-                .send()
+                .bytes()
                 .await
-                .map_err(Into::into)
+                .map_err(Into::<BuilderClientError>::into)?;
+
+            // Manually deserialize the result as one of the enum types. Bincode doesn't support deserialize_any,
+            // so we can't go directly into our target type.
+
+            if let Ok(available_block_header_input_v2) = vbs::Serializer::<Version>::deserialize::<
+                AvailableBlockHeaderInputV2<TYPES>,
+            >(&result)
+            {
+                Ok(AvailableBlockHeaderInputV2Either::Current(
+                    available_block_header_input_v2,
+                ))
+            } else {
+                vbs::Serializer::<Version>::deserialize::<AvailableBlockHeaderInputV2Legacy<TYPES>>(
+                    &result,
+                )
+                .map_err(|e| BuilderClientError::Api(format!("Failed to deserialize: {e:?}")))
+                .map(AvailableBlockHeaderInputV2Either::Legacy)
+            }
         }
 
         /// Claim block
