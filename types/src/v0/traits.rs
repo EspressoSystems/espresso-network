@@ -399,8 +399,15 @@ pub trait MembershipPersistence: Send + Sync + 'static {
         stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
     ) -> anyhow::Result<()>;
 
-    async fn store_events(&self, events: Vec<(EventKey, StakeTableEvent)>) -> anyhow::Result<()>;
-    async fn load_events(&self, l1_block: u64) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>>;
+    async fn store_events(
+        &self,
+        l1_finalized: u64,
+        events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()>;
+    async fn load_events(
+        &self,
+        l1_finalized: u64,
+    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)>;
 }
 
 #[async_trait]

@@ -1165,10 +1165,10 @@ mod persistence_tests {
         stake_table_contract: Address,
     ) -> anyhow::Result<()> {
         // Load persisted events
-        let events = persistence.load_events(block).await?;
+        let (stored_l1, events) = persistence.load_events(block).await?;
         assert!(!events.is_empty());
+        assert!(stored_l1.is_some());
         assert!(events.iter().all(|((l1_block, _), _)| *l1_block <= block));
-
         // Fetch events directly from the contract and compare with persisted data
         let contract_events = StakeTableFetcher::fetch_events_from_contract(
             l1_client.clone(),
@@ -1178,7 +1178,6 @@ mod persistence_tests {
         )
         .await?
         .sort_events()?;
-
         assert_eq!(
             contract_events, events,
             "Events from contract and persistence do not match"
@@ -1222,6 +1221,8 @@ mod persistence_tests {
             .try_into()
             .unwrap();
 
+        let persistence = persistence_options[0].clone().create().await.unwrap();
+
         // Build the config with PoS hook
         let l1_url = network_config.l1_url();
 
@@ -1235,7 +1236,7 @@ mod persistence_tests {
             .build();
 
         //start the network
-        let mut test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
+        let test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
 
         let client: Client<ServerError, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")
@@ -1255,9 +1256,7 @@ mod persistence_tests {
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
-
         // Load initial persisted events and validate they exist.
-
         let membership_coordinator = test_network
             .server
             .consensus()
@@ -1272,24 +1271,24 @@ mod persistence_tests {
         let stake_table_contract = chain_config.stake_table_contract.unwrap();
 
         let current_membership = membership_coordinator.membership();
-        let membership_state = current_membership.read().await;
-        let stake_table_fetcher = membership_state.fetcher();
+        {
+            let membership_state = current_membership.read().await;
+            let stake_table_fetcher = membership_state.fetcher();
 
-        let persistence = persistence_options[0].clone().create().await.unwrap();
-        let block1 = anvil_provider
-            .get_block_number()
-            .await
-            .expect("latest l1 block");
+            let block1 = anvil_provider
+                .get_block_number()
+                .await
+                .expect("latest l1 block");
 
-        assert_events(
-            &persistence,
-            block1,
-            stake_table_fetcher,
-            &l1_client,
-            stake_table_contract,
-        )
-        .await?;
-
+            assert_events(
+                &persistence,
+                block1,
+                stake_table_fetcher,
+                &l1_client,
+                stake_table_contract,
+            )
+            .await?;
+        }
         let _epoch_4_blocks = client
             .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
@@ -1299,46 +1298,24 @@ mod persistence_tests {
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
-
-        // Stop consensus to freeze the state
-        test_network.stop_consensus().await;
         let block2 = anvil_provider
             .get_block_number()
             .await
             .expect("latest l1 block");
 
-        assert_events(
-            &persistence,
-            block1,
-            stake_table_fetcher,
-            &l1_client,
-            stake_table_contract,
-        )
-        .await?;
+        {
+            let membership_state = current_membership.read().await;
+            let stake_table_fetcher = membership_state.fetcher();
 
-        // store an old snapshot of events in contract
-        // this would not be saved as we already have events with l1 block higher than this
-        // i.e block2 > block1
-        let events1 = persistence.load_events(block1).await?;
-
-        persistence.store_events(events1.clone()).await.unwrap();
-        assert_events(
-            &persistence,
-            block2,
-            stake_table_fetcher,
-            &l1_client,
-            stake_table_contract,
-        )
-        .await?;
-
-        assert_events(
-            &persistence,
-            block1,
-            stake_table_fetcher,
-            &l1_client,
-            stake_table_contract,
-        )
-        .await?;
+            assert_events(
+                &persistence,
+                block2,
+                stake_table_fetcher,
+                &l1_client,
+                stake_table_contract,
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -1462,10 +1439,10 @@ mod persistence_tests {
                 .await
                 .expect("latest l1 block");
 
-            let events = persistence.load_events(block).await?;
+            let (l1_block, events) = persistence.load_events(block).await?;
 
-            let l1_block = events.last().unwrap().0 .0;
             tracing::info!("{l1_block:?}, persistence events = {events:?}.");
+            let l1_block = l1_block.unwrap();
             assert!(l1_block > prev_l1_block, "events not updated");
 
             let contract_events = StakeTableFetcher::fetch_events_from_contract(

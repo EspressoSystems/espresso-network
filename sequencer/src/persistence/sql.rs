@@ -2094,21 +2094,34 @@ impl MembershipPersistence for Persistence {
         tx.commit().await
     }
 
-    async fn store_events(&self, events: Vec<(EventKey, StakeTableEvent)>) -> anyhow::Result<()> {
+    async fn store_events(
+        &self,
+        l1_finalized: u64,
+        events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()> {
         if events.is_empty() {
             return Ok(());
         }
 
         let mut tx = self.db.write().await?;
 
-        let (max_l1,) = query_as::<(Option<i64>,)>("SELECT MAX(l1_block) FROM stake_table_events")
-            .fetch_one(tx.as_mut())
-            .await?;
+        // check last l1 block if there is any
+        let (last_l1,) = query_as::<(Option<i64>,)>(
+            "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
+        )
+        .fetch_one(tx.as_mut())
+        .await?;
 
-        tracing::debug!("Max l1 = {max_l1:?}");
+        tracing::debug!("last l1 finalizes in database = {last_l1:?}");
 
-        if max_l1 > events.last().map(|((l1_block, _), _)| *l1_block as i64) {
-            tracing::debug!(?max_l1, ?events, "stored events max l1 is greater");
+        // skip events storage if the database already has higher l1 block events
+        if last_l1 > Some(l1_finalized as i64) {
+            tracing::debug!(
+                ?last_l1,
+                ?l1_finalized,
+                ?events,
+                "last l1 finalized stored is already higher"
+            );
             return Ok(());
         }
 
@@ -2131,19 +2144,44 @@ impl MembershipPersistence for Persistence {
 
         query.execute(tx.as_mut()).await?;
 
+        // update l1 block
+        tx.upsert(
+            "stake_table_events_l1_block",
+            ["id", "last_l1_block"],
+            ["id"],
+            [(0_i64, l1_finalized as i64)],
+        )
+        .await?;
+
         tx.commit().await?;
 
         Ok(())
     }
 
-    async fn load_events(&self, l1_block: u64) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+    async fn load_events(
+        &self,
+        l1_block: u64,
+    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)> {
         let mut tx = self.db.write().await?;
+
+        // check last l1 block if there is any
+        let (last_l1,) = query_as::<(Option<i64>,)>(
+            "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
+        )
+        .fetch_one(tx.as_mut())
+        .await?;
+
+        let Some(last_l1) = last_l1 else {
+            // this just means we dont have any events stored
+            return Ok((None, Vec::new()));
+        };
 
         let rows = query("SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER BY l1_block ASC, log_index ASC").bind(l1_block as i64)
             .fetch_all(tx.as_mut())
             .await?;
 
-        rows.into_iter()
+        let events = rows
+            .into_iter()
             .map(|row| {
                 let l1_block: i64 = row.try_get("l1_block")?;
                 let log_index: i64 = row.try_get("log_index")?;
@@ -2151,7 +2189,9 @@ impl MembershipPersistence for Persistence {
 
                 Ok(((l1_block.try_into()?, log_index.try_into()?), event))
             })
-            .collect::<anyhow::Result<Vec<_>>>()
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok((Some(last_l1.try_into()?), events))
     }
 }
 

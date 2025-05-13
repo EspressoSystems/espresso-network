@@ -1449,7 +1449,11 @@ impl MembershipPersistence for Persistence {
         )
     }
 
-    async fn store_events(&self, events: Vec<(EventKey, StakeTableEvent)>) -> anyhow::Result<()> {
+    async fn store_events(
+        &self,
+        l1_block: u64,
+        events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()> {
         if events.is_empty() {
             return Ok(());
         }
@@ -1459,27 +1463,30 @@ impl MembershipPersistence for Persistence {
         let events_dir = dir_path.join("events");
 
         fs::create_dir_all(events_dir.clone()).context("failed to create events dir")?;
-        let max_l1 = events.last().context("empty events")?.0 .0;
+        // Read the last l1 finalized for which events has been stored
+        let last_l1_finalized_path = events_dir.join("last_l1_finalized").with_extension("txt");
 
-        // Read the existing max_l1 from events.txt
-        let max_l1_file_path = dir_path.join("events.txt");
-
-        if max_l1_file_path.exists() {
-            let bytes = fs::read(max_l1_file_path).context("read")?;
+        // check if the last l1 events is higher than the incoming one
+        if last_l1_finalized_path.exists() {
+            let bytes = fs::read(&last_l1_finalized_path).context("read")?;
             let mut buf = [0; 8];
             bytes.as_slice().read_exact(&mut buf[..8])?;
-
             let stored_l1 = u64::from_le_bytes(buf);
-
-            if stored_l1 > max_l1 {
+            if stored_l1 > l1_block {
+                tracing::debug!(?stored_l1, ?l1_block, "stored l1 is greater");
                 return Ok(());
             }
         }
 
         for (event_key, event) in events {
             let (block_number, event_index) = event_key;
+            // file name is like block_index.json
             let filename = format!("{}_{}", block_number, event_index);
             let file_path = events_dir.join(filename).with_extension("json");
+
+            if file_path.exists() {
+                continue;
+            }
 
             let file = File::create(&file_path).context("Failed to create event file")?;
             let writer = BufWriter::new(file);
@@ -1488,16 +1495,15 @@ impl MembershipPersistence for Persistence {
                 .context("Failed to write event to file")?;
         }
 
-        // update max l1 block event into events.txt
-        let file_path = dir_path.join("events").with_extension("txt");
-
+        // update the l1 block for which we have processed events
         inner.replace(
-            &file_path,
+            &last_l1_finalized_path,
             |_| Ok(true),
             |mut file| {
-                let bytes = max_l1.to_le_bytes();
-                file.write_all(&bytes)?;
+                let bytes = l1_block.to_le_bytes();
 
+                file.write_all(&bytes)?;
+                tracing::debug!("updated l1 finalized ={l1_block:?}");
                 Ok(())
             },
         )
@@ -1506,15 +1512,17 @@ impl MembershipPersistence for Persistence {
     async fn load_events(
         &self,
         for_block: u64,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)> {
         let inner = self.inner.read().await;
         let dir_path = inner.stake_table_dir_path();
         let events_dir = dir_path.join("events");
 
-        let max_l1_file_path = dir_path.join("events.txt");
+        // check if we have any events in storage
+        // we can do this by checking last l1 finalized block for which we processed events
+        let last_l1_finalized_path = events_dir.join("last_l1_finalized").with_extension("txt");
 
-        if !max_l1_file_path.exists() || !events_dir.exists() {
-            return Ok(Vec::new());
+        if !last_l1_finalized_path.exists() || !events_dir.exists() {
+            return Ok((None, Vec::new()));
         }
 
         let mut events = Vec::new();
@@ -1564,7 +1572,13 @@ impl MembershipPersistence for Persistence {
 
         events.sort_by_key(|(key, _)| *key);
 
-        Ok(events)
+        let bytes = fs::read(&last_l1_finalized_path).context("read")?;
+        let mut buf = [0; 8];
+        bytes.as_slice().read_exact(&mut buf[..8])?;
+
+        let last_l1_finalized = u64::from_le_bytes(buf);
+
+        Ok((Some(last_l1_finalized), events))
     }
 }
 
