@@ -99,8 +99,8 @@ pub struct AvailableBlockHeaderInputV2Legacy<TYPES: NodeType> {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(untagged, bound = "")]
 pub enum AvailableBlockHeaderInputV2Either<TYPES: NodeType> {
-    Legacy(AvailableBlockHeaderInputV2Legacy<TYPES>),
     Current(AvailableBlockHeaderInputV2<TYPES>),
+    Legacy(AvailableBlockHeaderInputV2Legacy<TYPES>),
 }
 
 impl<TYPES: NodeType> AvailableBlockHeaderInputV2Legacy<TYPES> {
