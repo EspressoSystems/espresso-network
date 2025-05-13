@@ -908,7 +908,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
         vm.expectRevert(abi.encodeWithSelector(S.ValidatorAlreadyExited.selector));
         stakeTable.undelegate(validator, INITIAL_BALANCE);
 
-        //validator already exited so call claim withdaral exit
+        //validator already exited so call claim validator exit
         uint256 remainderStakedBalance = INITIAL_BALANCE - INITIAL_BALANCE / 2;
         vm.warp(block.timestamp + ESCROW_PERIOD);
         vm.expectEmit(false, false, false, true, address(stakeTable));
@@ -990,6 +990,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE / 3);
         assertEq(token.balanceOf(delegator2), INITIAL_BALANCE / 3);
         assertEq(token.balanceOf(delegator3), INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
     }
 
     function test_ValidatorRegistration_CommissionRates() public {
