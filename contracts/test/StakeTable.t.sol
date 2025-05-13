@@ -34,9 +34,6 @@ import { EspToken } from "../src/EspToken.sol";
 // Target contract
 import { StakeTable as S } from "../src/StakeTable.sol";
 
-// TODO: currently missing several tests
-// TODO: test only owner methods access control
-
 contract StakeTable_register_Test is LightClientCommonTest {
     S public stakeTable;
     // NOTE: address admin defined in LightClientCommonTest
@@ -533,7 +530,32 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
     // solhint-disable-next-line no-empty-blocks
     function test_RevertWhen_UndelegateAfterValidatorExit() public {
-        // TODO
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        // Delegate some funds
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, 3 ether);
+        stakeTable.delegate(validator, 3 ether);
+
+        // exit validator
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // undelegate after validator exit fails
+        vm.startPrank(delegator);
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        stakeTable.undelegate(validator, 1 ether);
+        vm.stopPrank();
     }
 
     function test_MultipleUndelegationsAfterExitEpochSucceeds() public {
