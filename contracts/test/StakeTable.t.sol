@@ -131,14 +131,8 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     function testFuzz_RevertWhen_InvalidBLSSig(uint256 scalar) external {
-        uint64 depositAmount = 10 ether;
-
         (BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK,) =
             genClientWallet(validator, seed1);
-
-        // Prepare for the token transfer
-        vm.startPrank(validator);
-        token.approve(address(stakeTable), depositAmount);
 
         // Ensure the scalar is valid
         // Note: Apparently BN254.scalarMul is not well defined when the scalar is 0
@@ -179,14 +173,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
     function test_RevertWhen_NoTokenAllowanceOrBalance() external {
         uint64 depositAmount = 10 ether;
 
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed1);
-
-        vm.prank(validator);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
         vm.startPrank(delegator);
         // The call to register is expected to fail because the depositAmount has not been approved
@@ -251,26 +238,8 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     function test_UpdateConsensusKeys_Succeeds() public {
-        uint64 depositAmount = 10 ether;
-
-        //Step 1: generate a new blsVK and schnorrVK and register this node
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed1);
-
-        // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(validator);
-        token.approve(address(stakeTable), depositAmount);
-
-        // Balances before registration
-        assertEq(token.balanceOf(validator), INITIAL_BALANCE);
-
-        // Check event is emitted after calling successfully `register`
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+        // Step 1: register the validator
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
         // Step 2: generate a new blsVK and schnorrVK
         (
@@ -280,6 +249,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
         ) = genClientWallet(validator, seed2);
 
         // Step 3: update the consensus keys
+        vm.startPrank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
         stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newBlsSig);
@@ -486,26 +456,14 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     function test_ClaimWithdrawalSucceeds() public {
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed1);
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
         vm.prank(tokenGrantRecipient);
         token.transfer(delegator, INITIAL_BALANCE);
 
-        vm.prank(delegator);
+        vm.startPrank(delegator);
         token.approve(address(stakeTable), INITIAL_BALANCE);
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
-
-        // register the node
-        vm.prank(validator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
-
-        vm.startPrank(delegator);
 
         // Delegating zero amount fails
         vm.expectRevert(S.ZeroAmount.selector);
@@ -579,26 +537,14 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     function test_MultipleUndelegationsAfterExitEpochSucceeds() public {
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed1);
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
         vm.prank(tokenGrantRecipient);
         token.transfer(delegator, INITIAL_BALANCE);
 
-        vm.prank(delegator);
+        vm.startPrank(delegator);
         token.approve(address(stakeTable), INITIAL_BALANCE);
         assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
-
-        // register the node
-        vm.prank(validator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
-
-        vm.startPrank(delegator);
 
         // Delegate some funds
         vm.expectEmit(false, false, false, true, address(stakeTable));
@@ -1047,52 +993,16 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     function test_ValidatorRegistration_CommissionRates() public {
-        // Test valid commission rates (2 decimal places)
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed1);
-
-        // Test commission = 12.34%
         uint16 commission1234 = 1234; // 12.34%
-        vm.startPrank(validator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, commission1234);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, commission1234);
-        vm.stopPrank();
+        registerValidatorOnStakeTable(validator, seed1, commission1234, stakeTable);
 
-        // Get a new validator and keys for next test
         address validator2 = makeAddr("validator2");
-        (
-            BN254.G2Point memory blsVK2,
-            EdOnBN254.EdOnBN254Point memory schnorrVK2,
-            BN254.G1Point memory sig2
-        ) = genClientWallet(validator2, seed2);
-
-        // Test maximum commission = 100.00%
         uint16 commission10000 = 10000; // 100.00%
-        vm.startPrank(validator2);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorRegistered(validator2, blsVK2, schnorrVK2, commission10000);
-        stakeTable.registerValidator(blsVK2, schnorrVK2, sig2, commission10000);
-        vm.stopPrank();
+        registerValidatorOnStakeTable(validator2, seed2, commission10000, stakeTable);
 
-        // Get a new validator and keys for next test
         address validator3 = makeAddr("validator3");
-        (
-            BN254.G2Point memory blsVK3,
-            EdOnBN254.EdOnBN254Point memory schnorrVK3,
-            BN254.G1Point memory sig3
-        ) = genClientWallet(validator3, "135");
-
-        // Test minimum commission = 0.00%
         uint16 commission0 = 0; // 0.00%
-        vm.startPrank(validator3);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorRegistered(validator3, blsVK3, schnorrVK3, commission0);
-        stakeTable.registerValidator(blsVK3, schnorrVK3, sig3, commission0);
-        vm.stopPrank();
+        registerValidatorOnStakeTable(validator3, "135", commission0, stakeTable);
 
         // Test invalid commission > 100.00%
         address validator4 = makeAddr("validator4");
@@ -1111,15 +1021,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
     function test_ValidatorExit() public {
         // Setup - register validator
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed1);
-
-        vm.startPrank(validator);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
-        vm.stopPrank();
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
         // Test 1: Non-validator cannot exit
         address nonValidator = makeAddr("nonValidator");
@@ -1157,15 +1059,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
     function test_ConsensusKeyUpdateAuthorization() public {
         // Setup - register initial validator
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed1);
-
-        vm.startPrank(validator);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
-        vm.stopPrank();
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
         (
             BN254.G2Point memory newBlsVK,
