@@ -2116,7 +2116,7 @@ impl MembershipPersistence for Persistence {
         tracing::debug!("last l1 finalizes in database = {last_l1:?}");
 
         // skip events storage if the database already has higher l1 block events
-        if last_l1 > Some(l1_finalized as i64) {
+        if last_l1 > Some(l1_finalized.try_into()?) {
             tracing::debug!(
                 ?last_l1,
                 ?l1_finalized,
@@ -2131,13 +2131,17 @@ impl MembershipPersistence for Persistence {
 
         let events = events
             .into_iter()
-            .map(|((b, i), e)| Ok((b, i, serde_json::to_value(e).context("l1 event to value")?)))
+            .map(|((b, i), e)| {
+                Ok((
+                    i64::try_from(b)?,
+                    i64::try_from(i)?,
+                    serde_json::to_value(e).context("l1 event to value")?,
+                ))
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         query_builder.push_values(events.into_iter(), |mut b, (l1_block, log_index, event)| {
-            b.push_bind(l1_block as i64)
-                .push_bind(log_index as i64)
-                .push_bind(event);
+            b.push_bind(l1_block).push_bind(log_index).push_bind(event);
         });
 
         query_builder.push(" ON CONFLICT DO NOTHING");
@@ -2187,7 +2191,8 @@ impl MembershipPersistence for Persistence {
             last_l1
         };
 
-        let rows = query("SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER BY l1_block ASC, log_index ASC").bind(l1_block as i64)
+        let rows = query("SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER BY l1_block ASC, log_index ASC")
+        .bind(l1_block)
             .fetch_all(tx.as_mut())
             .await?;
 
