@@ -721,7 +721,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
         emit S.Delegated(delegator, validator2, INITIAL_BALANCE / 3);
         stakeTable.delegate(validator2, INITIAL_BALANCE / 3);
 
-        // delegate from validator 1
+        // delegate to validator 1
         vm.expectEmit(false, false, false, true, address(stakeTable));
         emit S.Delegated(delegator, validator1, INITIAL_BALANCE / 3);
         stakeTable.delegate(validator1, INITIAL_BALANCE / 3);
