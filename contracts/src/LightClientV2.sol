@@ -184,7 +184,7 @@ contract LightClientV2 is LightClient {
             publicInput[10] = votingStakeTableState.threshold;
         }
 
-        // invoking PlonkVerifier2.sol::verify()
+        // invoking PlonkVerifierV2.sol::verify()
         if (!PlonkVerifierV2.verify(vk, publicInput, proof)) {
             revert InvalidProof();
         }
