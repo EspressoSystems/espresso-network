@@ -863,16 +863,20 @@ contract StakeTable_register_Test is LightClientCommonTest {
         vm.stopPrank();
     }
 
-    function test_RevertWhen_WithdrawFromNonExistentUndelegation() public {
-        // Should test withdrawing when no undelegation exists
+    function test_RevertWhen_WithdrawWithoutUndelegation() public {
         vm.prank(tokenGrantRecipient);
         token.transfer(delegator, INITIAL_BALANCE);
 
         registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
         vm.startPrank(delegator);
-        vm.expectRevert(abi.encodeWithSelector(S.InsufficientBalance.selector, 0));
-        stakeTable.undelegate(validator, INITIAL_BALANCE);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+
+        vm.expectRevert(S.NothingToWithdraw.selector);
+        stakeTable.claimWithdrawal(validator);
         vm.stopPrank();
     }
 
