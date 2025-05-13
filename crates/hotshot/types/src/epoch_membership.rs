@@ -42,7 +42,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
     /// Callback function to store a drb result in storage when one is calculated during catchup
-    store_drb_result_fn: Option<StoreDrbResultFn<TYPES>>,
+    store_drb_result_fn: StoreDrbResultFn<TYPES>,
 
     /// Number of blocks in an epoch
     pub epoch_height: u64,
@@ -77,7 +77,7 @@ where
             catchup_map: Arc::default(),
             epoch_height,
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
-            store_drb_result_fn: Some(store_drb_result_fn(storage.clone())),
+            store_drb_result_fn: store_drb_result_fn(storage.clone()),
         }
     }
 
@@ -237,11 +237,9 @@ where
             .unwrap()
         };
 
-        if let Some(cb) = &self.store_drb_result_fn {
-            tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
-            if let Err(e) = cb(epoch, drb).await {
-                tracing::warn!("Failed to add drb result to storage: {e}");
-            }
+        tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
+        if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
+            tracing::warn!("Failed to add drb result to storage: {e}");
         }
 
         self.membership.write().await.add_drb_result(epoch, drb);
