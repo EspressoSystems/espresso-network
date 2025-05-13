@@ -407,7 +407,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         initializer: HotShotInitializer<TYPES>,
         // external_reciever: Receiver<Event<TYPES>>,
     ) -> Arc<Self> {
-        let SystemContext {
+        let Self {
             public_key,
             private_key,
             state_private_key,
@@ -424,14 +424,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         let (internal_sender, internal_reciever) = internal_event_stream;
         let (external_sender, external_reciever) = external_event_stream;
-
-        let storage = if let Ok(storage) =
-            Arc::<RwLock<<I as NodeImplementation<TYPES>>::Storage>>::try_unwrap(storage)
-        {
-            storage.into_inner()
-        } else {
-            panic!("failed to unwrap storage")
-        };
 
         let metrics = Arc::<ConsensusMetricsValue>::try_unwrap(metrics).unwrap();
 
