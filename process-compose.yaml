@@ -20,7 +20,7 @@ processes:
         command: >
           curl -H "Content-Type: application/json"
           --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
-          ESPRESSO_SEQUENCER_L1_PROVIDER
+          $ESPRESSO_SEQUENCER_L1_PROVIDER
       failure_threshold: 6
       initial_delay_seconds: 5
 
