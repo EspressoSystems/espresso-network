@@ -406,7 +406,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         &self,
         initializer: HotShotInitializer<TYPES>,
         node_id: u64,
-        // external_reciever: Receiver<Event<TYPES>>,
     ) -> Arc<Self> {
         let Self {
             public_key,

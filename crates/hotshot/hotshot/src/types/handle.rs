@@ -74,6 +74,11 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions>
     SystemContextHandle<TYPES, I, V>
 {
+    /// TODO gate behind test feature
+    pub fn replace(&mut self, hotshot: Arc<SystemContext<TYPES, I, V>>) {
+        self.hotshot = hotshot;
+    }
+
     /// Adds a hotshot consensus-related task to the `SystemContextHandle`.
     pub fn add_task<S: TaskState<Event = HotShotEvent<TYPES>> + 'static>(&mut self, task_state: S) {
         let task = Task::new(

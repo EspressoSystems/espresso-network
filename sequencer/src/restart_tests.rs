@@ -342,10 +342,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     }
 
     // TODO review if we want this as a separate fn from `stop`.
-    fn soft_stop(&mut self) -> BoxFuture<()> {
-        self.store();
-        self.stop()
-    }
+    // fn soft_stop(&mut self) -> BoxFuture<()> {
+    //     async {
+    //         self.store().await;
+    //         self.stop();
+    //     }
+    //     .boxed()
+    // }
 
     fn stop(&mut self) -> BoxFuture<()> {
         async {
@@ -386,7 +389,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     .hotshot_context
                     .into_self_cloned(initializer.hotshot_initializer, node_id)
                     .await;
-                // TODO wrap `hotshot` in a `SystemContextHandle`
                 Some(hotshot)
             } else {
                 None
@@ -399,7 +401,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let mut retries = 5;
             let mut delay = Duration::from_secs(1);
             let genesis = Genesis::from_file(&self.opt.genesis_file).unwrap();
-            let ctx = loop {
+            let mut ctx = loop {
                 match init_with_storage(
                     genesis.clone(),
                     self.modules.clone(),
@@ -425,9 +427,9 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");
 
-            // if let Some(hotshot) = hotshot {
-            //     ctx.replace_handle(*hotshot);
-            // }
+            if let Some(hotshot) = hotshot {
+                ctx.replace_handle(hotshot).await;
+            }
 
             ctx.start_consensus().await;
             self.context = Some(ctx);
