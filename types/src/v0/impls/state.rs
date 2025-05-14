@@ -29,7 +29,7 @@ use super::{
     auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
-    reward::{apply_rewards, find_validator_info, first_two_epochs},
+    reward::{find_validator_info, first_two_epochs},
     v0_1::{
         RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
         REWARD_MERKLE_TREE_HEIGHT,
@@ -301,7 +301,7 @@ impl ValidatedState {
         delta: &mut Delta,
         validator: Validator<BLSPubKey>,
     ) -> anyhow::Result<()> {
-        let reward_state = apply_rewards(self.reward_merkle_tree.clone(), validator.clone())?;
+        let reward_state = validator.apply_rewards(self.reward_merkle_tree.clone())?;
         self.reward_merkle_tree = reward_state;
 
         // Update delta rewards
