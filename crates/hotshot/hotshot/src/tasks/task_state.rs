@@ -251,6 +251,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             epoch_height: handle.hotshot.config.epoch_height,
             consensus_metrics,
             first_epoch: None,
+            stake_table_capacity: handle.hotshot.config.stake_table_capacity,
         }
     }
 }

@@ -53,6 +53,7 @@ pub struct Genesis {
     pub upgrade_version: Version,
     pub epoch_height: Option<u64>,
     pub epoch_start_block: Option<u64>,
+    pub stake_table_capacity: Option<usize>,
     pub chain_config: ChainConfig,
     pub stake_table: StakeTableConfig,
     #[serde(default)]

@@ -73,6 +73,7 @@ pub struct PublicHotShotConfig {
     stop_voting_time: u64,
     epoch_height: u64,
     epoch_start_block: u64,
+    stake_table_capacity: usize,
 }
 
 impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
@@ -103,6 +104,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stop_voting_time,
             epoch_height,
             epoch_start_block,
+            stake_table_capacity,
         } = v;
 
         Self {
@@ -128,6 +130,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stop_voting_time,
             epoch_height,
             epoch_start_block,
+            stake_table_capacity,
         }
     }
 }
@@ -157,6 +160,7 @@ impl PublicHotShotConfig {
             stop_voting_time: self.stop_voting_time,
             epoch_height: self.epoch_height,
             epoch_start_block: self.epoch_start_block,
+            stake_table_capacity: self.stake_table_capacity,
         }
     }
 
