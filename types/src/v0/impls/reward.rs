@@ -314,6 +314,30 @@ impl From<(RewardAccountProof, U256)> for RewardAccountQueryData {
     }
 }
 
+pub struct ComputedRewards {
+    // delegator rewards
+    delegators: Vec<(Address, RewardAmount)>,
+    // leader commission reward
+    commission: RewardAmount,
+}
+
+impl ComputedRewards {
+    pub fn new(delegators: Vec<(Address, RewardAmount)>, commission: RewardAmount) -> Self {
+        Self {
+            delegators,
+            commission,
+        }
+    }
+
+    pub fn leader_commission(&self) -> &RewardAmount {
+        &self.commission
+    }
+
+    pub fn delegators(&self) -> &Vec<(Address, RewardAmount)> {
+        &self.delegators
+    }
+}
+
 pub fn apply_rewards(
     mut reward_state: RewardMerkleTree,
     validator: Validator<BLSPubKey>,
@@ -337,12 +361,22 @@ pub fn apply_rewards(
         }
         Ok::<(), anyhow::Error>(())
     };
-
+    let leader_address = validator.account;
     let computed_rewards = compute_rewards(validator)?;
-    for (address, reward) in computed_rewards {
-        update_balance(&RewardAccount(address), reward)?;
+    for (address, reward) in computed_rewards.delegators() {
+        update_balance(&RewardAccount(*address), *reward)?;
         tracing::debug!("applied rewards address={address} reward={reward}",);
     }
+    let leader_commission = computed_rewards.leader_commission();
+
+    update_balance(&RewardAccount(leader_address), *leader_commission)?;
+
+    tracing::debug!(
+        "updated leader reward address={} reward={}",
+        leader_address,
+        leader_commission
+    );
+
     Ok(reward_state)
 }
 
@@ -353,9 +387,7 @@ pub fn apply_rewards(
 /// with the remaining amount from the block reward given to the validator as the commission.
 /// Any minor discrepancies due to rounding off errors are adjusted in the leader reward
 /// to ensure the total reward is exactly equal to block reward.
-pub fn compute_rewards(
-    validator: Validator<BLSPubKey>,
-) -> anyhow::Result<Vec<(alloy::primitives::Address, RewardAmount)>> {
+pub fn compute_rewards(validator: Validator<BLSPubKey>) -> anyhow::Result<ComputedRewards> {
     ensure!(
         validator.commission <= COMMISSION_BASIS_POINTS,
         "commission must not exceed {COMMISSION_BASIS_POINTS}"
@@ -390,12 +422,11 @@ pub fn compute_rewards(
         rewards.push((*delegator_address, delegator_reward));
     }
 
-    let leader_reward = total_reward
+    let leader_commission = total_reward
         .checked_sub(delegators_rewards_distributed)
         .context("overflow")?;
-    rewards.push((validator.account, leader_reward.into()));
 
-    Ok(rewards)
+    Ok(ComputedRewards::new(rewards, leader_commission.into()))
 }
 /// Checks whether the given height belongs to the first or second epoch. or
 /// the Genesis epoch (EpochNumber::new(0))
@@ -506,26 +537,26 @@ pub mod tests {
 
         let validator = Validator::mock();
         let rewards = compute_rewards(validator).unwrap();
-        let total = |rewards: Vec<(_, RewardAmount)>| {
-            rewards.iter().fold(U256::ZERO, |acc, (_, r)| acc + r.0)
+        let total = |rewards: &ComputedRewards| {
+            rewards
+                .delegators()
+                .iter()
+                .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
+                + rewards.leader_commission().0
         };
-        assert_eq!(total(rewards), block_reward().into());
+        assert_eq!(total(&rewards), block_reward().into());
 
         let mut validator = Validator::mock();
         validator.commission = 0;
         let rewards = compute_rewards(validator.clone()).unwrap();
-        assert_eq!(total(rewards.clone()), block_reward().into());
+        assert_eq!(total(&rewards), block_reward().into());
 
         let mut validator = Validator::mock();
         validator.commission = 10000;
         let rewards = compute_rewards(validator.clone()).unwrap();
-        assert_eq!(total(rewards.clone()), block_reward().into());
-        let validator_reward = rewards
-            .iter()
-            .find(|(a, _)| *a == validator.account)
-            .unwrap()
-            .1;
-        assert_eq!(validator_reward, block_reward());
+        assert_eq!(total(&rewards), block_reward().into());
+        let validator_reward = rewards.leader_commission();
+        assert_eq!(*validator_reward, block_reward());
 
         let mut validator = Validator::mock();
         validator.commission = 10001;
@@ -542,11 +573,7 @@ pub mod tests {
         validator.commission = 0;
         let rewards = compute_rewards(validator.clone()).unwrap();
 
-        let validator_reward = rewards
-            .iter()
-            .find(|(a, _)| *a == validator.account)
-            .unwrap()
-            .1;
+        let validator_reward = rewards.leader_commission();
         let percentage =
             validator_reward.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
         assert_eq!(percentage, U256::ZERO);
@@ -554,11 +581,7 @@ pub mod tests {
         // 3%
         validator.commission = 300;
         let rewards = compute_rewards(validator.clone()).unwrap();
-        let validator_reward = rewards
-            .iter()
-            .find(|(a, _)| *a == validator.account)
-            .unwrap()
-            .1;
+        let validator_reward = rewards.leader_commission();
         let percentage =
             validator_reward.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
         println!("percentage: {percentage:?}");
@@ -567,11 +590,7 @@ pub mod tests {
         //100%
         validator.commission = 10000;
         let rewards = compute_rewards(validator.clone()).unwrap();
-        let validator_reward = rewards
-            .iter()
-            .find(|(a, _)| *a == validator.account)
-            .unwrap()
-            .1;
-        assert_eq!(validator_reward, block_reward());
+        let validator_reward = rewards.leader_commission();
+        assert_eq!(*validator_reward, block_reward());
     }
 }

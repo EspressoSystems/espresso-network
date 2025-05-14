@@ -3549,7 +3549,8 @@ mod test {
                 assert_eq!(delegator_stake_sum, validator.stake);
             }
 
-            let rewards = compute_rewards(leader_validator.clone()).expect("reward computation");
+            let computed_rewards =
+                compute_rewards(leader_validator.clone()).expect("reward computation");
 
             // Verify that the leader commission amount is within the tolerated range.
             // Due to potential rounding errors in decimal calculations for delegator rewards,
@@ -3557,7 +3558,6 @@ mod test {
             // amount may differ very slightly from the calculated value.
             // this asserts that it is within 10wei tolerance level.
             // 10 wei is 10* 10E-18
-            let (_, leader_commission_amount) = rewards.last().unwrap();
             let total_reward = block_reward().0;
             let leader_commission_basis_points = U256::from(leader_validator.commission);
             let calculated_leader_reward_amount = leader_commission_basis_points
@@ -3567,7 +3567,8 @@ mod test {
                 .context("overflow")?;
 
             assert!(
-                leader_commission_amount.0 - calculated_leader_reward_amount <= U256::from(10_u64)
+                (*computed_rewards.leader_commission()).0 - calculated_leader_reward_amount
+                    <= U256::from(10_u64)
             );
 
             // Aggregate reward amounts by address in the map.
@@ -3575,12 +3576,19 @@ mod test {
             // - One entry for commission rewards.
             // - Another for delegator rewards when the leader is delegating.
             // Also, rewards are accumulated for the same addresses
-            for (address, amount) in rewards {
+            let leader_commission = *computed_rewards.leader_commission();
+            for (address, amount) in computed_rewards.delegators().clone() {
                 rewards_map
                     .entry(address)
                     .and_modify(|entry| *entry += amount)
                     .or_insert(amount);
             }
+
+            // add leader commission reward
+            rewards_map
+                .entry(leader_eth_address)
+                .and_modify(|entry| *entry += leader_commission)
+                .or_insert(leader_commission);
 
             // assert that the reward matches to what is in the reward merkle tree
             for (address, calculated_amount) in rewards_map.iter() {
