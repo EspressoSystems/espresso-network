@@ -555,8 +555,8 @@ pub mod tests {
         validator.commission = 10000;
         let rewards = compute_rewards(validator.clone()).unwrap();
         assert_eq!(total(&rewards), block_reward().into());
-        let validator_reward = rewards.leader_commission();
-        assert_eq!(*validator_reward, block_reward());
+        let leader_commission = rewards.leader_commission();
+        assert_eq!(*leader_commission, block_reward());
 
         let mut validator = Validator::mock();
         validator.commission = 10001;
@@ -573,24 +573,24 @@ pub mod tests {
         validator.commission = 0;
         let rewards = compute_rewards(validator.clone()).unwrap();
 
-        let validator_reward = rewards.leader_commission();
+        let leader_commission = rewards.leader_commission();
         let percentage =
-            validator_reward.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
+            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
         assert_eq!(percentage, U256::ZERO);
 
         // 3%
         validator.commission = 300;
         let rewards = compute_rewards(validator.clone()).unwrap();
-        let validator_reward = rewards.leader_commission();
+        let leader_commission = rewards.leader_commission();
         let percentage =
-            validator_reward.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
+            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
         println!("percentage: {percentage:?}");
         assert_eq!(percentage, U256::from(300));
 
         //100%
         validator.commission = 10000;
         let rewards = compute_rewards(validator.clone()).unwrap();
-        let validator_reward = rewards.leader_commission();
-        assert_eq!(*validator_reward, block_reward());
+        let leader_commission = rewards.leader_commission();
+        assert_eq!(*leader_commission, block_reward());
     }
 }

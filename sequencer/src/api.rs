@@ -3560,14 +3560,14 @@ mod test {
             // 10 wei is 10* 10E-18
             let total_reward = block_reward().0;
             let leader_commission_basis_points = U256::from(leader_validator.commission);
-            let calculated_leader_reward_amount = leader_commission_basis_points
+            let calculated_leader_commission_reward = leader_commission_basis_points
                 .checked_mul(total_reward)
                 .context("overflow")?
                 .checked_div(U256::from(COMMISSION_BASIS_POINTS))
                 .context("overflow")?;
 
             assert!(
-                computed_rewards.leader_commission().0 - calculated_leader_reward_amount
+                computed_rewards.leader_commission().0 - calculated_leader_commission_reward
                     <= U256::from(10_u64)
             );
 
