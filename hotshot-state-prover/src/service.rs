@@ -429,14 +429,16 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             .await
             .map_err(|e| ProverError::NetworkError(anyhow!("{e}")))?;
         if cur_gas_price > max_gas_price {
-            tracing::debug!(
+            let cur_gwei = format_units(cur_gas_price, "gwei")
+                .map_err(|e| ProverError::Internal(format!("{e}")))?;
+            let max_gwei = format_units(max_gas_price, "gwei")
+                .map_err(|e| ProverError::Internal(format!("{e}")))?;
+            tracing::warn!(
                 "Current gas price too high: cur={} gwei, max={} gwei",
-                format_units(cur_gas_price, "gwei")
-                    .map_err(|e| ProverError::Internal(format!("{e}")))?,
-                format_units(max_gas_price, "gwei")
-                    .map_err(|e| ProverError::Internal(format!("{e}")))?,
+                cur_gwei,
+                max_gwei,
             );
-            return Ok(());
+            return Err(ProverError::GasPriceTooHigh(cur_gwei, max_gwei));
         }
     }
 
@@ -595,6 +597,7 @@ fn start_http_server<ApiVer: StaticVersionType + 'static>(
     Ok(())
 }
 
+/// Run prover in daemon mode
 pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     config: StateProverConfig,
     bind_version: ApiVer,
@@ -652,6 +655,10 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     for _ in 0..state.config.max_retries {
         match sync_state(&mut state, &proving_key, &relay_server_client).await {
             Ok(_) => return Ok(()),
+            Err(ProverError::GasPriceTooHigh(..)) => {
+                // static ERROR message for easier observability and alert
+                tracing::error!("Gas price too high, sync later");
+            },
             Err(err) => {
                 tracing::error!("Cannot sync the light client state, will retry: {}", err);
                 sleep(state.config.retry_interval).await;
@@ -675,6 +682,8 @@ pub enum ProverError {
     Internal(String),
     /// General network issue: {0}
     NetworkError(anyhow::Error),
+    /// Abort due to high gas price: current {0} gwei, max allowed: {1} gwei
+    GasPriceTooHigh(String, String),
 }
 
 impl From<ServerError> for ProverError {
