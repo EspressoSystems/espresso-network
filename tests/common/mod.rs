@@ -335,7 +335,7 @@ impl NativeDemo {
         }
 
         // Save output to file if PC_LOGS if that's set.
-        let log_path = std::env::var("PC_LOGS").unwrap_or_else(|_| {
+        let log_path = std::env::var("NATIVE_DEMO_LOGS").unwrap_or_else(|_| {
             tempfile::NamedTempFile::new()
                 .expect("tempfile creation succeeds")
                 .into_temp_path()
