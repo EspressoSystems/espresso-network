@@ -13,12 +13,15 @@ use hotshot_utils::{
 
 use crate::{
     data::Leaf2,
-    drb::{compute_drb_result, DrbResult},
+    drb::{compute_drb_result, DrbInput, DrbResult},
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
-        storage::StorageAddDrbResultFn,
+        storage::{
+            storage_add_drb_result, store_drb_progress_fn, Storage, StorageAddDrbResultFn,
+            StoreDrbProgressFn,
+        },
     },
     utils::{root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
@@ -43,6 +46,8 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
 
     /// Number of blocks in an epoch
     pub epoch_height: u64,
+
+    store_drb_progress_fn: StoreDrbProgressFn,
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -52,28 +57,27 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             catchup_map: Arc::clone(&self.catchup_map),
             storage_add_drb_result_fn: self.storage_add_drb_result_fn.clone(),
             epoch_height: self.epoch_height,
+            store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
         }
     }
 }
-// async fn catchup_membership(coordinator: EpochMembershipCoordinator<TYPES>) {
-
-// }
 
 impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES>
 where
     Self: Send,
 {
     /// Create an EpochMembershipCoordinator
-    pub fn new(
+    pub fn new<S: Storage<TYPES>>(
         membership: Arc<RwLock<TYPES::Membership>>,
-        storage_add_drb_result_fn: Option<StorageAddDrbResultFn<TYPES>>,
         epoch_height: u64,
+        storage: &S,
     ) -> Self {
         Self {
             membership,
             catchup_map: Arc::default(),
-            storage_add_drb_result_fn,
             epoch_height,
+            store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
+            storage_add_drb_result_fn: Some(storage_add_drb_result(storage.clone())),
         }
     }
 
@@ -219,10 +223,17 @@ where
             let mut drb_seed_input = [0u8; 32];
             let len = drb_seed_input_vec.len().min(32);
             drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
-
-            tokio::task::spawn_blocking(move || compute_drb_result::<TYPES>(drb_seed_input))
-                .await
-                .unwrap()
+            let drb_input = DrbInput {
+                epoch: *epoch,
+                iteration: 0,
+                value: drb_seed_input,
+            };
+            let store_drb_progress_fn = self.store_drb_progress_fn.clone();
+            tokio::task::spawn_blocking(move || {
+                compute_drb_result(drb_input, store_drb_progress_fn)
+            })
+            .await
+            .unwrap()
         };
 
         if let Some(cb) = &self.storage_add_drb_result_fn {

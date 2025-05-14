@@ -97,6 +97,7 @@ async fn test_vote_dependency_handle() {
                 id: handle.hotshot.id,
                 epoch_height: handle.hotshot.config.epoch_height,
                 state_private_key: handle.state_private_key().clone(),
+                first_epoch: None,
             };
 
         vote_dependency_handle_state
