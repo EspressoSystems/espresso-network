@@ -300,6 +300,13 @@ jobs:
           scripts/demo-native --tui=false &
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
 
+      - name: Upload process compose logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-compose-logs-test-demo-native
+          path: ${{ env.PC_LOGS }}
+
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
     needs: [test-postgres, test-sqlite, demo-native, test-integration]
