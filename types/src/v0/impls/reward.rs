@@ -1,4 +1,4 @@
-use std::{collections::HashSet, str::FromStr};
+use std::{collections::HashSet, iter::once, str::FromStr};
 
 use alloy::primitives::{
     utils::{parse_units, ParseUnits},
@@ -314,27 +314,42 @@ impl From<(RewardAccountProof, U256)> for RewardAccountQueryData {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ComputedRewards {
+    leader_address: Address,
+    // leader commission reward
+    leader_commission: RewardAmount,
     // delegator rewards
     delegators: Vec<(Address, RewardAmount)>,
-    // leader commission reward
-    commission: RewardAmount,
 }
 
 impl ComputedRewards {
-    pub fn new(delegators: Vec<(Address, RewardAmount)>, commission: RewardAmount) -> Self {
+    pub fn new(
+        delegators: Vec<(Address, RewardAmount)>,
+        leader_address: Address,
+        leader_commission: RewardAmount,
+    ) -> Self {
         Self {
             delegators,
-            commission,
+            leader_address,
+            leader_commission,
         }
     }
 
     pub fn leader_commission(&self) -> &RewardAmount {
-        &self.commission
+        &self.leader_commission
     }
 
     pub fn delegators(&self) -> &Vec<(Address, RewardAmount)> {
         &self.delegators
+    }
+
+    // chains delegation rewards and leader commission reward
+    pub fn all_rewards(self) -> Vec<(Address, RewardAmount)> {
+        self.delegators
+            .into_iter()
+            .chain(once((self.leader_address, self.leader_commission)))
+            .collect()
     }
 }
 
@@ -361,21 +376,11 @@ pub fn apply_rewards(
         }
         Ok::<(), anyhow::Error>(())
     };
-    let leader_address = validator.account;
     let computed_rewards = compute_rewards(validator)?;
-    for (address, reward) in computed_rewards.delegators() {
-        update_balance(&RewardAccount(*address), *reward)?;
+    for (address, reward) in computed_rewards.all_rewards() {
+        update_balance(&RewardAccount(address), reward)?;
         tracing::debug!("applied rewards address={address} reward={reward}",);
     }
-    let leader_commission = computed_rewards.leader_commission();
-
-    update_balance(&RewardAccount(leader_address), *leader_commission)?;
-
-    tracing::debug!(
-        "updated leader reward address={} reward={}",
-        leader_address,
-        leader_commission
-    );
 
     Ok(reward_state)
 }
@@ -426,7 +431,11 @@ pub fn compute_rewards(validator: Validator<BLSPubKey>) -> anyhow::Result<Comput
         .checked_sub(delegators_rewards_distributed)
         .context("overflow")?;
 
-    Ok(ComputedRewards::new(rewards, leader_commission.into()))
+    Ok(ComputedRewards::new(
+        rewards,
+        validator.account,
+        leader_commission.into(),
+    ))
 }
 /// Checks whether the given height belongs to the first or second epoch. or
 /// the Genesis epoch (EpochNumber::new(0))
@@ -537,24 +546,23 @@ pub mod tests {
 
         let validator = Validator::mock();
         let rewards = compute_rewards(validator).unwrap();
-        let total = |rewards: &ComputedRewards| {
+        let total = |rewards: ComputedRewards| {
             rewards
-                .delegators()
+                .all_rewards()
                 .iter()
                 .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
-                + rewards.leader_commission().0
         };
-        assert_eq!(total(&rewards), block_reward().into());
+        assert_eq!(total(rewards.clone()), block_reward().into());
 
         let mut validator = Validator::mock();
         validator.commission = 0;
         let rewards = compute_rewards(validator.clone()).unwrap();
-        assert_eq!(total(&rewards), block_reward().into());
+        assert_eq!(total(rewards.clone()), block_reward().into());
 
         let mut validator = Validator::mock();
         validator.commission = 10000;
         let rewards = compute_rewards(validator.clone()).unwrap();
-        assert_eq!(total(&rewards), block_reward().into());
+        assert_eq!(total(rewards.clone()), block_reward().into());
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, block_reward());
 
