@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use alloy::{
-    primitives::Address,
+    primitives::{utils::parse_units, Address},
     providers::{Provider, ProviderBuilder},
     signers::{
         local::{coins_bip39::English, MnemonicBuilder},
@@ -90,6 +90,10 @@ struct Args {
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
 
+    /// max acceptable gas price **in Gwei** for prover to send light client update transaction
+    #[clap(short, long, env = "ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI")]
+    pub max_gas_price: Option<String>,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -132,6 +136,12 @@ async fn main() {
         blocks_per_epoch,
         epoch_start_block
     );
+    let max_gas_price = args.max_gas_price.map(|v| {
+        parse_units(&v, "gwei")
+            .expect("parse_unit on max_gas_price in GWEI failed")
+            .try_into()
+            .expect("fail to convert gas price to u128")
+    });
 
     let config = StateProverConfig {
         relay_server: args.relay_server,
@@ -146,6 +156,7 @@ async fn main() {
         blocks_per_epoch,
         epoch_start_block,
         max_retries: args.max_retries,
+        max_gas_price,
     };
 
     // validate that the light client contract is a proxy, panics otherwise
