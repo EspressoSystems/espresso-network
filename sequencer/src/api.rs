@@ -3567,7 +3567,7 @@ mod test {
                 .context("overflow")?;
 
             assert!(
-                (*computed_rewards.leader_commission()).0 - calculated_leader_reward_amount
+                computed_rewards.leader_commission().0 - calculated_leader_reward_amount
                     <= U256::from(10_u64)
             );
 
