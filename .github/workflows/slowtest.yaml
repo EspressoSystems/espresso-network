@@ -42,6 +42,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build slow test
         run: just nextest --features embedded-db --no-run
@@ -67,6 +68,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build slow test
         run: just nextest --no-run
