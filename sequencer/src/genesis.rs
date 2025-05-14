@@ -1120,6 +1120,7 @@ mod test {
             upgrade_version = "0.2"
             epoch_height = 20
             epoch_start_block = 1
+            stake_table_capacity = 200
 
             [stake_table]
             capacity = 10
@@ -1183,6 +1184,7 @@ mod test {
             upgrade_version = "0.2"
             epoch_height = 20
             epoch_start_block = 1
+            stake_table_capacity = 200
 
             [stake_table]
             capacity = 10
