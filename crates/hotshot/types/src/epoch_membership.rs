@@ -204,7 +204,6 @@ where
             Ok(drb_membership) => drb_membership,
             Err(_) => Box::pin(self.wait_for_catchup(root_epoch + 1)).await?,
         };
-
         // get the DRB from the last block of the epoch right before the one we're catching up to
         // or compute it if it's not available
         let drb = if let Ok(drb) = drb_membership

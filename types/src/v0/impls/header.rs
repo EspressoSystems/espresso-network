@@ -36,7 +36,7 @@ use crate::{
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::reward::{apply_rewards, find_validator_info, first_two_epochs},
+        impls::reward::{find_validator_info, first_two_epochs},
         MarketplaceVersion,
     },
     v0_1, v0_2, v0_3,
@@ -534,7 +534,7 @@ impl Header {
         // so that marketplace version also supports this,
         // and the marketplace integration test passes
         if let Some(validator) = validator {
-            let reward_state = apply_rewards(state.reward_merkle_tree.clone(), validator)?;
+            let reward_state = validator.apply_rewards(state.reward_merkle_tree.clone())?;
             state.reward_merkle_tree = reward_state;
         }
 
