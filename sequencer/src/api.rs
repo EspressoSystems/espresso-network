@@ -1851,7 +1851,6 @@ mod test {
     use alloy::primitives::U256;
     use committable::{Commitment, Committable};
     use espresso_types::{
-        compute_rewards,
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
         v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
@@ -3549,8 +3548,9 @@ mod test {
                 assert_eq!(delegator_stake_sum, validator.stake);
             }
 
-            let computed_rewards =
-                compute_rewards(leader_validator.clone()).expect("reward computation");
+            let computed_rewards = leader_validator
+                .compute_rewards()
+                .expect("reward computation");
 
             // Verify that the leader commission amount is within the tolerated range.
             // Due to potential rounding errors in decimal calculations for delegator rewards,
