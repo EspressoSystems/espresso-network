@@ -11,6 +11,9 @@ import { BLSSig } from "./libraries/BLSSig.sol";
 
 contract StakeTableV2 is StakeTable {
     // === Events ===
+
+    /// @notice A validator is registered in the stake table
+    /// @notice the blsSig and schnorrSig are validated by the Espresso Network
     event ValidatorRegisteredV2(
         address indexed account,
         BN254.G2Point blsVk,
@@ -20,6 +23,8 @@ contract StakeTableV2 is StakeTable {
         EdOnBN254.EdOnBN254Point schnorrSig
     );
 
+    /// @notice A validator updates their consensus keys
+    /// @notice the blsSig and schnorrSig are validated by the Espresso Network
     event ConsensusKeysUpdatedV2(
         address indexed account,
         BN254.G2Point blsVK,
@@ -27,6 +32,18 @@ contract StakeTableV2 is StakeTable {
         BN254.G1Point blsSig,
         EdOnBN254.EdOnBN254Point schnorrSig
     );
+
+    /// @notice The exit escrow period is updated
+    event ExitEscrowPeriodUpdated(uint64 newExitEscrowPeriod);
+
+    // === Errors ===
+
+    /// The exit escrow period is invalid (either too short or too long)
+    error ExitEscrowPeriodInvalid();
+
+    constructor() {
+        _disableInitializers();
+    }
 
     function getVersion()
         public
@@ -99,5 +116,17 @@ contract StakeTableV2 is StakeTable {
         blsKeys[_hashBlsKey(blsVK)] = true;
 
         emit ConsensusKeysUpdatedV2(validator, blsVK, schnorrVK, blsSig, schnorrSig);
+    }
+
+    function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external virtual onlyOwner {
+        uint64 minRequiredPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
+            // block
+        uint64 maxAllowedPeriod = minRequiredPeriod * 20;
+
+        if (newExitEscrowPeriod < minRequiredPeriod || newExitEscrowPeriod > maxAllowedPeriod) {
+            revert ExitEscrowPeriodInvalid();
+        }
+        exitEscrowPeriod = newExitEscrowPeriod;
+        emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
     }
 }
