@@ -8,12 +8,13 @@
 
 use std::sync::Arc;
 
+use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     data::{
-        DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposalWrapper,
-        UpgradeProposal, VidDisperseShare,
+        vid_disperse::ADVZDisperseShare, DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal,
+        QuorumProposalWrapper, UpgradeProposal, VidDisperseShare,
     },
     error::HotShotError,
     message::{convert_proposal, Proposal},
@@ -37,11 +38,11 @@ pub struct Event<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> Event<TYPES> {
-    pub fn to_legacy(self) -> LegacyEvent<TYPES> {
-        LegacyEvent {
+    pub fn to_legacy(self) -> anyhow::Result<LegacyEvent<TYPES>> {
+        Ok(LegacyEvent {
             view_number: self.view_number,
-            event: self.event.to_legacy(),
-        }
+            event: self.event.to_legacy()?,
+        })
     }
 }
 
@@ -89,14 +90,19 @@ impl<TYPES: NodeType> LeafInfo<TYPES> {
         }
     }
 
-    pub fn to_legacy_unsafe(self) -> LegacyLeafInfo<TYPES> {
-        LegacyLeafInfo {
+    pub fn to_legacy_unsafe(self) -> anyhow::Result<LegacyLeafInfo<TYPES>> {
+        Ok(LegacyLeafInfo {
             leaf: self.leaf.to_leaf_unsafe(),
             state: self.state,
             delta: self.delta,
-            vid_share: self.vid_share,
-            state_cert: self.state_cert,
-        }
+            vid_share: self
+                .vid_share
+                .map(|share| match share {
+                    VidDisperseShare::V0(share) => Ok(share),
+                    VidDisperseShare::V1(_) => Err(error!("VID share is post-epoch")),
+                })
+                .transpose()?,
+        })
     }
 }
 
@@ -111,9 +117,7 @@ pub struct LegacyLeafInfo<TYPES: NodeType> {
     /// Optional application-specific state delta.
     pub delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
     /// Optional VID share data.
-    pub vid_share: Option<VidDisperseShare<TYPES>>,
-    /// Optional light client state update certificate.
-    pub state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+    pub vid_share: Option<ADVZDisperseShare<TYPES>>,
 }
 
 impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
@@ -122,15 +126,13 @@ impl<TYPES: NodeType> LegacyLeafInfo<TYPES> {
         leaf: Leaf<TYPES>,
         state: Arc<<TYPES as NodeType>::ValidatedState>,
         delta: Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
-        vid_share: Option<VidDisperseShare<TYPES>>,
-        state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
+        vid_share: Option<ADVZDisperseShare<TYPES>>,
     ) -> Self {
         Self {
             leaf,
             state,
             delta,
             vid_share,
-            state_cert,
         }
     }
 }
@@ -259,8 +261,8 @@ pub enum EventType<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> EventType<TYPES> {
-    pub fn to_legacy(self) -> LegacyEventType<TYPES> {
-        match self {
+    pub fn to_legacy(self) -> anyhow::Result<LegacyEventType<TYPES>> {
+        Ok(match self {
             EventType::Error { error } => LegacyEventType::Error { error },
             EventType::Decide {
                 leaf_chain,
@@ -272,7 +274,7 @@ impl<TYPES: NodeType> EventType<TYPES> {
                         .iter()
                         .cloned()
                         .map(LeafInfo::to_legacy_unsafe)
-                        .collect(),
+                        .collect::<anyhow::Result<_, _>>()?,
                 ),
                 qc: Arc::new(qc.as_ref().clone().to_qc()),
                 block_size,
@@ -301,7 +303,7 @@ impl<TYPES: NodeType> EventType<TYPES> {
             EventType::ExternalMessageReceived { sender, data } => {
                 LegacyEventType::ExternalMessageReceived { sender, data }
             },
-        }
+        })
     }
 }
 

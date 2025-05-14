@@ -163,11 +163,15 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
                 .filter(move |event| {
                     futures::future::ready(filter.should_broadcast(&event.as_ref().event))
                 })
-                .map(|a| Arc::new(Event::to_legacy(a.as_ref().clone())))
+                .filter_map(|a| {
+                    futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
+                })
                 .boxed()
         } else {
             receiver
-                .map(|a| Arc::new(Event::to_legacy(a.as_ref().clone())))
+                .filter_map(|a| {
+                    futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
+                })
                 .boxed()
         }
     }
