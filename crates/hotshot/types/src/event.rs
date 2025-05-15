@@ -190,6 +190,8 @@ pub enum EventType<TYPES: NodeType> {
 pub enum HotShotAction {
     /// A quorum vote was sent
     Vote,
+    /// A timeout vote was sent
+    TimeoutVote,
     /// View Sync Vote
     ViewSyncVote,
     /// A quorum proposal was sent

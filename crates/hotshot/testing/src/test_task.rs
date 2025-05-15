@@ -147,6 +147,8 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
                     break self.state.check().await;
                 }
 
+                self.receivers.retain(|receiver| !receiver.is_closed());
+
                 let mut messages = Vec::new();
 
                 for receiver in &mut self.receivers {

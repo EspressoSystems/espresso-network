@@ -1061,7 +1061,7 @@ impl<
                 Some((sender, message, TransmitType::Broadcast))
             },
             HotShotEvent::TimeoutVoteSend(vote) => {
-                *maybe_action = Some(HotShotAction::Vote);
+                *maybe_action = Some(HotShotAction::TimeoutVote);
                 let view_number = vote.view_number() + 1;
                 let leader = match self
                     .membership_coordinator

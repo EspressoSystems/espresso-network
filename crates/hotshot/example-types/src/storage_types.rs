@@ -64,6 +64,7 @@ pub struct TestStorageState<TYPES: NodeType> {
     state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
     drb_results: BTreeMap<TYPES::Epoch, DrbResult>,
     epoch_roots: BTreeMap<TYPES::Epoch, TYPES::BlockHeader>,
+    restart_view: TYPES::View,
 }
 
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
@@ -84,6 +85,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             epoch_roots: BTreeMap::new(),
+            restart_view: TYPES::View::genesis(),
         }
     }
 }
@@ -139,6 +141,10 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
 
     pub async fn last_actioned_view(&self) -> TYPES::View {
         self.inner.read().await.action
+    }
+
+    pub async fn restart_view(&self) -> TYPES::View {
+        self.inner.read().await.restart_view
     }
 
     pub async fn last_actioned_epoch(&self) -> Option<TYPES::Epoch> {
@@ -279,13 +285,19 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             bail!("Failed to append Action to storage");
         }
         let mut inner = self.inner.write().await;
-        if matches!(action, HotShotAction::Vote | HotShotAction::Propose) {
+        if matches!(
+            action,
+            HotShotAction::Vote | HotShotAction::Propose | HotShotAction::TimeoutVote
+        ) {
             if view > inner.action {
                 inner.action = view;
             }
             if epoch > inner.epoch {
                 inner.epoch = epoch;
             }
+        }
+        if matches!(action, HotShotAction::Vote) {
+            inner.restart_view = view + 1;
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
         Ok(())
