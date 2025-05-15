@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     fmt::{Debug, Display},
     marker::PhantomData,
     sync::Arc,
@@ -11,8 +10,7 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
-    MockSequencerVersions, NodeState, PubKey, SolverAuctionResultsProvider, Transaction,
-    ValidatedState,
+    NodeState, PubKey, SolverAuctionResultsProvider, Transaction, ValidatedState,
 };
 use futures::{
     future::{join_all, Future},
@@ -20,22 +18,17 @@ use futures::{
 };
 use hotshot::{
     types::{Event, EventType, SystemContextHandle},
-    HotShotInitializer, InitializerEpochInfo, MarketplaceConfig, SystemContext,
+    MarketplaceConfig, SystemContext,
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_query_service::data_source::storage::SqlStorage;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     network::NetworkConfig,
-    simple_certificate::QuorumCertificate2,
-    traits::{
-        metrics::Metrics,
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, Versions},
-    },
+    traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
     PeerConfig, ValidatorConfig,
 };
 use parking_lot::Mutex;
