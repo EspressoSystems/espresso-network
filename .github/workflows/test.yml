@@ -21,7 +21,8 @@ env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
   # Save the process compose logs
-  PC_LOGS: /tmp/pc.log
+  NATIVE_DEMO_LOGS: /tmp/native-demo.log
+  PC_LOG_FILE: /tmp/pc-logs.log
 
 jobs:
   build-test-artifacts-postgres:
@@ -281,14 +282,14 @@ jobs:
       - name: Show end of logs
         if: always()
         run: |
-          tail -n 1000 ${{ env.PC_LOGS }}
+          tail -n 1000 ${{ env.NATIVE_DEMO_LOGS }}
 
       - name: Upload process compose logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: process-compose-logs-integration-v${{ matrix.version  }}
-          path: ${{ env.PC_LOGS }}
+          path: ${{ env.NATIVE_DEMO_LOGS }}
 
 
   demo-native:
@@ -319,6 +320,13 @@ jobs:
           set -o pipefail
           scripts/demo-native --tui=false &
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+      - name: Upload process compose logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-compose-logs-test-demo-native
+          path: ${{ env.PC_LOG_FILE }}
 
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:

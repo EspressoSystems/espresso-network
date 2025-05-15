@@ -17,7 +17,10 @@ processes:
     command: docker compose up demo-l1-network --force-recreate --renew-anon-volumes
     readiness_probe:
       exec:
-        command: nc -zv localhost $ESPRESSO_SEQUENCER_L1_PORT
+        command: >-
+          curl -H "Content-Type: application/json"
+          --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+          http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
       failure_threshold: 6
       initial_delay_seconds: 5
 

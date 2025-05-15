@@ -535,6 +535,7 @@ async fn main() -> anyhow::Result<()> {
             blocks_per_epoch,
             epoch_start_block,
             max_retries: 0,
+            max_gas_price: None,
         };
 
         // spawn off prover service for this chain
