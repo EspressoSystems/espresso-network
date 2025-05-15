@@ -9,7 +9,7 @@ doc *args:
 demo *args:
     docker compose up {{args}}
 
-demo-native *args: build
+demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
 fmt:
