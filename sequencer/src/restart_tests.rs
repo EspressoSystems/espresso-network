@@ -352,7 +352,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     {
         async {
             if let Some(mut context) = self.context.take() {
-                self.store().await;
+                // Store state for recovering channels on restart.
+                self.initializer
+                    .replace(self.get_initializer(&context).await);
+
                 tracing::info!(node_id = context.node_id(), "stopping node");
                 context.shut_down().await;
             }
@@ -361,9 +364,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     }
 
     /// Store state of node, useful to restore node later.
-    async fn store(&mut self) {
-        let context = self.context.clone().unwrap();
-
+    async fn get_initializer(
+        &self,
+        context: &SequencerContext<
+            network::Production,
+            <S::Options as PersistenceOptions>::Persistence,
+            MockSequencerVersions,
+        >,
+    ) -> NodeInitializer<S> {
         let node_state = context.node_state();
         let hotshot = context.consensus().read().await.hotshot.clone();
 
@@ -375,13 +383,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             .await
             .unwrap();
 
-        let initializer = NodeInitializer {
+        NodeInitializer {
             hotshot_context: hotshot,
             hotshot_initializer: initializer,
             node_id: context.node_id(),
-        };
-
-        self.initializer.replace(initializer);
+        }
     }
 
     fn start(&mut self) -> BoxFuture<()>
