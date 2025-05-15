@@ -367,9 +367,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let node_state = context.node_state();
         let hotshot = context.consensus().read().await.hotshot.clone();
 
-        // Get stored consensus data.
-        // reference:
-        // https://github.com/EspressoSystems/espresso-network/blob/main/sequencer/src/context.rs#L130-L132
+        // Get stored consensus data. See `SequencerContext::init` for reference.
         let mut storage_opt = S::persistence_options(&self.storage);
         let persistence = storage_opt.create().await.unwrap();
         let (initializer, _anchor_view) = persistence
