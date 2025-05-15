@@ -41,10 +41,10 @@ use super::{QuorumProposalRecvTaskState, ValidationInfo};
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, check_qc_state_cert_correspondence, fetch_proposal, update_high_qc,
-        validate_epoch_transition_qc, validate_light_client_state_update_certificate,
-        validate_proposal_safety_and_liveness, validate_proposal_view_and_certs,
-        validate_qc_and_next_epoch_qc,
+        broadcast_event, broadcast_view_change, check_qc_state_cert_correspondence, fetch_proposal,
+        update_high_qc, validate_epoch_transition_qc,
+        validate_light_client_state_update_certificate, validate_proposal_safety_and_liveness,
+        validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc,
     },
     quorum_proposal_recv::{UpgradeLock, Versions},
 };
@@ -386,15 +386,16 @@ pub(crate) async fn handle_quorum_proposal_recv<
             justify_qc.data.leaf_commit
         );
         validate_proposal_liveness(proposal, &validation_info).await?;
-        tracing::trace!("Sending ViewChange for view {view_number} and epoch {proposal_epoch:?}");
         validation_info
             .consensus
             .write()
             .await
             .update_highest_block(proposal_block_number);
-        broadcast_event(
-            Arc::new(HotShotEvent::ViewChange(view_number, proposal_epoch)),
+        broadcast_view_change(
             event_sender,
+            view_number,
+            proposal_epoch,
+            validation_info.first_epoch,
         )
         .await;
         return Ok(());
@@ -410,7 +411,6 @@ pub(crate) async fn handle_quorum_proposal_recv<
     )
     .await?;
 
-    tracing::trace!("Sending ViewChange for view {view_number} and epoch {proposal_epoch:?}");
     validation_info
         .consensus
         .write()
@@ -419,9 +419,11 @@ pub(crate) async fn handle_quorum_proposal_recv<
     {
         validation_info.consensus.write().await.highest_block = proposal_block_number;
     }
-    broadcast_event(
-        Arc::new(HotShotEvent::ViewChange(view_number, proposal_epoch)),
+    broadcast_view_change(
         event_sender,
+        view_number,
+        proposal_epoch,
+        validation_info.first_epoch,
     )
     .await;
 

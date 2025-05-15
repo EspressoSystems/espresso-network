@@ -160,8 +160,8 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     let mut consensus_writer = consensus.write().await;
     consensus_writer.drb_results.store_result(epoch, drb_result);
     drop(consensus_writer);
-    tracing::debug!("Calling add_drb_result for epoch {epoch}");
-    if let Err(e) = storage.add_drb_result(epoch, drb_result).await {
+    tracing::debug!("Calling store_drb_result for epoch {epoch}");
+    if let Err(e) = storage.store_drb_result(epoch, drb_result).await {
         tracing::error!("Failed to store drb result for epoch {epoch}: {e}");
     }
 
@@ -1299,4 +1299,28 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         return Err(warn!("Received event is not VidShareValidated but we checked it earlier. Shouldn't be possible."));
     };
     Ok(second_vid_share.clone())
+}
+
+pub async fn broadcast_view_change<TYPES: NodeType>(
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    new_view_number: TYPES::View,
+    epoch: Option<TYPES::Epoch>,
+    first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+) {
+    let mut broadcast_epoch = epoch;
+    if let Some((first_epoch_view, first_epoch)) = first_epoch {
+        if new_view_number == first_epoch_view && broadcast_epoch != Some(first_epoch) {
+            broadcast_epoch = Some(first_epoch);
+        }
+    }
+    tracing::trace!(
+        "Sending ViewChange for view {} and epoch {:?}",
+        new_view_number,
+        broadcast_epoch
+    );
+    broadcast_event(
+        Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
+        sender,
+    )
+    .await
 }

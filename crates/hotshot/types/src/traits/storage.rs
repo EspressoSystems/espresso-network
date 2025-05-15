@@ -143,7 +143,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         Ok(())
     }
     /// Add a drb result
-    async fn add_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
+    async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
     /// Add an epoch block header
     async fn add_epoch_root(
         &self,
@@ -156,7 +156,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     }
 }
 
-pub async fn store_drb_input_impl<TYPES: NodeType>(
+async fn store_drb_input_impl<TYPES: NodeType>(
     storage: impl Storage<TYPES>,
     epoch: u64,
     iteration: u64,
@@ -181,7 +181,7 @@ pub fn null_store_drb_progress_fn() -> StoreDrbProgressFn {
     Arc::new(move |_epoch, _iteration, _value| Box::pin(async {}))
 }
 
-pub type StorageAddDrbResultFn<TYPES> = Arc<
+pub type StoreDrbResultFn<TYPES> = Arc<
     Box<
         dyn Fn(<TYPES as NodeType>::Epoch, DrbResult) -> BoxFuture<'static, Result<()>>
             + Send
@@ -190,20 +190,20 @@ pub type StorageAddDrbResultFn<TYPES> = Arc<
     >,
 >;
 
-async fn storage_add_drb_result_impl<TYPES: NodeType>(
+async fn store_drb_result_impl<TYPES: NodeType>(
     storage: impl Storage<TYPES>,
     epoch: TYPES::Epoch,
     drb_result: DrbResult,
 ) -> Result<()> {
-    storage.add_drb_result(epoch, drb_result).await
+    storage.store_drb_result(epoch, drb_result).await
 }
 
 /// Helper function to create a callback to add a drb result to storage
-pub fn storage_add_drb_result<TYPES: NodeType>(
+pub fn store_drb_result_fn<TYPES: NodeType>(
     storage: impl Storage<TYPES> + 'static,
-) -> StorageAddDrbResultFn<TYPES> {
+) -> StoreDrbResultFn<TYPES> {
     Arc::new(Box::new(move |epoch, drb_result| {
         let st = storage.clone();
-        Box::pin(storage_add_drb_result_impl(st, epoch, drb_result))
+        Box::pin(store_drb_result_impl(st, epoch, drb_result))
     }))
 }
