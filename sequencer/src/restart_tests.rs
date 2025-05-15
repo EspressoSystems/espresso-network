@@ -244,11 +244,7 @@ struct NodeInitializer<S: TestableSequencerDataSource> {
             MockSequencerVersions,
         >,
     >,
-    sequencer_context: SequencerContext<
-        network::Production,
-        <S::Options as PersistenceOptions>::Persistence,
-        MockSequencerVersions,
-    >,
+    node_id: u64,
 }
 
 #[derive(Debug)]
@@ -350,9 +346,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     //     .boxed()
     // }
 
-    fn stop(&mut self) -> BoxFuture<()> {
+    fn stop(&mut self) -> BoxFuture<()>
+    where
+        S::Storage: Send,
+    {
         async {
             if let Some(mut context) = self.context.take() {
+                self.store().await;
                 tracing::info!(node_id = context.node_id(), "stopping node");
                 context.shut_down().await;
             }
@@ -362,14 +362,25 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
     /// Store state of node, useful to restore node later.
     async fn store(&mut self) {
-        let (hotshot_context, hotshot_initializer) =
-            self.context.clone().unwrap().into_initializer().await;
+        let context = self.context.clone().unwrap();
 
-        // TODO we may need more info than this.
+        let node_state = context.node_state();
+        let hotshot = context.consensus().read().await.hotshot.clone();
+
+        // Get stored consensus data.
+        // reference:
+        // https://github.com/EspressoSystems/espresso-network/blob/main/sequencer/src/context.rs#L130-L132
+        let mut storage_opt = S::persistence_options(&self.storage);
+        let persistence = storage_opt.create().await.unwrap();
+        let (initializer, _anchor_view) = persistence
+            .load_consensus_state::<MockSequencerVersions>(node_state.clone())
+            .await
+            .unwrap();
+
         let initializer = NodeInitializer {
-            hotshot_context,
-            hotshot_initializer,
-            sequencer_context: self.context.clone().unwrap(),
+            hotshot_context: hotshot,
+            hotshot_initializer: initializer,
+            node_id: context.node_id(),
         };
 
         self.initializer.replace(initializer);
@@ -384,9 +395,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             // Check if we have a stored config for soft-restart.
             let hotshot = if let Some(initializer) = self.initializer.take() {
-                let node_id = initializer.sequencer_context.node_id();
+                let node_id = initializer.node_id;
                 let hotshot = initializer
                     .hotshot_context
+                    // TODO I think all the copied values are static, so should
+                    // be safe, but double check.
                     .into_self_cloned(initializer.hotshot_initializer, node_id)
                     .await;
                 Some(hotshot)
