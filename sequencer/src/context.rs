@@ -433,47 +433,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         self.network_config.clone()
     }
 
-    /// Get a `HotshotInitialized` to restore from later.
-    // TODO most the values are fudged for now
-    pub async fn into_initializer(
-        &self,
-    ) -> (
-        Arc<SystemContext<SeqTypes, Node<N, P>, V>>,
-        HotShotInitializer<SeqTypes>,
-    ) {
-        let node_state = self.node_state();
-        let validated_state = self.decided_state().await;
-        let hotshot = self.consensus().read().await.hotshot.clone();
-
-        // TODO these are fudge values.
-        let iei = InitializerEpochInfo {
-            epoch: EpochNumber::new(0),
-            drb_result: Default::default(),
-            block_header: None,
-        };
-
-        // TODO real high_qc
-        let high_qc =
-            QuorumCertificate2::genesis::<MockSequencerVersions>(&*validated_state, &node_state)
-                .await;
-        // TODO fudge
-        let hs_initializer = HotShotInitializer::<SeqTypes>::load(
-            node_state,
-            hotshot.config.epoch_height,
-            hotshot.config.epoch_start_block,
-            vec![iei],
-            hotshot.anchored_leaf.clone(),
-            (ViewNumber::new(0), None), // TODO
-            (high_qc, None),            // TODO
-            BTreeMap::new(),
-            BTreeMap::new(),
-            None,
-            None,
-        );
-
-        (hotshot, hs_initializer)
-    }
-
     #[cfg(any(test, feature = "testing"))]
     /// Replace Consensus Handle
     pub async fn replace_handle(&mut self, consensus: Arc<SystemContext<SeqTypes, Node<N, P>, V>>) {
