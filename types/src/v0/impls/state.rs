@@ -1069,7 +1069,6 @@ impl HotShotState<SeqTypes> for ValidatedState {
         }
     }
     /// Construct a genesis validated state.
-    #[must_use]
     fn genesis(instance: &Self::Instance) -> (Self, Self::Delta) {
         (instance.genesis_state.clone(), Delta::default())
     }

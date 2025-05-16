@@ -13,7 +13,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     fs::OpenOptions,
-    io::{self, ErrorKind},
+    io,
     time::Duration,
 };
 
@@ -877,8 +877,7 @@ where
         })
         .collect();
 
-    let web_api =
-        define_api().map_err(|_e| io::Error::new(ErrorKind::Other, "Failed to define api"));
+    let web_api = define_api().map_err(|_e| io::Error::other("Failed to define api"));
 
     let state: RwLock<OrchestratorState<TYPES>> =
         RwLock::new(OrchestratorState::new(network_config));
