@@ -583,15 +583,13 @@ fn start_http_server<ApiVer: StaticVersionType + 'static>(
     let toml = toml::from_str::<toml::value::Value>(include_str!("../api/prover-service.toml"))
         .map_err(io::Error::other)?;
 
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml)
-        .map_err(io::Error::other)?;
+    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
 
     api.get("getlightclientcontract", move |_, _| {
         async move { Ok(light_client_address) }.boxed()
     })
     .map_err(io::Error::other)?;
-    app.register_module("api", api)
-        .map_err(io::Error::other)?;
+    app.register_module("api", api).map_err(io::Error::other)?;
 
     spawn(app.serve(format!("0.0.0.0:{port}"), bind_version));
     Ok(())
