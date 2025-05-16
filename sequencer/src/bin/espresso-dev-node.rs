@@ -207,6 +207,18 @@ struct Args {
     #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 300)]
     epoch_height: u64,
 
+    /// The initial supply of the tokens.
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = 3590000000)]
+    initial_token_supply: U256,
+
+    /// The name of the tokens.
+    #[clap(long, env = "ESP_TOKEN_NAME", default_value_t = "Espresso".to_string())]
+    token_name: String,
+
+    /// The symbol of the tokens.
+    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value_t = "ESP".to_string())]
+    token_symbol: String,
+
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
@@ -457,8 +469,16 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // deploy EspToken, proxy
-            let token_proxy_addr =
-                deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+            let token_proxy_addr = deployer::deploy_token_proxy(
+                &provider,
+                contracts,
+                admin,
+                admin,
+                initial_token_supply,
+                token_name,
+                token_symbol,
+            )
+            .await?;
             if let Some(multisig) = multisig_address {
                 deployer::transfer_ownership(
                     &provider,

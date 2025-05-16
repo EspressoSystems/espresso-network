@@ -125,14 +125,29 @@
     "name": "initialize",
     "inputs": [
       {
-        "name": "_owner",
+        "name": "owner",
         "type": "address",
         "internalType": "address"
       },
       {
-        "name": "_initialGrantRecipient",
+        "name": "initialRecipient",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "initialSupply",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "symbol",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "outputs": [],

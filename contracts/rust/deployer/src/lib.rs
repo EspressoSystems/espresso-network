@@ -539,6 +539,9 @@ pub async fn deploy_token_proxy(
     contracts: &mut Contracts,
     owner: Address,
     init_grant_recipient: Address,
+    initial_supply: U256,
+    name: String,
+    symbol: String,
 ) -> Result<Address> {
     let token_addr = contracts
         .deploy(Contract::EspToken, EspToken::deploy_builder(&provider))
@@ -546,7 +549,7 @@ pub async fn deploy_token_proxy(
     let token = EspToken::new(token_addr, &provider);
 
     let init_data = token
-        .initialize(owner, init_grant_recipient)
+        .initialize(owner, init_grant_recipient, initial_supply, name, symbol)
         .calldata()
         .to_owned();
     let token_proxy_addr = contracts
@@ -1053,16 +1056,29 @@ mod tests {
 
         let init_recipient = provider.get_accounts().await?[0];
         let rand_owner = Address::random();
+        let initial_supply = parse_units("10000000000", "ether").unwrap();
+        let name = "Espresso".to_string();
+        let symbol = "ESP".to_string();
 
-        let addr =
-            deploy_token_proxy(&provider, &mut contracts, rand_owner, init_recipient).await?;
+        let addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            rand_owner,
+            init_recipient,
+            initial_supply,
+            name,
+            symbol,
+        )
+        .await?;
         let token = EspToken::new(addr, &provider);
 
         assert_eq!(token.owner().call().await?._0, rand_owner);
         assert_eq!(
             token.balanceOf(init_recipient).call().await?._0,
-            parse_units("10000000000", "ether").unwrap().into(),
+            initial_supply.into(),
         );
+        assert_eq!(token.name().call().await?._0, name);
+        assert_eq!(token.symbol().call().await?._0, symbol);
 
         Ok(())
     }

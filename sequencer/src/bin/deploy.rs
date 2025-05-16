@@ -147,6 +147,18 @@ struct Options {
     #[clap(long, env = "ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
     initial_token_grant_recipient: Option<Address>,
 
+    /// The initial supply of the tokens.
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = 3590000000)]
+    initial_token_supply: U256,
+
+    /// The name of the tokens.
+    #[clap(long, env = "ESP_TOKEN_NAME", default_value_t = "Espresso".to_string())]
+    token_name: String,
+
+    /// The symbol of the tokens.
+    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value_t = "ESP".to_string())]
+    token_symbol: String,
+
     #[clap(flatten)]
     logging: logging::Config,
 }
@@ -212,6 +224,9 @@ async fn main() -> anyhow::Result<()> {
             args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
         }
     }
+    args_builder.token_name(opt.token_name);
+    args_builder.token_symbol(opt.token_symbol);
+    args_builder.initial_token_supply(opt.initial_token_supply);
 
     // then deploy specified contracts
     let args = args_builder.build()?;
