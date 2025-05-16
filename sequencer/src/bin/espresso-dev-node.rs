@@ -784,8 +784,7 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
         toml::from_str::<toml::value::Value>(include_str!("../../api/espresso_dev_node.toml"))
             .map_err(io::Error::other)?;
 
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml)
-        .map_err(io::Error::other)?;
+    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
     api.get("devinfo", move |_, _| {
         let info = dev_info.clone();
         async move { Ok(info.clone()) }.boxed()
@@ -841,8 +840,7 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     })
     .map_err(io::Error::other)?;
 
-    app.register_module("api", api)
-        .map_err(io::Error::other)?;
+    app.register_module("api", api).map_err(io::Error::other)?;
 
     tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
 
