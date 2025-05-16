@@ -125,7 +125,7 @@ where
 fn decode_into_io_error(err: cbor4ii::serde::DecodeError<Infallible>) -> io::Error {
     match err {
         cbor4ii::serde::DecodeError::Core(DecodeError::Read(e)) => {
-            io::Error::new(io::ErrorKind::Other, e.to_string())
+            io::Error::other(e.to_string())
         },
         cbor4ii::serde::DecodeError::Core(e @ DecodeError::Unsupported { .. }) => {
             io::Error::new(io::ErrorKind::Unsupported, e.to_string())
@@ -137,12 +137,12 @@ fn decode_into_io_error(err: cbor4ii::serde::DecodeError<Infallible>) -> io::Err
             io::Error::new(io::ErrorKind::InvalidData, e.to_string())
         },
         cbor4ii::serde::DecodeError::Custom(e) => {
-            io::Error::new(io::ErrorKind::Other, e.to_string())
+            io::Error::other(e.to_string())
         },
     }
 }
 
 /// Convert a `cbor4ii::serde::EncodeError` into an `io::Error`
 fn encode_into_io_error(err: cbor4ii::serde::EncodeError<TryReserveError>) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, err)
+    io::Error::other(err)
 }
