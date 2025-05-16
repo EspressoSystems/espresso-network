@@ -242,7 +242,7 @@ impl AvidMScheme {
                 "Weight distribution is inconsistent with the given param".to_string(),
             ));
         }
-        if distribution.iter().any(|&w| w == 0) {
+        if distribution.contains(&0) {
             return Err(VidError::Argument("Weight cannot be zero".to_string()));
         }
 
