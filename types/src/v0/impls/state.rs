@@ -26,7 +26,6 @@ use time::OffsetDateTime;
 use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    auction::ExecutionError,
     fee_info::FeeError,
     instance_state::NodeState,
     reward::{find_validator_info, first_two_epochs},
@@ -36,7 +35,6 @@ use super::{
     },
     v0_3::Validator,
     BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
-    MarketplaceVersion,
 };
 use crate::{
     traits::StateCatchup,
@@ -741,22 +739,7 @@ fn validate_builder_fee(
             .ok_or(BuilderValidationError::FeeAmountOutOfRange(fee_info.amount))?;
 
         // Verify signatures.
-
-        // TODO Marketplace signatures are placeholders for now. In
-        // finished Marketplace signatures will cover the full
-        // transaction.
-        if version >= MarketplaceVersion::VERSION {
-            tracing::debug!("Validating (Marketplace) sequencing fee signature.");
-            fee_info
-                .account()
-                .validate_sequencing_fee_signature_marketplace(
-                    &signature,
-                    fee_info.amount().as_u64().unwrap(),
-                    view_number,
-                )
-                .then_some(())
-                .ok_or(BuilderValidationError::InvalidBuilderSignature)?;
-        } else if !fee_info.account().validate_fee_signature(
+        if !fee_info.account().validate_fee_signature(
             &signature,
             fee_info.amount().as_u64().unwrap(),
             proposed_header.metadata(),
@@ -943,15 +926,6 @@ impl ValidatedState {
 
         Ok(cf)
     }
-}
-
-fn _apply_full_transactions(
-    validated_state: &mut ValidatedState,
-    full_network_txs: Vec<FullNetworkTx>,
-) -> Result<(), ExecutionError> {
-    full_network_txs
-        .iter()
-        .try_for_each(|tx| tx.execute(validated_state))
 }
 
 pub async fn get_l1_deposits(
@@ -1933,76 +1907,6 @@ mod test {
                 ..header
             }),
         };
-
-        validate_builder_fee(&header, *parent.view_number() + 1).unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_validate_builder_fee_marketplace() {
-        initialize_logging();
-        let max_block_size = 10;
-
-        let validated_state = ValidatedState::default();
-        let instance_state = NodeState::mock_v99().with_chain_config(ChainConfig {
-            base_fee: 1000.into(), // High base fee
-            max_block_size: max_block_size.into(),
-            ..validated_state.chain_config.resolve().unwrap()
-        });
-
-        let parent: Leaf2 =
-            Leaf::genesis::<MockVersions>(&instance_state.genesis_state, &instance_state)
-                .await
-                .into();
-        let header = parent.block_header().clone();
-
-        debug!("{:?}", header.version());
-
-        let key_pair = EthKeyPair::random();
-        let account = key_pair.fee_account();
-
-        let data = header.fee_info()[0].amount().as_u64().unwrap();
-
-        // test v3 sig
-        let sig =
-            FeeAccount::sign_sequencing_fee_marketplace(&key_pair, data, *parent.view_number() + 1)
-                .unwrap();
-        // test dedicated marketplace validation function
-        account
-            .validate_sequencing_fee_signature_marketplace(&sig, data, *parent.view_number() + 1)
-            .then_some(())
-            .unwrap();
-
-        let header = match header {
-            Header::V1(header) => Header::V1(v0_1::Header {
-                builder_signature: Some(sig),
-                fee_info: FeeInfo::new(account, data),
-                ..header
-            }),
-            Header::V2(header) => Header::V2(v0_2::Header {
-                builder_signature: Some(sig),
-                fee_info: FeeInfo::new(account, data),
-                ..header
-            }),
-            Header::V3(header) => Header::V3(v0_3::Header {
-                builder_signature: Some(sig),
-                fee_info: FeeInfo::new(account, data),
-                ..header
-            }),
-            Header::V99(header) => Header::V99(v0_99::Header {
-                builder_signature: vec![sig],
-                fee_info: vec![FeeInfo::new(account, data)],
-                ..header
-            }),
-        };
-
-        let sig: Vec<BuilderSignature> = header.builder_signature();
-        let fee = header.fee_info()[0].amount().as_u64().unwrap();
-
-        // assert expectations
-        account
-            .validate_sequencing_fee_signature_marketplace(&sig[0], fee, *parent.view_number() + 1)
-            .then_some(())
-            .unwrap();
 
         validate_builder_fee(&header, *parent.view_number() + 1).unwrap();
     }

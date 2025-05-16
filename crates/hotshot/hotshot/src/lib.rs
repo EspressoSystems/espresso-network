@@ -92,15 +92,6 @@ pub const H_512: usize = 64;
 /// Length, in bytes, of a 256 bit hash
 pub const H_256: usize = 32;
 
-#[derive(Clone)]
-/// Wrapper for all marketplace config that needs to be passed when creating a new instance of HotShot
-pub struct MarketplaceConfig<TYPES: NodeType, I: NodeImplementation<TYPES>> {
-    /// auction results provider
-    pub auction_results_provider: Arc<I::AuctionResultsProvider>,
-    /// fallback builder
-    pub fallback_builder_url: Url,
-}
-
 /// Holds the state needed to participate in `HotShot` consensus
 pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
     /// The public key of this node
@@ -160,9 +151,6 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
 
     /// shared lock for upgrade information
     pub upgrade_lock: UpgradeLock<TYPES, V>,
-
-    /// Marketplace config for this instance of HotShot
-    pub marketplace_config: MarketplaceConfig<TYPES, I>,
 }
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
     for SystemContext<TYPES, I, V>
@@ -188,7 +176,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
             id: self.id,
             storage: self.storage.clone(),
             upgrade_lock: self.upgrade_lock.clone(),
-            marketplace_config: self.marketplace_config.clone(),
         }
     }
 }
@@ -217,7 +204,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
         storage: I::Storage,
-        marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> Arc<Self> {
         let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
         let external_chan = broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
@@ -233,7 +219,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             initializer,
             metrics,
             storage,
-            marketplace_config,
             internal_chan,
             external_chan,
         )
@@ -259,7 +244,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
         storage: I::Storage,
-        marketplace_config: MarketplaceConfig<TYPES, I>,
         internal_channel: (
             Sender<Arc<HotShotEvent<TYPES>>>,
             Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -392,7 +376,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             anchored_leaf: anchored_leaf.clone(),
             storage,
             upgrade_lock,
-            marketplace_config,
         });
 
         inner
@@ -649,7 +632,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
         storage: I::Storage,
-        marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> Result<
         (
             SystemContextHandle<TYPES, I, V>,
@@ -669,7 +651,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             initializer,
             metrics,
             storage,
-            marketplace_config,
         )
         .await;
         let handle = Arc::clone(&hotshot).run_tasks().await;
@@ -814,7 +795,6 @@ where
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
         storage: I::Storage,
-        marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> (
         SystemContextHandle<TYPES, I, V>,
         SystemContextHandle<TYPES, I, V>,
@@ -831,7 +811,6 @@ where
             initializer.clone(),
             metrics.clone(),
             storage.clone(),
-            marketplace_config.clone(),
         )
         .await;
         let right_system_context = SystemContext::new(
@@ -845,7 +824,6 @@ where
             initializer,
             metrics,
             storage,
-            marketplace_config,
         )
         .await;
 
@@ -880,7 +858,7 @@ where
         );
 
         // create each handle
-        let mut left_handle = SystemContextHandle {
+        let mut left_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: left_consensus_registry,
             network_registry: left_network_registry,
             output_event_stream: left_external_event_stream.clone(),
@@ -892,7 +870,7 @@ where
             epoch_height,
         };
 
-        let mut right_handle = SystemContextHandle {
+        let mut right_handle = SystemContextHandle::<_, I, _> {
             consensus_registry: right_consensus_registry,
             network_registry: right_network_registry,
             output_event_stream: right_external_event_stream.clone(),
