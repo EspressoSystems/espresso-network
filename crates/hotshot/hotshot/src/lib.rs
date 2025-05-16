@@ -473,10 +473,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 self.start_epoch,
             )))
             .await
-            .unwrap_or_else(|_| {
+            .unwrap_or_else(|e| {
                 panic!(
-                    "Genesis Broadcast failed; event = ViewChange({:?})",
-                    self.start_view
+                    "Startup Initial Broadcast failed; event = ViewChange({:?}), error = {}",
+                    self.start_view, e
                 )
             });
 
