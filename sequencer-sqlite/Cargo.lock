@@ -8488,6 +8488,7 @@ dependencies = [
  "bincode",
  "blake3",
  "byteorder",
+ "dashmap",
  "derive_more 1.0.0",
  "hotshot-types",
  "parking_lot",
