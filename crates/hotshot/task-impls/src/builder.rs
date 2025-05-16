@@ -129,7 +129,8 @@ impl<TYPES: NodeType, Ver: StaticVersionType> BuilderClient<TYPES, Ver> {
 /// Version 0.1
 pub mod v0_1 {
     use hotshot_builder_api::v0_1::block_info::{
-        AvailableBlockData, AvailableBlockHeaderInputV2, AvailableBlockHeaderInputV2Legacy,
+        AvailableBlockData, AvailableBlockHeaderInputV2, AvailableBlockHeaderInputV2Either,
+        AvailableBlockHeaderInputV2Legacy,
     };
     pub use hotshot_builder_api::v0_1::Version;
     use hotshot_types::{
@@ -138,6 +139,7 @@ pub mod v0_1 {
         utils::BuilderCommitment,
     };
     use tagged_base64::TaggedBase64;
+    use vbs::BinarySerializer;
 
     use super::BuilderClientError;
 
@@ -187,6 +189,47 @@ pub mod v0_1 {
                 .send()
                 .await
                 .map_err(Into::into)
+        }
+
+        /// Claim block header input, preferring the current `AvailableBlockHeaderInputV2` type but falling back to
+        /// the `AvailableBlockHeaderInputV2Legacy` type
+        ///
+        /// # Errors
+        /// - [`BuilderClientError::BlockNotFound`] if block isn't available
+        /// - [`BuilderClientError::Api`] if API isn't responding or responds incorrectly
+        pub async fn claim_either_block_header_input(
+            &self,
+            block_hash: BuilderCommitment,
+            view_number: u64,
+            sender: TYPES::SignatureKey,
+            signature: &<<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+        ) -> Result<AvailableBlockHeaderInputV2Either<TYPES>, BuilderClientError> {
+            let encoded_signature: TaggedBase64 = signature.clone().into();
+            let result = self.client
+                .get::<Vec<u8>>(&format!(
+                    "{LEGACY_BUILDER_MODULE}/claimheaderinput/v2/{block_hash}/{view_number}/{sender}/{encoded_signature}"
+                ))
+                .bytes()
+                .await
+                .map_err(Into::<BuilderClientError>::into)?;
+
+            // Manually deserialize the result as one of the enum types. Bincode doesn't support deserialize_any,
+            // so we can't go directly into our target type.
+
+            if let Ok(available_block_header_input_v2) = vbs::Serializer::<Version>::deserialize::<
+                AvailableBlockHeaderInputV2<TYPES>,
+            >(&result)
+            {
+                Ok(AvailableBlockHeaderInputV2Either::Current(
+                    available_block_header_input_v2,
+                ))
+            } else {
+                vbs::Serializer::<Version>::deserialize::<AvailableBlockHeaderInputV2Legacy<TYPES>>(
+                    &result,
+                )
+                .map_err(|e| BuilderClientError::Api(format!("Failed to deserialize: {e:?}")))
+                .map(AvailableBlockHeaderInputV2Either::Legacy)
+            }
         }
 
         /// Claim block
