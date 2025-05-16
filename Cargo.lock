@@ -9737,6 +9737,7 @@ dependencies = [
  "vbs",
  "vec1",
  "vergen",
+ "vid",
 ]
 
 [[package]]

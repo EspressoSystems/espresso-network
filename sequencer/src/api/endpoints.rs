@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     env,
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -29,23 +30,26 @@ use hotshot_query_service::{
     ApiState, Error, VidCommon,
 };
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidShare, ViewNumber},
     traits::{
         network::ConnectedNetwork,
         node_implementation::{ConsensusTime, Versions},
     },
+    vid::avidm::{init_avidm_param, AvidMShare},
 };
 use jf_merkle_tree::MerkleTreeScheme;
 use serde::de::Error as _;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
 use tide_disco::{method::ReadState, Api, Error as _, StatusCode};
+use tracing::warn;
 use vbs::version::{StaticVersion, StaticVersionType};
+use vid::avid_m::AvidMScheme;
 
 use super::{
     data_source::{
-        CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, SequencerDataSource,
-        StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
+        CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, RequestResponseDataSource,
+        SequencerDataSource, StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
     },
     StorageState,
 };
@@ -304,8 +308,12 @@ where
 pub(super) fn node<S>(api_ver: semver::Version) -> Result<Api<S, node::Error, StaticVersion<0, 1>>>
 where
     S: 'static + Send + Sync + ReadState,
-    <S as ReadState>::State:
-        Send + Sync + StakeTableDataSource<SeqTypes> + NodeDataSource<SeqTypes>,
+    <S as ReadState>::State: Send
+        + Sync
+        + StakeTableDataSource<SeqTypes>
+        + NodeDataSource<SeqTypes>
+        + AvailabilityDataSource<SeqTypes>
+        + RequestResponseDataSource<SeqTypes>,
 {
     // Extend the base API
     let mut options = node::Options::default();
@@ -367,6 +375,101 @@ where
                     message: format!("failed to get validators mapping: err: {err}"),
                     status: StatusCode::NOT_FOUND,
                 })
+        }
+        .boxed()
+    })?
+    .at("incorrect_encoding_proof", |req, state| {
+        async move {
+            // Get the block number from the request
+            let block_number = req.integer_param::<_, u64>("block_number").map_err(|_| {
+                hotshot_query_service::node::Error::Custom {
+                    message: "Block number is required".to_string(),
+                    status: StatusCode::BAD_REQUEST,
+                }
+            })?;
+
+            // Get or fetch the VID common data for the given block number
+            // TODO: Time this out
+            let vid_common = state
+                .read(|state| state.get_vid_common(block_number as usize).boxed())
+                .await
+                .await;
+
+            // Get or fetch the VID common metadata for the given block number
+            let vid_common_metadata = state
+                .read(|state| state.get_vid_common_metadata(block_number as usize).boxed())
+                .await
+                .await;
+
+            // Request the VID shares from other nodes. Use the VID common and common metadata to
+            // verify that they are correct
+            let vid_common_clone = vid_common.clone();
+            let mut vid_shares = state
+                .read(|state| {
+                    state.request_vid_shares(
+                        block_number,
+                        vid_common_clone,
+                        Duration::from_secs(40),
+                    )
+                })
+                .await
+                .map_err(|err| {
+                    warn!("Failed to request VID shares from network: {err:#}");
+                    hotshot_query_service::node::Error::Custom {
+                        message: format!("Failed to request VID shares from network"),
+                        status: StatusCode::NOT_FOUND,
+                    }
+                })?;
+
+            // Get our own share and add it. We don't need to verify here
+            let vid_share = state
+                .read(|state| state.vid_share(block_number as usize).boxed())
+                .await;
+            if let Ok(vid_share) = vid_share {
+                vid_shares.push(vid_share);
+            };
+
+            // Get the total VID weight based on the VID common data
+            let total_weight = match vid_common.common() {
+                VidCommon::V0(_) => {
+                    // TODO: This needs to be done via the stake table
+                    return Err(hotshot_query_service::node::Error::Custom {
+                        message: "V0 shares not supported yet".to_string(),
+                        status: StatusCode::NOT_FOUND,
+                    });
+                },
+                VidCommon::V1(v1) => v1.total_weights,
+            };
+
+            // Calculate the AvidM parameter from the total weight
+            let avidm_param = init_avidm_param(total_weight).map_err(|err| {
+                hotshot_query_service::node::Error::Custom {
+                    message: format!("Failed to initialize AvidM parameters: {err}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                }
+            })?;
+
+            // Get the payload hash
+            let VidCommitment::V1(local_payload_hash) = vid_common.payload_hash() else {
+                return Err(hotshot_query_service::node::Error::Custom {
+                    message: "V0 shares not supported yet".to_string(),
+                    status: StatusCode::NOT_FOUND,
+                });
+            };
+
+            // Collect the shares as V1 shares
+            let avidm_shares: Vec<AvidMShare> = vid_shares
+                .into_iter()
+                .filter_map(|share| {
+                    if let VidShare::V1(share) = share {
+                        Some(share)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            Ok(avidm_shares)
         }
         .boxed()
     })?;
@@ -468,7 +571,7 @@ where
 
             state
                 .get_account(
-                    state.node_state().await,
+                    &state.node_state().await,
                     height,
                     ViewNumber::new(view),
                     account,
@@ -495,7 +598,7 @@ where
                     async move {
                         state
                             .get_accounts(
-                                state.node_state().await,
+                                &state.node_state().await,
                                 height,
                                 ViewNumber::new(view),
                                 &accounts,
@@ -531,7 +634,7 @@ where
 
             state
                 .get_reward_account(
-                    state.node_state().await,
+                    &state.node_state().await,
                     height,
                     ViewNumber::new(view),
                     account,
@@ -558,7 +661,7 @@ where
                     async move {
                         state
                             .get_reward_accounts(
-                                state.node_state().await,
+                                &state.node_state().await,
                                 height,
                                 ViewNumber::new(view),
                                 &accounts,
@@ -584,7 +687,7 @@ where
                 .map_err(Error::from_request_error)?;
 
             state
-                .get_frontier(state.node_state().await, height, ViewNumber::new(view))
+                .get_frontier(&state.node_state().await, height, ViewNumber::new(view))
                 .await
                 .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))
         }

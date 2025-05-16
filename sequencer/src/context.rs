@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::Context;
+use crate::request_response::data_source::Storage as RequestResponseStorage;
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
@@ -22,7 +23,6 @@ use hotshot::{
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
-use hotshot_query_service::data_source::storage::SqlStorage;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
@@ -63,7 +63,7 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
+    pub request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
 
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
@@ -96,7 +96,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         validator_config: ValidatorConfig<SeqTypes>,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
-        storage: Option<Arc<SqlStorage>>,
+        storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,

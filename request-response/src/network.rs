@@ -11,7 +11,10 @@ use std::{ops::Deref, sync::Arc};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use hotshot_types::traits::{network::ConnectedNetwork, signature_key::SignatureKey};
+use hotshot_types::traits::{
+    network::{BroadcastDelay, ConnectedNetwork, Topic},
+    signature_key::SignatureKey,
+};
 use tokio::sync::mpsc;
 
 /// A type alias for a shareable byte array
@@ -20,8 +23,11 @@ pub type Bytes = Arc<Vec<u8>>;
 /// The [`Sender`] trait is used to allow the [`RequestResponseProtocol`] to send messages to a specific recipient
 #[async_trait]
 pub trait Sender<K: SignatureKey + 'static>: Send + Sync + 'static + Clone {
-    /// Send a message to the specified recipient
-    async fn send_message(&self, message: &Bytes, recipient: K) -> Result<()>;
+    /// Send a message to a specific recipient
+    async fn send_direct_message(&self, message: &Bytes, recipient: K) -> Result<()>;
+
+    /// Send a message to all recipients
+    async fn send_broadcast_message(&self, message: &Bytes) -> Result<()>;
 }
 
 /// The [`Receiver`] trait is used to allow the [`RequestResponseProtocol`] to receive messages from a network
@@ -39,9 +45,16 @@ where
     T: Deref<Target: ConnectedNetwork<K>> + Send + Sync + 'static + Clone,
     K: SignatureKey + 'static,
 {
-    async fn send_message(&self, message: &Bytes, recipient: K) -> Result<()> {
-        // Just send the message to the recipient
+    async fn send_direct_message(&self, message: &Bytes, recipient: K) -> Result<()> {
+        // Send the message to the specified recipient
         self.direct_message(message.to_vec(), recipient)
+            .await
+            .with_context(|| "failed to send message")
+    }
+
+    async fn send_broadcast_message(&self, message: &Bytes) -> Result<()> {
+        // Send the message to all recipients
+        self.broadcast_message(message.to_vec(), Topic::Global, BroadcastDelay::None)
             .await
             .with_context(|| "failed to send message")
     }

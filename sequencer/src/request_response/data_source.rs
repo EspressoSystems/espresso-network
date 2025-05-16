@@ -13,7 +13,13 @@ use espresso_types::{
     NodeState, PubKey, SeqTypes,
 };
 use hotshot::{traits::NodeImplementation, SystemContext};
-use hotshot_query_service::data_source::storage::SqlStorage;
+use hotshot_query_service::{
+    data_source::{
+        storage::{FileSystemStorage, NodeStorage, SqlStorage},
+        VersionedDataSource,
+    },
+    node::BlockId,
+};
 use hotshot_types::{
     data::ViewNumber,
     traits::{
@@ -36,7 +42,11 @@ use crate::{
 };
 
 /// A type alias for SQL storage
-type Storage = Arc<SqlStorage>;
+#[derive(Clone)]
+pub enum Storage {
+    Sql(Arc<SqlStorage>),
+    Fs(Arc<FileSystemStorage<SeqTypes>>),
+}
 
 /// A type alias for the consensus handle
 type Consensus<I, V> = Arc<SystemContext<SeqTypes, I, V>>;
@@ -80,13 +90,14 @@ impl<
                 }
 
                 // Fall back to storage
-                let (merkle_tree, leaf) = self
-                    .storage
-                    .as_ref()
-                    .with_context(|| "storage was not initialized")?
-                    .get_accounts(&self.node_state, *height, ViewNumber::new(*view), accounts)
-                    .await
-                    .with_context(|| "failed to get accounts from sql storage")?;
+                let (merkle_tree, leaf) = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_accounts(&self.node_state, *height, ViewNumber::new(*view), accounts)
+                        .await
+                        .with_context(|| "failed to get accounts from sql storage")?,
+                    Some(Storage::Fs(_)) => bail!("fs storage not supported for accounts"),
+                    _ => bail!("storage was not initialized"),
+                };
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
@@ -141,13 +152,15 @@ impl<
                 }
 
                 // Fall back to storage
-                let leaf_chain = self
-                    .storage
-                    .as_ref()
-                    .with_context(|| "storage was not initialized")?
-                    .get_leaf_chain(*height)
-                    .await
-                    .with_context(|| "failed to get leaf from sql storage")?;
+                let leaf_chain = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_leaf_chain(*height)
+                        .await
+                        .with_context(|| "failed to get leaf from sql storage")?,
+                    // TODO: Actually implement FS storage for some of these
+                    Some(Storage::Fs(_)) => bail!("fs storage not supported for leaf"),
+                    _ => bail!("storage was not initialized"),
+                };
 
                 Ok(Response::Leaf(leaf_chain))
             },
@@ -161,14 +174,16 @@ impl<
                 }
 
                 // Fall back to storage
-                Ok(Response::ChainConfig(
-                    self.storage
-                        .as_ref()
-                        .with_context(|| "storage was not initialized")?
+                Ok(Response::ChainConfig(match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
                         .get_chain_config(*commitment)
                         .await
                         .with_context(|| "failed to get chain config from sql storage")?,
-                ))
+                    Some(Storage::Fs(_)) => {
+                        bail!("fs storage not supported for chain config")
+                    },
+                    _ => bail!("storage was not initialized"),
+                }))
             },
             Request::BlocksFrontier(height, view) => {
                 // First try to respond from memory
@@ -186,13 +201,16 @@ impl<
                     return Ok(Response::BlocksFrontier(blocks_frontier_from_memory));
                 } else {
                     // If we can't get the blocks frontier from memory, fall through to storage
-                    let blocks_frontier_from_storage = self
-                        .storage
-                        .as_ref()
-                        .with_context(|| "storage was not initialized")?
-                        .get_frontier(&self.node_state, *height, ViewNumber::new(*view))
-                        .await
-                        .with_context(|| "failed to get blocks frontier from sql storage")?;
+                    let blocks_frontier_from_storage = match &self.storage {
+                        Some(Storage::Sql(storage)) => storage
+                            .get_frontier(&self.node_state, *height, ViewNumber::new(*view))
+                            .await
+                            .with_context(|| "failed to get blocks frontier from sql storage")?,
+                        Some(Storage::Fs(_)) => {
+                            bail!("fs storage not supported for blocks frontier")
+                        },
+                        _ => bail!("storage was not initialized"),
+                    };
 
                     Ok(Response::BlocksFrontier(blocks_frontier_from_storage))
                 }
@@ -208,18 +226,21 @@ impl<
                 }
 
                 // Fall back to storage
-                let (merkle_tree, leaf) = self
-                    .storage
-                    .as_ref()
-                    .with_context(|| "storage was not initialized")?
-                    .get_reward_accounts(
-                        &self.node_state,
-                        *height,
-                        ViewNumber::new(*view),
-                        accounts,
-                    )
-                    .await
-                    .with_context(|| "failed to get accounts from sql storage")?;
+                let (merkle_tree, leaf) = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_reward_accounts(
+                            &self.node_state,
+                            *height,
+                            ViewNumber::new(*view),
+                            accounts,
+                        )
+                        .await
+                        .with_context(|| "failed to get accounts from sql storage")?,
+                    Some(Storage::Fs(_)) => {
+                        bail!("fs storage not supported for reward accounts")
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
@@ -236,6 +257,32 @@ impl<
                 }
 
                 Ok(Response::RewardAccounts(merkle_tree))
+            },
+
+            Request::VidShare(block_number, _request_id) => {
+                // Load the VID share from storage
+                let vid_share = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .get_vid_share::<SeqTypes>(BlockId::Number(*block_number as usize))
+                        .await
+                        .with_context(|| "failed to get vid share from sql storage")?,
+                    Some(Storage::Fs(storage)) => {
+                        // Open a read transaction
+                        let mut transaction = storage
+                            .read()
+                            .await
+                            .with_context(|| "failed to open fs storage transaction")?;
+
+                        // Get the VID share
+                        transaction
+                            .vid_share(BlockId::Number(*block_number as usize))
+                            .await
+                            .with_context(|| "failed to get vid share from fs storage")?
+                    },
+                    _ => bail!("storage was not initialized"),
+                };
+
+                Ok(Response::VidShare(vid_share))
             },
         }
     }
