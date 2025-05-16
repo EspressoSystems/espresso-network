@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# A script that we can use locally and in docker to run the upgrade proxy script
+# with ts-node. The arguments are passed to the upgrade script.
+#
+# Usage: scripts/multisig-upgrade-entrypoint [args]
+#
+set -e
+
+repo_path=contracts/script/multisigTransactionProposals/safeSDK/upgradeProxy.ts
+docker_path=/app/contracts/script/multisigTransactionProposals/safeSDK/upgradeProxy.ts
+
+# 1. if the repo path exists use it
+# 2. check if the docker path exists and use that
+# 3. otherwise error
+
+if [ -f "$repo_path" ]; then
+    echo "Using repo path: $repo_path"
+    path=$repo_path
+elif [ -f "$docker_path" ]; then
+    echo "Using docker path: $docker_path"
+    path=$docker_path
+else
+    echo "Error: Neither $repo_path nor $docker_path exist."
+    exit 1
+fi
+
+ts-node "$path" "$@"
