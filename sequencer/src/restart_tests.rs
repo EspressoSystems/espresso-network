@@ -397,20 +397,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         async {
             tracing::info!("starting node");
 
-            // Check if we have a stored config for soft-restart.
-            let hotshot = if let Some(initializer) = self.initializer.take() {
-                let node_id = initializer.node_id;
-                let hotshot = initializer
-                    .hotshot_context
-                    // TODO I think all the copied values are static, so should
-                    // be safe, but double check.
-                    .into_self_cloned(initializer.hotshot_initializer, node_id)
-                    .await;
-                Some(hotshot)
-            } else {
-                None
-            };
-
             // If we are starting a node which had already been started and stopped, we may need to
             // delay a bit for the OS to reclaim the node's P2P port. Otherwise initialization of
             // libp2p may fail with "address already in use". Thus, retry the node initialization
@@ -444,9 +430,19 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");
 
-            if let Some(hotshot) = hotshot {
-                ctx.replace_handle(hotshot).await;
-            }
+            // Check if we have a stored config for soft-restart.
+            if let Some(initializer) = self.initializer.take() {
+                tracing::error!("storing hotshot");
+                let node_id = initializer.node_id;
+                let handle = initializer
+                    .hotshot_context
+                    // TODO I think all the copied values are static, so should
+                    // be safe, but double check.
+                    .into_self_cloned(initializer.hotshot_initializer, node_id)
+                    .await;
+
+                ctx.replace_handle(handle).await;
+            };
 
             ctx.start_consensus().await;
             self.context = Some(ctx);

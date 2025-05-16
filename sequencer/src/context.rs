@@ -428,9 +428,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
     #[cfg(any(test, feature = "testing"))]
     /// Replace Consensus Handle
-    pub async fn replace_handle(&mut self, consensus: Arc<SystemContext<SeqTypes, Node<N, P>, V>>) {
-        let mut handle = self.handle.write().await;
-        handle.replace(consensus);
+    pub async fn replace_handle(&mut self, handle: SystemContextHandle<SeqTypes, Node<N, P>, V>) {
+        self.handle = Arc::new(RwLock::new(handle));
     }
 }
 

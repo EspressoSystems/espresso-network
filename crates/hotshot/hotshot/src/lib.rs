@@ -18,8 +18,8 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
     traits::{
-        block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions, signature_key::StateSignatureKey,
+        block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
+        network::BroadcastDelay, node_implementation::Versions, signature_key::StateSignatureKey,
     },
     utils::epoch_from_block_number,
 };
@@ -406,7 +406,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         &self,
         initializer: HotShotInitializer<TYPES>,
         node_id: u64,
-    ) -> Arc<Self> {
+    ) -> SystemContextHandle<TYPES, I, V> {
         let Self {
             public_key,
             private_key,
@@ -425,9 +425,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let (internal_sender, internal_reciever) = internal_event_stream;
         let (external_sender, external_reciever) = external_event_stream;
 
-        let metrics = Arc::<ConsensusMetricsValue>::try_unwrap(metrics).unwrap();
+        // panics:
+        // let metrics = Arc::<ConsensusMetricsValue>::into_inner(metrics).unwrap();
 
-        Self::new_from_channels(
+        // TODO possibly can use pre-existing metrics if somehow get rid of all
+        // the references before we get here. Or we can create a new metrics
+        // from the module and pass it into this method.
+        let metrics = ConsensusMetricsValue::new(&NoMetrics);
+
+        let hotshot = Self::new_from_channels(
             public_key,
             private_key,
             state_private_key,
@@ -442,7 +448,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             (internal_sender, internal_reciever.activate()), // I think we don't need this one anyway
             (external_sender, external_reciever.activate()), // TODO probably not the correct place to activate
         )
-        .await
+        .await;
+
+        Arc::clone(&hotshot).run_tasks().await
     }
 
     /// "Starts" consensus by sending a `Qc2Formed`, `ViewChange` events
