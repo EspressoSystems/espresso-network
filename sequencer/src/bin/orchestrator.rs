@@ -14,19 +14,19 @@ use vec1::Vec1;
 #[derive(Parser)]
 struct Args {
     /// Port to run the server on.
-    #[clap(short, long, env = "ESPRESSO_ORCHESTRATOR_PORT")]
+    #[arg(short, long, env = "ESPRESSO_ORCHESTRATOR_PORT")]
     port: u16,
 
     /// Port to run the server on.
-    #[clap(short, long, env = "ESPRESSO_ORCHESTRATOR_MANUAL_START_PASSWORD")]
+    #[arg(short, long, env = "ESPRESSO_ORCHESTRATOR_MANUAL_START_PASSWORD")]
     manual_start_password: Option<String>,
 
     /// Number of nodes in the network.
-    #[clap(short, long, env = "ESPRESSO_ORCHESTRATOR_NUM_NODES")]
+    #[arg(short, long, env = "ESPRESSO_ORCHESTRATOR_NUM_NODES")]
     num_nodes: NonZeroUsize,
 
     /// Duration to wait after all nodes are connected before starting the run.
-    #[clap(long, env = "ESPRESSO_ORCHESTRATOR_START_DELAY", default_value = "10s", value_parser = parse_duration)]
+    #[arg(long, env = "ESPRESSO_ORCHESTRATOR_START_DELAY", default_value = "10s", value_parser = parse_duration)]
     start_delay: Duration,
 
     /// Base duration for next-view timeout.
@@ -94,7 +94,7 @@ struct Args {
     )]
     builder_timeout: Duration,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 

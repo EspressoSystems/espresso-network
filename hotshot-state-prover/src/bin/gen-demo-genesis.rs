@@ -8,7 +8,7 @@ use url::Url;
 #[derive(Parser)]
 struct Args {
     /// URL of the HotShot orchestrator.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "ESPRESSO_SEQUENCER_ORCHESTRATOR_URL",

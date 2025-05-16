@@ -20,40 +20,40 @@ use vbs::version::StaticVersionType;
 #[derive(Clone, Debug, Parser)]
 struct Options {
     /// Start counting from block FROM.
-    #[clap(long, name = "FROM")]
+    #[arg(long, value_name = "FROM")]
     from: Option<usize>,
 
     /// Stop counting at block TO.
-    #[clap(long, name = "TO")]
+    #[arg(long, value_name = "TO")]
     to: Option<usize>,
 
     /// Skip verifying header timestamps.
-    #[clap(long)]
+    #[arg(long)]
     no_timestamps: bool,
 
     /// Skip verifying L1 head numbers.
-    #[clap(long)]
+    #[arg(long)]
     no_l1_heads: bool,
 
     /// Skip verifying L1 finalized references.
-    #[clap(long)]
+    #[arg(long)]
     no_l1_finalized: bool,
 
     /// L1 RPC URL
     ///
     /// This will be used to verify the hashes and timestamps of L1 finalized references. If not
     /// provided, only block numbers will be verified.
-    #[clap(long)]
+    #[arg(long)]
     l1: Option<Url>,
 
     /// Number of parallel tasks to run.
-    #[clap(short, long, default_value = "1")]
+    #[arg(short, long, default_value = "1")]
     jobs: usize,
 
     /// URL of the HotShot query service.
     url: Url,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 
