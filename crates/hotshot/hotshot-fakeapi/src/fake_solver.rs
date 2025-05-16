@@ -1,7 +1,4 @@
-use std::{
-    io::{self},
-    time,
-};
+use std::{io, time};
 
 use anyhow::Result;
 use async_lock::RwLock;
