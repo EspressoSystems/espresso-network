@@ -425,6 +425,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     pub fn network_config(&self) -> NetworkConfig<SeqTypes> {
         self.network_config.clone()
     }
+
+    #[cfg(any(test, feature = "testing"))]
+    /// Replace Consensus Handle
+    pub async fn replace_handle(&mut self, handle: SystemContextHandle<SeqTypes, Node<N, P>, V>) {
+        self.handle = Arc::new(RwLock::new(handle));
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Drop

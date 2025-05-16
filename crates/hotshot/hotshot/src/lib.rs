@@ -18,8 +18,8 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
     traits::{
-        block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions, signature_key::StateSignatureKey,
+        block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
+        network::BroadcastDelay, node_implementation::Versions, signature_key::StateSignatureKey,
     },
     utils::epoch_from_block_number,
 };
@@ -143,7 +143,7 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     pub(crate) external_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
 
     /// Anchored leaf provided by the initializer.
-    anchored_leaf: Leaf2<TYPES>,
+    pub anchored_leaf: Leaf2<TYPES>,
 
     /// access to the internal event stream, in case we need to, say, shut something down
     #[allow(clippy::type_complexity)]
@@ -398,6 +398,61 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         inner
     }
 
+    /// Instantiate Hotshot from Hotshot, taking a `HotshotIntializer` as
+    /// argument. This allows us to create a new Hotshot with a previously
+    /// existing event-stream with the ultimate objective of using this for soft
+    /// restarts.
+    pub async fn into_self_cloned(
+        &self,
+        initializer: HotShotInitializer<TYPES>,
+        node_id: u64,
+    ) -> SystemContextHandle<TYPES, I, V> {
+        let Self {
+            public_key,
+            private_key,
+            state_private_key,
+            config,
+            network,
+            membership_coordinator,
+            storage,
+            metrics,
+            marketplace_config,
+            external_event_stream,
+            internal_event_stream,
+            ..
+        } = self.clone();
+
+        let (internal_sender, internal_reciever) = internal_event_stream;
+        let (external_sender, external_reciever) = external_event_stream;
+
+        // panics:
+        // let metrics = Arc::<ConsensusMetricsValue>::into_inner(metrics).unwrap();
+
+        // TODO possibly can use pre-existing metrics if somehow get rid of all
+        // the references before we get here. Or we can create a new metrics
+        // from the module and pass it into this method.
+        let metrics = ConsensusMetricsValue::new(&NoMetrics);
+
+        let hotshot = Self::new_from_channels(
+            public_key,
+            private_key,
+            state_private_key,
+            node_id, // in tests nonce is node_id
+            config,
+            membership_coordinator,
+            network,
+            initializer,
+            metrics,
+            storage,
+            marketplace_config,
+            (internal_sender, internal_reciever.activate()), // I think we don't need this one anyway
+            (external_sender, external_reciever.activate()), // TODO probably not the correct place to activate
+        )
+        .await;
+
+        Arc::clone(&hotshot).run_tasks().await
+    }
+
     /// "Starts" consensus by sending a `Qc2Formed`, `ViewChange` events
     ///
     /// # Panics
@@ -418,10 +473,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 self.start_epoch,
             )))
             .await
-            .unwrap_or_else(|_| {
+            .unwrap_or_else(|e| {
                 panic!(
-                    "Genesis Broadcast failed; event = ViewChange({:?})",
-                    self.start_view
+                    "Startup Initial Broadcast failed; event = ViewChange({:?}), error = {}",
+                    self.start_view, e
                 )
             });
 
@@ -1028,7 +1083,7 @@ pub struct InitializerEpochInfo<TYPES: NodeType> {
     pub block_header: Option<TYPES::BlockHeader>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// initializer struct for creating starting block
 pub struct HotShotInitializer<TYPES: NodeType> {
     /// Instance-level state.
