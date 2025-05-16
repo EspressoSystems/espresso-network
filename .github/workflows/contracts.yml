@@ -46,6 +46,7 @@ jobs:
         name: Enable Rust Caching
         with:
           prefix-key: v2-rust-${{ hashFiles('flake.*') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check toolchain versions
         run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions

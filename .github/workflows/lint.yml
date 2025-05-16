@@ -33,6 +33,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Format Check
         run: cargo +nightly fmt -- --check

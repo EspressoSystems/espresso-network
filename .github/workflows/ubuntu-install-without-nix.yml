@@ -19,6 +19,8 @@ jobs:
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main'  }}
 
       - name: Install and test
         run: scripts/ubuntu-install-test-no-nix

@@ -57,6 +57,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: github
 
       - name: Build
@@ -92,6 +93,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: buildjet
 
       - name: Build

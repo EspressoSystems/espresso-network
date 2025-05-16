@@ -58,6 +58,7 @@ jobs:
       - name: Enable Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: "v1-${{ matrix.arch }}"
 
       - name: Initialize Nix Environment

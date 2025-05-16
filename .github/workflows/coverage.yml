@@ -35,6 +35,8 @@ jobs:
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Separate build step for easier identification of failures and timings.
       - name: Build tests for coverage
