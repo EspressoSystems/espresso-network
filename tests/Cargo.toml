@@ -17,6 +17,7 @@ dotenvy = { workspace = true }
 espresso-types = { path = "../types", features = ["testing"] }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
+sequencer = { path = "../sequencer" }
 surf-disco = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

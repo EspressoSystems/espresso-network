@@ -1,7 +1,9 @@
 base_version = "0.2"
 upgrade_version = "0.3"
-epoch_height = 200
-epoch_start_block = 321
+# NOTE: the upgrade to PoS needs to happen within one epoch. Currently it takes about 120 blocks to
+# perform the upgrade. Therefore the epoch_height can't be set significantly lower than 150.
+epoch_height = 150
+epoch_start_block = 271
 
 [stake_table]
 capacity = 10
@@ -21,7 +23,7 @@ number = 0
 
 [[upgrade]]
 version = "0.3"
-start_proposing_view = 200
+start_proposing_view = 150
 stop_proposing_view = 1000
 
 [upgrade.epoch]

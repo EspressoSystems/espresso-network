@@ -1,6 +1,6 @@
 # Espresso Types
 
-This crate provides the data types that make up the Espresso Sequencing Marketplace, along with the logic that defines
+This crate provides the data types that make up the Espresso Network, along with the logic that defines
 how these types interact and evolve as the network operates. It also provides a versioning system that enables network
 upgrades, including changes to data types, that maintains adequate compatibility with older types so that newer versions
 of the software are able to interpret an Espresso blockchain all the way back to genesis.
