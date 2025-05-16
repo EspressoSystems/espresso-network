@@ -8,7 +8,7 @@ use std::{fs::OpenOptions, io::Write, path::PathBuf, process::Command};
 use alloy::hex::ToHexExt;
 use clap::Parser;
 use hotshot_contract_adapter::sol_types::VerifyingKeySol;
-use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
+use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use jf_pcs::prelude::UnivariateUniversalParams;
 
 #[derive(Parser)]
@@ -42,7 +42,7 @@ fn main() {
     let (_, vk) = if mock {
         hotshot_state_prover::preprocess(&srs, 10).expect("Circuit preprocess failed")
     } else {
-        hotshot_state_prover::preprocess(&srs, STAKE_TABLE_CAPACITY)
+        hotshot_state_prover::preprocess(&srs, DEFAULT_STAKE_TABLE_CAPACITY)
             .expect("Circuit preprocess failed")
     };
     let vk: VerifyingKeySol = vk.into();

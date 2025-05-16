@@ -24,8 +24,7 @@ use tagged_base64::tagged;
 use crate::signature_key::BLSPubKey;
 
 /// Capacity of the stake table, used for light client
-/// TODO(Chengyu): this should be loaded from the sequencer config
-pub const STAKE_TABLE_CAPACITY: usize = 200;
+pub const DEFAULT_STAKE_TABLE_CAPACITY: usize = 200;
 /// Base field in the prover circuit
 pub type CircuitField = ark_ed_on_bn254::Fq;
 /// Concrete type for light client state

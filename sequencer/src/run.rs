@@ -292,6 +292,7 @@ mod test {
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
             epoch_start_block: None,
+            stake_table_capacity: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

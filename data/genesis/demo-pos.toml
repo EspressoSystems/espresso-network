@@ -4,6 +4,7 @@ upgrade_version = "0.3"
 # perform the upgrade. Therefore the epoch_height can't be set significantly lower than 150.
 epoch_height = 150
 epoch_start_block = 271
+stake_table_capacity = 10
 
 [stake_table]
 capacity = 10

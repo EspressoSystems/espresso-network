@@ -370,11 +370,16 @@ where
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
     let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
+    let stake_table_capacity = genesis
+        .stake_table_capacity
+        .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
     tracing::info!("setting epoch_height={epoch_height:?}");
     tracing::info!("setting epoch_start_block={epoch_start_block:?}");
+    tracing::info!("setting stake_table_capacity={stake_table_capacity:?}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.epoch_start_block = epoch_start_block;
+    network_config.config.stake_table_capacity = stake_table_capacity;
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
@@ -1001,6 +1006,7 @@ pub mod testing {
                 stop_voting_time: 0,
                 epoch_height: 30,
                 epoch_start_block: 1,
+                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             };
 
             let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();

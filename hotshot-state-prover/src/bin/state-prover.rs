@@ -12,7 +12,7 @@ use clap::Parser;
 use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
 use espresso_types::parse_duration;
 use hotshot_state_prover::service::{run_prover_once, run_prover_service, StateProverConfig};
-use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
+use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -87,7 +87,7 @@ struct Args {
     pub port: Option<u16>,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
 
     /// max acceptable gas price **in Gwei** for prover to send light client update transaction

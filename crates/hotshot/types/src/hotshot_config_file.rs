@@ -58,6 +58,8 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     pub epoch_height: u64,
     /// Epoch start block
     pub epoch_start_block: u64,
+    /// Stake table capacity for light client use
+    pub stake_table_capacity: usize,
 }
 
 impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
@@ -87,6 +89,7 @@ impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
             stop_voting_time: val.upgrade.stop_voting_time,
             epoch_height: val.epoch_height,
             epoch_start_block: val.epoch_start_block,
+            stake_table_capacity: val.stake_table_capacity,
         }
     }
 }
@@ -138,6 +141,7 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             upgrade: UpgradeConfig::default(),
             epoch_height: 0,
             epoch_start_block: 0,
+            stake_table_capacity: crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         }
     }
 }

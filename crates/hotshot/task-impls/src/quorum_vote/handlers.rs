@@ -477,6 +477,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     epoch_root_vote: bool,
     epoch_height: u64,
     state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+    stake_table_capacity: usize,
 ) -> Result<()> {
     let committee_member_in_current_epoch = membership.has_stake(&public_key).await;
     // If the proposed leaf is for the last block in the epoch and the node is part of the quorum committee
@@ -545,11 +546,13 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .get_light_client_state(view_number)
             .wrap()
             .context(error!("Failed to generate light client state"))?;
-        let next_membership = membership.next_epoch_stake_table().await?;
-        let next_stake_table_state = next_membership
+        let next_stake_table = membership
+            .next_epoch_stake_table()
+            .await?
             .stake_table()
-            .await
-            .commitment(hotshot_types::light_client::STAKE_TABLE_CAPACITY)
+            .await;
+        let next_stake_table_state = next_stake_table
+            .commitment(stake_table_capacity)
             .wrap()
             .context(error!("Failed to compute stake table commitment"))?;
         let signature = <TYPES::StateSignatureKey as StateSignatureKey>::sign_state(

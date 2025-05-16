@@ -222,10 +222,17 @@ pub struct HotShotConfig<TYPES: NodeType> {
     /// Epoch start block   
     #[serde(default = "default_epoch_start_block")]
     pub epoch_start_block: u64,
+    /// Stake table capacity for light client use
+    #[serde(default = "default_stake_table_capacity")]
+    pub stake_table_capacity: usize,
 }
 
 fn default_epoch_start_block() -> u64 {
     1
+}
+
+fn default_stake_table_capacity() -> usize {
+    crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY
 }
 
 impl<TYPES: NodeType> HotShotConfig<TYPES> {
