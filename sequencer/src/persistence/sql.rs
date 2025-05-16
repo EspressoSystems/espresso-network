@@ -2096,39 +2096,118 @@ impl MembershipPersistence for Persistence {
 
     async fn store_events(
         &self,
-        l1_block: u64,
+        l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        let events_json = serde_json::to_value(&events).context("failed to serialize events ")?;
+        if events.is_empty() {
+            return Ok(());
+        }
 
         let mut tx = self.db.write().await?;
 
+        // check last l1 block if there is any
+        let last_l1 = query_as::<(i64,)>(
+            "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
+        )
+        .fetch_optional(tx.as_mut())
+        .await?
+        .map(|(l1,)| l1);
+
+        tracing::debug!("last l1 finalizes in database = {last_l1:?}");
+
+        // skip events storage if the database already has higher l1 block events
+        if last_l1 > Some(l1_finalized.try_into()?) {
+            tracing::debug!(
+                ?last_l1,
+                ?l1_finalized,
+                ?events,
+                "last l1 finalized stored is already higher"
+            );
+            return Ok(());
+        }
+
+        let mut query_builder: sqlx::QueryBuilder<Db> =
+            sqlx::QueryBuilder::new("INSERT INTO stake_table_events (l1_block, log_index, event) ");
+
+        let events = events
+            .into_iter()
+            .map(|((b, i), e)| {
+                Ok((
+                    i64::try_from(b)?,
+                    i64::try_from(i)?,
+                    serde_json::to_value(e).context("l1 event to value")?,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        query_builder.push_values(events.into_iter(), |mut b, (l1_block, log_index, event)| {
+            b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+        });
+
+        query_builder.push(" ON CONFLICT DO NOTHING");
+        let query = query_builder.build();
+
+        query.execute(tx.as_mut()).await?;
+
+        // update l1 block
         tx.upsert(
-            "stake_table_events",
-            ["id", "l1_block", "data"],
+            "stake_table_events_l1_block",
+            ["id", "last_l1_block"],
             ["id"],
-            [(0_i64, l1_block as i64, events_json)],
+            [(0_i32, l1_finalized as i64)],
         )
         .await?;
-        tx.commit().await
+
+        tx.commit().await?;
+
+        Ok(())
     }
 
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
+    async fn load_events(
+        &self,
+        l1_block: u64,
+    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)> {
         let mut tx = self.db.write().await?;
 
-        let row = query("SELECT l1_block, data FROM stake_table_events WHERE id = 0")
-            .fetch_optional(tx.as_mut())
+        // check last l1 block if there is any
+        let res = query_as::<(i64,)>(
+            "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
+        )
+        .fetch_optional(tx.as_mut())
+        .await?;
+
+        let Some((last_l1,)) = res else {
+            // this just means we dont have any events stored
+            return Ok((None, Vec::new()));
+        };
+
+        // Determine the L1 block for querying events.
+        // If the last stored L1 block is greater than the requested block, limit the query to the requested block.
+        // Otherwise, query up to the last stored block.
+        let l1_block = l1_block.try_into()?;
+        let query_l1_block = if last_l1 > l1_block {
+            l1_block
+        } else {
+            last_l1
+        };
+
+        let rows = query("SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER BY l1_block ASC, log_index ASC")
+            .bind(query_l1_block)
+            .fetch_all(tx.as_mut())
             .await?;
 
-        match row {
-            None => Ok(None),
-            Some(row) => {
-                let l1 = row.try_get::<i64, _>("l1_block")?;
-                let events = row.try_get::<serde_json::Value, _>("data")?;
-                let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_value(events)?;
-                Ok(Some((l1 as u64, events)))
-            },
-        }
+        let events = rows
+            .into_iter()
+            .map(|row| {
+                let l1_block: i64 = row.try_get("l1_block")?;
+                let log_index: i64 = row.try_get("log_index")?;
+                let event = serde_json::from_value(row.try_get("event")?)?;
+
+                Ok(((l1_block.try_into()?, log_index.try_into()?), event))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok((Some(query_l1_block.try_into()?), events))
     }
 }
 

@@ -267,12 +267,15 @@ impl MembershipPersistence for NoStorage {
 
     async fn store_events(
         &self,
-        _l1_block: u64,
+        _l1: u64,
         _events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
-        Ok(None)
+    async fn load_events(
+        &self,
+        _l1_block: u64,
+    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)> {
+        Ok((None, Vec::new()))
     }
 }

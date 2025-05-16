@@ -401,10 +401,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
     async fn store_events(
         &self,
-        l1_block: u64,
+        l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()>;
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>>;
+    async fn load_events(
+        &self,
+        l1_finalized: u64,
+    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)>;
 }
 
 #[async_trait]
