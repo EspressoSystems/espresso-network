@@ -37,10 +37,7 @@ use super::{
     options::{Options, Query},
     sql, AccountQueryData, BlocksFrontier,
 };
-use crate::{
-    persistence::{self},
-    SeqTypes, SequencerApiVersion,
-};
+use crate::{persistence, SeqTypes, SequencerApiVersion};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;

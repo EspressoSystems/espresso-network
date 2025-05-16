@@ -39,11 +39,12 @@ use tracing::instrument;
 
 use crate::{
     events::{HotShotEvent, HotShotTaskCompleted},
-    helpers::broadcast_event,
+    helpers::{broadcast_event, broadcast_view_change},
     vote_collection::{
         create_vote_accumulator, AccumulatorInfo, HandleVoteEvent, VoteCollectionTaskState,
     },
 };
+
 #[derive(PartialEq, PartialOrd, Clone, Debug, Eq, Hash)]
 /// Phases of view sync
 pub enum ViewSyncPhase {
@@ -125,6 +126,9 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
 #[async_trait]
@@ -183,6 +187,9 @@ pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
 
     /// Epoch HotShot was in when this task was created
     pub cur_epoch: Option<TYPES::Epoch>,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
 #[async_trait]
@@ -254,6 +261,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
             id: self.id,
             upgrade_lock: self.upgrade_lock.clone(),
             cur_epoch: self.cur_epoch,
+            first_epoch: self.first_epoch,
         };
 
         let result = replica_state
@@ -553,12 +561,17 @@ impl<TYPES: NodeType, V: Versions> ViewSyncTaskState<TYPES, V> {
                 } else {
                     // If this is the first timeout we've seen advance to the next view
                     self.cur_view = view_number + 1;
-                    broadcast_event(
-                        Arc::new(HotShotEvent::ViewChange(self.cur_view, self.cur_epoch)),
+                    broadcast_view_change(
                         &event_stream,
+                        self.cur_view,
+                        self.cur_epoch,
+                        self.first_epoch,
                     )
                     .await;
                 }
+            },
+            HotShotEvent::SetFirstEpoch(view, epoch) => {
+                self.first_epoch = Some((*view, *epoch));
             },
 
             _ => {},
@@ -738,13 +751,11 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     *self.next_view
                 );
 
-                // TODO: Figure out the correct way to view sync across epochs if needed
-                broadcast_event(
-                    Arc::new(HotShotEvent::ViewChange(
-                        self.next_view,
-                        certificate.epoch(),
-                    )),
+                broadcast_view_change(
                     &event_stream,
+                    self.next_view,
+                    certificate.epoch(),
+                    self.first_epoch,
                 )
                 .await;
 
@@ -817,13 +828,11 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
                     timeout_task.abort();
                 }
 
-                // TODO: Figure out the correct way to view sync across epochs if needed
-                broadcast_event(
-                    Arc::new(HotShotEvent::ViewChange(
-                        self.next_view,
-                        certificate.epoch(),
-                    )),
+                broadcast_view_change(
                     &event_stream,
+                    self.next_view,
+                    certificate.epoch(),
+                    self.first_epoch,
                 )
                 .await;
                 return Some(HotShotTaskCompleted);

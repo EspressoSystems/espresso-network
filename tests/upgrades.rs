@@ -1,32 +1,25 @@
+use std::time::Duration;
+
 use anyhow::Result;
-use espresso_types::{FeeVersion, MarketplaceVersion};
+use espresso_types::{EpochVersion, FeeVersion, UpgradeMode};
 use futures::{future::join_all, StreamExt};
+use sequencer::Genesis;
 use vbs::version::StaticVersionType;
 
 use crate::{
-    common::{NativeDemo, TestConfig},
+    common::{load_genesis_file, NativeDemo, TestConfig, TestRequirements},
     smoke::assert_native_demo_works,
 };
 
-const SEQUENCER_BLOCKS_TIMEOUT: u64 = 200;
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_native_demo_upgrade() -> Result<()> {
-    let _demo = NativeDemo::run(Some(
-        "-f process-compose.yaml -f process-compose-mp.yml".to_string(),
-    ))?;
-
-    assert_native_demo_works().await?;
-
+async fn assert_pos_upgrade_happens(genesis: &Genesis) -> Result<()> {
     dotenvy::dotenv()?;
 
-    let testing = TestConfig::new().await.unwrap();
+    // The requirements passed to `TestConfig` are ignored here.
+    let testing = TestConfig::new(Default::default()).await.unwrap();
+    println!("Testing upgrade {:?}", testing);
 
-    let versions = if testing.sequencer_version as u16 >= MarketplaceVersion::version().minor {
-        (FeeVersion::version(), MarketplaceVersion::version())
-    } else {
-        panic!("Invalid sequencer version provided for upgrade test.");
-    };
+    let base_version = FeeVersion::version();
+    let upgrade_version = EpochVersion::version();
 
     println!("Waiting on readiness");
     let _ = testing.readiness().await?;
@@ -56,19 +49,58 @@ async fn test_native_demo_upgrade() -> Result<()> {
         // TODO is it possible to discover the view at which upgrade should be finished?
         // First few views should be `Base` version.
         if header.height() <= 20 {
-            assert_eq!(header.version(), versions.0)
+            assert_eq!(header.version(), base_version);
         }
 
-        if header.version() == versions.1 {
+        if header.version() == upgrade_version {
             println!("header version matched! height={:?}", header.height());
             break;
         }
 
-        if header.height() > SEQUENCER_BLOCKS_TIMEOUT {
-            panic!("Exceeded maximum block height. Upgrade should have finished by now :(");
+        let wait_until_view = match genesis.upgrades[&upgrade_version].mode.clone() {
+            // It usually takes about 120 blocks to get to the upgrade, wait a bit longer.
+            UpgradeMode::View(upgrade) => upgrade.start_proposing_view + 200,
+            UpgradeMode::Time(_time_based_upgrade) => {
+                unimplemented!("Time based upgrade not supported yet")
+            },
+        };
+
+        if header.height() > wait_until_view {
+            panic!("Waited until {wait_until_view} but upgrade did not happen");
         }
     }
 
-    // TODO assert transactions are incrementing
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_pos_upgrade() -> Result<()> {
+    let genesis_path = "data/genesis/demo-pos.toml";
+    let genesis = load_genesis_file(genesis_path)?;
+    let _demo = NativeDemo::run(
+        None,
+        Some(vec![(
+            "ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE".to_string(),
+            genesis_path.to_string(),
+        )]),
+    )?;
+
+    assert_native_demo_works(Default::default()).await?;
+    assert_pos_upgrade_happens(&genesis).await?;
+
+    let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
+    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
+    // we are using the stake table from the contract.
+    let expected_block_height = epoch_length * 3 + 10;
+
+    // verify native demo continues to work after upgrade
+    let pos_progress_requirements = TestRequirements {
+        block_height_increment: expected_block_height,
+        txn_count_increment: 2 * expected_block_height,
+        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
+        ..Default::default()
+    };
+    assert_native_demo_works(pos_progress_requirements).await?;
+
     Ok(())
 }

@@ -41,7 +41,6 @@ use hotshot_types::{
         network::Topic,
         node_implementation::{ConsensusTime, Versions},
         signature_key::SignatureKey as _,
-        storage::storage_add_drb_result,
     },
     HotShotConfig, PeerConfig,
 };
@@ -201,8 +200,8 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             .set_first_epoch(ViewNumber::new(0), INITIAL_DRB_RESULT);
                         let memberships = EpochMembershipCoordinator::new(
                             membership,
-                            Some(storage_add_drb_result(hs_storage.clone())),
                             config.epoch_height,
+                            &hs_storage.clone(),
                         );
 
                         let hotshot = SystemContext::init(

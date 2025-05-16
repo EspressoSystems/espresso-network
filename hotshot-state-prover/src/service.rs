@@ -8,7 +8,7 @@ use std::{
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{Address, U256},
+    primitives::{utils::format_units, Address, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
@@ -83,6 +83,8 @@ pub struct StateProverConfig {
     pub epoch_start_block: u64,
     /// Maximum number of retires for one-shot prover
     pub max_retries: u64,
+    /// optional gas price cap **in wei** to prevent prover sending updates during jammed base layer
+    pub max_gas_price: Option<u128>,
 }
 
 #[derive(Debug, Clone)]
@@ -420,6 +422,26 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         .wallet(wallet)
         .on_http(state.config.provider_endpoint.clone());
 
+    // only sync light client state when gas price is sane
+    if let Some(max_gas_price) = state.config.max_gas_price {
+        let cur_gas_price = provider
+            .get_gas_price()
+            .await
+            .map_err(|e| ProverError::NetworkError(anyhow!("{e}")))?;
+        if cur_gas_price > max_gas_price {
+            let cur_gwei = format_units(cur_gas_price, "gwei")
+                .map_err(|e| ProverError::Internal(format!("{e}")))?;
+            let max_gwei = format_units(max_gas_price, "gwei")
+                .map_err(|e| ProverError::Internal(format!("{e}")))?;
+            tracing::warn!(
+                "Current gas price too high: cur={} gwei, max={} gwei",
+                cur_gwei,
+                max_gwei,
+            );
+            return Err(ProverError::GasPriceTooHigh(cur_gwei, max_gwei));
+        }
+    }
+
     tracing::info!(
         ?light_client_address,
         "Start syncing light client state for provider: {}",
@@ -559,22 +581,21 @@ fn start_http_server<ApiVer: StaticVersionType + 'static>(
 ) -> io::Result<()> {
     let mut app = tide_disco::App::<_, ServerError>::with_state(());
     let toml = toml::from_str::<toml::value::Value>(include_str!("../api/prover-service.toml"))
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        .map_err(io::Error::other)?;
 
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
 
     api.get("getlightclientcontract", move |_, _| {
         async move { Ok(light_client_address) }.boxed()
     })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-    app.register_module("api", api)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    .map_err(io::Error::other)?;
+    app.register_module("api", api).map_err(io::Error::other)?;
 
     spawn(app.serve(format!("0.0.0.0:{port}"), bind_version));
     Ok(())
 }
 
+/// Run prover in daemon mode
 pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     config: StateProverConfig,
     bind_version: ApiVer,
@@ -632,6 +653,10 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     for _ in 0..state.config.max_retries {
         match sync_state(&mut state, &proving_key, &relay_server_client).await {
             Ok(_) => return Ok(()),
+            Err(ProverError::GasPriceTooHigh(..)) => {
+                // static ERROR message for easier observability and alert
+                tracing::error!("Gas price too high, sync later");
+            },
             Err(err) => {
                 tracing::error!("Cannot sync the light client state, will retry: {}", err);
                 sleep(state.config.retry_interval).await;
@@ -655,6 +680,8 @@ pub enum ProverError {
     Internal(String),
     /// General network issue: {0}
     NetworkError(anyhow::Error),
+    /// Abort due to high gas price: current {0} gwei, max allowed: {1} gwei
+    GasPriceTooHigh(String, String),
 }
 
 impl From<ServerError> for ProverError {

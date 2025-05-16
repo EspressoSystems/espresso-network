@@ -1,6 +1,4 @@
 //! Mock implementation of persistence, for testing.
-#![cfg(any(test, feature = "testing"))]
-
 use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::bail;
@@ -212,7 +210,7 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
         _drb_result: DrbResult,

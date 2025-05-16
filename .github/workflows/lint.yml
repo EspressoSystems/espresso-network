@@ -16,33 +16,46 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  RUST_LOG: info,libp2p=off
-
 jobs:
-  lint:
+  cargo-fmt:
+    name: cargo fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        name: Checkout Repository
-
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           components: rustfmt
 
-      - uses: Swatinem/rust-cache@v2
-        name: Enable Rust Caching
-
-      - name: Format Check
+      - name: Check formatting
         run: cargo +nightly fmt -- --check
 
-      - name: Check (embedded-db)
-        run: |
-          cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going \
-          -- -D warnings
-      
-      - name: Check (postgres)
+  clippy-postgres:
+    name: clippy (postgres)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main'  }}
+          shared-key: cargo-clippy
+
+      - name: Run clippy
         run: |
           cargo clippy --workspace --features testing --all-targets --keep-going \
           -- -D warnings
+
+  clippy-embedded:
+      name: clippy (embedded-db)
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - uses: Swatinem/rust-cache@v2
+          with:
+            save-if: false
+            shared-key: cargo-clippy
+
+        - name: Run clippy
+          run: |
+            cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going \
+            -- -D warnings
