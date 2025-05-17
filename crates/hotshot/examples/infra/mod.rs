@@ -31,10 +31,9 @@ use hotshot::{
         BlockPayload, NodeImplementation,
     },
     types::SystemContextHandle,
-    MarketplaceConfig, SystemContext,
+    SystemContext,
 };
 use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider,
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     node_types::{Libp2pImpl, PushCdnImpl},
     state_types::TestInstanceState,
@@ -332,12 +331,7 @@ where
 pub trait RunDa<
     TYPES: NodeType<InstanceState = TestInstanceState>,
     NETWORK: ConnectedNetwork<TYPES::SignatureKey>,
-    NODE: NodeImplementation<
-        TYPES,
-        Network = NETWORK,
-        Storage = TestStorage<TYPES>,
-        AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
-    >,
+    NODE: NodeImplementation<TYPES, Network = NETWORK, Storage = TestStorage<TYPES>>,
     V: Versions,
 > where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
@@ -381,11 +375,6 @@ pub trait RunDa<
 
         let network = self.network();
 
-        let marketplace_config = MarketplaceConfig {
-            auction_results_provider: TestAuctionResultsProvider::<TYPES>::default().into(),
-            // TODO: we need to pass a valid fallback builder url here somehow
-            fallback_builder_url: config.config.builder_urls.first().clone(),
-        };
         let epoch_height = config.config.epoch_height;
         let storage = TestStorage::<TYPES>::default();
 
@@ -400,7 +389,6 @@ pub trait RunDa<
             initializer,
             ConsensusMetricsValue::default(),
             storage,
-            marketplace_config,
         )
         .await
         .expect("Could not init hotshot")
@@ -613,7 +601,6 @@ impl<
             TYPES,
             Network = PushCdnNetwork<TYPES::SignatureKey>,
             Storage = TestStorage<TYPES>,
-            AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
         >,
         V: Versions,
     > RunDa<TYPES, PushCdnNetwork<TYPES::SignatureKey>, NODE, V> for PushCdnDaRun<TYPES>
@@ -696,12 +683,7 @@ impl<
             BlockHeader = TestBlockHeader,
             InstanceState = TestInstanceState,
         >,
-        NODE: NodeImplementation<
-            TYPES,
-            Network = Libp2pNetwork<TYPES>,
-            Storage = TestStorage<TYPES>,
-            AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
-        >,
+        NODE: NodeImplementation<TYPES, Network = Libp2pNetwork<TYPES>, Storage = TestStorage<TYPES>>,
         V: Versions,
     > RunDa<TYPES, Libp2pNetwork<TYPES>, NODE, V> for Libp2pDaRun<TYPES>
 where
@@ -805,12 +787,7 @@ impl<
             BlockHeader = TestBlockHeader,
             InstanceState = TestInstanceState,
         >,
-        NODE: NodeImplementation<
-            TYPES,
-            Network = CombinedNetworks<TYPES>,
-            Storage = TestStorage<TYPES>,
-            AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
-        >,
+        NODE: NodeImplementation<TYPES, Network = CombinedNetworks<TYPES>, Storage = TestStorage<TYPES>>,
         V: Versions,
     > RunDa<TYPES, CombinedNetworks<TYPES>, NODE, V> for CombinedDaRun<TYPES>
 where
@@ -895,12 +872,7 @@ pub async fn main_entry_point<
         InstanceState = TestInstanceState,
     >,
     NETWORK: ConnectedNetwork<TYPES::SignatureKey>,
-    NODE: NodeImplementation<
-        TYPES,
-        Network = NETWORK,
-        Storage = TestStorage<TYPES>,
-        AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
-    >,
+    NODE: NodeImplementation<TYPES, Network = NETWORK, Storage = TestStorage<TYPES>>,
     V: Versions,
     RUNDA: RunDa<TYPES, NETWORK, NODE, V>,
 >(

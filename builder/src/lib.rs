@@ -53,8 +53,8 @@ pub mod testing {
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
-        traits::SequencerPersistence, v0_99::ChainConfig, Event, FeeAccount, NamespaceId,
-        NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+        traits::SequencerPersistence, v0_3::ChainConfig, Event, FeeAccount, NamespaceId, NodeState,
+        PrivKey, PubKey, Transaction, ValidatedState,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{

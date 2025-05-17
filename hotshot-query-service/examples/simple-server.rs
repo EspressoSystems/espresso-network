@@ -16,7 +16,7 @@
 //! consensus network with two nodes and connects a query service to each node. It runs each query
 //! server on local host. The program continues until it is manually killed.
 
-use std::{num::NonZeroUsize, str::FromStr, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use async_lock::RwLock;
@@ -25,12 +25,9 @@ use futures::future::{join_all, try_join_all};
 use hotshot::{
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{SignatureKey, SystemContextHandle},
-    HotShotInitializer, MarketplaceConfig, SystemContext,
+    HotShotInitializer, SystemContext,
 };
-use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider, state_types::TestInstanceState,
-    storage_types::TestStorage,
-};
+use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
 use hotshot_query_service::{
     data_source,
     fetching::provider::NoFetching,
@@ -267,10 +264,6 @@ async fn init_consensus(
                     .unwrap(),
                     ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                     storage,
-                    MarketplaceConfig {
-                        auction_results_provider: Arc::new(TestAuctionResultsProvider::default()),
-                        fallback_builder_url: Url::from_str("https://some.url").unwrap(),
-                    },
                 )
                 .await
                 .unwrap()

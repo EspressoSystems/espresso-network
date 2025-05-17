@@ -24,7 +24,6 @@ use hotshot_types::{
     utils::epoch_from_block_number,
 };
 use rand::Rng;
-use url::Url;
 use vbs::version::StaticVersionType;
 
 /// Contains traits consumed by [`SystemContext`]

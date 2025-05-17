@@ -19,8 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use committable::Committable;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use url::Url;
+use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersionType;
 
 use super::{
@@ -249,9 +248,6 @@ pub trait Versions: Clone + Copy + Debug + Send + Sync + 'static {
 
     /// The hash for the upgrade.
     const UPGRADE_HASH: [u8; 32];
-
-    /// The version at which to switch over to marketplace logic
-    type Marketplace: StaticVersionType;
 
     /// The version at which to switch over to epochs logic
     type Epochs: StaticVersionType;

@@ -116,10 +116,10 @@ async fn test_da_task() {
                 vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                     num_storage_node,
                     <TestVersions as Versions>::Base::VERSION,
-                    *ViewNumber::new(2),
+                    
                 )
                 .unwrap()],
-                None,
+                
             )),
         ],
         serial![DaProposalRecv(proposals[1].clone(), leaders[1])],
@@ -234,10 +234,9 @@ async fn test_da_task_storage_failure() {
                 vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                     num_storage_node,
                     <TestVersions as Versions>::Base::VERSION,
-                    *ViewNumber::new(2),
                 )
                 .unwrap()],
-                None,
+                
             ),)
         ],
         serial![DaProposalRecv(proposals[1].clone(), leaders[1])],

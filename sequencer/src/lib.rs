@@ -23,8 +23,7 @@ use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
     v0_3::StakeTableFetcher,
-    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes,
-    SolverAuctionResultsProvider, ValidatedState,
+    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
@@ -102,7 +101,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeImplementation<Se
 {
     type Network = N;
     type Storage = Arc<P>;
-    type AuctionResultsProvider = SolverAuctionResultsProvider;
 }
 
 #[derive(Clone, Debug)]

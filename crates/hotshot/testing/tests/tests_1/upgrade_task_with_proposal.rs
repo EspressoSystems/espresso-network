@@ -133,7 +133,7 @@ async fn test_upgrade_task_with_proposal() {
     let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
         num_storage_nodes,
         <TestVersions as Versions>::Base::VERSION,
-        *ViewNumber::new(1),
+        
     )
     .unwrap();
 
@@ -174,7 +174,7 @@ async fn test_upgrade_task_with_proposal() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -192,7 +192,7 @@ async fn test_upgrade_task_with_proposal() {
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
         ],
@@ -211,7 +211,7 @@ async fn test_upgrade_task_with_proposal() {
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
         ],

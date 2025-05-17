@@ -5,10 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot::traits::{implementations::PushCdnNetwork, NodeImplementation};
-use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider, state_types::TestTypes,
-    storage_types::TestStorage,
-};
+use hotshot_example_types::{state_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +21,6 @@ pub type Network = PushCdnNetwork<<TestTypes as NodeType>::SignatureKey>;
 impl NodeImplementation<TestTypes> for NodeImpl {
     type Network = Network;
     type Storage = TestStorage<TestTypes>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TestTypes>;
 }
 
 /// Convenience type alias

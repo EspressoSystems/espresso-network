@@ -6,7 +6,7 @@ use std::{
 use alloy::primitives::Address;
 use anyhow::{Context, Ok};
 use espresso_types::{
-    v0_99::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
+    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
     Upgrade,
 };
 use serde::{Deserialize, Serialize};
@@ -374,7 +374,6 @@ mod test {
                 base_fee: 1.into(),
                 fee_recipient: FeeAccount::default(),
                 fee_contract: Some(Address::default()),
-                bid_recipient: None,
                 stake_table_contract: None
             }
         );
@@ -446,7 +445,6 @@ mod test {
                 max_block_size: 30000.into(),
                 base_fee: 1.into(),
                 fee_recipient: FeeAccount::default(),
-                bid_recipient: None,
                 fee_contract: None,
                 stake_table_contract: None,
             }

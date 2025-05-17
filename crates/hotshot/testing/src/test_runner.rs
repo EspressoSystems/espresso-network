@@ -41,7 +41,6 @@ use hotshot_types::{
     HotShotConfig, ValidatorConfig,
 };
 use tide_disco::Url;
-use tokio::{spawn, task::JoinHandle};
 #[allow(deprecated)]
 use tracing::info;
 
@@ -311,8 +310,7 @@ where
 
     pub async fn init_builders<B: TestBuilderImplementation<TYPES>>(
         &self,
-    ) -> (Vec<Box<dyn BuilderTask<TYPES>>>, Vec<Url>, Url) {
-        let config = self.launcher.metadata.test_config.clone();
+    ) -> (Vec<Box<dyn BuilderTask<TYPES>>>, Vec<Url>) {
         let mut builder_tasks = Vec::new();
         let mut builder_urls = Vec::new();
         for metadata in &self.launcher.metadata.builders {
@@ -330,21 +328,7 @@ where
             builder_urls.push(builder_url);
         }
 
-        let fallback_builder_port = portpicker::pick_unused_port().expect("No free ports");
-        let fallback_builder_url =
-            Url::parse(&format!("http://localhost:{fallback_builder_port}")).expect("Invalid URL");
-
-        let fallback_builder_task = B::start(
-            config.num_nodes_with_stake.into(),
-            fallback_builder_url.clone(),
-            B::Config::default(),
-            self.launcher.metadata.fallback_builder.changes.clone(),
-        )
-        .await;
-
-        builder_tasks.push(fallback_builder_task);
-
-        (builder_tasks, builder_urls, fallback_builder_url)
+        (builder_tasks, builder_urls)
     }
 
     /// Add nodes.
@@ -362,8 +346,7 @@ where
 
         // Num_nodes is updated on the fly now via claim_block_with_num_nodes. This stays around to seed num_nodes
         // in the builders for tests which don't update that field.
-        let (mut builder_tasks, builder_urls, fallback_builder_url) =
-            self.init_builders::<B>().await;
+        let (mut builder_tasks, builder_urls) = self.init_builders::<B>().await;
 
         // Collect uninitialized nodes because we need to wait for all networks to be ready before starting the tasks
         let mut uninitialized_nodes = Vec::new();

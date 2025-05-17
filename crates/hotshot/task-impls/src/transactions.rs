@@ -11,7 +11,7 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
+use futures::{stream::FuturesUnordered, StreamExt};
 use hotshot_builder_api::{
     v0_1::block_info::AvailableBlockInfo, v0_2::block_info::AvailableBlockHeaderInputV2,
 };
@@ -24,7 +24,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         block_contents::{BuilderFee, EncodeBytes},
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{BuilderSignatureKey, SignatureKey},
         BlockPayload,
     },
@@ -33,14 +33,10 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
-use url::Url;
 use vbs::version::{StaticVersionType, Version};
-use vec1::Vec1;
 
 use crate::{
-    builder::{
-        v0_1::BuilderClient as BuilderClientBase, v0_99::BuilderClient as BuilderClientMarketplace,
-    },
+    builder::v0_1::BuilderClient as BuilderClientBase,
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
 };
@@ -123,7 +119,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         block_view: TYPES::View,
         block_epoch: Option<TYPES::Epoch>,
     ) -> Option<HotShotTaskCompleted> {
-        let version = match self.upgrade_lock.version(block_view).await {
+        let _version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!("Failed to calculate version: {:?}", e);
@@ -283,9 +279,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             },
         };
 
-        let Some(null_fee) =
-            null_block::builder_fee::<TYPES, V>(num_storage_nodes, version, *block_view)
-        else {
+        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
             tracing::error!("Failed to get null fee");
             return;
         };
@@ -315,9 +309,7 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
         version: Version,
         num_storage_nodes: usize,
     ) -> Option<PackedBundle<TYPES>> {
-        let Some(null_fee) =
-            null_block::builder_fee::<TYPES, V>(num_storage_nodes, version, *block_view)
-        else {
+        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
             tracing::error!("Failed to calculate null block fee.");
             return None;
         };

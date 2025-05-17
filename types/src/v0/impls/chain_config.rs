@@ -74,7 +74,7 @@ impl FromStringOrInteger for BlockSize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v0_99::{ChainConfig, ResolvableChainConfig};
+    use crate::v0_3::{ChainConfig, ResolvableChainConfig};
 
     #[test]
     fn test_chainid_serde_json_as_decimal() {

@@ -2,9 +2,7 @@ use anyhow::Context;
 use clap::Parser;
 use espresso_types::traits::SequencerPersistence;
 #[allow(unused_imports)]
-use espresso_types::{
-    traits::NullEventConsumer, FeeVersion, SequencerVersions, SolverAuctionResultsProvider, V0_0,
-};
+use espresso_types::{traits::NullEventConsumer, FeeVersion, SequencerVersions, V0_0};
 use futures::future::FutureExt;
 use hotshot_types::traits::{metrics::NoMetrics, node_implementation::Versions};
 use vbs::version::StaticVersionType;

@@ -10,8 +10,6 @@ use hotshot_types::{
     HotShotConfig,
 };
 use indexmap::IndexMap;
-use sequencer_utils::ser::FromStringOrInteger;
-use time::OffsetDateTime;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
@@ -21,10 +19,10 @@ use super::{
     traits::MembershipPersistence,
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    SeqTypes, TimeBasedUpgrade, UpgradeType, ViewBasedUpgrade,
+    SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
 use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
+    traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
     Upgrade, UpgradeMode,
 };
 #[cfg(any(test, feature = "testing"))]
@@ -36,7 +34,7 @@ use crate::EpochCommittees;
 #[derive(derive_more::Debug, Clone)]
 pub struct NodeState {
     pub node_id: u64,
-    pub chain_config: crate::v0_99::ChainConfig,
+    pub chain_config: ChainConfig,
     pub l1_client: L1Client,
     #[debug("{}", state_catchup.name())]
     pub state_catchup: Arc<dyn StateCatchup>,
@@ -367,26 +365,6 @@ impl Upgrade {
         });
 
         let upgrade_type = UpgradeType::Epoch { chain_config };
-        Upgrade { mode, upgrade_type }
-    }
-
-    pub fn marketplace_time_based() -> Upgrade {
-        let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
-        let mode = UpgradeMode::Time(TimeBasedUpgrade {
-            start_proposing_time: Timestamp::from_integer(now).unwrap(),
-            stop_proposing_time: Timestamp::from_integer(now + 500).unwrap(),
-            start_voting_time: None,
-            stop_voting_time: None,
-        });
-
-        let upgrade_type = UpgradeType::Marketplace {
-            chain_config: ChainConfig {
-                max_block_size: 400.into(),
-                base_fee: 2.into(),
-                bid_recipient: Some(Default::default()),
-                ..Default::default()
-            },
-        };
         Upgrade { mode, upgrade_type }
     }
 }

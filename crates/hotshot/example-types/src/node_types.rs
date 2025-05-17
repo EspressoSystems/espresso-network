@@ -284,8 +284,6 @@ impl Versions for TestVersions {
         0, 0,
     ];
 
-    type Marketplace = StaticVersion<0, 3>;
-
     type Epochs = StaticVersion<0, 4>;
 }
 
@@ -299,24 +297,6 @@ impl Versions for MarketplaceUpgradeTestVersions {
         1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
         0, 0,
     ];
-
-    type Marketplace = StaticVersion<0, 3>;
-
-    type Epochs = StaticVersion<0, 4>;
-}
-
-#[derive(Clone, Debug, Copy)]
-pub struct MarketplaceTestVersions {}
-
-impl Versions for MarketplaceTestVersions {
-    type Base = StaticVersion<0, 3>;
-    type Upgrade = StaticVersion<0, 3>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Marketplace = StaticVersion<0, 3>;
 
     type Epochs = StaticVersion<0, 4>;
 }
@@ -332,8 +312,6 @@ impl Versions for EpochsTestVersions {
         0, 0,
     ];
 
-    type Marketplace = StaticVersion<0, 5>;
-
     type Epochs = StaticVersion<0, 3>;
 }
 
@@ -347,8 +325,6 @@ impl Versions for EpochUpgradeTestVersions {
         1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
         0, 0,
     ];
-
-    type Marketplace = StaticVersion<0, 5>;
 
     type Epochs = StaticVersion<0, 4>;
 }
@@ -365,9 +341,7 @@ mod tests {
     };
     use serde::{Deserialize, Serialize};
 
-    use crate::node_types::{
-        EpochsTestVersions, MarketplaceTestVersions, NodeType, TestTypes, TestVersions,
-    };
+    use crate::node_types::{EpochsTestVersions, NodeType, TestTypes, TestVersions};
     #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
     /// Dummy data used for test
     struct TestData<TYPES: NodeType> {
@@ -398,20 +372,22 @@ mod tests {
         let view_0 = <TestTypes as NodeType>::View::new(0);
         let view_1 = <TestTypes as NodeType>::View::new(1);
 
-        let versioned_data_0 = VersionedVoteData::<
-            TestTypes,
-            TestData<TestTypes>,
-            MarketplaceTestVersions,
-        >::new(data, view_0, &upgrade_lock)
-        .await
-        .unwrap();
-        let versioned_data_1 = VersionedVoteData::<
-            TestTypes,
-            TestData<TestTypes>,
-            MarketplaceTestVersions,
-        >::new(data, view_1, &upgrade_lock)
-        .await
-        .unwrap();
+        let versioned_data_0 =
+            VersionedVoteData::<TestTypes, TestData<TestTypes>, TestVersions>::new(
+                data,
+                view_0,
+                &upgrade_lock,
+            )
+            .await
+            .unwrap();
+        let versioned_data_1 =
+            VersionedVoteData::<TestTypes, TestData<TestTypes>, TestVersions>::new(
+                data,
+                view_1,
+                &upgrade_lock,
+            )
+            .await
+            .unwrap();
 
         let versioned_data_commitment_0: [u8; 32] = versioned_data_0.commit().into();
         let versioned_data_commitment_1: [u8; 32] = versioned_data_1.commit().into();

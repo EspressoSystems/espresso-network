@@ -23,7 +23,7 @@ use espresso_contract_deployer::{
     DeployedContracts, HttpProviderWithWallet,
 };
 use espresso_types::{
-    parse_duration, v0_99::ChainConfig, EpochVersion, SeqTypes, SequencerVersions, ValidatedState,
+    parse_duration, v0_3::ChainConfig, EpochVersion, SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};

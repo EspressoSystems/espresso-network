@@ -163,14 +163,13 @@ fn reference_l1_block() -> L1BlockInfo {
 
 const REFERENCE_L1_BLOCK_COMMITMENT: &str = "L1BLOCK~4HpzluLK2Isz3RdPNvNrDAyQcWOF2c9JeLZzVNLmfpQ9";
 
-fn reference_chain_config() -> crate::v0_99::ChainConfig {
-    crate::v0_99::ChainConfig {
+fn reference_chain_config() -> crate::v0_3::ChainConfig {
+    crate::v0_3::ChainConfig {
         chain_id: 0x8a19.into(),
         max_block_size: 10240.into(),
         base_fee: 0.into(),
         fee_contract: Some(Default::default()),
         fee_recipient: Default::default(),
-        bid_recipient: Some(Default::default()),
         stake_table_contract: Some(Default::default()),
     }
 }
@@ -183,9 +182,6 @@ const REFERENCE_V2_CHAIN_CONFIG_COMMITMENT: &str =
 
 const REFERENCE_V3_CHAIN_CONFIG_COMMITMENT: &str =
     "CHAIN_CONFIG~eGc90bEB8zFN4GTo2nForM7pox7r4OiHd2LrtgotiNMO";
-
-const REFERENCE_V99_CHAIN_CONFIG_COMMITMENT: &str =
-    "CHAIN_CONFIG~ucfYQZSMbWCUHdtwYMc6vsw-4jDmlu3hi2lGDBxCRpI-";
 
 fn reference_fee_info() -> FeeInfo {
     FeeInfo::new(
@@ -230,7 +226,6 @@ async fn reference_header(version: Version) -> Header {
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
-const REFERENCE_V99_HEADER_COMMITMENT: &str = "BLOCK~3mQrgngtwuDmhzShcxbajQBcY6tuhKYqxcwzCkQDkoIa";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -448,16 +443,6 @@ fn test_reference_v3_chain_config() {
 }
 
 #[test]
-fn test_reference_v99_chain_config() {
-    reference_test(
-        "v99",
-        "chain_config",
-        reference_chain_config(),
-        REFERENCE_V99_CHAIN_CONFIG_COMMITMENT,
-    );
-}
-
-#[test]
 fn test_reference_fee_info() {
     reference_test(
         "v1",
@@ -497,15 +482,6 @@ async fn test_reference_header_v3() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_reference_header_v99() {
-    reference_test(
-        "v99",
-        "header",
-        reference_header(StaticVersion::<0, 99>::version()).await,
-        REFERENCE_V99_HEADER_COMMITMENT,
-    );
-}
 #[test]
 fn test_reference_transaction() {
     reference_test(

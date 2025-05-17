@@ -12,7 +12,7 @@ use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use derivative::Derivative;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, FeeAccount,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
     MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
 };
 use futures::{

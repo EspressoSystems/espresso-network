@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
-use crate::{v0::utils::Timestamp, v0_99::ChainConfig};
+use crate::{v0::utils::Timestamp, v0_3::ChainConfig};
 
 /// Represents the specific type of upgrade.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
