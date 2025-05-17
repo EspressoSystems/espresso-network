@@ -13,4 +13,5 @@ extend-exclude = [
   "crates/hotshot/orchestrator/run-config.toml",
   "crates/hotshot/macros/src/lib.rs",
   "staking-cli/tests/cli.rs",
+  "sdks/go/types/common/consts.go",
 ]

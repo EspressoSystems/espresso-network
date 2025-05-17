@@ -51,6 +51,8 @@
       CARGO_TARGET_DIR = "target/nix";
       rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE CARGO_TARGET_DIR; };
 
+      goVersion = 23; # Change this to update the whole stack
+
       solhintPkg = { buildNpmPackage, fetchFromGitHub }:
         buildNpmPackage rec {
           pname = "solhint";
@@ -80,6 +82,19 @@
           mkShell = prev.mkShell.override {
             stdenv = prev.stdenvAdapters.useMoldLinker prev.clangStdenv;
           };
+        })
+
+        (final: prev: rec {
+          golangci-lint = prev.golangci-lint.overrideAttrs (old: rec {
+            version = "1.64.8";
+            src = prev.fetchFromGitHub {
+              owner = "golangci";
+              repo = "golangci-lint";
+              rev = "v${version}";
+              sha256 = "sha256-ODnNBwtfILD0Uy2AKDR/e76ZrdyaOGlCktVUcf9ujy8";
+            };
+            vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
+          });
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
@@ -230,6 +245,11 @@
             solhint
             (python3.withPackages (ps: with ps; [ black ]))
             yarn
+
+            go
+            golangci-lint
+            # provides abigen
+            go-ethereum
           ] ++ lib.optionals stdenv.isDarwin
             [ darwin.apple_sdk.frameworks.SystemConfiguration ]
           ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX

@@ -209,6 +209,23 @@ jobs:
           --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 20
 
+  test-go-sdk:
+    needs: build-test-bins
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - uses: actions/checkout@v4
+
+      - name: Build verification module
+        run: |
+          nix develop --accept-flake-config -c just build-go-crypto-helper
+
+      - name: Test
+        run: |
+          nix develop --accept-flake-config -c just test-go
+
   test-integration:
     needs: [build-test-bins, build-test-artifacts-postgres]
     strategy:

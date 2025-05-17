@@ -154,6 +154,7 @@ gen-bindings:
     cargo sort -g -w
 
     just export-contract-abis
+    just gen-go-bindings
 
 # export select ABIs, to let downstream projects can use them without solc compilation
 export-contract-abis:
@@ -213,3 +214,14 @@ dev-download-srs:
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
     2>&1 | tee log.txt
 
+gen-go-bindings:
+	abigen --abi contracts/artifacts/abi/LightClient.json --pkg lightclient --out sdks/go/light-client/lightclient.go
+	abigen --abi contracts/artifacts/abi/LightClientMock.json --pkg lightclientmock --out sdks/go/light-client-mock/lightclient.go
+
+build-go-crypto-helper *args:
+    ./scripts/build-go-crypto-helper {{args}}
+
+test-go:
+    #!/usr/bin/env bash
+    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
+    cd sdks/go && go test -v ./...
