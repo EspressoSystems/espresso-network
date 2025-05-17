@@ -1,6 +1,7 @@
 base_version = "0.3"
 upgrade_version = "0.3"
-epoch_height = 300
+epoch_height = 150
+epoch_start_block = 1
 
 [stake_table]
 capacity = 10

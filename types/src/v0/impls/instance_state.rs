@@ -135,6 +135,7 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
@@ -149,7 +150,8 @@ impl NodeState {
             StakeTableFetcher::mock(),
         )));
 
-        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
         Self::new(
             0,
             chain_config,
@@ -162,6 +164,7 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
@@ -175,7 +178,8 @@ impl NodeState {
             vec![],
             StakeTableFetcher::mock(),
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             0,
@@ -189,6 +193,7 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
@@ -201,7 +206,8 @@ impl NodeState {
             StakeTableFetcher::mock(),
         )));
 
-        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
         Self::new(
             0,
             ChainConfig::default(),
@@ -214,9 +220,11 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v99() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
+
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -226,7 +234,8 @@ impl NodeState {
             vec![],
             StakeTableFetcher::mock(),
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             0,
@@ -293,9 +302,11 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 #[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
+
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -305,7 +316,8 @@ impl Default for NodeState {
             vec![],
             StakeTableFetcher::mock(),
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, None, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             1u64,

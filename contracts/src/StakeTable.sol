@@ -275,20 +275,18 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     }
 
     function ensureValidatorActive(address validator) internal view {
-        if (!(validators[validator].status == ValidatorStatus.Active)) {
+        ValidatorStatus status = validators[validator].status;
+        if (status == ValidatorStatus.Unknown) {
             revert ValidatorInactive();
+        }
+        if (status == ValidatorStatus.Exited) {
+            revert ValidatorAlreadyExited();
         }
     }
 
     function ensureValidatorNotRegistered(address validator) internal view {
         if (validators[validator].status != ValidatorStatus.Unknown) {
             revert ValidatorAlreadyRegistered();
-        }
-    }
-
-    function ensureValidatorNotExited(address validator) internal view {
-        if (validatorExits[validator] != 0) {
-            revert ValidatorAlreadyExited();
         }
     }
 
@@ -361,6 +359,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         validators[validator].status = ValidatorStatus.Exited;
         validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+        validators[validator].delegatedAmount = 0;
 
         emit ValidatorExit(validator);
     }
@@ -381,10 +380,10 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
             revert InsufficientAllowance(allowance, amount);
         }
 
+        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
+
         validators[validator].delegatedAmount += amount;
         delegations[validator][delegator] += amount;
-
-        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
 
         emit Delegated(delegator, validator, amount);
     }
@@ -398,10 +397,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         if (amount == 0) {
             revert ZeroAmount();
-        }
-
-        if (validators[delegator].status == ValidatorStatus.Exited) {
-            revert ValidatorAlreadyExited();
         }
 
         if (undelegations[validator][delegator].amount != 0) {

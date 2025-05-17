@@ -509,7 +509,7 @@ impl Inner {
         if self.legacy_anchor_leaf_path().is_file() {
             // We may have an old version of storage, where there is just a single file for the
             // anchor leaf. Read it and return the contents.
-            let mut file = File::open(self.legacy_anchor_leaf_path())?;
+            let mut file = BufReader::new(File::open(self.legacy_anchor_leaf_path())?);
 
             // The first 8 bytes just contain the height of the leaf. We can skip this.
             file.seek(SeekFrom::Start(8)).context("seek")?;
@@ -1241,7 +1241,7 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         epoch: EpochNumber,
         drb_result: DrbResult,

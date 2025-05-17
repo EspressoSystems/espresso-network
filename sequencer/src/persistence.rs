@@ -200,7 +200,7 @@ mod persistence_tests {
 
         // Store a drb result.
         storage
-            .add_drb_result(EpochNumber::new(1), [1; 32])
+            .store_drb_result(EpochNumber::new(1), [1; 32])
             .await
             .unwrap();
         assert_eq!(
@@ -214,7 +214,7 @@ mod persistence_tests {
 
         // Store a second DRB result
         storage
-            .add_drb_result(EpochNumber::new(2), [3; 32])
+            .store_drb_result(EpochNumber::new(2), [3; 32])
             .await
             .unwrap();
         assert_eq!(
@@ -268,7 +268,7 @@ mod persistence_tests {
             let epoch = EpochNumber::new(i);
             let drb = [i as u8; 32];
             storage
-                .add_drb_result(epoch, drb)
+                .store_drb_result(epoch, drb)
                 .await
                 .unwrap_or_else(|_| panic!("Failed to store DRB result for epoch {}", i));
         }
