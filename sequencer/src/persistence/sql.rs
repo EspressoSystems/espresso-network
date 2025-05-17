@@ -2163,6 +2163,16 @@ impl MembershipPersistence for Persistence {
         Ok(())
     }
 
+    /// Loads all events from persistent storage up to the specified L1 block.
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple containing:
+    /// - `Option<u64>` - The queried L1 block for which all events have been successfully fetched.
+    /// - `Vec<(EventKey, StakeTableEvent)>` - A list of events, where each entry is a tuple of the event key
+    /// event key is (l1 block number, log index)
+    ///   and the corresponding StakeTable event.
+    ///
     async fn load_events(
         &self,
         to_l1_block: u64,
