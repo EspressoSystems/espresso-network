@@ -323,7 +323,7 @@ impl<
 {
     type Error = std::convert::Infallible;
 
-    async fn new_legacy(
+    async fn new(
         _parent_state: &TYPES::ValidatedState,
         instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         parent_leaf: &Leaf2<TYPES>,

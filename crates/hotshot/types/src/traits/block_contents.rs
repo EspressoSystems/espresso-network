@@ -165,7 +165,7 @@ pub trait BlockHeader<TYPES: NodeType>:
     /// Build a header with the parent validate state, instance-level state, parent leaf, payload
     /// and builder commitments, and metadata. This is only used in pre-marketplace versions
     #[allow(clippy::too_many_arguments)]
-    fn new_legacy(
+    fn new(
         parent_state: &TYPES::ValidatedState,
         instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         parent_leaf: &Leaf2<TYPES>,

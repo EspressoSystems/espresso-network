@@ -521,7 +521,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 );
             }
         }
-        let block_header = TYPES::BlockHeader::new_legacy(
+        let block_header = TYPES::BlockHeader::new(
             state.as_ref(),
             self.instance_state.as_ref(),
             &parent_leaf,

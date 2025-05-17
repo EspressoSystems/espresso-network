@@ -745,7 +745,7 @@ impl BlockHeader<SeqTypes> for Header {
             version,
         )
     )]
-    async fn new_legacy(
+    async fn new(
         parent_state: &ValidatedState,
         instance_state: &NodeState,
         parent_leaf: &Leaf2,
@@ -1369,7 +1369,7 @@ mod test_headers {
             fee_account: key_pair.fee_account(),
             fee_signature,
         };
-        let proposal = Header::new_legacy(
+        let proposal = Header::new(
             &forgotten_state,
             &genesis_state,
             &parent_leaf,
