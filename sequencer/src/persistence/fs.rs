@@ -12,7 +12,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
@@ -1449,9 +1449,10 @@ impl MembershipPersistence for Persistence {
         )
     }
 
+    /// store stake table events upto the l1 block
     async fn store_events(
         &self,
-        l1_block: u64,
+        to_l1_block: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
         if events.is_empty() {
@@ -1464,16 +1465,23 @@ impl MembershipPersistence for Persistence {
 
         fs::create_dir_all(events_dir.clone()).context("failed to create events dir")?;
         // Read the last l1 finalized for which events has been stored
-        let last_l1_finalized_path = events_dir.join("last_l1_finalized").with_extension("txt");
+        let last_l1_finalized_path = events_dir.join("last_l1_finalized").with_extension("bin");
 
         // check if the last l1 events is higher than the incoming one
         if last_l1_finalized_path.exists() {
-            let bytes = fs::read(&last_l1_finalized_path).context("read")?;
+            let bytes = fs::read(&last_l1_finalized_path).with_context(|| {
+                format!("Failed to read file at path: {last_l1_finalized_path:?}")
+            })?;
             let mut buf = [0; 8];
-            bytes.as_slice().read_exact(&mut buf[..8])?;
-            let stored_l1 = u64::from_le_bytes(buf);
-            if stored_l1 > l1_block {
-                tracing::debug!(?stored_l1, ?l1_block, "stored l1 is greater");
+            bytes
+                .as_slice()
+                .read_exact(&mut buf[..8])
+                .with_context(|| {
+                    format!("Failed to read 8 bytes from file at path: {last_l1_finalized_path:?}")
+                })?;
+            let persisted_l1_block = u64::from_le_bytes(buf);
+            if persisted_l1_block > to_l1_block {
+                tracing::debug!(?persisted_l1_block, ?to_l1_block, "stored l1 is greater");
                 return Ok(());
             }
         }
@@ -1500,26 +1508,39 @@ impl MembershipPersistence for Persistence {
             &last_l1_finalized_path,
             |_| Ok(true),
             |mut file| {
-                let bytes = l1_block.to_le_bytes();
+                let bytes = to_l1_block.to_le_bytes();
 
                 file.write_all(&bytes)?;
-                tracing::debug!("updated l1 finalized ={l1_block:?}");
+                tracing::debug!("updated l1 finalized ={to_l1_block:?}");
                 Ok(())
             },
         )
     }
 
+    /// Loads all events from persistent storage up to the specified L1 block.
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple containing:
+    /// - `Option<u64>` - The queried L1 block for which all events have been successfully fetched.
+    /// - `Vec<(EventKey, StakeTableEvent)>` - A list of events, where each entry is a tuple of the event key
+    /// event key is (l1 block number, log index)
+    ///   and the corresponding StakeTable event.
+    ///
     async fn load_events(
         &self,
-        l1_block: u64,
-    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)> {
+        to_l1_block: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
         let inner = self.inner.read().await;
         let dir_path = inner.stake_table_dir_path();
         let events_dir = dir_path.join("events");
 
         // check if we have any events in storage
         // we can do this by checking last l1 finalized block for which we processed events
-        let last_l1_finalized_path = events_dir.join("last_l1_finalized").with_extension("txt");
+        let last_l1_finalized_path = events_dir.join("last_l1_finalized").with_extension("bin");
 
         if !last_l1_finalized_path.exists() || !events_dir.exists() {
             return Ok((None, Vec::new()));
@@ -1527,19 +1548,25 @@ impl MembershipPersistence for Persistence {
 
         let mut events = Vec::new();
 
-        let bytes = fs::read(&last_l1_finalized_path).context("read")?;
+        let bytes = fs::read(&last_l1_finalized_path)
+            .with_context(|| format!("Failed to read file at path: {last_l1_finalized_path:?}"))?;
         let mut buf = [0; 8];
-        bytes.as_slice().read_exact(&mut buf[..8])?;
+        bytes
+            .as_slice()
+            .read_exact(&mut buf[..8])
+            .with_context(|| {
+                format!("Failed to read 8 bytes from file at path: {last_l1_finalized_path:?}")
+            })?;
 
-        let last_l1 = u64::from_le_bytes(buf);
+        let last_processed_l1_block = u64::from_le_bytes(buf);
 
         // Determine the L1 block for querying events.
         // If the last stored L1 block is greater than the requested block, limit the query to the requested block.
         // Otherwise, query up to the last stored block.
-        let query_l1_block = if last_l1 > l1_block {
-            l1_block
+        let query_l1_block = if last_processed_l1_block > to_l1_block {
+            to_l1_block
         } else {
-            last_l1
+            last_processed_l1_block
         };
 
         for entry in fs::read_dir(&events_dir).context("events directory")? {
@@ -1587,7 +1614,14 @@ impl MembershipPersistence for Persistence {
 
         events.sort_by_key(|(key, _)| *key);
 
-        Ok((Some(query_l1_block), events))
+        if query_l1_block == to_l1_block {
+            Ok((Some(EventsPersistenceRead::Complete), events))
+        } else {
+            Ok((
+                Some(EventsPersistenceRead::UntilL1Block(query_l1_block)),
+                events,
+            ))
+        }
     }
 }
 

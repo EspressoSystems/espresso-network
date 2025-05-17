@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     Leaf2, NetworkConfig,
@@ -277,7 +277,10 @@ impl MembershipPersistence for NoStorage {
     async fn load_events(
         &self,
         _l1_block: u64,
-    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)> {
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
         Ok((None, Vec::new()))
     }
 }

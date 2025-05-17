@@ -19,7 +19,7 @@ use vbs::version::Version;
 
 use super::{
     state::ValidatedState,
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     SeqTypes, TimeBasedUpgrade, UpgradeType, ViewBasedUpgrade,
@@ -98,7 +98,10 @@ impl MembershipPersistence for NoStorage {
     async fn load_events(
         &self,
         _l1_block: u64,
-    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)> {
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
         bail!("unimplemented")
     }
 }

@@ -380,6 +380,14 @@ pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     async fn reset(self) -> anyhow::Result<()>;
 }
 
+/// Determine the read state based on the queried block range.
+// - If the persistence returned events up to the requested block, the read is complete.
+/// - Otherwise, indicate that the read is up to the last processed block.
+pub enum EventsPersistenceRead {
+    Complete,
+    UntilL1Block(u64),
+}
+
 #[async_trait]
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
@@ -407,7 +415,10 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     async fn load_events(
         &self,
         l1_finalized: u64,
-    ) -> anyhow::Result<(Option<u64>, Vec<(EventKey, StakeTableEvent)>)>;
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )>;
 }
 
 #[async_trait]

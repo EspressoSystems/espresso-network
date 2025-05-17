@@ -61,7 +61,7 @@ mod persistence_tests {
         Contract, Contracts,
     };
     use espresso_types::{
-        traits::{EventConsumer, NullEventConsumer, PersistenceOptions},
+        traits::{EventConsumer, EventsPersistenceRead, NullEventConsumer, PersistenceOptions},
         v0_3::{StakeTableFetcher, Validator},
         Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
         SequencerVersions, ValidatedState,
@@ -1157,7 +1157,7 @@ mod persistence_tests {
             .is_err());
     }
 
-    async fn assert_events<P: TestablePersistence>(
+    async fn assert_events_eq<P: TestablePersistence>(
         persistence: &P,
         block: u64,
         stake_table_fetcher: &StakeTableFetcher,
@@ -1280,7 +1280,7 @@ mod persistence_tests {
                 .await
                 .expect("latest l1 block");
 
-            assert_events(
+            assert_events_eq(
                 &persistence,
                 block1,
                 stake_table_fetcher,
@@ -1307,7 +1307,7 @@ mod persistence_tests {
             let membership_state = current_membership.read().await;
             let stake_table_fetcher = membership_state.fetcher();
 
-            assert_events(
+            assert_events_eq(
                 &persistence,
                 block2,
                 stake_table_fetcher,
@@ -1429,9 +1429,10 @@ mod persistence_tests {
 
         fetcher.spawn_update_loop().await;
         let mut prev_l1_block = 0;
+        let mut prev_events_len = 0;
         for _i in 0..10 {
             // Wait for more than update interval to assert that persistence was updated
-            // L1 update interval is 2s in this test
+            // L1 update interval is 7s in this test
             tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
             let block = anvil_provider
@@ -1439,10 +1440,16 @@ mod persistence_tests {
                 .await
                 .expect("latest l1 block");
 
-            let (l1_block, events) = persistence.load_events(block).await?;
+            let (read_offset, persisted_events) = persistence.load_events(block).await?;
+            let read_offset = read_offset.unwrap();
+            let l1_block = match read_offset {
+                EventsPersistenceRead::Complete => block,
+                EventsPersistenceRead::UntilL1Block(block) => block,
+            };
 
-            tracing::info!("{l1_block:?}, persistence events = {events:?}.");
-            let l1_block = l1_block.unwrap();
+            tracing::info!("{l1_block:?}, persistence events = {persisted_events:?}.");
+            assert!(persisted_events.len() > prev_events_len);
+
             assert!(l1_block > prev_l1_block, "events not updated");
 
             let contract_events = StakeTableFetcher::fetch_events_from_contract(
@@ -1453,9 +1460,10 @@ mod persistence_tests {
             )
             .await?
             .sort_events()?;
-            assert_eq!(events, contract_events);
+            assert_eq!(persisted_events, contract_events);
 
             prev_l1_block = l1_block;
+            prev_events_len = persisted_events.len();
         }
 
         Ok(())
