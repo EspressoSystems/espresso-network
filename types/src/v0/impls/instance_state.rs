@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
+use anyhow::bail;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -16,7 +17,7 @@ use vbs::version::Version;
 
 use super::{
     state::ValidatedState,
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     SeqTypes, UpgradeType, ViewBasedUpgrade,
@@ -86,13 +87,20 @@ impl MembershipPersistence for NoStorage {
 
     async fn store_events(
         &self,
-        _l1_block: u64,
+        _l1_finalized: u64,
         _events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
-        Ok(None)
+
+    async fn load_events(
+        &self,
+        _l1_block: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
+        bail!("unimplemented")
     }
 }
 

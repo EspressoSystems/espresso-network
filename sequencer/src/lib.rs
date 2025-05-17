@@ -1179,7 +1179,7 @@ pub mod testing {
 
             let l1_opt = L1ClientOptions {
                 stake_table_update_interval: Duration::from_secs(5),
-                l1_events_max_block_range: 1,
+                l1_events_max_block_range: 1000,
                 l1_polling_interval: Duration::from_secs(1),
                 subscription_timeout: Duration::from_secs(5),
                 ..Default::default()
