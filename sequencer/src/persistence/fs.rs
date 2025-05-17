@@ -1486,6 +1486,9 @@ impl MembershipPersistence for Persistence {
             }
         }
 
+        // stores each event in a separate file
+        // this can cause performance issue when, for example, reading all the files
+        // However, the plan is to remove file system completely in future
         for (event_key, event) in events {
             let (block_number, event_index) = event_key;
             // file name is like block_index.json
