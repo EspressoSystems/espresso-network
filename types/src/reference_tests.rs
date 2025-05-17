@@ -437,7 +437,7 @@ fn test_reference_v3_chain_config() {
     reference_test(
         "v3",
         "chain_config",
-        v0_3::ChainConfig::from(reference_chain_config()),
+        reference_chain_config(),
         REFERENCE_V3_CHAIN_CONFIG_COMMITMENT,
     );
 }

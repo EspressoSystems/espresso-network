@@ -321,20 +321,6 @@ pub trait BuilderSignatureKey:
         )
     }
 
-    /// sign fee offer (marketplace version)
-    /// # Errors
-    /// If unable to sign the data with the key
-    fn sign_sequencing_fee_marketplace(
-        private_key: &Self::BuilderPrivateKey,
-        fee_amount: u64,
-        view_number: u64,
-    ) -> Result<Self::BuilderSignature, Self::SignError> {
-        Self::sign_builder_message(
-            private_key,
-            &aggregate_fee_data_marketplace(fee_amount, view_number),
-        )
-    }
-
     /// sign transactions (marketplace version)
     /// # Errors
     /// If unable to sign the data with the key

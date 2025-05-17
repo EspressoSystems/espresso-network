@@ -585,7 +585,7 @@ impl<'a> ValidatedTransition<'a> {
         }
         Ok(())
     }
-    /// Validate that [`FeeAmount`] (or sum of fees for Marketplace Version) is
+    /// Validate that [`FeeAmount`] that is
     /// sufficient for block size.
     fn validate_fee(&self) -> Result<(), ProposalValidationError> {
         // TODO this should be updated to `base_fee * bundle_size` when we have
@@ -880,7 +880,6 @@ impl ValidatedState {
 
         let cf = match upgrade.upgrade_type {
             UpgradeType::Fee { chain_config } => chain_config,
-            UpgradeType::Marketplace { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
         };
 

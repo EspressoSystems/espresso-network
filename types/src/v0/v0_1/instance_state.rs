@@ -8,7 +8,6 @@ use crate::{v0::utils::Timestamp, v0_3::ChainConfig};
 #[serde(rename_all = "snake_case")]
 pub enum UpgradeType {
     Fee { chain_config: ChainConfig },
-    Marketplace { chain_config: ChainConfig },
     Epoch { chain_config: ChainConfig },
 }
 
@@ -18,7 +17,6 @@ impl UpgradeType {
     pub fn chain_config(&self) -> Option<ChainConfig> {
         match self {
             UpgradeType::Fee { chain_config } => Some(*chain_config),
-            UpgradeType::Marketplace { chain_config } => Some(*chain_config),
             UpgradeType::Epoch { chain_config } => Some(*chain_config),
         }
     }

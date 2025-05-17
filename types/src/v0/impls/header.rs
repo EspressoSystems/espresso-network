@@ -463,11 +463,6 @@ impl Header {
 
         assert!(major == 0, "Invalid major version {major}");
 
-        // DISTRIBUTE REWARDS
-        // TODO(abdul): Change this to version >= EpochVersion::version()
-        // when we deploy the permissionless contract in native demo
-        // so that marketplace version also supports this,
-        // and the marketplace integration test passes
         if let Some(validator) = validator {
             let reward_state = validator.apply_rewards(state.reward_merkle_tree.clone())?;
             state.reward_merkle_tree = reward_state;
@@ -773,7 +768,6 @@ impl BlockHeader<SeqTypes> for Header {
                 Some(upgrade) => match upgrade.upgrade_type {
                     UpgradeType::Fee { chain_config } => chain_config,
                     UpgradeType::Epoch { chain_config } => chain_config,
-                    _ => Header::get_chain_config(&validated_state, instance_state).await?,
                 },
                 None => Header::get_chain_config(&validated_state, instance_state).await?,
             }
