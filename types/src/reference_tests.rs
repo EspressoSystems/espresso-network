@@ -48,7 +48,7 @@ use vbs::{
 
 use crate::{
     v0_1::{self, ADVZNsProof},
-    v0_2, v0_3, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
+    v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
     NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction, ValidatedState,
 };
 

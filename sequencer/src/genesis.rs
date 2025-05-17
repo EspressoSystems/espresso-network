@@ -629,7 +629,7 @@ mod test {
 
            
         "#,
-            proxy_addr, proxy_addr,
+            proxy_addr,
         )
         .to_string();
 
