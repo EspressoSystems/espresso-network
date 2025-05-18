@@ -23,6 +23,7 @@ pub struct ChainConfig {
     /// contract when they are off. In a future release, after fees are switched on and thoroughly
     /// tested, this may be made mandatory.
     #[serde(with = "ethers_serde::option_address")]
+    #[serde(default)]
     pub fee_contract: Option<Address>,
 
     /// Account that receives sequencing fees.
@@ -38,6 +39,7 @@ pub struct ChainConfig {
     /// contract when they are off. In a future release, after PoS is switched on and thoroughly
     /// tested, this may be made mandatory.
     #[serde(with = "ethers_serde::option_address")]
+    #[serde(default)]
     pub stake_table_contract: Option<Address>,
 }
 

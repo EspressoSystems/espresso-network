@@ -260,7 +260,7 @@ impl Header {
         ns_table: NsTable,
         fee_merkle_tree_root: FeeMerkleCommitment,
         block_merkle_tree_root: BlockMerkleCommitment,
-        reward_merkle_tree_root: Option<RewardMerkleCommitment>,
+        reward_merkle_tree_root: RewardMerkleCommitment,
         fee_info: Vec<FeeInfo>,
         builder_signature: Vec<BuilderSignature>,
         version: Version,
@@ -318,7 +318,7 @@ impl Header {
                 fee_merkle_tree_root,
                 fee_info: fee_info[0], // NOTE this is asserted to exist above
                 builder_signature: builder_signature.first().copied(),
-                reward_merkle_tree_root: reward_merkle_tree_root.unwrap(),
+                reward_merkle_tree_root,
             }),
             // This case should never occur
             // but if it does, we must panic
@@ -916,7 +916,7 @@ impl BlockHeader<SeqTypes> for Header {
             ns_table.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
-            Some(reward_merkle_tree_root),
+            reward_merkle_tree_root,
             vec![FeeInfo::genesis()],
             vec![],
             instance_state.current_version,
@@ -1457,7 +1457,7 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
-            None,
+            header.reward_merkle_tree_root(),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1481,7 +1481,7 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
-            None,
+            header.reward_merkle_tree_root(),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
@@ -1494,7 +1494,7 @@ mod test_headers {
         let deserialized: Header = serde_json::from_str(&serialized).unwrap();
         assert_eq!(v2_header, deserialized);
 
-        let v99_header = Header::create(
+        let v3_header = Header::create(
             genesis.instance_state.chain_config,
             1,
             2,
@@ -1505,21 +1505,18 @@ mod test_headers {
             ns_table.clone(),
             header.fee_merkle_tree_root(),
             header.block_merkle_tree_root(),
-            None,
+            header.reward_merkle_tree_root(),
             vec![FeeInfo {
                 amount: 0.into(),
                 account: fee_account,
             }],
             Default::default(),
-            Version {
-                major: 0,
-                minor: 99,
-            },
+            Version { major: 0, minor: 3 },
         );
 
-        let serialized = serde_json::to_string(&v99_header).unwrap();
+        let serialized = serde_json::to_string(&v3_header).unwrap();
         let deserialized: Header = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(v99_header, deserialized);
+        assert_eq!(v3_header, deserialized);
 
         let v1_bytes = BincodeSerializer::<StaticVersion<0, 1>>::serialize(&v1_header).unwrap();
         let deserialized: Header =
@@ -1531,9 +1528,9 @@ mod test_headers {
             BincodeSerializer::<StaticVersion<0, 2>>::deserialize(&v2_bytes).unwrap();
         assert_eq!(v2_header, deserialized);
 
-        let v99_bytes = BincodeSerializer::<StaticVersion<0, 99>>::serialize(&v99_header).unwrap();
+        let v3_bytes = BincodeSerializer::<StaticVersion<0, 3>>::serialize(&v3_header).unwrap();
         let deserialized: Header =
-            BincodeSerializer::<StaticVersion<0, 99>>::deserialize(&v99_bytes).unwrap();
-        assert_eq!(v99_header, deserialized);
+            BincodeSerializer::<StaticVersion<0, 3>>::deserialize(&v3_bytes).unwrap();
+        assert_eq!(v3_header, deserialized);
     }
 }

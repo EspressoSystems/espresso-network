@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::{
     v0::impls::{NodeState, ValidatedState},
-    v0_1::ChainConfig,
+    v0_3::ChainConfig,
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
     NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxProof,
 };

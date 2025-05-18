@@ -216,7 +216,7 @@ async fn reference_header(version: Version) -> Header {
         ns_table,
         state.fee_merkle_tree.commitment(),
         state.block_merkle_tree.commitment(),
-        Some(state.reward_merkle_tree.commitment()),
+        state.reward_merkle_tree.commitment(),
         vec![fee_info],
         vec![builder_signature],
         version,
