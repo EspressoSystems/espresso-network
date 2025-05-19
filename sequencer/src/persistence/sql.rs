@@ -8,7 +8,7 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
     parse_duration, parse_size,
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2, NetworkConfig, Payload,
@@ -2096,38 +2096,142 @@ impl MembershipPersistence for Persistence {
 
     async fn store_events(
         &self,
-        l1_block: u64,
+        l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
-        let events_json = serde_json::to_value(&events).context("failed to serialize events ")?;
+        if events.is_empty() {
+            return Ok(());
+        }
 
         let mut tx = self.db.write().await?;
 
+        // check last l1 block if there is any
+        let last_processed_l1_block = query_as::<(i64,)>(
+            "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
+        )
+        .fetch_optional(tx.as_mut())
+        .await?
+        .map(|(l1,)| l1);
+
+        tracing::debug!("last l1 finalizes in database = {last_processed_l1_block:?}");
+
+        // skip events storage if the database already has higher l1 block events
+        if last_processed_l1_block > Some(l1_finalized.try_into()?) {
+            tracing::debug!(
+                ?last_processed_l1_block,
+                ?l1_finalized,
+                ?events,
+                "last l1 finalized stored is already higher"
+            );
+            return Ok(());
+        }
+
+        let mut query_builder: sqlx::QueryBuilder<Db> =
+            sqlx::QueryBuilder::new("INSERT INTO stake_table_events (l1_block, log_index, event) ");
+
+        let events = events
+            .into_iter()
+            .map(|((block_number, index), event)| {
+                Ok((
+                    i64::try_from(block_number)?,
+                    i64::try_from(index)?,
+                    serde_json::to_value(event).context("l1 event to value")?,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        query_builder.push_values(events.into_iter(), |mut b, (l1_block, log_index, event)| {
+            b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+        });
+
+        query_builder.push(" ON CONFLICT DO NOTHING");
+        let query = query_builder.build();
+
+        query.execute(tx.as_mut()).await?;
+
+        // update l1 block
         tx.upsert(
-            "stake_table_events",
-            ["id", "l1_block", "data"],
+            "stake_table_events_l1_block",
+            ["id", "last_l1_block"],
             ["id"],
-            [(0_i64, l1_block as i64, events_json)],
+            [(0_i32, l1_finalized as i64)],
         )
         .await?;
-        tx.commit().await
+
+        tx.commit().await?;
+
+        Ok(())
     }
 
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
+    /// Loads all events from persistent storage up to the specified L1 block.
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple containing:
+    /// - `Option<u64>` - The queried L1 block for which all events have been successfully fetched.
+    /// - `Vec<(EventKey, StakeTableEvent)>` - A list of events, where each entry is a tuple of the event key
+    /// event key is (l1 block number, log index)
+    ///   and the corresponding StakeTable event.
+    ///
+    async fn load_events(
+        &self,
+        to_l1_block: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
         let mut tx = self.db.write().await?;
 
-        let row = query("SELECT l1_block, data FROM stake_table_events WHERE id = 0")
-            .fetch_optional(tx.as_mut())
+        // check last l1 block if there is any
+        let res = query_as::<(i64,)>(
+            "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
+        )
+        .fetch_optional(tx.as_mut())
+        .await?;
+
+        let Some((last_processed_l1_block,)) = res else {
+            // this just means we dont have any events stored
+            return Ok((None, Vec::new()));
+        };
+
+        // Determine the L1 block for querying events.
+        // If the last stored L1 block is greater than the requested block, limit the query to the requested block.
+        // Otherwise, query up to the last stored block.
+        let to_l1_block = to_l1_block.try_into()?;
+        let query_l1_block = if last_processed_l1_block > to_l1_block {
+            to_l1_block
+        } else {
+            last_processed_l1_block
+        };
+
+        let rows = query("SELECT l1_block, log_index, event FROM stake_table_events WHERE l1_block <= $1 ORDER BY l1_block ASC, log_index ASC")
+            .bind(query_l1_block)
+            .fetch_all(tx.as_mut())
             .await?;
 
-        match row {
-            None => Ok(None),
-            Some(row) => {
-                let l1 = row.try_get::<i64, _>("l1_block")?;
-                let events = row.try_get::<serde_json::Value, _>("data")?;
-                let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_value(events)?;
-                Ok(Some((l1 as u64, events)))
-            },
+        let events = rows
+            .into_iter()
+            .map(|row| {
+                let l1_block: i64 = row.try_get("l1_block")?;
+                let log_index: i64 = row.try_get("log_index")?;
+                let event = serde_json::from_value(row.try_get("event")?)?;
+
+                Ok(((l1_block.try_into()?, log_index.try_into()?), event))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        // Determine the read state based on the queried block range.
+        // - If the persistence returned events up to the requested block, the read is complete.
+        // - Otherwise, indicate that the read is up to the last processed block.
+        if query_l1_block == to_l1_block {
+            Ok((Some(EventsPersistenceRead::Complete), events))
+        } else {
+            Ok((
+                Some(EventsPersistenceRead::UntilL1Block(
+                    query_l1_block.try_into()?,
+                )),
+                events,
+            ))
         }
     }
 }

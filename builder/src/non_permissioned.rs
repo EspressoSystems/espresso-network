@@ -247,7 +247,7 @@ mod test {
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
             Options,
         },
-        persistence::{self},
+        persistence,
         testing::TestConfigBuilder,
     };
     use sequencer_utils::test_utils::setup_test;

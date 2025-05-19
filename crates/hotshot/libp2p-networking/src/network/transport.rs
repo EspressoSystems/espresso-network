@@ -173,7 +173,7 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
                         .await
                         .map_err(|e| {
                             warn!("Failed to authenticate with remote peer: {:?}", e);
-                            IoError::new(IoErrorKind::Other, e)
+                            IoError::other(e)
                         })?;
 
                     // Verify the remote peer's authentication
@@ -185,7 +185,7 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
                     .await
                     .map_err(|e| {
                         warn!("Failed to verify remote peer: {:?}", e);
-                        IoError::new(IoErrorKind::Other, e)
+                        IoError::other(e)
                     })?;
                 } else {
                     // If it is incoming, verify the remote peer's authentication first
@@ -197,7 +197,7 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
                     .await
                     .map_err(|e| {
                         warn!("Failed to verify remote peer: {:?}", e);
-                        IoError::new(IoErrorKind::Other, e)
+                        IoError::other(e)
                     })?;
 
                     // Authenticate with the remote peer
@@ -205,7 +205,7 @@ impl<T: Transport, Types: NodeType, C: StreamMuxer + Unpin> StakeTableAuthentica
                         .await
                         .map_err(|e| {
                             warn!("Failed to authenticate with remote peer: {:?}", e);
-                            IoError::new(IoErrorKind::Other, e)
+                            IoError::other(e)
                         })?;
                 }
 
