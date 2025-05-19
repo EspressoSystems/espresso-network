@@ -119,11 +119,12 @@ contract StakeTableV2 is StakeTable {
     }
 
     function updateExitEscrowPeriod(uint64 newExitEscrowPeriod) external virtual onlyOwner {
-        uint64 minRequiredPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
+        uint64 minExitEscrowPeriod = lightClient.blocksPerEpoch() * 15; // assuming 15 seconds per
             // block
-        uint64 maxAllowedPeriod = minRequiredPeriod * 20;
+        uint64 maxExitEscrowPeriod = 86400 * 14; // 14 days
 
-        if (newExitEscrowPeriod < minRequiredPeriod || newExitEscrowPeriod > maxAllowedPeriod) {
+        if (newExitEscrowPeriod < minExitEscrowPeriod || newExitEscrowPeriod > maxExitEscrowPeriod)
+        {
             revert ExitEscrowPeriodInvalid();
         }
         exitEscrowPeriod = newExitEscrowPeriod;

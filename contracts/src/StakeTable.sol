@@ -203,7 +203,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     // @dev these are stored indexed by validator so we can keep track of them for slashing later
     mapping(address validator => mapping(address delegator => Undelegation)) public undelegations;
 
-    /// The time the contract will hold funds after undelegations are requested.
+    /// The time (seconds) the contract will hold funds after undelegations are requested.
     ///
     /// Must allow ample time for node to exit active validator set and slashing
     /// evidence to be submitted.
