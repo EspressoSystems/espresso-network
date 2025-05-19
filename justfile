@@ -21,6 +21,7 @@ lint:
     # Use the same target dir for both `clippy` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
     cargo clippy --workspace --features testing --all-targets -- -D warnings
+    cargo clippy --workspace --features "embedded-db testing" --all-targets -- -D warnings
     cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml -- -D warnings
 
 build profile="dev" features="":

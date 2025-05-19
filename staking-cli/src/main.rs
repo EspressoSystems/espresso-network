@@ -193,39 +193,34 @@ pub async fn main() -> Result<()> {
     let config = config.apply_env_var_overrides()?;
 
     // Commands that don't need a signer
-    match config.commands {
-        Commands::StakeTable {
-            l1_block_number,
-            compact,
-        } => {
-            let provider = ProviderBuilder::new().on_http(config.rpc_url.clone());
-            let query_block = l1_block_number.unwrap_or(BlockId::latest());
-            let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
-                exit_err("Failed to get block {query_block}", "Block not found");
-            });
-            let l1_block_resolved = l1_block.header.number;
-            tracing::info!("Getting stake table info at block {l1_block_resolved}");
-            let stake_table = stake_table_info(
-                config.rpc_url.clone(),
-                config.stake_table_address,
-                l1_block_resolved,
-            )
-            .await?;
-            display_stake_table(stake_table, compact)?;
-            return Ok(());
-        },
-        _ => {}, // Other commands handled below.
+    if let Commands::StakeTable {
+        l1_block_number,
+        compact,
+    } = config.commands
+    {
+        let provider = ProviderBuilder::new().on_http(config.rpc_url.clone());
+        let query_block = l1_block_number.unwrap_or(BlockId::latest());
+        let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
+            exit_err("Failed to get block {query_block}", "Block not found");
+        });
+        let l1_block_resolved = l1_block.header.number;
+        tracing::info!("Getting stake table info at block {l1_block_resolved}");
+        let stake_table = stake_table_info(
+            config.rpc_url.clone(),
+            config.stake_table_address,
+            l1_block_resolved,
+        )
+        .await?;
+        display_stake_table(stake_table, compact)?;
+        return Ok(());
     }
 
     let (wallet, account) = TryInto::<ValidSignerConfig>::try_into(config.signer.clone())?
         .wallet()
         .await?;
-    match config.commands {
-        Commands::Account => {
-            println!("{account}");
-            return Ok(());
-        },
-        _ => {}, // Other commands handled after shared setup.
+    if let Commands::Account = config.commands {
+        println!("{account}");
+        return Ok(());
     };
 
     // Clap serde will put default value if they aren't set. We check some
