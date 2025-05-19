@@ -89,6 +89,7 @@ pub fn default_hotshot_config<TYPES: NodeType>(
         stop_voting_time: 0,
         epoch_height,
         epoch_start_block,
+        stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
     }
 }
 

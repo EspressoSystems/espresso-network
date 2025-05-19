@@ -218,6 +218,7 @@ async fn init_consensus(
         stop_voting_time: 0,
         epoch_height: 0,
         epoch_start_block: 0,
+        stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(

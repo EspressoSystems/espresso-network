@@ -156,6 +156,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             stop_voting_time: 0,
             epoch_height: EPOCH_HEIGHT,
             epoch_start_block: 0,
+            stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         };
         update_config(&mut config);
 

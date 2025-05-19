@@ -101,6 +101,9 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Stake table capacity for light client use
+    pub stake_table_capacity: usize,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -374,6 +377,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 is_vote_epoch_root,
                 self.epoch_height,
                 &self.state_private_key,
+                self.stake_table_capacity,
             )
             .await
         )
@@ -431,6 +435,9 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// First view in which epoch version takes effect
     pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Stake table capacity for light client use
+    pub stake_table_capacity: usize,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -538,6 +545,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 consensus_metrics: Arc::clone(&self.consensus_metrics),
                 state_private_key: self.state_private_key.clone(),
                 first_epoch: self.first_epoch,
+                stake_table_capacity: self.stake_table_capacity,
             },
         );
         self.vote_dependencies

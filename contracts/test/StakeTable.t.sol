@@ -31,8 +31,9 @@ import { TimelockController } from "@openzeppelin/contracts/governance/TimelockC
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
 
-// Target contract
+// Target contracts
 import { StakeTable as S } from "../src/StakeTable.sol";
+import { StakeTableV2 } from "../src/StakeTableV2.sol";
 
 contract StakeTable_register_Test is LightClientCommonTest {
     S public stakeTable;
@@ -1126,6 +1127,8 @@ contract StakeTable_register_Test is LightClientCommonTest {
         vm.expectRevert(S.ValidatorAlreadyExited.selector);
         stakeTable.updateConsensusKeys(postExitBlsVK, postExitSchnorrVK, postExitSig);
         vm.stopPrank();
+
+        // TODO test the v2 events
     }
 
     function test_ValidatorSelfDelegation() public {
@@ -1317,6 +1320,19 @@ contract StakeTableUpgradeTest is Test {
         assertEq(result, "true");
     }
 
+    function test_StorageLayoutIsCompatibleWithStakeTableV2() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableV2";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "true");
+    }
+
     function test_StorageLayout_IsIncompatibleIfFieldIsMissing() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
@@ -1356,6 +1372,19 @@ contract StakeTableUpgradeTest is Test {
         assertEq(result, "false");
     }
 
+    function test_RevertWhen_StakeTableV2InitializationAttempted() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)", address(0), address(0), 0, address(0)
+        );
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+    }
+
     function test_ReinitializeSucceedsOnlyOnce() public {
         vm.startPrank(stakeTableRegisterTest.admin());
         S proxy = stakeTableRegisterTest.stakeTable();
@@ -1369,6 +1398,49 @@ contract StakeTableUpgradeTest is Test {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         proxyV2.initializeV2(3);
 
+        vm.stopPrank();
+    }
+
+    function test_updateExitEscrowPeriod() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.expectEmit(false, false, false, true, address(proxy));
+        emit StakeTableV2.ExitEscrowPeriodUpdated(200 seconds);
+        StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_NotOwner() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+        address notAdmin = makeAddr("notAdmin");
+        vm.startPrank(notAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+        );
+        StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ExitEscrowPeriodTooShort() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+
+        vm.expectRevert(StakeTableV2.ExitEscrowPeriodInvalid.selector);
+        StakeTableV2(proxy).updateExitEscrowPeriod(100 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ExitEscrowPeriodTooLong() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.expectRevert(StakeTableV2.ExitEscrowPeriodInvalid.selector);
+        StakeTableV2(proxy).updateExitEscrowPeriod(100 days);
         vm.stopPrank();
     }
 }

@@ -30,7 +30,7 @@ use hotshot_events_service::events_source::{
 use hotshot_query_service::data_source::ExtensibleDataSource;
 use hotshot_types::{
     data::ViewNumber,
-    event::Event,
+    event::{Event, LegacyEvent},
     light_client::StateSignatureRequestBody,
     network::NetworkConfig,
     traits::{
@@ -140,6 +140,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
     for ApiState<N, P, V>
 {
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
+    type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
 
     async fn get_event_stream(
         &self,
@@ -152,6 +153,19 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
             .get_event_stream(None)
             .await
     }
+
+    async fn get_legacy_event_stream(
+        &self,
+        _filter: Option<EventFilterSet<SeqTypes>>,
+    ) -> Self::LegacyEventStream {
+        self.event_streamer()
+            .await
+            .read()
+            .await
+            .get_legacy_event_stream(None)
+            .await
+    }
+
     async fn get_startup_info(&self) -> StartupInfo<SeqTypes> {
         self.event_streamer()
             .await

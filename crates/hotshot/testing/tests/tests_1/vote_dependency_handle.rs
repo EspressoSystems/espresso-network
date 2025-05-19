@@ -98,6 +98,7 @@ async fn test_vote_dependency_handle() {
                 epoch_height: handle.hotshot.config.epoch_height,
                 state_private_key: handle.state_private_key().clone(),
                 first_epoch: None,
+                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             };
 
         vote_dependency_handle_state
