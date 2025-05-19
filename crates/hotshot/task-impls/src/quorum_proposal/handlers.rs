@@ -534,7 +534,7 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
         )
         .await
         .wrap()
-        .context(warn!("Failed to construct legacy block header"))?;
+        .context(warn!("Failed to construct block header"))?;
         let epoch = option_epoch_from_block_number::<TYPES>(
             version >= V::Epochs::VERSION,
             block_header.block_number(),
