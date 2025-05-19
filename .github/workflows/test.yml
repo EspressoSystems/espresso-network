@@ -326,20 +326,13 @@ jobs:
     needs: [build-test-bins, build-test-bins-sqlite]
     runs-on: ubuntu-latest
     steps:
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-
+      - uses: cachix/install-nix-action@v31
       - uses: actions/checkout@v4
 
-      - name: Download archive
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: test-binaries
-
-      - name: Download archive
-        uses: actions/download-artifact@v4
-        with:
-          name: test-binaries-sqlite
+          pattern: test-binaries*
+          merge-multiple: true
 
       - name: chmod +x
         run: chmod -c +x target/debug/*
