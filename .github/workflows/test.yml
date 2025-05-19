@@ -334,7 +334,12 @@ jobs:
       - name: Download archive
         uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
+          name: test-binaries
+
+      - name: Download archive
+        uses: actions/download-artifact@v4
+        with:
+          name: test-binaries-sqlite
 
       - name: chmod +x
         run: chmod -c +x target/debug/*
