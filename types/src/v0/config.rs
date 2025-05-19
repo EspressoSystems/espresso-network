@@ -309,34 +309,13 @@ mod tests {
   "transaction_size": 100,
   "key_type_name": "jf_signature::bls_over_bn254::VerKey",
   "libp2p_config": {
-    "bootstrap_nodes": [
-      [
-        "12D3KooWP1XCQPYWn5vT7euC48aDsbuiG8869ky3ANCNmCvfVvTa",
-        "/dns/decaf-network-5dfb61bd543bfdd3.elb.us-east-2.amazonaws.com/udp/2007/quic-v1"
-      ]
-    ]
+    "bootstrap_nodes": []
   },
   "config": {
     "start_threshold": [100, 100],
     "num_nodes_with_stake": 100,
-    "known_nodes_with_stake": [
-      {
-        "stake_table_entry": {
-          "stake_key": "BLS_VER_KEY~VbTfoVdZmeJUiHebyyBezOApsjmmta0UoL9zu11P1RNC3ULFX3lz7q-xDa0E9o0Ree0a1gRp0No4jP_W8Bg6BDN6eupTvYJB1OENCql8w_MIIEzMuTh8dVND1-kfyucenqbrO8Gk39DTvKUqY7-cENpGJ7112L2tutALjttJRADF",
-          "stake_amount": "0x1"
-        },
-        "state_ver_key": "SCHNORR_VER_KEY~uargB4B6KyIOOWSE269Pb4jaWZcgYseSBbwn-NVHXgrtnKH4x07vearbLbb11tr3COCYa3QgeoNYK-W3AUa0JhM"
-      }
-    ],
-    "known_da_nodes": [
-      {
-        "stake_table_entry": {
-          "stake_key": "BLS_VER_KEY~VbTfoVdZmeJUiHebyyBezOApsjmmta0UoL9zu11P1RNC3ULFX3lz7q-xDa0E9o0Ree0a1gRp0No4jP_W8Bg6BDN6eupTvYJB1OENCql8w_MIIEzMuTh8dVND1-kfyucenqbrO8Gk39DTvKUqY7-cENpGJ7112L2tutALjttJRADF",
-          "stake_amount": "0x1"
-        },
-        "state_ver_key": "SCHNORR_VER_KEY~uargB4B6KyIOOWSE269Pb4jaWZcgYseSBbwn-NVHXgrtnKH4x07vearbLbb11tr3COCYa3QgeoNYK-W3AUa0JhM"
-      }
-    ],
+    "known_nodes_with_stake": [],
+    "known_da_nodes": [],
     "da_staked_committee_size": 100,
     "fixed_leader_for_gpuvid": 1,
     "next_view_timeout": 12000,
