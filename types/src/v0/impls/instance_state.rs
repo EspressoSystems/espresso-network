@@ -216,35 +216,6 @@ impl NodeState {
         )
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn mock_v99() -> Self {
-        use hotshot_example_types::storage_types::TestStorage;
-        use vbs::version::StaticVersion;
-
-        use crate::v0_3::StakeTableFetcher;
-
-        let chain_config = ChainConfig::default();
-        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
-            .expect("Failed to create L1 client");
-
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
-            vec![],
-            vec![],
-            StakeTableFetcher::mock(),
-        )));
-        let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
-
-        Self::new(
-            0,
-            chain_config,
-            l1,
-            Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 99>::version(),
-            coordinator,
-        )
-    }
-
     pub fn with_l1(mut self, l1_client: L1Client) -> Self {
         self.l1_client = l1_client;
         self
