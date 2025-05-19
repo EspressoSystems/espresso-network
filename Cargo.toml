@@ -243,11 +243,10 @@ inherits = "dev"
 strip = "none"
 debug = "full"
 
-[profile.test]
-opt-level = 1
-[profile.test.package.tests]
-opt-level = 0
-[profile.test.package.client]
-opt-level = 0
+# Optimize dependencies, but not crates in the workspace. Compilation of dependencies can be cached
+# effectively on the CI because they rarely change, whereas the workspace code usually changes and
+# workspace compilation artifacts are therefore not cached.
+[profile.test.package."*"]
+opt-level = 3
 [profile.test.package.hotshot-state-prover]
 opt-level = 3
