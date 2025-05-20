@@ -19,8 +19,8 @@ use crate::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
         storage::{
-            store_drb_progress_fn, store_drb_result_fn, Storage, StoreDrbProgressFn,
-            StoreDrbResultFn, LoadDrbProgressFn, load_drb_progress_fn
+            load_drb_progress_fn, store_drb_progress_fn, store_drb_result_fn, LoadDrbProgressFn,
+            Storage, StoreDrbProgressFn, StoreDrbResultFn,
         },
     },
     utils::{root_block_in_epoch, transition_block_for_epoch},
@@ -50,7 +50,6 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
 
     /// Callback function to store a drb result in storage when one is calculated during catchup
     store_drb_result_fn: StoreDrbResultFn<TYPES>,
-
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {

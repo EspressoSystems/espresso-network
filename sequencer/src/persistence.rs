@@ -198,7 +198,7 @@ mod persistence_tests {
         let storage = P::connect(&tmp).await;
 
         // Initially, there is no saved info.
-        if !storage.load_drb_input(10).await.is_err() {
+        if storage.load_drb_input(10).await.is_ok() {
             panic!("unexpected nonempty drb_input");
         }
 

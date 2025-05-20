@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::traits::{
     node_implementation::{ConsensusTime, NodeType},
-    storage::{StoreDrbProgressFn, LoadDrbProgressFn},
+    storage::{LoadDrbProgressFn, StoreDrbProgressFn},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,9 +80,9 @@ pub async fn compute_drb_result(
     let mut drb_input = drb_input;
 
     if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
-      if loaded_drb_input.iteration >= drb_input.iteration {
-        drb_input = loaded_drb_input;
-      }
+        if loaded_drb_input.iteration >= drb_input.iteration {
+            drb_input = loaded_drb_input;
+        }
     }
 
     let mut hash = drb_input.value.to_vec();

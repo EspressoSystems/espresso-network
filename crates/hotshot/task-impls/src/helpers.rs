@@ -34,7 +34,7 @@ use hotshot_types::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
-        storage::{store_drb_progress_fn, load_drb_progress_fn, Storage},
+        storage::{load_drb_progress_fn, store_drb_progress_fn, Storage},
         BlockPayload, ValidatedState,
     },
     utils::{
@@ -186,8 +186,12 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         value: seed,
     };
     tokio::spawn(async move {
-        let drb_result =
-            hotshot_types::drb::compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await;
+        let drb_result = hotshot_types::drb::compute_drb_result(
+            drb_input,
+            store_drb_progress_fn,
+            load_drb_progress_fn,
+        )
+        .await;
 
         handle_drb_result::<TYPES, I>(&membership, epoch, &storage, &consensus, drb_result).await;
         drb_result

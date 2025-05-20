@@ -174,7 +174,9 @@ pub fn load_drb_progress_fn<TYPES: NodeType>(
 }
 
 pub fn null_load_drb_progress_fn() -> LoadDrbProgressFn {
-    Arc::new(move |_drb_input| Box::pin(async { Err(anyhow!("Using null implementation of load_drb_input")) }))
+    Arc::new(move |_drb_input| {
+        Box::pin(async { Err(anyhow!("Using null implementation of load_drb_input")) })
+    })
 }
 
 pub async fn store_drb_input_impl<TYPES: NodeType>(
