@@ -106,14 +106,14 @@ impl AvidMNsProofV1 {
         commit: &VidCommitment,
         common: &AvidMCommon,
     ) -> Option<AvidMNsProofV1> {
-        if shares.is_empty() {
-            tracing::error!("Error generating incorrect encoding proof: no shares provided");
-            return None;
-        }
         let VidCommitment::V1(commit) = commit else {
             tracing::error!("Error generating incorrect encoding proof: invalid vid commitment");
             return None;
         };
+        if shares.is_empty() {
+            tracing::error!("Error generating incorrect encoding proof: no valid shares provided");
+            return None;
+        }
         let payload_byte_len = crate::PayloadByteLen(shares[0].payload_byte_len());
         let ns_index = ns_index.0;
         let ns_table = ns_table

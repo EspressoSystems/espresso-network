@@ -45,15 +45,17 @@ impl AvidMScheme {
         commit: &AvidMCommit,
         shares: &[AvidMShare],
     ) -> VidResult<AvidMBadEncodingProof> {
-        // First verify all the shares
-        for share in shares.iter() {
-            if AvidMScheme::verify_share(param, commit, share)?.is_err() {
-                return Err(VidError::InvalidShare);
-            }
-        }
+        // First filter out the invalid shares
+        let shares = shares
+            .iter()
+            .filter(|share| {
+                AvidMScheme::verify_share(param, commit, share).is_ok_and(|r| r.is_ok())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         // Recover the original payload in fields representation.
         // Length of `payload` is always a multiple of `recovery_threshold`.
-        let witness = Self::recover_fields(param, shares)?;
+        let witness = Self::recover_fields(param, &shares)?;
         let (mt, _) = Self::raw_encode(param, &witness)?;
         if mt.commitment() == commit.commit {
             return Err(VidError::Argument(
@@ -170,7 +172,7 @@ impl NsAvidMScheme {
         let ns_commit = AvidMCommit { commit: *ns_commit };
         let shares = shares
             .iter()
-            .map(|share| share.inner_ns_share(ns_index))
+            .filter_map(|share| share.inner_ns_share(ns_index))
             .collect::<Vec<_>>();
         Ok(NsAvidMBadEncodingProof {
             ns_index,

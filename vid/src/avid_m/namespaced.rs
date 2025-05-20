@@ -39,14 +39,16 @@ impl NsAvidMShare {
         self.ns_commits.len()
     }
 
-    /// Return the inner share for a given namespace.
-    /// WARN: will panic if `ns_index` is out of bound.
-    pub fn inner_ns_share(&self, ns_index: usize) -> AvidMShare {
-        AvidMShare {
+    /// Return the inner share for a given namespace if there exists one.
+    pub fn inner_ns_share(&self, ns_index: usize) -> Option<AvidMShare> {
+        if ns_index >= self.ns_lens.len() || ns_index >= self.content.len() {
+            return None;
+        }
+        Some(AvidMShare {
             index: self.index,
             payload_byte_len: self.ns_lens[ns_index],
             content: self.content[ns_index].clone(),
-        }
+        })
     }
 
     /// Return the length of underlying payload in bytes
@@ -219,7 +221,7 @@ impl NsAvidMScheme {
         let ns_commit = shares[0].ns_commits[ns_index];
         let shares: Vec<_> = shares
             .iter()
-            .map(|share| share.inner_ns_share(ns_index))
+            .filter_map(|share| share.inner_ns_share(ns_index))
             .collect();
         AvidMScheme::recover(param, &ns_commit, &shares)
     }
