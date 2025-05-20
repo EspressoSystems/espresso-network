@@ -6,10 +6,7 @@
 
 use std::{collections::HashMap, marker::PhantomData, rc::Rc, sync::Arc};
 
-use hotshot::{
-    traits::{NodeImplementation, TestableNodeImplementation},
-    MarketplaceConfig,
-};
+use hotshot::traits::{NodeImplementation, TestableNodeImplementation};
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     traits::{
@@ -38,8 +35,6 @@ pub struct ResourceGenerators<TYPES: NodeType, I: TestableNodeImplementation<TYP
     pub hotshot_config: Generator<HotShotConfig<TYPES>>,
     /// config that contains the signature keys
     pub validator_config: Generator<ValidatorConfig<TYPES>>,
-    /// generate a new marketplace config for each node
-    pub marketplace_config: Generator<MarketplaceConfig<TYPES, I>>,
 }
 
 /// test launcher
@@ -59,7 +54,6 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> TestLau
         TestRunner::<TYPES, I, V, N> {
             launcher: self,
             nodes: Vec::new(),
-            solver_server: None,
             late_start: HashMap::new(),
             next_node_id: 0,
             _pd: PhantomData,

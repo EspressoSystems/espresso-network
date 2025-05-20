@@ -6,8 +6,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_1::{RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleTree},
-    v0_3::Validator,
-    v0_99::ChainConfig,
+    v0_3::{ChainConfig, Validator},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::Future;

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
     v0_1::{RewardAccount, RewardMerkleTree},
-    v0_99::ChainConfig,
+    v0_3::ChainConfig,
     FeeAccount, FeeMerkleTree, Leaf2,
 };
 use request_response::{request::Request as RequestTrait, Serializable};

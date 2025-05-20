@@ -16,7 +16,6 @@ use hotshot::traits::{
     election::static_committee::StaticCommittee, implementations::MemoryNetwork, NodeImplementation,
 };
 use hotshot_example_types::{
-    auction_results_provider_types::{TestAuctionResult, TestAuctionResultsProvider},
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
@@ -44,7 +43,6 @@ use crate::{
 pub type MockHeader = TestBlockHeader;
 pub type MockPayload = TestBlockPayload;
 pub type MockTransaction = TestTransaction;
-pub type MockAuctionResults = TestAuctionResult;
 
 pub fn mock_transaction(payload: Vec<u8>) -> MockTransaction {
     TestTransaction::new(payload)
@@ -139,7 +137,6 @@ impl NodeType for MockTypes {
     type ValidatedState = TestValidatedState;
     type Membership = StaticCommittee<Self>;
     type BuilderSignatureKey = BLSPubKey;
-    type AuctionResult = TestAuctionResult;
     type StateSignatureKey = SchnorrPubKey;
 }
 
@@ -153,8 +150,6 @@ impl Versions for MockVersions {
         1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
         0, 0,
     ];
-
-    type Marketplace = StaticVersion<0, 3>;
     type Epochs = StaticVersion<0, 4>;
 }
 
@@ -175,7 +170,6 @@ pub struct MockNodeImpl;
 impl NodeImplementation<MockTypes> for MockNodeImpl {
     type Network = MockNetwork;
     type Storage = MockStorage;
-    type AuctionResultsProvider = TestAuctionResultsProvider<MockTypes>;
 }
 
 pub type MockMerkleTree = UniversalMerkleTree<usize, Sha3Digest, usize, 8, Sha3Node>;

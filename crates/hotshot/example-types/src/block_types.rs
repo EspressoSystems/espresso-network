@@ -30,7 +30,6 @@ use time::OffsetDateTime;
 use vbs::version::Version;
 
 use crate::{
-    auction_results_provider_types::TestAuctionResult,
     node_types::TestTypes,
     state_types::{TestInstanceState, TestValidatedState},
     testable_delay::{DelayConfig, SupportedTraitTypesForAsyncDelay, TestableDelay},
@@ -319,13 +318,12 @@ impl<
             BlockHeader = Self,
             BlockPayload = TestBlockPayload,
             InstanceState = TestInstanceState,
-            AuctionResult = TestAuctionResult,
         >,
     > BlockHeader<TYPES> for TestBlockHeader
 {
     type Error = std::convert::Infallible;
 
-    async fn new_legacy(
+    async fn new(
         _parent_state: &TYPES::ValidatedState,
         instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         parent_leaf: &Leaf2<TYPES>,
@@ -335,27 +333,6 @@ impl<
         _builder_fee: BuilderFee<TYPES>,
         _version: Version,
         _view_number: u64,
-    ) -> Result<Self, Self::Error> {
-        Self::run_delay_settings_from_config(&instance_state.delay_config).await;
-        Ok(Self::new(
-            parent_leaf,
-            payload_commitment,
-            builder_commitment,
-            metadata,
-        ))
-    }
-
-    async fn new_marketplace(
-        _parent_state: &TYPES::ValidatedState,
-        instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
-        parent_leaf: &Leaf2<TYPES>,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-        metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        _builder_fee: Vec<BuilderFee<TYPES>>,
-        _view_number: u64,
-        _auction_results: Option<TYPES::AuctionResult>,
-        _version: Version,
     ) -> Result<Self, Self::Error> {
         Self::run_delay_settings_from_config(&instance_state.delay_config).await;
         Ok(Self::new(
@@ -400,10 +377,6 @@ impl<
 
     fn builder_commitment(&self) -> BuilderCommitment {
         self.builder_commitment.clone()
-    }
-
-    fn get_auction_results(&self) -> Option<TYPES::AuctionResult> {
-        Some(TYPES::AuctionResult { urls: vec![] })
     }
 
     fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState> {
