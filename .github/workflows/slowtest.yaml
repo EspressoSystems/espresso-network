@@ -42,6 +42,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
+          shared-key: slow-test
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build slow test
@@ -68,7 +69,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: slow-test
+          save-if: false
 
       - name: Build slow test
         run: just nextest --no-run
