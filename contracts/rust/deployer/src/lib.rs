@@ -500,6 +500,15 @@ pub async fn upgrade_light_client_v2(
     }
 }
 
+pub struct LightClientV2UpgradeParams {
+    pub is_mock: bool,
+    pub blocks_per_epoch: u64,
+    pub epoch_start_block: u64,
+    pub rpc_url: String,
+    pub multisig_address: Address,
+    pub dry_run: Option<bool>,
+}
+
 /// Upgrade the light client proxy to use LightClientV2.
 /// Internally, first detect existence of proxy, then deploy LCV2, then upgrade and initializeV2.
 /// Internal to "deploy LCV2", we deploy PlonkVerifierV2 whose address will be used at LCV2 init time.
@@ -513,14 +522,9 @@ pub async fn upgrade_light_client_v2(
 pub async fn upgrade_light_client_v2_multisig_owner(
     provider: impl Provider,
     contracts: &mut Contracts,
-    is_mock: bool,
-    blocks_per_epoch: u64,
-    epoch_start_block: u64,
-    rpc_url: String,
-    multisig_address: Address,
-    dry_run: Option<bool>,
+    params: LightClientV2UpgradeParams,
 ) -> Result<(String, bool)> {
-    let dry_run = dry_run.unwrap_or(false);
+    let dry_run = params.dry_run.unwrap_or(false);
     match contracts.address(Contract::LightClientProxy) {
         // check if proxy already exists
         None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
@@ -529,7 +533,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
             let owner = proxy.owner().call().await?;
             let owner_addr = owner._0;
             assert_eq!(
-                owner_addr, multisig_address,
+                owner_addr, params.multisig_address,
                 "Proxy is not owned by the multisig"
             );
             // TODO: check if owner is a multisig
@@ -541,7 +545,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 )
                 .await?;
             // then deploy LightClientV2.sol
-            let target_lcv2_bytecode = if is_mock {
+            let target_lcv2_bytecode = if params.is_mock {
                 LightClientV2Mock::BYTECODE.encode_hex()
             } else {
                 LightClientV2::BYTECODE.encode_hex()
@@ -564,7 +568,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                     },
                 }
             };
-            let lcv2_addr = if is_mock {
+            let lcv2_addr = if params.is_mock {
                 let addr = LightClientV2Mock::deploy_builder(&provider)
                     .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
                     .deploy()
@@ -584,17 +588,17 @@ pub async fn upgrade_light_client_v2_multisig_owner(
             // prepare init calldata
             let lcv2 = LightClientV2::new(lcv2_addr, &provider);
             let init_data = lcv2
-                .initializeV2(blocks_per_epoch, epoch_start_block)
+                .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
                 .calldata()
                 .to_owned();
 
-            tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", blocks_per_epoch, epoch_start_block);
+            tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
             // invoke upgrade on proxy via the safeSDK
             let result = call_upgrade_proxy_script(
                 proxy_addr,
                 lcv2_addr,
                 init_data.to_string(),
-                rpc_url,
+                params.rpc_url,
                 owner_addr,
                 Some(dry_run),
             )
@@ -1293,12 +1297,14 @@ mod tests {
         let (result, success) = upgrade_light_client_v2_multisig_owner(
             &provider,
             &mut contracts,
-            is_mock,
-            blocks_per_epoch,
-            epoch_start_block,
-            sepolia_rpc_url,
-            multisig_admin,
-            Some(dry_run),
+            LightClientV2UpgradeParams {
+                is_mock,
+                blocks_per_epoch,
+                epoch_start_block,
+                rpc_url: sepolia_rpc_url,
+                multisig_address: multisig_admin,
+                dry_run: Some(dry_run),
+            },
         )
         .await?;
         tracing::info!(
