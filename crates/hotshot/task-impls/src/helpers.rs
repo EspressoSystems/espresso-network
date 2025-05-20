@@ -212,7 +212,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
         let mut start = Instant::now();
         if let Err(e) = storage
-            .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
+            .store_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
             .await
         {
             tracing::error!("Failed to store epoch root for epoch {next_epoch_number}: {e}");

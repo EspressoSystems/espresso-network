@@ -225,7 +225,7 @@ impl SequencerPersistence for NoStorage {
         bail!("Cannot load from NoStorage")
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         _epoch: EpochNumber,
         _block_header: <SeqTypes as NodeType>::BlockHeader,
