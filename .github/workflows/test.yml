@@ -60,6 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-postgres
+          if-no-files-found: error
           path: nextest-archive-postgres.tar.zst
 
   build-test-artifacts-sqlite:
@@ -98,6 +99,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-sqlite
+          if-no-files-found: error
           path: nextest-archive-sqlite.tar.zst
 
   build-test-bins:
@@ -125,6 +127,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-binaries
+          if-no-files-found: error
           path: |
             target/debug/orchestrator
             target/debug/cdn-broker
@@ -170,6 +173,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-binaries-sqlite
+          if-no-files-found: error
           path: |
             target/debug/sequencer-sqlite
 
@@ -198,6 +202,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-binaries-dev-node
+          if-no-files-found: error
           path: |
             target/debug/espresso-dev-node
 
@@ -329,8 +334,8 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: actions/checkout@v4
 
-        # TODO: this downloads all (available) artifacts, which is unnecessary
-        # but artifact downloads always fail if I try to select a subset.
+        # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
+        # downloads always fail if I try to select a subset.
       - name: Download archive
         uses: actions/download-artifact@v4
 
