@@ -329,16 +329,17 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: test-binaries-sqlite
+        # TODO: this downloads all (available) artifacts, which is unnecessary
+        # but artifact downloads always fail if I try to select a subset.
+      - name: Download archive
+        uses: actions/download-artifact@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: test-binaries
-
-      - name: chmod +x
-        run: chmod -c +x target/debug/*
+      - name: Move files
+        run: |
+          mkdir -p target/debug
+          mv test-binaries/* target/debug
+          mv test-binaries-sqlite/* target/debug
+          chmod -c +x target/debug/*
 
       # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
       - name: Install process-compose
