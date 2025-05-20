@@ -27,12 +27,9 @@ env:
     target/release/cdn-whitelist
     target/release/cli
     target/release/deploy
-    target/release/dev-rollup
     target/release/espresso-bridge
     target/release/espresso-dev-node
     target/release/keygen
-    target/release/marketplace-builder
-    target/release/marketplace-solver
     target/release/nasty-client
     target/release/node-metrics
     target/release/orchestrator
@@ -45,12 +42,11 @@ env:
     target/release/state-prover
     target/release/state-relay-server
     target/release/submit-transactions
-    target/release/update-permissioned-stake-table
     target/release/utils
 
 jobs:
   build:
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -61,7 +57,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
-          cache-provider: buildjet
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-provider: github
 
       - name: Build
         # Build in release without `testing` feature, this should work without `hotshot_example` config.
@@ -96,6 +93,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: buildjet
 
       - name: Build
@@ -131,10 +129,7 @@ jobs:
           - cdn-marshal
           - cdn-whitelist
           - deploy
-          - dev-rollup
           - espresso-dev-node
-          - marketplace-builder
-          - marketplace-solver
           - nasty-client
           - node-validator
           - orchestrator
@@ -143,7 +138,6 @@ jobs:
           - staking-cli
           - state-relay-server
           - submit-transactions
-          - update-permissioned-stake-table
 
     needs: [build, build-arm]
     # if build_arm is skipped, run this job anyway

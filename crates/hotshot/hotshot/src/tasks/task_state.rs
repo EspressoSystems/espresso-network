@@ -152,7 +152,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
             id: handle.hotshot.id,
-            storage: Arc::clone(&handle.storage),
+            storage: handle.storage.clone(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
         }
     }
@@ -181,13 +181,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             id: handle.hotshot.id,
             last_garbage_collected_view: TYPES::View::new(0),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+            first_epoch: None,
         }
     }
 }
 
 #[async_trait]
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for TransactionTaskState<TYPES, I, V>
+    for TransactionTaskState<TYPES, V>
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
         Self {
@@ -210,14 +211,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
                 .map(BuilderClient::new)
                 .collect(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
-            auction_results_provider: Arc::clone(
-                &handle.hotshot.marketplace_config.auction_results_provider,
-            ),
-            fallback_builder_url: handle
-                .hotshot
-                .marketplace_config
-                .fallback_builder_url
-                .clone(),
             epoch_height: handle.epoch_height,
         }
     }
@@ -245,10 +238,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             membership: handle.hotshot.membership_coordinator.clone(),
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
             id: handle.hotshot.id,
-            storage: Arc::clone(&handle.storage),
+            storage: handle.storage.clone(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
             consensus_metrics,
+            first_epoch: None,
+            stake_table_capacity: handle.hotshot.config.stake_table_capacity,
         }
     }
 }
@@ -272,7 +267,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             membership_coordinator: handle.hotshot.membership_coordinator.clone(),
             public_key: handle.public_key().clone(),
             private_key: handle.private_key().clone(),
-            storage: Arc::clone(&handle.storage),
+            storage: handle.storage.clone(),
             timeout: handle.hotshot.config.next_view_timeout,
             id: handle.hotshot.id,
             formed_upgrade_certificate: None,
@@ -298,11 +293,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             membership: handle.hotshot.membership_coordinator.clone(),
             timeout: handle.hotshot.config.next_view_timeout,
             output_event_stream: handle.hotshot.external_event_stream.0.clone(),
-            storage: Arc::clone(&handle.storage),
+            storage: handle.storage.clone(),
             spawned_tasks: BTreeMap::new(),
             id: handle.hotshot.id,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,
+            first_epoch: None,
         }
     }
 }
@@ -331,7 +327,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             timeout_task: spawn(async {}),
             timeout: handle.hotshot.config.next_view_timeout,
             consensus: OuterConsensus::new(consensus),
-            storage: Arc::clone(&handle.storage),
+            storage: handle.storage.clone(),
             id: handle.hotshot.id,
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
             epoch_height: handle.hotshot.config.epoch_height,

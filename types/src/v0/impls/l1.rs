@@ -180,7 +180,7 @@ impl SwitchingTransport {
         let metrics = L1ClientMetrics::new(&**opt.metrics, urls.len());
 
         // Create a new `SingleTransport` for the first URL
-        let first_transport = Arc::new(RwLock::new(SingleTransport::new(&first_url, 0)));
+        let first_transport = Arc::new(RwLock::new(SingleTransport::new(&first_url, 0, None)));
 
         Ok(Self {
             urls: Arc::new(urls),
@@ -250,15 +250,33 @@ impl SingleTransportStatus {
 
         false
     }
+
+    /// Whether or not the transport should be switched back to the primary URL.
+    fn should_revert(&mut self, revert_at: Option<Instant>) -> bool {
+        if self.shutting_down {
+            // We have already switched away from this transport in another thread.
+            return false;
+        }
+        let Some(revert_at) = revert_at else {
+            return false;
+        };
+        if Instant::now() >= revert_at {
+            self.shutting_down = true;
+            return true;
+        }
+
+        false
+    }
 }
 
 impl SingleTransport {
     /// Create a new `SingleTransport` with the given URL
-    fn new(url: &Url, generation: usize) -> Self {
+    fn new(url: &Url, generation: usize, revert_at: Option<Instant>) -> Self {
         Self {
             generation,
             client: Http::new(url.clone()),
             status: Default::default(),
+            revert_at,
         }
     }
 }
@@ -290,6 +308,21 @@ impl Service<RequestPacket> for SwitchingTransport {
         Box::pin(async move {
             // Clone the current transport
             let mut current_transport = self_clone.current_transport.read().clone();
+
+            // Revert back to the primary transport if it's time.
+            let should_revert = current_transport
+                .status
+                .write()
+                .should_revert(current_transport.revert_at);
+            if should_revert {
+                // Switch to the next generation which maps to index 0.
+                let n = self_clone.urls.len();
+                // Rounding down to a multiple of n gives us the last generation of the primary transport.
+                let prev_primary_gen = (current_transport.generation / n) * n;
+                // Adding n jumps to the next generation.
+                let next_gen = prev_primary_gen + n;
+                current_transport = self_clone.switch_to(next_gen, current_transport);
+            }
 
             // If we've been rate limited, back off until the limit (hopefully) expires.
             if let Some(t) = current_transport.status.read().rate_limited_until {
@@ -345,27 +378,44 @@ impl Service<RequestPacket> for SwitchingTransport {
                     {
                         // Increment the failovers metric
                         self_clone.metrics.failovers.add(1);
-
-                        // Calculate the next URL index
-                        let next_gen = current_transport.generation + 1;
-                        let next_index = next_gen % self_clone.urls.len();
-                        let url = self_clone.urls[next_index].clone();
-                        tracing::info!(%url, "failing over to next L1 transport");
-
-                        // Create a new transport from the next URL and index
-                        let new_transport = SingleTransport::new(&url, next_gen);
-
-                        // Switch to the next URL
-                        *self_clone.current_transport.write() = new_transport;
-
-                        // Notify the transport that it has been switched
-                        self_clone.switch_notify.notify_waiters();
+                        self_clone.switch_to(current_transport.generation + 1, current_transport);
                     }
 
                     Err(err)
                 },
             }
         })
+    }
+}
+
+impl SwitchingTransport {
+    fn switch_to(&self, next_gen: usize, current_transport: SingleTransport) -> SingleTransport {
+        let next_index = next_gen % self.urls.len();
+        let url = self.urls[next_index].clone();
+        tracing::info!(%url, next_gen, "switch L1 transport");
+
+        let revert_at = if next_gen % self.urls.len() == 0 {
+            // If we are reverting to the primary transport, clear our scheduled revert time.
+            None
+        } else if current_transport.generation % self.urls.len() == 0 {
+            // If we are failing over from the primary transport, schedule a time to automatically
+            // revert back.
+            Some(Instant::now() + self.opt.l1_failover_revert)
+        } else {
+            // Otherwise keep the currently scheduled revert time.
+            current_transport.revert_at
+        };
+
+        // Create a new transport from the next URL and index
+        let new_transport = SingleTransport::new(&url, next_gen, revert_at);
+
+        // Switch to the next URL
+        *self.current_transport.write() = new_transport.clone();
+
+        // Notify the transport that it has been switched
+        self.switch_notify.notify_waiters();
+
+        new_transport
     }
 }
 
@@ -723,18 +773,41 @@ impl L1Client {
             self.retry_delay().await;
         };
 
-        // It is possible there is some earlier block that also has the proper timestamp. Work
-        // backwards until we find the true earliest block.
-        loop {
-            let (state_lock, parent) = self
-                .fetch_finalized_block_by_number(state, block.number - 1)
-                .await;
-            if parent.timestamp < timestamp {
-                return block;
-            }
+        // It is possible there is some earlier block that also has the proper timestamp. Binary
+        // search until we find the true earliest block with timestamp >= `timestamp`.
+        //
+        // Invariants:
+        // * `upper_bound <= lower_bound`
+        // * `upper_bound = block.number`
+        // * Block number `lower_bound - 1` has timestamp < `timestamp` (strictly)
+        // * `block` has timestamp >= `timestamp`
+        let mut upper_bound = block.number;
+        let mut lower_bound = 0;
+        while lower_bound < upper_bound {
+            let midpoint = (upper_bound + lower_bound) / 2;
+            tracing::debug!(
+                lower_bound,
+                midpoint,
+                upper_bound,
+                %timestamp,
+                ?block,
+                "searching for earliest block with sufficient timestamp"
+            );
+
+            let (state_lock, midpoint_block) =
+                self.fetch_finalized_block_by_number(state, midpoint).await;
             state = state_lock;
-            block = parent;
+
+            tracing::debug!(?midpoint_block, %timestamp, "pivot on midpoint block");
+            if midpoint_block.timestamp < timestamp {
+                lower_bound = midpoint + 1;
+            } else {
+                upper_bound = midpoint;
+                block = midpoint_block;
+            }
         }
+
+        block
     }
 
     async fn fetch_finalized_block_by_number<'a>(
@@ -751,6 +824,25 @@ impl L1Client {
             "requesting a finalized block {number} that isn't finalized; snapshot: {:?}",
             state.snapshot,
         );
+
+        if let Some(safety_margin) = self.options().l1_finalized_safety_margin {
+            if number < latest_finalized.number.saturating_sub(safety_margin) {
+                // If the requested block height is so old that we can assume all L1 providers have
+                // finalized it, we don't need to worry about failing over to a lagging L1 provider
+                // which has yet to finalize the block, so we don't need to bother with the
+                // expensive hash chaining logic below. Just look up the block by number and assume
+                // the response is finalized.
+                tracing::debug!(
+                    number,
+                    ?latest_finalized,
+                    "skipping hash check for old finalized block"
+                );
+                let (state, block) = self
+                    .load_and_cache_finalized_block(state, number.into())
+                    .await;
+                return (state, block.info);
+            }
+        }
 
         // To get this block and be sure we are getting the correct finalized block, we first need
         // to find an equal or later block so we can find the expected hash of this block. If we
@@ -792,31 +884,48 @@ impl L1Client {
         // Work backwards from the known finalized successor, fetching blocks by parent hash so we
         // know we are getting the correct block.
         while successor.info.number > number {
-            drop(state);
-            successor = loop {
-                let block = match self.provider.get_block(successor.parent_hash.into()).await {
-                    Ok(Some(block)) => block,
-                    Ok(None) => {
-                        tracing::warn!(
-                            number,
-                            "provider error: finalized L1 block should always be available"
-                        );
-                        self.retry_delay().await;
-                        continue;
-                    },
-                    Err(err) => {
-                        tracing::warn!(number, "failed to get finalized L1 block: {err:#}");
-                        self.retry_delay().await;
-                        continue;
-                    },
-                };
-                break (&block).into();
-            };
-            state = self.state.lock().await;
-            state.put_finalized(successor);
+            tracing::debug!(
+                number,
+                ?successor,
+                "checking hash chaining for finalized block"
+            );
+            (state, successor) = self
+                .load_and_cache_finalized_block(state, successor.parent_hash.into())
+                .await;
         }
 
         (state, successor.info)
+    }
+
+    async fn load_and_cache_finalized_block<'a>(
+        &'a self,
+        mut state: MutexGuard<'a, L1State>,
+        id: BlockId,
+    ) -> (MutexGuard<'a, L1State>, L1BlockInfoWithParent) {
+        // Don't hold state lock while fetching from network.
+        drop(state);
+        let block = loop {
+            let block = match self.provider.get_block(id).await {
+                Ok(Some(block)) => block,
+                Ok(None) => {
+                    tracing::warn!(
+                        %id,
+                        "provider error: finalized L1 block should always be available"
+                    );
+                    self.retry_delay().await;
+                    continue;
+                },
+                Err(err) => {
+                    tracing::warn!(%id, "failed to get finalized L1 block: {err:#}");
+                    self.retry_delay().await;
+                    continue;
+                },
+            };
+            break (&block).into();
+        };
+        state = self.state.lock().await;
+        state.put_finalized(block);
+        (state, block)
     }
 
     /// Get fee info for each `Deposit` occurring between `prev`
@@ -949,6 +1058,7 @@ impl L1State {
         Self {
             snapshot: Default::default(),
             finalized: LruCache::new(cache_size),
+            last_finalized: None,
         }
     }
 
@@ -959,6 +1069,10 @@ impl L1State {
             "inserting a finalized block {block:?} that isn't finalized; snapshot: {:?}",
             self.snapshot,
         );
+
+        if Some(block.info.number()) > self.last_finalized {
+            self.last_finalized = Some(block.info.number());
+        }
 
         if let Some((old_number, old_block)) = self.finalized.push(block.info.number, block) {
             if old_number == block.info.number && block != old_block {
@@ -997,32 +1111,40 @@ mod test {
         primitives::utils::parse_ether,
         providers::layers::AnvilProvider,
     };
+    use espresso_contract_deployer::{deploy_fee_contract_proxy, Contracts};
     use portpicker::pick_unused_port;
-    use sequencer_utils::{
-        deployer::{deploy_fee_contract_proxy, Contracts},
-        test_utils::setup_test,
-    };
+    use sequencer_utils::test_utils::setup_test;
     use time::OffsetDateTime;
 
     use super::*;
 
-    async fn new_l1_client(anvil: &Arc<AnvilInstance>, include_ws: bool) -> L1Client {
-        let l1_client = L1ClientOptions {
+    async fn new_l1_client_opt(
+        anvil: &Arc<AnvilInstance>,
+        f: impl FnOnce(&mut L1ClientOptions),
+    ) -> L1Client {
+        let mut opt = L1ClientOptions {
             l1_events_max_block_range: 1,
             l1_polling_interval: Duration::from_secs(1),
             subscription_timeout: Duration::from_secs(5),
-            l1_ws_provider: if include_ws {
-                Some(vec![anvil.ws_endpoint_url()])
-            } else {
-                None
-            },
             ..Default::default()
-        }
-        .connect(vec![anvil.endpoint_url()])
-        .expect("Failed to create L1 client");
+        };
+        f(&mut opt);
+
+        let l1_client = opt
+            .connect(vec![anvil.endpoint_url()])
+            .expect("Failed to create L1 client");
 
         l1_client.spawn_tasks().await;
         l1_client
+    }
+
+    async fn new_l1_client(anvil: &Arc<AnvilInstance>, include_ws: bool) -> L1Client {
+        new_l1_client_opt(anvil, |opt| {
+            if include_ws {
+                opt.l1_ws_provider = Some(vec![anvil.ws_endpoint_url()]);
+            }
+        })
+        .await
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1158,6 +1280,40 @@ mod test {
         test_wait_for_finalized_block_helper(false).await
     }
 
+    async fn test_wait_for_old_finalized_block_helper(ws: bool) {
+        setup_test();
+
+        let anvil = Arc::new(Anvil::new().block_time_f64(0.2).spawn());
+        let l1_client = new_l1_client_opt(&anvil, |opt| {
+            if ws {
+                opt.l1_ws_provider = Some(vec![anvil.ws_endpoint_url()]);
+            }
+            opt.l1_finalized_safety_margin = Some(1);
+        })
+        .await;
+        let provider = &l1_client.provider;
+
+        // Wait for anvil to finalize a few blocks.
+        l1_client.wait_for_finalized_block(2).await;
+
+        // Get an old finalized block.
+        let block = l1_client.wait_for_finalized_block(0).await;
+
+        // Compare against underlying provider.
+        let true_block = provider.get_block(0.into()).await.unwrap().unwrap();
+        assert_eq!(block.hash, true_block.header.hash);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_wait_for_old_finalized_block_ws() {
+        test_wait_for_old_finalized_block_helper(true).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_wait_for_old_finalized_block_http() {
+        test_wait_for_old_finalized_block_helper(false).await
+    }
+
     async fn test_wait_for_finalized_block_by_timestamp_helper(ws: bool) {
         setup_test();
 
@@ -1206,6 +1362,36 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_wait_for_finalized_block_by_timestamp_http() {
         test_wait_for_finalized_block_by_timestamp_helper(false).await
+    }
+
+    async fn test_wait_for_old_finalized_block_by_timestamp_helper(ws: bool) {
+        setup_test();
+
+        let anvil = Arc::new(Anvil::new().block_time_f64(0.2).spawn());
+        let l1_client = new_l1_client(&anvil, ws).await;
+
+        // Get the timestamp of the first block.
+        let true_block = l1_client.wait_for_finalized_block(0).await;
+        let timestamp = true_block.timestamp;
+
+        // Wait for some more blocks to be produced.
+        l1_client.wait_for_finalized_block(10).await;
+
+        // Get the old block by timestamp.
+        let block = l1_client
+            .wait_for_finalized_block_with_timestamp(U256::from(timestamp))
+            .await;
+        assert_eq!(block, true_block);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_wait_for_old_finalized_block_by_timestamp_ws() {
+        test_wait_for_old_finalized_block_by_timestamp_helper(true).await
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_wait_for_old_finalized_block_by_timestamp_http() {
+        test_wait_for_old_finalized_block_by_timestamp_helper(false).await
     }
 
     async fn test_wait_for_block_helper(ws: bool) {
@@ -1472,6 +1658,35 @@ mod test {
         provider.get_block_number().await.unwrap_err();
         provider.get_block_number().await.unwrap();
         assert!(get_failover_index(&provider) == 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_failover_revert() {
+        setup_test();
+
+        let anvil = Anvil::new().block_time(1).spawn();
+        let provider = L1ClientOptions {
+            l1_polling_interval: Duration::from_secs(1),
+            l1_consecutive_failure_tolerance: 1,
+            l1_failover_revert: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![
+            "http://notarealurl:1234".parse().unwrap(),
+            anvil.endpoint_url(),
+        ])
+        .expect("Failed to create L1 client");
+
+        // The first request fails and triggers a failover.
+        provider.get_block_number().await.unwrap_err();
+        assert_eq!(get_failover_index(&provider), 1);
+
+        // The next request succeeds from the other provider.
+        provider.get_block_number().await.unwrap();
+
+        // Eventually we revert back to the primary and requests fail again.
+        sleep(Duration::from_millis(2100)).await;
+        provider.get_block_number().await.unwrap_err();
     }
 
     // Checks that the L1 client initialized the state on startup even

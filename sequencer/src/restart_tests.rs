@@ -12,7 +12,7 @@ use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use derivative::Derivative;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_99::ChainConfig, FeeAccount,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
     MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
 };
 use futures::{
@@ -546,6 +546,7 @@ impl TestNetwork {
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
             epoch_start_block: None,
+            stake_table_capacity: None,
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()

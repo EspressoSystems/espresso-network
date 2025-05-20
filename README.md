@@ -10,7 +10,10 @@
 [![Build without lockfile](https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml)
 [![Coverage Status](https://coveralls.io/repos/github/EspressoSystems/espresso-network/badge.svg?branch=main)](https://coveralls.io/github/EspressoSystems/espresso-network?branch=main)
 
-The Espresso Network is the global confirmation layer for rollups in the Ethereum ecosystem. Espresso's [global confirmation layer(GCL)](https://docs.espressosys.com/network) provides agreement on inputs to a collection of composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast confirmations in return.
+The Espresso Network is the global confirmation layer for rollups in the Ethereum ecosystem. Espresso's
+[global confirmation layer(GCL)](https://docs.espressosys.com/network) provides agreement on inputs to a collection of
+composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast
+confirmations in return.
 
 [Official Documentation](https://docs.espressosys.com/network/)
 
@@ -171,18 +174,6 @@ In order to profile the gas consumption of the light client contract do the foll
 3. Create an account on [sentio.xyz](https://app.sentio.xyz/).
 4. Use the hash of the transaction generated in step two when calling the function `newFinalizedState` in order to
    obtain the gas profile.
-
-## Misc
-
-### Authenticate with GitHub container registry
-
-This is only necessary to fetch private images.
-
-- Go to your github profile
-- Developer Settings > Personal access tokens > Personal access tokens (classic)
-- Generate a new token
-  - for the scope options of the token, tick the _repo_ box.
-- Run `docker login ghcr.io --username <you_github_id> --password <your_personal_access_token>`
 
 # License
 

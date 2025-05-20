@@ -7,7 +7,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use async_broadcast::{InactiveReceiver, Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_task::{
@@ -22,15 +21,15 @@ use hotshot_types::{
     event::Event,
     message::UpgradeLock,
     simple_vote::HasEpoch,
+    stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StateSignatureKey},
         storage::Storage,
     },
-    utils::{is_epoch_root, is_last_block, option_epoch_from_block_number},
+    utils::{is_epoch_root, is_epoch_transition, is_last_block, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber},
-    StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
@@ -38,7 +37,7 @@ use tracing::instrument;
 
 use crate::{
     events::HotShotEvent,
-    helpers::broadcast_event,
+    helpers::{broadcast_event, broadcast_view_change, wait_for_second_vid_share},
     quorum_vote::handlers::{handle_quorum_proposal_validated, submit_vote, update_shared_state},
 };
 
@@ -74,7 +73,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// Reference to the storage.
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// View number to vote on.
     pub view_number: TYPES::View,
@@ -99,6 +98,12 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     /// Signature key for light client state
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Stake table capacity for light client use
+    pub stake_table_capacity: usize,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> HandleDepOutput
@@ -113,6 +118,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
         let mut next_epoch_payload_commitment = None;
         let mut leaf = None;
         let mut vid_share = None;
+        let mut da_cert = None;
         let mut parent_view_number = None;
         for event in res {
             match event.as_ref() {
@@ -137,13 +143,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     }
                     // Update our persistent storage of the proposal. If we cannot store the proposal return
                     // and error so we don't vote
-                    if let Err(e) = self
-                        .storage
-                        .write()
-                        .await
-                        .append_proposal_wrapper(proposal)
-                        .await
-                    {
+                    if let Err(e) = self.storage.append_proposal_wrapper(proposal).await {
                         tracing::error!("failed to store proposal, not voting.  error = {e:#}");
                         return;
                     }
@@ -171,6 +171,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                     } else {
                         next_epoch_payload_commitment = next_epoch_cert_payload_comm;
                     }
+                    da_cert = Some(cert.clone());
                 },
                 HotShotEvent::VidShareValidated(share) => {
                     let vid_payload_commitment = &share.data.payload_commitment();
@@ -216,6 +217,91 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             return;
         };
 
+        let Some(da_cert) = da_cert else {
+            tracing::error!(
+                "We don't have the DA cert for this view {:?}, but we should, because the vote dependencies have completed.",
+                self.view_number
+            );
+            return;
+        };
+
+        let mut maybe_current_epoch_vid_share = None;
+        // If this is an epoch transition block, we might need two VID shares.
+        if self.upgrade_lock.epochs_enabled(leaf.view_number()).await
+            && is_epoch_transition(leaf.block_header().block_number(), self.epoch_height)
+        {
+            let current_epoch = option_epoch_from_block_number::<TYPES>(
+                leaf.with_epoch,
+                leaf.block_header().block_number(),
+                self.epoch_height,
+            );
+            let next_epoch = current_epoch.map(|e| e + 1);
+
+            let Ok(current_epoch_membership) = self
+                .membership_coordinator
+                .stake_table_for_epoch(current_epoch)
+                .await
+            else {
+                tracing::warn!("Couldn't acquire current epoch membership. Do not vote!");
+                return;
+            };
+            let Ok(next_epoch_membership) = self
+                .membership_coordinator
+                .stake_table_for_epoch(next_epoch)
+                .await
+            else {
+                tracing::warn!("Couldn't acquire next epoch membership. Do not vote!");
+                return;
+            };
+
+            // If we belong to both epochs, we require VID shares from both epochs.
+            if current_epoch_membership.has_stake(&self.public_key).await
+                && next_epoch_membership.has_stake(&self.public_key).await
+            {
+                let other_target_epoch = if vid_share.data.target_epoch() == current_epoch {
+                    maybe_current_epoch_vid_share = Some(vid_share.clone());
+                    next_epoch
+                } else {
+                    current_epoch
+                };
+                match wait_for_second_vid_share(
+                    other_target_epoch,
+                    &vid_share,
+                    &da_cert,
+                    &self.consensus,
+                    &self.receiver.activate_cloned(),
+                )
+                .await
+                {
+                    Ok(other_vid_share) => {
+                        if maybe_current_epoch_vid_share.is_none() {
+                            maybe_current_epoch_vid_share = Some(other_vid_share);
+                        }
+                        if leaf.block_header().payload_commitment()
+                            != maybe_current_epoch_vid_share
+                                .as_ref()
+                                .unwrap()
+                                .data
+                                .payload_commitment()
+                        {
+                            tracing::error!(
+                                "We have both epochs vid shares but the leaf's vid commit doesn't \
+                                match the old epoch vid share's commit. It should never happen."
+                            );
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "This is an epoch transition block, we are in both epochs \
+                             but we received only one VID share. Do not vote! Error: {e:?}"
+                        );
+                        return;
+                    },
+                }
+            }
+        }
+
         // Update internal state
         if let Err(e) = update_shared_state::<TYPES, I, V>(
             OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
@@ -228,7 +314,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             self.view_number,
             Arc::clone(&self.instance_state),
             &leaf,
-            &vid_share,
+            maybe_current_epoch_vid_share.as_ref().unwrap_or(&vid_share),
             parent_view_number,
             self.epoch_height,
         )
@@ -267,14 +353,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
             // We're voting for the proposal that will probably form the eQC. We don't want to change
             // the view here because we will probably change it when we form the eQC.
             // The main reason is to handle view change event only once in the transaction task.
-            tracing::trace!(
-                "Sending ViewChange for view {} and epoch {:?}",
-                leaf.view_number() + 1,
-                cur_epoch
-            );
-            broadcast_event(
-                Arc::new(HotShotEvent::ViewChange(leaf.view_number() + 1, cur_epoch)),
+            broadcast_view_change(
                 &self.sender,
+                leaf.view_number() + 1,
+                cur_epoch,
+                self.first_epoch,
             )
             .await;
         }
@@ -287,13 +370,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static, V: Versions> Handl
                 self.private_key.clone(),
                 self.upgrade_lock.clone(),
                 self.view_number,
-                Arc::clone(&self.storage),
+                self.storage.clone(),
                 leaf,
-                vid_share,
+                maybe_current_epoch_vid_share.unwrap_or(vid_share),
                 is_vote_leaf_extended,
                 is_vote_epoch_root,
                 self.epoch_height,
                 &self.state_private_key,
+                self.stake_table_capacity,
             )
             .await
         )
@@ -338,7 +422,7 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub consensus_metrics: Arc<ConsensusMetricsValue>,
 
     /// Reference to the storage.
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -348,6 +432,12 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
 
     /// Signature key for light client state
     pub state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+
+    /// Stake table capacity for light client use
+    pub stake_table_capacity: usize,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskState<TYPES, I, V> {
@@ -445,7 +535,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 consensus: OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus)),
                 instance_state: Arc::clone(&self.instance_state),
                 membership_coordinator: self.membership.clone(),
-                storage: Arc::clone(&self.storage),
+                storage: self.storage.clone(),
                 view_number,
                 sender: event_sender.clone(),
                 receiver: event_receiver.clone().deactivate(),
@@ -454,6 +544,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 epoch_height: self.epoch_height,
                 consensus_metrics: Arc::clone(&self.consensus_metrics),
                 state_private_key: self.state_private_key.clone(),
+                first_epoch: self.first_epoch,
+                stake_table_capacity: self.stake_table_capacity,
             },
         );
         self.vote_dependencies
@@ -548,7 +640,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
 
                 // Validate the DAC.
                 cert.is_valid_cert(
-                    StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
+                    &StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
                     membership_da_success_threshold,
                     &self.upgrade_lock,
                 )
@@ -608,7 +700,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 );
 
                 let total_weight = vid_total_weight::<TYPES>(
-                    self.membership
+                    &self
+                        .membership
                         .membership_for_epoch(target_epoch)
                         .await?
                         .stake_table()
@@ -662,6 +755,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                     task.abort();
                 }
                 self.vote_dependencies = current_tasks;
+            },
+            HotShotEvent::SetFirstEpoch(view, epoch) => {
+                self.first_epoch = Some((*view, *epoch));
             },
             _ => {},
         }

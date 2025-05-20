@@ -5,7 +5,6 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! Common traits for the `HotShot` protocol
-pub mod auction_results_provider;
 pub mod block_contents;
 pub mod consensus_api;
 pub mod election;
@@ -14,7 +13,6 @@ pub mod network;
 pub mod node_implementation;
 pub mod qc;
 pub mod signature_key;
-pub mod stake_table;
 pub mod states;
 pub mod storage;
 

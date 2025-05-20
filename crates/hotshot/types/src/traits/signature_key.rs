@@ -91,7 +91,7 @@ pub trait SignatureKey:
         + Serialize
         + for<'a> Deserialize<'a>;
     /// The type of the quorum certificate parameters used for assembled signature
-    type QcParams: Send + Sync + Sized + Clone + Debug + Hash;
+    type QcParams<'a>: Send + Sync + Sized + Clone + Debug + Hash;
     /// The type of the assembled signature, without `BitVec`
     type PureAssembledSignatureType: Send
         + Sync
@@ -154,16 +154,16 @@ pub trait SignatureKey:
 
     /// get the public parameter for the assembled signature checking
     fn public_parameter(
-        stake_entries: Vec<Self::StakeTableEntry>,
+        stake_entries: &[Self::StakeTableEntry],
         threshold: U256,
-    ) -> Self::QcParams;
+    ) -> Self::QcParams<'_>;
 
     /// check the quorum certificate for the assembled signature, returning `Ok(())` if it is valid.
     ///
     /// # Errors
     /// Returns an error if the signature key fails to validate
     fn check(
-        real_qc_pp: &Self::QcParams,
+        real_qc_pp: &Self::QcParams<'_>,
         data: &[u8],
         qc: &Self::QcType,
     ) -> Result<(), SignatureError>;
@@ -173,7 +173,7 @@ pub trait SignatureKey:
 
     /// assemble the signature from the partial signature and the indication of signers in `BitVec`
     fn assemble(
-        real_qc_pp: &Self::QcParams,
+        real_qc_pp: &Self::QcParams<'_>,
         signers: &BitSlice,
         sigs: &[Self::PureAssembledSignatureType],
     ) -> Self::QcType;
@@ -321,20 +321,6 @@ pub trait BuilderSignatureKey:
         )
     }
 
-    /// sign fee offer (marketplace version)
-    /// # Errors
-    /// If unable to sign the data with the key
-    fn sign_sequencing_fee_marketplace(
-        private_key: &Self::BuilderPrivateKey,
-        fee_amount: u64,
-        view_number: u64,
-    ) -> Result<Self::BuilderSignature, Self::SignError> {
-        Self::sign_builder_message(
-            private_key,
-            &aggregate_fee_data_marketplace(fee_amount, view_number),
-        )
-    }
-
     /// sign transactions (marketplace version)
     /// # Errors
     /// If unable to sign the data with the key
@@ -428,6 +414,7 @@ pub trait StateSignatureKey:
     + PartialEq
     + Eq
     + Display
+    + Default
     + ToFieldsLightClientCompat
     + for<'a> TryFrom<&'a TaggedBase64>
     + Into<TaggedBase64>

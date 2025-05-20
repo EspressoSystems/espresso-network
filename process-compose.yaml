@@ -1,5 +1,15 @@
 version: "3"
 
+availability:
+  # terminate process compose if process exits
+  run-forever: &run-forever
+    exit_on_skipped: true
+    exit_on_end: true
+  # terminate process compose if process exits with non-zero exit code
+  run-forever: &exit-ok
+    exit_on_skipped: true
+    restart: exit_on_failure
+
 environment:
   - ESPRESSO_SEQUENCER_CDN_ENDPOINT=127.0.0.1:$ESPRESSO_CDN_SERVER_PORT
   - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL=http://localhost:$ESPRESSO_ORCHESTRATOR_PORT
@@ -17,21 +27,28 @@ processes:
     command: docker compose up demo-l1-network --force-recreate --renew-anon-volumes
     readiness_probe:
       exec:
-        command: nc -zv localhost $ESPRESSO_SEQUENCER_L1_PORT
+        command: >-
+          curl -H "Content-Type: application/json"
+          --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+          http://localhost:$ESPRESSO_SEQUENCER_L1_PORT
       failure_threshold: 6
       initial_delay_seconds: 5
+    availability: *run-forever
 
   deploy-sequencer-contracts:
     # The contract addresses are implicitly inherited from .env. We need to unset these or else the
     # script will think they're already deployed.
     command:
-      unset ESPRESSO_SEQUENCER_PERMISSIONED_STAKE_TABLE_ADDRESS
-      ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
-      && deploy --deploy-fee --deploy-permissioned-stake-table --deploy-esp-token --deploy-stake-table
+      unset
+      ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
+      ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+      ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS
+      && deploy --deploy-fee --deploy-esp-token --deploy-stake-table
     namespace: setup
     depends_on:
       demo-l1-network:
         condition: process_healthy
+    availability: *exit-ok
 
   deploy-prover-contracts:
     # The contract addresses are implicitly inherited from .env. We need to unset these or else the
@@ -48,6 +65,7 @@ processes:
       # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
       deploy-sequencer-contracts:
         condition: process_completed
+    availability: *exit-ok
 
   fund-builder:
     command: espresso-bridge deposit
@@ -66,8 +84,9 @@ processes:
         condition: process_completed
       sequencer1:
         condition: process_healthy
+    availability: *exit-ok
 
-  stake:
+  stake-for-demo:
     command: staking-cli stake-for-demo
     namespace: setup
     environment:
@@ -81,6 +100,7 @@ processes:
         condition: process_completed
       sequencer1:
         condition: process_healthy
+    availability: *exit-ok
 
   orchestrator:
     command: orchestrator
@@ -97,8 +117,7 @@ processes:
       timeout_seconds: 1
       success_threshold: 1
       failure_threshold: 100
-    availability:
-      restart: exit_on_failure
+    availability: *exit-ok
 
   state-relay-server:
     command: state-relay-server
@@ -110,9 +129,11 @@ processes:
         host: localhost
         port: $ESPRESSO_STATE_RELAY_SERVER_PORT
         path: /healthcheck
+    availability: *run-forever
 
   prover-service:
-    command: state-prover -d
+    # to avoid interfering so much with other work, "nice" the state prover process
+    command: nice state-prover -d
     environment:
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - RAYON_NUM_THREADS=$PROVER_RAYON_NUM_THREADS
@@ -125,6 +146,7 @@ processes:
         condition: process_healthy
       deploy-prover-contracts:
         condition: process_completed
+    availability: *run-forever
 
   sequencer0:
     command: sequencer -- storage-sql -- http -- query -- submit -- hotshot-events -- config
@@ -169,9 +191,7 @@ processes:
         condition: process_healthy
       deploy-sequencer-contracts:
         condition: process_completed
-    availability:
-      exit_on_skipped: true
-      restart: exit_on_failure
+    availability: *run-forever
 
     readiness_probe:
       http_get:
@@ -234,8 +254,7 @@ processes:
         path: /healthcheck
       period_seconds: 1
       failure_threshold: 100
-    availability:
-      restart: exit_on_failure
+    availability: *run-forever
 
   sequencer2:
     command: sequencer -- http
@@ -282,9 +301,7 @@ processes:
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
-    availability:
-      exit_on_skipped: true
-      restart: exit_on_failure
+    availability: *run-forever
 
   sequencer3:
     command: sequencer -- http -- query -- storage-fs
@@ -332,9 +349,7 @@ processes:
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
-    availability:
-      exit_on_skipped: true
-      restart: exit_on_failure
+    availability: *run-forever
 
   sequencer4:
     command: sequencer-sqlite -- storage-sql -- http -- query
@@ -380,12 +395,10 @@ processes:
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
-    availability:
-      exit_on_skipped: true
-      restart: exit_on_failure
+    availability: *run-forever
 
   node_validator:
-    command: RUST_LOG=debug node-metrics --
+    command: node-metrics --
     environment:
       - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT/v0/
       - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:$ESPRESSO_SEQUENCER_API_PORT/v0/
@@ -413,6 +426,7 @@ processes:
         path: /healthcheck
       period_seconds: 1
       failure_threshold: 100
+    availability: *run-forever
 
   # We use KeyDB (a Redis variant) to maintain consistency between
   # different parts of the CDN
@@ -427,6 +441,7 @@ processes:
       period_seconds: 5
       timeout_seconds: 4
       failure_threshold: 20
+    availability: *run-forever
 
   # The CDN system's main entry point; where users contact first.
   marshal_0:
@@ -442,10 +457,11 @@ processes:
         path: /metrics
       period_seconds: 1
       failure_threshold: 100
+    availability: *run-forever
 
   # A broker is the main message-routing unit of the CDN
   broker_0:
-    command: RUST_LOG=debug cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091
+    command: cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091
     depends_on:
       keydb:
         condition: process_healthy
@@ -457,12 +473,13 @@ processes:
         path: /metrics
       period_seconds: 1
       failure_threshold: 100
+    availability: *run-forever
 
   # A broker is the main message-routing unit of the CDN
   # as we're running a local demo, we need to operate on different ports
   broker_1:
     command:
-      RUST_LOG=debug cdn-broker --public-bind-endpoint 0.0.0.0:1740 --public-advertise-endpoint local_ip:1740
+      cdn-broker --public-bind-endpoint 0.0.0.0:1740 --public-advertise-endpoint local_ip:1740
       --private-bind-endpoint 0.0.0.0:1741 --private-advertise-endpoint local_ip:1741 -d
       "redis://:changeme!@localhost:6379" -m 127.0.0.1:9092
     depends_on:
@@ -476,6 +493,7 @@ processes:
         path: /metrics
       period_seconds: 1
       failure_threshold: 100
+    availability: *run-forever
 
   cdn-whitelist:
     command: cdn-whitelist -d redis://:changeme!@localhost:6379 -o http://localhost:$ESPRESSO_ORCHESTRATOR_PORT
@@ -485,6 +503,7 @@ processes:
         condition: process_healthy
       keydb:
         condition: process_healthy
+    availability: *exit-ok
 
   submit-transactions-public:
     command: submit-transactions
@@ -505,8 +524,7 @@ processes:
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
-    availability:
-      exit_on_skipped: true
+    availability: *run-forever
 
   submit-transactions-private:
     command: submit-transactions
@@ -526,8 +544,7 @@ processes:
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
-    availability:
-      exit_on_skipped: true
+    availability: *run-forever
 
   permissionless-builder:
     command: permissionless-builder
@@ -550,8 +567,7 @@ processes:
         path: /healthcheck
       failure_threshold: 100
       period_seconds: 1
-    availability:
-      restart: "exit_on_failure"
+    availability: *run-forever
 
   nasty-client:
     command: nasty-client
@@ -568,30 +584,7 @@ processes:
         port: $ESPRESSO_NASTY_CLIENT_PORT
         path: /healthcheck
       failure_threshold: 100
-
-  marketplace-solver:
-    command: marketplace-solver
-    environment:
-      - ESPRESSO_MARKETPLACE_SOLVER_API_PORT=$ESPRESSO_MARKETPLACE_SOLVER_API_PORT
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_API_URL=http://localhost:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
-      - MARKETPLACE_SOLVER_POSTGRES_HOST=localhost
-      - MARKETPLACE_SOLVER_POSTGRES_USER=root
-      - MARKETPLACE_SOLVER_POSTGRES_PASSWORD=password
-      - MARKETPLACE_SOLVER_POSTGRES_DATABASE_NAME=solver
-    depends_on:
-      sequencer0:
-        condition: process_healthy
-      solver-db:
-        condition: process_healthy
-
-    readiness_probe:
-      http_get:
-        scheme: http
-        host: localhost
-        port: $ESPRESSO_MARKETPLACE_SOLVER_API_PORT
-        path: /healthcheck
-      period_seconds: 1
-      failure_threshold: 100
+    availability: *run-forever
 
   sequencer-db-0:
     command:
@@ -610,6 +603,7 @@ processes:
       # See https://github.com/docker-library/postgres/issues/146 for discussion.
       success_threshold: 2
       failure_threshold: 20
+    availability: *run-forever
 
   sequencer-db-1:
     command:
@@ -628,24 +622,7 @@ processes:
       # See https://github.com/docker-library/postgres/issues/146 for discussion.
       success_threshold: 2
       failure_threshold: 20
-
-  solver-db:
-    command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p $MARKETPLACE_SOLVER_POSTGRES_PORT:5432 postgres
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_USER=root
-      - POSTGRES_DB=solver
-    readiness_probe:
-      exec:
-        command: pg_isready -h localhost -p $MARKETPLACE_SOLVER_POSTGRES_PORT
-      initial_delay_seconds: 5
-      period_seconds: 5
-      timeout_seconds: 4
-      # Postgres can be falsely "ready" once before running init scripts.
-      # See https://github.com/docker-library/postgres/issues/146 for discussion.
-      success_threshold: 2
-      failure_threshold: 20
+    availability: *run-forever
 
   block-explorer:
     command:
@@ -654,3 +631,4 @@ processes:
     depends_on:
       sequencer1:
         condition: process_healthy
+    availability: *run-forever

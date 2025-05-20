@@ -13,10 +13,15 @@ use hotshot_utils::{
 
 use crate::{
     data::Leaf2,
-    drb::{compute_drb_result, DrbResult},
+    drb::{compute_drb_result, DrbInput, DrbResult},
+    stake_table::HSStakeTable,
     traits::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeType},
+        storage::{
+            store_drb_progress_fn, store_drb_result_fn, Storage, StoreDrbProgressFn,
+            StoreDrbResultFn,
+        },
     },
     utils::{root_block_in_epoch, transition_block_for_epoch},
     PeerConfig,
@@ -36,8 +41,13 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// wait for the actual catchup and allert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
+    /// Callback function to store a drb result in storage when one is calculated during catchup
+    store_drb_result_fn: StoreDrbResultFn<TYPES>,
+
     /// Number of blocks in an epoch
     pub epoch_height: u64,
+
+    store_drb_progress_fn: StoreDrbProgressFn,
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -45,24 +55,29 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
         Self {
             membership: Arc::clone(&self.membership),
             catchup_map: Arc::clone(&self.catchup_map),
+            store_drb_result_fn: self.store_drb_result_fn.clone(),
             epoch_height: self.epoch_height,
+            store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
         }
     }
 }
-// async fn catchup_membership(coordinator: EpochMembershipCoordinator<TYPES>) {
-
-// }
 
 impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES>
 where
     Self: Send,
 {
     /// Create an EpochMembershipCoordinator
-    pub fn new(membership: Arc<RwLock<TYPES::Membership>>, epoch_height: u64) -> Self {
+    pub fn new<S: Storage<TYPES>>(
+        membership: Arc<RwLock<TYPES::Membership>>,
+        epoch_height: u64,
+        storage: &S,
+    ) -> Self {
         Self {
             membership,
             catchup_map: Arc::default(),
             epoch_height,
+            store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
+            store_drb_result_fn: store_drb_result_fn(storage.clone()),
         }
     }
 
@@ -173,20 +188,22 @@ where
             anytrace::bail!("get epoch root failed for epoch {:?}", root_epoch);
         };
 
-        let updater = self
-            .membership
-            .read()
-            .await
-            .add_epoch_root(epoch, root_leaf.block_header().clone())
-            .await
-            .ok_or(anytrace::warn!("add epoch root failed"))?;
-        updater(&mut *(self.membership.write().await));
+        let add_epoch_root_updater = {
+            let membership_read = self.membership.read().await;
+            membership_read
+                .add_epoch_root(epoch, root_leaf.block_header().clone())
+                .await
+        };
+
+        if let Some(updater) = add_epoch_root_updater {
+            let mut membership_write = self.membership.write().await;
+            updater(&mut *(membership_write));
+        };
 
         let drb_membership = match root_membership.next_epoch_stake_table().await {
             Ok(drb_membership) => drb_membership,
             Err(_) => Box::pin(self.wait_for_catchup(root_epoch + 1)).await?,
         };
-
         // get the DRB from the last block of the epoch right before the one we're catching up to
         // or compute it if it's not available
         let drb = if let Ok(drb) = drb_membership
@@ -206,10 +223,23 @@ where
             let mut drb_seed_input = [0u8; 32];
             let len = drb_seed_input_vec.len().min(32);
             drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
-            tokio::task::spawn_blocking(move || compute_drb_result::<TYPES>(drb_seed_input))
-                .await
-                .unwrap()
+            let drb_input = DrbInput {
+                epoch: *epoch,
+                iteration: 0,
+                value: drb_seed_input,
+            };
+            let store_drb_progress_fn = self.store_drb_progress_fn.clone();
+            tokio::task::spawn_blocking(move || {
+                compute_drb_result(drb_input, store_drb_progress_fn)
+            })
+            .await
+            .unwrap()
         };
+
+        tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
+        if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
+            tracing::warn!("Failed to add drb result to storage: {e}");
+        }
 
         self.membership.write().await.add_drb_result(epoch, drb);
         Ok(EpochMembership {
@@ -247,8 +277,14 @@ fn spawn_catchup<T: NodeType>(coordinator: EpochMembershipCoordinator<T>, epoch:
             tx
         };
         // do catchup
-        let ret = coordinator.catchup(epoch).await;
-        let _ = tx.broadcast_direct(ret).await;
+
+        let result = coordinator.clone().catchup(epoch).await;
+        let _ = tx.broadcast_direct(result.clone()).await;
+
+        if let Err(err) = result {
+            tracing::warn!("failed to catchup for epoch={epoch:?}. err={err:#}");
+            coordinator.catchup_map.lock().await.remove(&epoch);
+        }
     });
 }
 /// Wrapper around a membership that guarantees that the epoch
@@ -327,7 +363,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn stake_table(&self) -> Vec<PeerConfig<TYPES>> {
+    pub async fn stake_table(&self) -> HSStakeTable<TYPES> {
         self.coordinator
             .membership
             .read()
@@ -336,7 +372,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn da_stake_table(&self) -> Vec<PeerConfig<TYPES>> {
+    pub async fn da_stake_table(&self) -> HSStakeTable<TYPES> {
         self.coordinator
             .membership
             .read()

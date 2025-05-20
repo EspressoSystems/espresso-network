@@ -5,7 +5,7 @@ use anyhow::{bail, ensure, Context};
 use espresso_types::{
     traits::StateCatchup,
     v0_1::{RewardAccount, RewardMerkleTree},
-    v0_99::ChainConfig,
+    v0_3::ChainConfig,
     BlockMerkleTree, Delta, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
 };
 use futures::{future::Future, StreamExt};

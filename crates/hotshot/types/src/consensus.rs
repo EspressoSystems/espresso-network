@@ -31,6 +31,7 @@ use crate::{
         DaCertificate2, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
         QuorumCertificate2,
     },
+    simple_vote::HasEpoch,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         metrics::{Counter, Gauge, Histogram, Metrics, NoMetrics},
@@ -49,10 +50,13 @@ use crate::{
 /// A type alias for `HashMap<Commitment<T>, T>`
 pub type CommitmentMap<T> = HashMap<Commitment<T>, T>;
 
-/// A type alias for `BTreeMap<T::Time, HashMap<T::SignatureKey, Proposal<T, VidDisperseShare<T>>>>`
+/// A type alias for `BTreeMap<T::Time, HashMap<T::SignatureKey, BTreeMap<T::Epoch, Proposal<T, VidDisperseShare<T>>>>>`
 pub type VidShares<TYPES> = BTreeMap<
     <TYPES as NodeType>::View,
-    HashMap<<TYPES as NodeType>::SignatureKey, Proposal<TYPES, VidDisperseShare<TYPES>>>,
+    HashMap<
+        <TYPES as NodeType>::SignatureKey,
+        BTreeMap<Option<<TYPES as NodeType>::Epoch>, Proposal<TYPES, VidDisperseShare<TYPES>>>,
+    >,
 >;
 
 /// Type alias for consensus state wrapped in a lock.
@@ -619,12 +623,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
 
     /// Get the parent Leaf Info from a given leaf and our public key.
     /// Returns None if we don't have the data in out state
-    pub fn parent_leaf_info(
+    pub async fn parent_leaf_info(
         &self,
         leaf: &Leaf2<TYPES>,
         public_key: &TYPES::SignatureKey,
     ) -> Option<LeafInfo<TYPES>> {
         let parent_view_number = leaf.justify_qc().view_number();
+        let parent_epoch = leaf.justify_qc().epoch();
         let parent_leaf = self
             .saved_leaves
             .get(&leaf.justify_qc().data().leaf_commit)?;
@@ -632,10 +637,12 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         let (Some(state), delta) = parent_state_and_delta else {
             return None;
         };
+
         let parent_vid = self
             .vid_shares()
             .get(&parent_view_number)
-            .and_then(|inner_map| inner_map.get(public_key).cloned())
+            .and_then(|key_map| key_map.get(public_key).cloned())
+            .and_then(|epoch_map| epoch_map.get(&parent_epoch).cloned())
             .map(|prop| prop.data);
 
         let state_cert = if parent_leaf.with_epoch
@@ -975,7 +982,9 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.vid_shares
             .entry(view_number)
             .or_default()
-            .insert(disperse.data.recipient_key().clone(), disperse);
+            .entry(disperse.data.recipient_key().clone())
+            .or_default()
+            .insert(disperse.data.target_epoch(), disperse);
     }
 
     /// Add a new entry to the da_certs map.
@@ -1185,13 +1194,11 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         is_epoch_transition(block_height, self.epoch_height)
     }
 
-    /// Returns true if our high QC is for the last block in the epoch
-    pub fn is_high_qc_for_last_block(&self) -> bool {
-        let Some(leaf) = self.saved_leaves.get(&self.high_qc().data.leaf_commit) else {
-            tracing::trace!("We don't have a leaf corresponding to the high QC");
+    /// Returns true if our high QC is for one of the epoch transition blocks
+    pub fn is_high_qc_for_epoch_transition(&self) -> bool {
+        let Some(block_height) = self.high_qc().data.block_number else {
             return false;
         };
-        let block_height = leaf.height();
         is_epoch_transition(block_height, self.epoch_height)
     }
 
@@ -1231,6 +1238,4 @@ pub struct CommitmentAndMetadata<TYPES: NodeType> {
     pub fees: Vec1<BuilderFee<TYPES>>,
     /// View number this block is for
     pub block_view: TYPES::View,
-    /// auction result that the block was produced from, if any
-    pub auction_result: Option<TYPES::AuctionResult>,
 }

@@ -24,11 +24,12 @@ use crate::{
     message::UpgradeLock,
     simple_certificate::{LightClientStateUpdateCertificate, Threshold},
     simple_vote::{LightClientStateUpdateVote, VersionedVoteData, Voteable},
+    stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         node_implementation::{NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
     },
-    PeerConfig, StakeTableEntries,
+    PeerConfig,
 };
 
 /// A simple vote that has a signer and commitment to the data voted on.
@@ -76,7 +77,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     /// Checks if the cert is valid in the given epoch
     fn is_valid_cert<V: Versions>(
         &self,
-        stake_table: Vec<<TYPES::SignatureKey as SignatureKey>::StakeTableEntry>,
+        stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> impl std::future::Future<Output = Result<()>>;
@@ -87,7 +88,7 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     /// Get  Stake Table from Membership implementation.
     fn stake_table(
         membership: &EpochMembership<TYPES>,
-    ) -> impl Future<Output = Vec<PeerConfig<TYPES>>> + Send;
+    ) -> impl Future<Output = HSStakeTable<TYPES>> + Send;
 
     /// Get Total Nodes from Membership implementation.
     fn total_nodes(membership: &EpochMembership<TYPES>) -> impl Future<Output = usize> + Send;
@@ -215,9 +216,10 @@ impl<
 
         if *total_stake_casted >= threshold {
             // Assemble QC
-            let real_qc_pp: <<TYPES as NodeType>::SignatureKey as SignatureKey>::QcParams =
+            let stake_table_entries = StakeTableEntries::<TYPES>::from(stake_table).0;
+            let real_qc_pp: <<TYPES as NodeType>::SignatureKey as SignatureKey>::QcParams<'_> =
                 <TYPES::SignatureKey as SignatureKey>::public_parameter(
-                    StakeTableEntries::<TYPES>::from(stake_table).0,
+                    &stake_table_entries,
                     threshold,
                 );
 

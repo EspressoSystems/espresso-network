@@ -165,7 +165,7 @@ pub trait BlockHeader<TYPES: NodeType>:
     /// Build a header with the parent validate state, instance-level state, parent leaf, payload
     /// and builder commitments, and metadata. This is only used in pre-marketplace versions
     #[allow(clippy::too_many_arguments)]
-    fn new_legacy(
+    fn new(
         parent_state: &TYPES::ValidatedState,
         instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         parent_leaf: &Leaf2<TYPES>,
@@ -175,23 +175,6 @@ pub trait BlockHeader<TYPES: NodeType>:
         builder_fee: BuilderFee<TYPES>,
         version: Version,
         view_number: u64,
-    ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
-
-    /// Build a header with the parent validate state, instance-level state, parent leaf, payload
-    /// and builder commitments, metadata, and auction results. This is only used in post-marketplace
-    /// versions
-    #[allow(clippy::too_many_arguments)]
-    fn new_marketplace(
-        parent_state: &TYPES::ValidatedState,
-        instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
-        parent_leaf: &Leaf2<TYPES>,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-        metadata: <TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        builder_fee: Vec<BuilderFee<TYPES>>,
-        view_number: u64,
-        auction_results: Option<TYPES::AuctionResult>,
-        version: Version,
     ) -> impl Future<Output = Result<Self, Self::Error>> + Send;
 
     /// Build the genesis header, payload, and metadata.
@@ -213,9 +196,6 @@ pub trait BlockHeader<TYPES: NodeType>:
 
     /// Get the builder commitment
     fn builder_commitment(&self) -> BuilderCommitment;
-
-    /// Get the results of the auction for this Header. Only used in post-marketplace versions
-    fn get_auction_results(&self) -> Option<TYPES::AuctionResult>;
 
     /// Get the light client state
     fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState>;

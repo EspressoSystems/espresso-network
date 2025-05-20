@@ -248,37 +248,6 @@ pub struct Options {
     #[derivative(Debug(format_with = "Display::fmt"))]
     pub state_relay_server_url: Url,
 
-    /// URL of the Auction Results Solver
-    #[clap(
-        long,
-        env = "ESPRESSO_AUCTION_RESULTS_SOLVER_URL",
-        default_value = "http://localhost:25000"
-    )]
-    #[derivative(Debug(format_with = "Display::fmt"))]
-    pub auction_results_solver_url: Url,
-    #[clap(
-        long,
-        env = "ESPRESSO_MARKETPLACE_SOLVER_PATH",
-        default_value = "marketplace-solver/"
-    )]
-    /// API path of marketplace-solver
-    pub marketplace_solver_path: String,
-    #[clap(
-        long,
-        env = "ESPRESSO_AUCTION_RESULTS_PATH",
-        default_value = "auction_results/"
-    )]
-    /// API path of marketplace-solver auction results
-    pub auction_results_path: String,
-    /// URL of generic builder
-    #[clap(
-        long,
-        env = "ESPRESSO_FALLBACK_BUILDER_URL",
-        default_value = "http://localhost:31004"
-    )]
-    #[derivative(Debug(format_with = "Display::fmt"))]
-    pub fallback_builder_url: Url,
-
     /// Path to TOML file containing genesis state.
     #[clap(
         long,

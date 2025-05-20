@@ -1,12 +1,10 @@
 //! Mock implementation of persistence, for testing.
-#![cfg(any(test, feature = "testing"))]
-
 use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     Leaf2, NetworkConfig,
@@ -212,7 +210,7 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
         _drb_result: DrbResult,
@@ -269,12 +267,18 @@ impl MembershipPersistence for NoStorage {
 
     async fn store_events(
         &self,
-        _l1_block: u64,
+        _l1: u64,
         _events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
-        Ok(None)
+    async fn load_events(
+        &self,
+        _l1_block: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
+        Ok((None, Vec::new()))
     }
 }

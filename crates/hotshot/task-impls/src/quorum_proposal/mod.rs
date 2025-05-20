@@ -7,7 +7,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use either::Either;
 use hotshot_task::{
@@ -23,14 +22,14 @@ use hotshot_types::{
         EpochRootQuorumCertificate, LightClientStateUpdateCertificate, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
+    stake_table::StakeTableEntries,
     traits::{
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
         storage::Storage,
     },
-    utils::{is_epoch_transition, EpochTransitionIndicator},
+    utils::{is_epoch_transition, is_last_block, EpochTransitionIndicator},
     vote::{Certificate, HasViewNumber},
-    StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
 use tokio::task::JoinHandle;
@@ -75,7 +74,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub timeout: u64,
 
     /// This node's storage ref
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// Shared consensus task state
     pub consensus: OuterConsensus<TYPES>,
@@ -157,7 +156,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                             _metadata,
                             view_number,
                             _fee,
-                            _auction_result,
                         ) = event
                         {
                             *view_number
@@ -344,29 +342,28 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         // If we are in the epoch transition and we are the leader in the next epoch,
         // we might want to start collecting dependencies for our next epoch proposal.
 
-        if !leader_in_current_epoch {
-            let leader_in_next_epoch = epoch_number.is_some()
-                && matches!(
-                    epoch_transition_indicator,
-                    EpochTransitionIndicator::InTransition
-                )
-                && epoch_membership
-                    .next_epoch()
-                    .await
-                    .context(warn!(
-                        "Missing the randomized stake table for epoch {:?}",
-                        epoch_number.unwrap() + 1
-                    ))?
-                    .leader(view_number)
-                    .await?
-                    == self.public_key;
+        let leader_in_next_epoch = !leader_in_current_epoch
+            && epoch_number.is_some()
+            && matches!(
+                epoch_transition_indicator,
+                EpochTransitionIndicator::InTransition
+            )
+            && epoch_membership
+                .next_epoch()
+                .await
+                .context(warn!(
+                    "Missing the randomized stake table for epoch {:?}",
+                    epoch_number.unwrap() + 1
+                ))?
+                .leader(view_number)
+                .await?
+                == self.public_key;
 
-            // Don't even bother making the task if we are not entitled to propose anyway.
-            ensure!(
-                leader_in_current_epoch || leader_in_next_epoch,
-                debug!("We are not the leader of the next view")
-            );
-        }
+        // Don't even bother making the task if we are not entitled to propose anyway.
+        ensure!(
+            leader_in_current_epoch || leader_in_next_epoch,
+            debug!("We are not the leader of the next view")
+        );
 
         // Don't try to propose twice for the same view.
         ensure!(
@@ -446,8 +443,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
         event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         let epoch_number = self.cur_epoch;
-        let epoch_transition_indicator = if self.consensus.read().await.is_high_qc_for_last_block()
-        {
+        let maybe_high_qc_block_number = self.consensus.read().await.high_qc().data.block_number;
+        let epoch_transition_indicator = if maybe_high_qc_block_number.is_some_and(|bn| {
+            is_epoch_transition(bn, self.epoch_height) && !is_last_block(bn, self.epoch_height)
+        }) {
             EpochTransitionIndicator::InTransition
         } else {
             EpochTransitionIndicator::NotInTransition
@@ -525,8 +524,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     .insert(state_cert.epoch, state_cert.clone());
 
                 self.storage
-                    .write()
-                    .await
                     .update_high_qc2_and_state_cert(qc.clone(), state_cert.clone())
                     .await
                     .wrap()
@@ -551,7 +548,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 _metadata,
                 view_number,
                 _fee,
-                _auction_result,
             ) => {
                 let view_number = *view_number;
 
@@ -561,7 +557,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    EpochTransitionIndicator::NotInTransition,
+                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -578,7 +574,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
 
                 certificate
                     .is_valid_cert(
-                        StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
                         membership_success_threshold,
                         &self.upgrade_lock,
                     )
@@ -599,7 +595,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     event_receiver,
                     event_sender,
                     event,
-                    EpochTransitionIndicator::NotInTransition,
+                    epoch_transition_indicator,
                 )
                 .await?;
             },
@@ -636,7 +632,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     event_receiver,
                     event_sender,
                     Arc::clone(&event),
-                    EpochTransitionIndicator::NotInTransition,
+                    epoch_transition_indicator,
                 )
                 .await?;
             },

@@ -13,22 +13,20 @@ use hotshot_query_service::{
     explorer::{BlockDetail, ExplorerHeader, Timestamp},
     Resolvable,
 };
-use hotshot_stake_table::vec_based::StakeTable;
 use hotshot_types::{
-    light_client::{CircuitField, StateVerKey},
     signature_key::BLSPubKey,
-    traits::{
-        block_contents::BlockHeader,
-        stake_table::{SnapshotVersion, StakeTableScheme},
-        BlockPayload, EncodeBytes,
-    },
+    traits::{block_contents::BlockHeader, BlockPayload, EncodeBytes},
+    utils::epoch_from_block_number,
+    PeerConfig,
 };
 pub use location_details::LocationDetails;
 pub use node_identity::NodeIdentity;
 use time::OffsetDateTime;
 use tokio::{spawn, task::JoinHandle};
 
-use crate::api::node_validator::v0::LeafAndBlock;
+use crate::api::node_validator::v0::{
+    get_node_stake_table_from_sequencer, LeafAndBlock, PublicHotShotConfig, Version01,
+};
 
 /// MAX_HISTORY represents the last N records that are stored within the
 /// DataState structure for the various different sample types.
@@ -44,7 +42,7 @@ pub const MAX_VOTERS_HISTORY: usize = 100;
 pub struct DataState {
     latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
     latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
-    stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
+    stake_table: Vec<PeerConfig<SeqTypes>>,
     // Do we need any other data at the moment?
     node_identity: Vec<NodeIdentity>,
 }
@@ -53,17 +51,12 @@ impl DataState {
     pub fn new(
         latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
         latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
-        stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
+        stake_table: Vec<PeerConfig<SeqTypes>>,
     ) -> Self {
-        let node_identity = {
-            let stake_table_iter_result = stake_table.try_iter(SnapshotVersion::Head);
-            match stake_table_iter_result {
-                Ok(into_iter) => into_iter
-                    .map(|(key, ..)| NodeIdentity::from_public_key(key))
-                    .collect(),
-                Err(_) => vec![],
-            }
-        };
+        let node_identity: Vec<_> = stake_table
+            .iter()
+            .map(|config| NodeIdentity::from_public_key(config.stake_table_entry.stake_key))
+            .collect();
 
         Self {
             latest_blocks,
@@ -77,11 +70,15 @@ impl DataState {
         self.latest_blocks.iter()
     }
 
+    pub fn is_latest_blocks_empty(&self) -> bool {
+        !self.latest_blocks.is_empty()
+    }
+
     pub fn latest_voters(&self) -> impl Iterator<Item = &BitVec<u16>> {
         self.latest_voters.iter()
     }
 
-    pub fn stake_table(&self) -> &StakeTable<BLSPubKey, StateVerKey, CircuitField> {
+    pub fn stake_table(&self) -> &Vec<PeerConfig<SeqTypes>> {
         &self.stake_table
     }
 
@@ -89,16 +86,57 @@ impl DataState {
         self.node_identity.iter()
     }
 
-    pub fn replace_stake_table(
-        &mut self,
-        stake_table: StakeTable<BLSPubKey, StateVerKey, CircuitField>,
-    ) {
-        self.stake_table = stake_table;
+    // [stake_table_differences] is a helper function that will check the
+    // public key entry differences between the [old_stake_table] and the new
+    // [stake_table].
+    //
+    // This function will return a tuple of a list of of added public keys,
+    // and a list of removed public keys
+    fn stake_table_differences(
+        &self,
+        old_stake_table: &[PeerConfig<SeqTypes>],
+        stake_table: &[PeerConfig<SeqTypes>],
+    ) -> (Vec<BLSPubKey>, Vec<BLSPubKey>) {
+        let old_stake_table_set = old_stake_table
+            .iter()
+            .map(|config| config.stake_table_entry.stake_key)
+            .collect::<HashSet<_>>();
 
-        // We want to make sure that we're accounting for this node identity
-        // information that we have.  In the case of any new public keys
-        // being added, we want to ensure we have an entry for them in our
-        // node identity list.
+        let new_stake_table_set = stake_table
+            .iter()
+            .map(|config| config.stake_table_entry.stake_key)
+            .collect::<HashSet<_>>();
+
+        let added_public_keys = new_stake_table_set
+            .difference(&old_stake_table_set)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let removed_public_keys = old_stake_table_set
+            .difference(&new_stake_table_set)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        tracing::info!(
+            "new stake table added {:?} public keys",
+            added_public_keys
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+        tracing::info!(
+            "new stake table removed {:?} public keys",
+            removed_public_keys
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+
+        (added_public_keys, removed_public_keys)
+    }
+
+    pub fn replace_stake_table(&mut self, stake_table: Vec<PeerConfig<SeqTypes>>) {
+        let old_stake_table = std::mem::replace(&mut self.stake_table, stake_table.clone());
 
         let current_identity_set = self
             .node_identity
@@ -106,18 +144,24 @@ impl DataState {
             .map(|node_identity| *node_identity.public_key())
             .collect::<HashSet<_>>();
 
-        let stake_table_iter_result = self.stake_table.try_iter(SnapshotVersion::Head);
-        let stake_table_iter = match stake_table_iter_result {
-            Ok(into_iter) => into_iter,
-            Err(_) => return,
-        };
+        // We want to make sure that we're accounting for this node identity
+        // information that we have.  In the case of any new public keys
+        // being added, we want to ensure we have an entry for them in our
+        // node identity list.
 
-        let missing_node_identity_entries =
-            stake_table_iter.filter(|(key, ..)| !current_identity_set.contains(key));
+        // TODO @ayiga: We need to figure out how to prune old nodes from
+        //      the list of node identities in such a way that does not
+        //      cause issues or lend to confusion.  For now, we will just
+        //      ignore these removals, and keep a potentially ever-growing
+        //      list of node identities.
+        let (new_public_keys, _) = self.stake_table_differences(&old_stake_table, &stake_table);
 
-        self.node_identity.extend(
-            missing_node_identity_entries.map(|(key, ..)| NodeIdentity::from_public_key(key)),
-        );
+        let missing_node_identity_entries = new_public_keys
+            .into_iter()
+            .filter(|key| !current_identity_set.contains(key));
+
+        self.node_identity
+            .extend(missing_node_identity_entries.map(NodeIdentity::from_public_key));
     }
 
     pub fn add_latest_block(&mut self, block: BlockDetail<SeqTypes>) {
@@ -162,6 +206,7 @@ impl DataState {
 pub enum ProcessLeafError {
     BlockSendError(SendError),
     VotersSendError(SendError),
+    FailedToGetNewStakeTable,
 }
 
 impl std::fmt::Display for ProcessLeafError {
@@ -173,6 +218,9 @@ impl std::fmt::Display for ProcessLeafError {
             ProcessLeafError::VotersSendError(err) => {
                 write!(f, "error sending voters to sender: {}", err)
             },
+            ProcessLeafError::FailedToGetNewStakeTable => {
+                write!(f, "error getting new stake table from sequencer")
+            },
         }
     }
 }
@@ -182,6 +230,7 @@ impl std::error::Error for ProcessLeafError {
         match self {
             ProcessLeafError::BlockSendError(err) => Some(err),
             ProcessLeafError::VotersSendError(err) => Some(err),
+            ProcessLeafError::FailedToGetNewStakeTable => None,
         }
     }
 }
@@ -210,6 +259,81 @@ pub fn create_block_detail_from_block(block: &BlockQueryData<SeqTypes>) -> Block
     }
 }
 
+// epoch_number_helper is a utility function that will determine the
+// epoch number based on the given [block_height], [epoch_starting_block],
+// and [num_blocks_per_epoch].
+//
+// This function will ensure that the epoch number is zero if the given
+// [block_height] is less than the [epoch_starting_block]. Otherwise it
+// will return the [epoch_from_block_number] result.
+fn epoch_number_helper(
+    block_height: u64,
+    epoch_starting_block: u64,
+    num_blocks_per_epoch: u64,
+) -> u64 {
+    if block_height < epoch_starting_block {
+        return 0;
+    }
+
+    epoch_from_block_number(block_height, num_blocks_per_epoch)
+}
+
+async fn perform_stake_table_epoch_check_and_update(
+    data_state: Arc<RwLock<DataState>>,
+    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    hotshot_config: &PublicHotShotConfig,
+    block_height: u64,
+) -> Result<(), ProcessLeafError> {
+    // Are we in a new epoch?
+    // Do we need to replace our stake table?
+    tracing::debug!("processing block height: {}", block_height);
+    if let (Some(epoch_starting_block), Some(num_blocks_per_epoch)) = (
+        hotshot_config.epoch_start_block,
+        hotshot_config.epoch_height,
+    ) {
+        let previous_epoch = epoch_number_helper(
+            block_height.saturating_sub(1),
+            epoch_starting_block,
+            num_blocks_per_epoch,
+        );
+        let upcoming_epoch =
+            epoch_number_helper(block_height, epoch_starting_block, num_blocks_per_epoch);
+
+        if upcoming_epoch != previous_epoch {
+            tracing::debug!(
+                "new epoch detected: {} -> {} for blocks {}, and {}",
+                previous_epoch,
+                upcoming_epoch,
+                block_height.saturating_sub(1),
+                block_height,
+            );
+            // We're in a new epoch, so we'll need to update our stake table
+            let next_stake_table = match get_node_stake_table_from_sequencer(client, upcoming_epoch)
+                .await
+            {
+                Ok(stake_table) => stake_table,
+                Err(err) => {
+                    tracing::error!("process_incoming_leaf_and_block: error getting stake table from sequencer: {}", err);
+                    return Err(ProcessLeafError::FailedToGetNewStakeTable);
+                },
+            };
+
+            {
+                tracing::debug!(
+                    "replacing stake table for epoch {}, new table contains {} entries",
+                    upcoming_epoch,
+                    next_stake_table.len(),
+                );
+                // Update the stake table
+                let mut data_state_write_lock_guard = data_state.write().await;
+                data_state_write_lock_guard.replace_stake_table(next_stake_table);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// [process_incoming_leaf_and_block] is a helper function that will process
 /// an incoming [Leaf] and update the [DataState] with the new information.
 /// Additionally, the block that is contained within the [Leaf] will be
@@ -219,6 +343,8 @@ async fn process_incoming_leaf_and_block<BDSink, BVSink>(
     leaf: Leaf1QueryData<SeqTypes>,
     block: BlockQueryData<SeqTypes>,
     data_state: Arc<RwLock<DataState>>,
+    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    hotshot_config: &PublicHotShotConfig,
     mut block_sender: BDSink,
     mut voters_sender: BVSink,
 ) -> Result<(), ProcessLeafError>
@@ -259,17 +385,27 @@ where
     // We will need to recompute these BitVecs if the node information that
     // is stored shrinks instead of growing.
 
+    let block_height = block.header().height();
+
+    // We want to check to see if we need a new stake table before we process
+    // the block and leaf.  Otherwise we might have an outdated stake-table
+    // and may potentially result in miss-mapped staking entries.
+    perform_stake_table_epoch_check_and_update(
+        data_state.clone(),
+        client.clone(),
+        hotshot_config,
+        block_height,
+    )
+    .await?;
+
     let mut data_state_write_lock_guard = data_state.write().await;
 
     let stake_table = &data_state_write_lock_guard.stake_table;
-    let stable_table_entries_vec = stake_table
-        .try_iter(SnapshotVersion::LastEpochStart)
-        .map_or(vec![], |into_iter| into_iter.collect::<Vec<_>>());
 
     // We have a BitVec of voters who signed the QC.
     // We can use this to determine the weight of the QC
     let stake_table_entry_voter_participation_and_entries_pairs =
-        zip(stake_table_voters_bit_vec, stable_table_entries_vec);
+        zip(stake_table_voters_bit_vec, stake_table.iter());
     let stake_table_keys_that_voted = stake_table_entry_voter_participation_and_entries_pairs
         .filter(|(bit_ref, _)| *bit_ref)
         .map(|(_, entry)| {
@@ -277,8 +413,7 @@ where
             // In this case, we just want to determine who voted for this
             // Leaf.
 
-            let (key, ..): (BLSPubKey, _, _) = entry;
-            key
+            entry.stake_table_entry.stake_key
         });
 
     let voters_set: HashSet<BLSPubKey> = stake_table_keys_that_voted.collect();
@@ -329,6 +464,8 @@ impl ProcessLeafAndBlockPairStreamTask {
     pub fn new<S, K1, K2>(
         leaf_receiver: S,
         data_state: Arc<RwLock<DataState>>,
+        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        hotshot_config: PublicHotShotConfig,
         block_detail_sender: K1,
         voters_sender: K2,
     ) -> Self
@@ -340,6 +477,8 @@ impl ProcessLeafAndBlockPairStreamTask {
         let task_handle = spawn(Self::process_leaf_stream(
             leaf_receiver,
             data_state.clone(),
+            client,
+            hotshot_config,
             block_detail_sender,
             voters_sender,
         ));
@@ -354,6 +493,8 @@ impl ProcessLeafAndBlockPairStreamTask {
     async fn process_leaf_stream<S, BDSink, BVSink>(
         mut stream: S,
         data_state: Arc<RwLock<DataState>>,
+        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        hotshot_config: PublicHotShotConfig,
         block_sender: BDSink,
         voters_senders: BVSink,
     ) where
@@ -377,6 +518,8 @@ impl ProcessLeafAndBlockPairStreamTask {
                 leaf,
                 block,
                 data_state.clone(),
+                client.clone(),
+                &hotshot_config,
                 block_sender.clone(),
                 voters_senders.clone(),
             )
@@ -394,6 +537,9 @@ impl ProcessLeafAndBlockPairStreamTask {
                     },
                     ProcessLeafError::VotersSendError(_) => {
                         panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying sink is closed, voters will stagnate: {}", err)
+                    },
+                    ProcessLeafError::FailedToGetNewStakeTable => {
+                        panic!("ProcessLeafStreamTask: process_incoming_leaf failed, underlying stake table is closed, blocks will stagnate: {}", err)
                     },
                 }
             }
@@ -562,7 +708,7 @@ mod tests {
 
     use async_lock::RwLock;
     use espresso_types::{
-        v0_1::RewardMerkleTree, v0_99::ChainConfig, BlockMerkleTree, FeeMerkleTree, NodeState,
+        v0_1::RewardMerkleTree, v0_3::ChainConfig, BlockMerkleTree, FeeMerkleTree, NodeState,
         ValidatedState,
     };
     use futures::{channel::mpsc, SinkExt, StreamExt};
@@ -578,8 +724,9 @@ mod tests {
     use url::Url;
 
     use super::{DataState, ProcessLeafAndBlockPairStreamTask};
-    use crate::service::data_state::{
-        LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask,
+    use crate::{
+        api::node_validator::v0::PublicHotShotConfig,
+        service::data_state::{LocationDetails, NodeIdentity, ProcessNodeIdentityStreamTask},
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -613,6 +760,12 @@ mod tests {
         let mut process_leaf_stream_task_handle = ProcessLeafAndBlockPairStreamTask::new(
             leaf_receiver,
             data_state.clone(),
+            surf_disco::Client::new("http://localhost/".parse().unwrap()),
+            PublicHotShotConfig {
+                epoch_start_block: None,
+                epoch_height: None,
+                known_nodes_with_stake: vec![],
+            },
             block_sender,
             voters_sender,
         );

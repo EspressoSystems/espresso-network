@@ -25,7 +25,7 @@ use hotshot_testing::{
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
-    data::{null_block, Leaf2, ViewChangeEvidence2, ViewNumber},
+    data::{null_block, EpochNumber, Leaf2, ViewChangeEvidence2, ViewNumber},
     simple_vote::{TimeoutData2, ViewSyncFinalizeData2},
     traits::node_implementation::{ConsensusTime, Versions},
     utils::BuilderCommitment,
@@ -94,11 +94,12 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
     }
 
     // We must send the genesis cert here to initialize hotshot successfully.
+    let num_storage_node = epoch_1_mem.total_nodes().await;
     let genesis_cert = proposals[0].data.justify_qc().clone();
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
     let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
-        <TestVersions as Versions>::Base::VERSION,
-        *ViewNumber::new(1),
+        num_storage_node,
+        <TestVersions as Versions>::Base::VERSION, 
     )
     .unwrap();
     drop(consensus_writer);
@@ -118,7 +119,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
         ],
     ];
@@ -155,6 +156,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
         .membership_for_epoch(Some(EpochNumber::new(1)))
         .await
         .unwrap();
+    let num_storage_node = epoch_1_mem.total_nodes().await;
 
     let mut generator =
         TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
@@ -192,8 +194,8 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
 
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
     let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
-        <TestVersions as Versions>::Base::VERSION,
-        *ViewNumber::new(1),
+        num_storage_node,
+        <TestVersions as Versions>::Base::VERSION, 
     )
     .unwrap();
 
@@ -220,7 +222,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                None,
+                 
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -238,7 +240,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
                 vec1![builder_fee.clone()],
-                None,
+                 
             ),
             VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
         ],
@@ -256,7 +258,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
                 vec1![builder_fee.clone()],
-                None,
+                 
             ),
             VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
         ],
@@ -274,7 +276,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 proposals[2].data.block_header().metadata,
                 ViewNumber::new(4),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[3].clone(), handle.public_key()),
         ],
@@ -292,7 +294,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
                 proposals[3].data.block_header().metadata,
                 ViewNumber::new(5),
                 vec1![builder_fee.clone()],
-                None,
+                 
             ),
             VidDisperseSend(vid_dispersals[4].clone(), handle.public_key()),
         ],
@@ -382,6 +384,7 @@ async fn test_quorum_proposal_task_qc_timeout() {
         _ => panic!("Found a View Sync Cert when there should have been a Timeout cert"),
     };
 
+    let num_storage_nodes = epoch_1_mem.total_nodes().await;
     let inputs = vec![random![
         Qc2Formed(either::Right(cert.clone())),
         SendPayloadCommitmentAndMetadata(
@@ -392,11 +395,12 @@ async fn test_quorum_proposal_task_qc_timeout() {
             },
             ViewNumber::new(3),
             vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+                num_storage_nodes,
                 <TestVersions as Versions>::Base::VERSION,
-                *ViewNumber::new(3),
+               
             )
             .unwrap()],
-            None,
+             
         ),
         VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
     ]];
@@ -482,6 +486,7 @@ async fn test_quorum_proposal_task_view_sync() {
         _ => panic!("Found a TC when there should have been a view sync cert"),
     };
 
+    let num_storage_nodes = epoch_1_mem.total_nodes().await;
     let inputs = vec![random![
         ViewSyncFinalizeCertificateRecv(cert.clone()),
         SendPayloadCommitmentAndMetadata(
@@ -492,11 +497,12 @@ async fn test_quorum_proposal_task_view_sync() {
             },
             ViewNumber::new(2),
             vec1![null_block::builder_fee::<TestTypes, TestVersions>(
+                num_storage_nodes,
                 <TestVersions as Versions>::Base::VERSION,
-                *ViewNumber::new(2),
+             
             )
             .unwrap()],
-            None,
+            
         ),
         VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
     ]];
@@ -560,10 +566,12 @@ async fn test_quorum_proposal_task_liveness_check() {
     }
     drop(consensus_writer);
 
+    let num_storage_nodes = epoch_1_mem.total_nodes().await;
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
     let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
+        num_storage_nodes,
         <TestVersions as Versions>::Base::VERSION,
-        *ViewNumber::new(1),
+ 
     )
     .unwrap();
 
@@ -594,7 +602,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -612,7 +620,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
         ],
@@ -630,7 +638,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
         ],
@@ -648,7 +656,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 proposals[2].data.block_header().metadata,
                 ViewNumber::new(4),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[3].clone(), handle.public_key()),
         ],
@@ -666,7 +674,7 @@ async fn test_quorum_proposal_task_liveness_check() {
                 proposals[3].data.block_header().metadata,
                 ViewNumber::new(5),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[4].clone(), handle.public_key()),
         ],

@@ -15,9 +15,8 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-fee --deploy-permissioned-stake-table --deploy-esp-token --deploy-stake-table
+    command: deploy --deploy-fee --deploy-esp-token --deploy-stake-table
     environment:
-      - ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH=/data/initial_stake_table.toml
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
@@ -28,8 +27,6 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
-    volumes:
-      - "./data/initial_stake_table.toml:/data/initial_stake_table.toml"
     depends_on:
       demo-l1-network:
         condition: service_healthy
@@ -78,7 +75,7 @@ services:
       sequencer1:
         condition: service_healthy
 
-  stake:
+  stake-for-demo:
     image: ghcr.io/espressosystems/espresso-sequencer/staking-cli:main
     command: staking-cli stake-for-demo
     environment:
@@ -232,6 +229,7 @@ services:
       - ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS
       - ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY
+      - ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI
       - MNEMONIC=$ESPRESSO_SEQUENCER_ETH_MNEMONIC
       - ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX
       - RAYON_NUM_THREADS=$PROVER_RAYON_NUM_THREADS
@@ -273,6 +271,7 @@ services:
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
+      - ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL
       - ESPRESSO_STATE_RELAY_SERVER_URL
       - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_0
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_0
@@ -332,6 +331,7 @@ services:
       - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://demo-l1-network:${ESPRESSO_SEQUENCER_L1_WS_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
+      - ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL
       - ESPRESSO_STATE_RELAY_SERVER_URL
       - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_1
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_1
@@ -385,6 +385,7 @@ services:
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
+      - ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL
       - ESPRESSO_STATE_RELAY_SERVER_URL
       - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_2
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_2
@@ -437,6 +438,7 @@ services:
       - ESPRESSO_SEQUENCER_L1_WS_PROVIDER=ws://demo-l1-network:${ESPRESSO_SEQUENCER_L1_WS_PORT}
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
+      - ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL
       - ESPRESSO_STATE_RELAY_SERVER_URL
       - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_3
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_3
@@ -489,6 +491,7 @@ services:
       - ESPRESSO_SEQUENCER_L1_PROVIDER
       - ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL
       - ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
+      - ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL
       - ESPRESSO_STATE_RELAY_SERVER_URL
       - ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY=$ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_4
       - ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY=$ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_4
@@ -566,68 +569,6 @@ services:
       permissionless-builder:
         condition: service_healthy
 
-  marketplace-reserve-builder:
-    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder:${DOCKER_TAG:-main}
-    ports:
-      - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
-    profiles: [marketplace]
-    environment:
-      - ESPRESSO_MARKETPLACE_BUILDER_IS_RESERVE=true
-      - ESPRESSO_MARKETPLACE_SOLVER_API_URL=http://localhost:$ESPRESSO_MARKETPLACE_SOLVER_API_PORT
-      - ESPRESSO_MARKETPLACE_BUILDER_NAMESPACE=10000
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_BUILDER_GENESIS_FILE
-      - ESPRESSO_BUILDER_ETH_MNEMONIC
-      - ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
-      - ESPRESSO_BUILDER_L1_PROVIDER
-      - ESPRESSO_BUILDER_SERVER_PORT
-      - ESPRESSO_BUILDER_TX_CHANNEL_CAPACITY
-      - ESPRESSO_BUILDER_EVENT_CHANNEL_CAPACITY
-      - ESPRESSO_BUILDER_BOOTSTRAPPED_VIEW
-      - ESPRESSO_BUILDER_WEBSERVER_RESPONSE_TIMEOUT_DURATION
-      - ESPRESSO_BUILDER_BUFFER_VIEW_NUM_COUNT
-      - ESPRESSO_BUILDER_INIT_NODE_COUNT
-      - RUST_LOG
-      - RUST_LOG_FORMAT
-      - ASYNC_STD_THREAD_COUNT
-    depends_on:
-      sequencer0:
-        condition: service_healthy
-      fund-builder:
-        condition: service_completed_successfully
-
-  marketplace-fallback-builder:
-    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder:${DOCKER_TAG:-main}
-    ports:
-      - "$ESPRESSO_FALLBACK_BUILDER_SERVER_PORT:$ESPRESSO_FALLBACK_BUILDER_SERVER_PORT"
-    profiles: [marketplace]
-    environment:
-      - ESPRESSO_BUILDER_SERVER_PORT=$ESPRESSO_FALLBACK_BUILDER_SERVER_PORT
-      - ESPRESSO_MARKETPLACE_BUILDER_IS_RESERVE=false
-      - ESPRESSO_MARKETPLACE_SOLVER_API_URL=http://localhost:$ESPRESSO_MARKETPLACE_SOLVER_API_PORT
-      - ESPRESSO_MARKETPLACE_BUILDER_NAMESPACE=10000
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
-      - ESPRESSO_SEQUENCER_STATE_PEERS=http://sequencer0:$ESPRESSO_SEQUENCER_API_PORT
-      - ESPRESSO_BUILDER_GENESIS_FILE
-      - ESPRESSO_BUILDER_ETH_MNEMONIC
-      - ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
-      - ESPRESSO_BUILDER_L1_PROVIDER
-      - ESPRESSO_BUILDER_TX_CHANNEL_CAPACITY
-      - ESPRESSO_BUILDER_EVENT_CHANNEL_CAPACITY
-      - ESPRESSO_BUILDER_BOOTSTRAPPED_VIEW
-      - ESPRESSO_BUILDER_WEBSERVER_RESPONSE_TIMEOUT_DURATION
-      - ESPRESSO_BUILDER_BUFFER_VIEW_NUM_COUNT
-      - ESPRESSO_BUILDER_INIT_NODE_COUNT
-      - RUST_LOG
-      - RUST_LOG_FORMAT
-      - ASYNC_STD_THREAD_COUNT
-    depends_on:
-      sequencer0:
-        condition: service_healthy
-      fund-builder:
-        condition: service_completed_successfully
-
   permissionless-builder:
     image: ghcr.io/espressosystems/espresso-sequencer/builder:${DOCKER_TAG:-main}
     ports:
@@ -668,24 +609,6 @@ services:
       - ASYNC_STD_THREAD_COUNT
     depends_on:
       sequencer0:
-        condition: service_healthy
-
-  marketplace-solver:
-    image: ghcr.io/espressosystems/espresso-sequencer/marketplace-solver:${DOCKER_TAG:-main}
-    ports:
-      - "$ESPRESSO_MARKETPLACE_SOLVER_API_PORT:$ESPRESSO_MARKETPLACE_SOLVER_API_PORT"
-
-    environment:
-      - MARKETPLACE_SOLVER_POSTGRES_URL=postgresql://root:password@solver-db/solver
-      - ESPRESSO_MARKETPLACE_SOLVER_API_PORT
-      - ESPRESSO_SEQUENCER_HOTSHOT_EVENT_API_URL=http://sequencer0:$ESPRESSO_SEQUENCER_HOTSHOT_EVENT_STREAMING_API_PORT
-      - MARKETPLACE_SOLVER_POSTGRES_MAX_CONNECTIONS=100
-      - MARKETPLACE_SOLVER_POSTGRES_ACQUIRE_TIMEOUT=5
-      - RUST_LOG
-    depends_on:
-      sequencer0:
-        condition: service_healthy
-      solver-db:
         condition: service_healthy
 
   node-validator:
@@ -745,23 +668,6 @@ services:
       timeout: 4s
       retries: 20
 
-  solver-db:
-    image: postgres
-    user: root
-    ports:
-      - "$MARKETPLACE_SOLVER_POSTGRES_PORT:5432"
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_USER=root
-      - POSTGRES_DB=solver
-    healthcheck:
-      # Postgres can be falsely "ready" once before running init scripts.
-      # See https://github.com/docker-library/postgres/issues/146 for discussion.
-      test: "pg_isready -U root -d solver && sleep 1 && pg_isready -U root -d solver"
-      interval: 5s
-      timeout: 4s
-      retries: 20
-
   block-explorer:
     image: ghcr.io/espressosystems/espresso-block-explorer:main
     ports:
@@ -771,13 +677,4 @@ services:
       - NODE_VALIDATOR_URI=ws://localhost:$ESPRESSO_NODE_VALIDATOR_PORT/v0/
     depends_on:
       sequencer1:
-        condition: service_healthy
-
-  dev-rollup:
-    image: ghcr.io/espressosystems/espresso-sequencer/dev-rollup:${DOCKER_TAG:-main}
-    command: dev-rollup register --ns 1; dev-rollup register --ns 2; dev-rollup register --ns 3
-    environment:
-      - ESPRESSO_MARKETPLACE_SOLVER_API_URL=http://marketplace-solver:$ESPRESSO_MARKETPLACE_SOLVER_API_PORT
-    depends_on:
-      marketplace-solver:
         condition: service_healthy

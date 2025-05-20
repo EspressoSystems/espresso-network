@@ -18,6 +18,7 @@ use hotshot_types::{
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
     },
+    utils::{View, ViewInner},
 };
 use sha2::{Digest, Sha256};
 use tokio::{spawn, task::JoinHandle, time::sleep};
@@ -71,6 +72,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
     }
 
     /// Process request events or loop until a `HotShotEvent::Shutdown` is received.
+    #[instrument(skip_all, fields(id = self.id), name = "NetworkResponseState")]
     async fn run_response_loop(
         self,
         mut receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
@@ -82,29 +84,18 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                     // break loop when false, this means shutdown received
                     match event.as_ref() {
                         HotShotEvent::VidRequestRecv(request, sender) => {
-                            let cur_epoch = self.consensus.read().await.cur_epoch();
-                            let next_epoch = cur_epoch.map(|epoch| epoch + 1);
-                            let target_epoch = if self.valid_sender(sender, cur_epoch).await {
-                                cur_epoch
-                            } else if self.valid_sender(sender, next_epoch).await {
-                                next_epoch
-                            } else {
-                                // The sender neither belongs to the current nor to the next epoch.
-                                continue;
-                            };
                             // Verify request is valid
                             if !valid_signature::<TYPES>(request, sender) {
                                 continue;
                             }
-                            if let Some(proposal) = self
-                                .get_or_calc_vid_share(request.view, target_epoch, sender)
-                                .await
+                            for vid_share in self.get_or_calc_vid_share(request.view, sender).await
                             {
+                                tracing::debug!("Sending VID response {:?}", vid_share);
                                 broadcast_event(
                                     HotShotEvent::VidResponseSend(
                                         self.pub_key.clone(),
                                         sender.clone(),
-                                        proposal,
+                                        vid_share,
                                     )
                                     .into(),
                                     &event_sender,
@@ -154,36 +145,63 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
     /// Get the VID share from consensus storage, or calculate it from the payload for
     /// the view, if we have the payload.  Stores all the shares calculated from the payload
     /// if the calculation was done
-    #[instrument(skip_all, target = "NetworkResponseState", fields(id = self.id))]
     async fn get_or_calc_vid_share(
         &self,
         view: TYPES::View,
-        target_epoch: Option<TYPES::Epoch>,
-        key: &TYPES::SignatureKey,
-    ) -> Option<Proposal<TYPES, VidDisperseShare<TYPES>>> {
+        sender: &TYPES::SignatureKey,
+    ) -> Vec<Proposal<TYPES, VidDisperseShare<TYPES>>> {
         let consensus_reader = self.consensus.read().await;
-        if let Some(view) = consensus_reader.vid_shares().get(&view) {
-            if let Some(share) = view.get(key) {
-                return Some(share.clone());
+        let cur_epoch = consensus_reader.cur_epoch();
+        let next_epoch = cur_epoch.map(|epoch| epoch + 1);
+        let is_transition_block = match consensus_reader.validated_state_map().get(&view) {
+            Some(View {
+                view_inner:
+                    ViewInner::Leaf {
+                        leaf: leaf_commit, ..
+                    },
+            }) => consensus_reader.is_epoch_transition(*leaf_commit),
+            _ => false,
+        };
+        drop(consensus_reader);
+
+        // Epochs for which vid shares are required
+        let mut target_epochs = vec![];
+        if self.valid_sender(sender, cur_epoch).await {
+            // The sender belongs to the current epoch.
+            target_epochs.push(cur_epoch);
+        }
+        if is_transition_block && self.valid_sender(sender, next_epoch).await {
+            // It's the last block in epoch and the sender belongs to the next epoch.
+            target_epochs.push(next_epoch);
+        }
+
+        // Vector of vid shares that we return
+        let mut res = vec![];
+        // Epochs for which vid shares need to be calculated
+        let mut calc_target_epochs = vec![];
+        for target_epoch in target_epochs {
+            if let Some(vid_share) = self
+                .consensus
+                .read()
+                .await
+                .vid_shares()
+                .get(&view)
+                .and_then(|key_map| key_map.get(sender))
+                .and_then(|epoch_map| epoch_map.get(&target_epoch))
+            {
+                res.push(vid_share.clone());
+            } else {
+                calc_target_epochs.push(target_epoch);
             }
         }
 
-        drop(consensus_reader);
+        // We have all the required vid shares, return them
+        if calc_target_epochs.is_empty() {
+            return res;
+        }
 
-        if Consensus::calculate_and_update_vid::<V>(
-            OuterConsensus::new(Arc::clone(&self.consensus)),
-            view,
-            target_epoch,
-            self.membership.clone(),
-            &self.private_key,
-            &self.upgrade_lock,
-        )
-        .await
-        .is_none()
-        {
-            // Sleep in hope we receive txns in the meantime
-            sleep(TXNS_TIMEOUT).await;
-            Consensus::calculate_and_update_vid::<V>(
+        for target_epoch in calc_target_epochs {
+            if Consensus::calculate_and_update_vid::<V>(
                 OuterConsensus::new(Arc::clone(&self.consensus)),
                 view,
                 target_epoch,
@@ -191,16 +209,34 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
                 &self.private_key,
                 &self.upgrade_lock,
             )
-            .await?;
-        }
-        return self
-            .consensus
-            .read()
             .await
-            .vid_shares()
-            .get(&view)?
-            .get(key)
-            .cloned();
+            .is_none()
+            {
+                // Sleep in hope we receive txns in the meantime
+                sleep(TXNS_TIMEOUT).await;
+                Consensus::calculate_and_update_vid::<V>(
+                    OuterConsensus::new(Arc::clone(&self.consensus)),
+                    view,
+                    target_epoch,
+                    self.membership.clone(),
+                    &self.private_key,
+                    &self.upgrade_lock,
+                )
+                .await;
+            }
+            if let Some(vid_share) = self
+                .consensus
+                .read()
+                .await
+                .vid_shares()
+                .get(&view)
+                .and_then(|key_map| key_map.get(sender))
+                .and_then(|epoch_map| epoch_map.get(&target_epoch))
+            {
+                res.push(vid_share.clone());
+            }
+        }
+        res
     }
 
     /// Makes sure the sender is allowed to send a request in the given epoch.

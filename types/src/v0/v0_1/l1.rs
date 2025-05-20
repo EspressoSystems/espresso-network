@@ -136,6 +136,15 @@ pub struct L1ClientOptions {
     )]
     pub l1_consecutive_failure_tolerance: usize,
 
+    /// Revert back to the first provider this duration after failing over.
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_L1_FAILOVER_REVERT",
+        default_value = "30m",
+        value_parser = parse_duration,
+    )]
+    pub l1_failover_revert: Duration,
+
     /// Amount of time to wait after receiving a 429 response before making more L1 RPC requests.
     ///
     /// If not set, the general l1-retry-delay will be used.
@@ -151,6 +160,33 @@ pub struct L1ClientOptions {
     /// Typically this would be a WebSockets endpoint while the main provider uses HTTP.
     #[clap(long, env = "ESPRESSO_SEQUENCER_L1_WS_PROVIDER", value_delimiter = ',')]
     pub l1_ws_provider: Option<Vec<Url>>,
+
+    /// Interval at which the background update loop polls the L1 stake table contract for new events
+    /// and updates local persistence.
+    ///
+    #[clap(
+        long,
+        env = "ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL",
+        default_value = "60m",
+        value_parser = parse_duration,
+    )]
+    pub stake_table_update_interval: Duration,
+
+    /// A block range which is expected to contain the finalized heads of all L1 provider chains.
+    ///
+    /// If specified, it is assumed that if a block `n` is known to be finalized according to a
+    /// certain provider, then any block less than `n - L1_FINALIZED_SAFETY_MARGIN` is finalized
+    /// _according to any provider_. In other words, if we fail over from one provider to another,
+    /// the second provider will never be lagging the first by more than this margin.
+    ///
+    /// This allows us to quickly query for very old finalized blocks by number. Without this
+    /// assumption, we always need to verify that a block is finalized by fetching all blocks in a
+    /// hash chain between the known finalized block and the desired block, recomputing and checking
+    /// the hashes. This is fine and good for blocks very near the finalized head, but for
+    /// extremely old blocks it is prohibitively expensive, and these old blocks are extremely
+    /// unlikely to be unfinalized anyways.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_L1_FINALIZED_SAFETY_MARGIN")]
+    pub l1_finalized_safety_margin: Option<u64>,
 
     #[clap(skip = Arc::<Box<dyn Metrics>>::new(Box::new(NoMetrics)))]
     pub metrics: Arc<Box<dyn Metrics>>,
@@ -192,6 +228,7 @@ pub struct L1Client {
 pub(crate) struct L1State {
     pub(crate) snapshot: L1Snapshot,
     pub(crate) finalized: LruCache<u64, L1BlockInfoWithParent>,
+    pub(crate) last_finalized: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -234,6 +271,8 @@ pub(crate) struct SingleTransport {
     pub(crate) generation: usize,
     pub(crate) client: Http<Client>,
     pub(crate) status: Arc<RwLock<SingleTransportStatus>>,
+    /// Time at which to revert back to the primary provider after a failover.
+    pub(crate) revert_at: Option<Instant>,
 }
 
 /// The status of a single transport

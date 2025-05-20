@@ -41,8 +41,8 @@ pub async fn register_validator(
     let schnorr_vk_sol: EdOnBN254PointSol = schnorr_vk.to_affine().into();
     Ok(stake_table
         .registerValidator(
-            bls_vk_sol.into(),
-            schnorr_vk_sol.into(),
+            bls_vk_sol,
+            schnorr_vk_sol,
             sig_sol.into(),
             commission.to_evm(),
         )
@@ -64,7 +64,7 @@ pub async fn update_consensus_keys(
     let (bls_vk_sol, sig_sol) = prepare_bls_payload(&bls_key_pair, validator_address);
     let schnorr_vk_sol: EdOnBN254PointSol = schnorr_vk.to_affine().into();
     Ok(stake_table
-        .updateConsensusKeys(bls_vk_sol.into(), schnorr_vk_sol.into(), sig_sol.into())
+        .updateConsensusKeys(bls_vk_sol, schnorr_vk_sol, sig_sol.into())
         .send()
         .await
         .maybe_decode_revert::<StakeTableErrors>()?
@@ -98,8 +98,7 @@ mod test {
         let system = TestSystem::deploy().await?;
         let validator_address = system.deployer_address;
         let (bls_vk_sol, _) = prepare_bls_payload(&system.bls_key_pair, validator_address);
-        let schnorr_vk_sol: EdOnBN254PointSol =
-            system.schnorr_key_pair.ver_key().to_affine().into();
+        let schnorr_vk_sol: EdOnBN254PointSol = system.state_key_pair.ver_key().to_affine().into();
 
         let receipt = register_validator(
             &system.provider,
@@ -107,7 +106,7 @@ mod test {
             system.commission,
             validator_address,
             system.bls_key_pair,
-            system.schnorr_key_pair.ver_key(),
+            system.state_key_pair.ver_key(),
         )
         .await?;
         assert!(receipt.status());
@@ -118,8 +117,8 @@ mod test {
         assert_eq!(event.account, validator_address);
         assert_eq!(event.commission, system.commission.to_evm());
 
-        assert_eq!(event.blsVk, bls_vk_sol.into());
-        assert_eq!(event.schnorrVk, schnorr_vk_sol.into());
+        assert_eq!(event.blsVk, bls_vk_sol);
+        assert_eq!(event.schnorrVk, schnorr_vk_sol);
 
         // TODO verify we can parse keys and verify signature
         Ok(())
@@ -145,7 +144,7 @@ mod test {
         system.register_validator().await?;
         let validator_address = system.deployer_address;
         let mut rng = StdRng::from_seed([43u8; 32]);
-        let (new_bls, new_schnorr) = TestSystem::gen_consensus_keys(&mut rng);
+        let (_, new_bls, new_schnorr) = TestSystem::gen_keys(&mut rng);
         let (bls_vk_sol, _) = prepare_bls_payload(&new_bls, validator_address);
         let schnorr_vk_sol: EdOnBN254PointSol = new_schnorr.ver_key().to_affine().into();
 
@@ -164,8 +163,8 @@ mod test {
             .unwrap();
         assert_eq!(event.account, system.deployer_address);
 
-        assert_eq!(event.blsVK, bls_vk_sol.into());
-        assert_eq!(event.schnorrVK, schnorr_vk_sol.into());
+        assert_eq!(event.blsVK, bls_vk_sol);
+        assert_eq!(event.schnorrVK, schnorr_vk_sol);
 
         Ok(())
     }

@@ -2,7 +2,7 @@ use std::{collections::HashSet, rc::Rc, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot_example_types::{
-    node_types::{Libp2pImpl, MarketplaceTestVersions, MemoryImpl, PushCdnImpl, TestVersions},
+    node_types::{Libp2pImpl, MemoryImpl, PushCdnImpl, TestVersions},
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
@@ -125,7 +125,7 @@ cross_tests!(
     TestName: dishonest_da,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
-    Versions: [MarketplaceTestVersions],
+    Versions: [TestVersions],
     Ignore: false,
     Metadata: {
         let behaviour = Rc::new(|node_id| {
@@ -160,7 +160,7 @@ cross_tests!(
     TestName: dishonest_voting,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
-    Versions: [MarketplaceTestVersions],
+    Versions: [TestVersions],
     Ignore: false,
     Metadata: {
         let nodes_count = 10;
@@ -201,7 +201,7 @@ cross_tests!(
     TestName: coordination_attack,
     Impls: [MemoryImpl],
     Types: [TestTypes],
-    Versions: [MarketplaceTestVersions],
+    Versions: [TestVersions],
     Ignore: false,
     Metadata: {
         let dishonest_proposal_view_numbers = Arc::new(RwLock::new(HashSet::new()));

@@ -6,8 +6,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_1::{RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardMerkleTree},
-    v0_3::Validator,
-    v0_99::ChainConfig,
+    v0_3::{ChainConfig, Validator},
     FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
 };
 use futures::future::Future;
@@ -37,10 +36,7 @@ use super::{
     options::{Options, Query},
     sql, AccountQueryData, BlocksFrontier,
 };
-use crate::{
-    persistence::{self},
-    SeqTypes, SequencerApiVersion,
-};
+use crate::{persistence, SeqTypes, SequencerApiVersion};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -128,10 +124,12 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     fn get_stake_table(
         &self,
         epoch: Option<<T as NodeType>::Epoch>,
-    ) -> impl Send + Future<Output = Vec<PeerConfig<T>>>;
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>>;
 
     /// Get the stake table for the current epoch if not provided
-    fn get_stake_table_current(&self) -> impl Send + Future<Output = StakeTableWithEpochNumber<T>>;
+    fn get_stake_table_current(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<StakeTableWithEpochNumber<T>>>;
 
     /// Get all the validators
     fn get_validators(

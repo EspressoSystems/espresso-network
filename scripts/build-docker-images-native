@@ -83,14 +83,10 @@ binaries=(
   cdn-marshal
   cdn-whitelist
   deploy
-  dev-rollup
   espresso-bridge
   espresso-dev-node
   keygen
-  marketplace-builder
-  marketplace-solver
   nasty-client
-  update-permissioned-stake-table
   node-metrics
   orchestrator
   permissionless-builder
@@ -125,10 +121,7 @@ images=(
  cdn-marshal
  cdn-whitelist
  deploy
- dev-rollup
  espresso-dev-node
- marketplace-builder
- marketplace-solver
  nasty-client
  node-validator
  orchestrator
@@ -137,7 +130,6 @@ images=(
  state-relay-server
  staking-cli
  submit-transactions
- update-permissioned-stake-table
 )
 for image in "${images[@]}"; do
   docker build --platform $PLATFORM -t ghcr.io/espressosystems/espresso-sequencer/$image:main -f docker/$image.Dockerfile "$WORKDIR"

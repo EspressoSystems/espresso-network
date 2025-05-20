@@ -12,17 +12,16 @@ members = [
     "builder",
     "client",
     "contracts/rust/adapter",
+    "contracts/rust/deployer",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/examples",
     "crates/hotshot/hotshot",
-    "crates/hotshot/hotshot-fakeapi",
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
     "crates/hotshot/orchestrator",
-    "crates/hotshot/stake-table",
     "crates/hotshot/task",
     "crates/hotshot/task-impls",
     "crates/hotshot/testing",
@@ -33,8 +32,6 @@ members = [
     "hotshot-events-service",
     "hotshot-query-service",
     "hotshot-state-prover",
-    "marketplace-builder",
-    "marketplace-solver",
     "node-metrics",
     "request-response",
     "sequencer",
@@ -104,6 +101,7 @@ es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch
 dotenvy = "0.15"
 ethers = { version = "2.0", features = ["solc", "ws"] }
 futures = "0.3"
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread",
     "macros",
@@ -131,7 +129,6 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
-marketplace-builder-core = { path = "marketplace-builder-core" }
 marketplace-builder-shared = { path = "marketplace-builder-shared" }
 hotshot-builder-core = { path = "hotshot-builder-core" }
 
@@ -144,7 +141,6 @@ hotshot-events-service = { path = "hotshot-events-service" }
 hotshot-utils = { path = "crates/hotshot/utils" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
-hotshot-stake-table = { path = "crates/hotshot/stake-table" }
 hotshot-state-prover = { version = "0.1.0", path = "hotshot-state-prover" }
 hotshot-task = { path = "crates/hotshot/task" }
 hotshot-testing = { path = "crates/hotshot/testing" }
@@ -246,11 +242,16 @@ inherits = "dev"
 strip = "none"
 debug = "full"
 
+# Don't optimize the binaries in the workspace. Compilation of dependencies can be cached
+# effectively on the CI because they rarely change, whereas the workspace code usually changes and
+# workspace compilation artifacts are therefore not cached. However, some of our tests don't work if
+# we don't have any optimizations in the workspace.
 [profile.test]
 opt-level = 1
-[profile.test.package.tests]
+
+[profile.test.package.sequencer]
 opt-level = 0
-[profile.test.package.client]
+[profile.test.package.hotshot-testing]
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
 opt-level = 3

@@ -12,13 +12,7 @@ use hotshot_query_service::{
     availability::{BlockQueryData, Leaf1QueryData},
     types::HeightIndexed,
 };
-use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::{
-    light_client::{CircuitField, StateVerKey},
-    signature_key::BLSPubKey,
-    traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme},
-    PeerConfig,
-};
+use hotshot_types::{signature_key::BLSPubKey, PeerConfig};
 use prometheus_parse::{Sample, Scrape};
 use serde::{Deserialize, Serialize};
 use tide_disco::{api::ApiError, socket::Connection, Api};
@@ -296,23 +290,25 @@ where
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PublishHotShotConfig {
+pub struct PublicHotShotConfig {
     pub known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
+    pub epoch_height: Option<u64>,
+    pub epoch_start_block: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SequencerConfig {
-    pub config: PublishHotShotConfig,
+    pub config: PublicHotShotConfig,
 }
 
-/// [get_stake_table_from_sequencer] retrieves the stake table from the
+/// [get_config_stake_table_from_sequencer] retrieves the stake table from the
 /// Sequencer.  It expects a [surf_disco::Client] to be provided so that it can
 /// make the request to the Hotshot Query Service.  It will return a
 /// [StakeTable] that is populated with the data retrieved from the Hotshot
 /// Query Service.
-pub async fn get_stake_table_from_sequencer(
+pub async fn get_config_stake_table_from_sequencer(
     client: surf_disco::Client<hotshot_query_service::Error, Version01>,
-) -> Result<StakeTable<BLSPubKey, StateVerKey, CircuitField>, hotshot_query_service::Error> {
+) -> Result<PublicHotShotConfig, hotshot_query_service::Error> {
     let request = client
         .get("config/hotshot")
         // We need to set the Accept header, otherwise the Content-Type
@@ -329,26 +325,34 @@ pub async fn get_stake_table_from_sequencer(
         },
     };
 
-    let public_hot_shot_config = sequencer_config.config;
+    Ok(sequencer_config.config)
+}
 
-    let mut stake_table = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(
-        public_hot_shot_config.known_nodes_with_stake.len(),
-    );
+// [get_node_stake_table_from_sequencer] is a function that is similar to
+// [get_config_stake_table_from_sequencer], but it retrieves the stake table,
+// and only the stake table from a sequencer for a given epoch.
+pub async fn get_node_stake_table_from_sequencer(
+    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    epoch: u64,
+) -> Result<Vec<PeerConfig<SeqTypes>>, hotshot_query_service::Error> {
+    let path = format!("node/stake-table/{epoch}");
+    // Let's figure out our epoch height
+    let request = client
+        .get(&path)
+        // We need to set the Accept header, otherwise the Content-Type
+        // will be application/octet-stream, and we won't be able to
+        // deserialize the response.
+        .header("Accept", "application/json");
 
-    for node in public_hot_shot_config.known_nodes_with_stake.into_iter() {
-        stake_table
-            .register(
-                *node.stake_table_entry.key(),
-                node.stake_table_entry.stake(),
-                node.state_ver_key,
-            )
-            .expect("registering stake table entry");
-    }
+    let peer_configs: Vec<PeerConfig<SeqTypes>> = match request.send().await {
+        Ok(peer_configs) => peer_configs,
+        Err(err) => {
+            tracing::info!("retrieve stake table request failed: {}", err);
+            return Err(err);
+        },
+    };
 
-    stake_table.advance();
-    stake_table.advance();
-
-    Ok(stake_table)
+    Ok(peer_configs)
 }
 
 pub enum GetNodeIdentityFromUrlError {

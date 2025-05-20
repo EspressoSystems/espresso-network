@@ -1,5 +1,5 @@
 use clap::Parser;
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
+use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer::{state_signature::relay_server::run_relay_server, SequencerApiVersion};
 use sequencer_utils::logging;
 use url::Url;
@@ -26,7 +26,7 @@ struct Args {
     pub sequencer_url: Url,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
 
     #[clap(flatten)]

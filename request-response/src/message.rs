@@ -65,18 +65,19 @@ impl<R: Request, K: SignatureKey> RequestMessage<R, K> {
             .as_secs();
 
         // Concatenate the content and timestamp
-        let timestamped_content = [
+        let content_to_sign = [
             request
                 .to_bytes()
                 .with_context(|| "failed to serialize request content")?
                 .as_slice(),
             timestamp_unix_seconds.to_le_bytes().as_slice(),
+            b"espresso-request-response",
         ]
         .concat();
 
-        // Sign the actual request content with the private key
+        // Sign the actual request content (+ a namespace) with the private key
         let signature =
-            K::sign(private_key, &timestamped_content).with_context(|| "failed to sign message")?;
+            K::sign(private_key, &content_to_sign).with_context(|| "failed to sign message")?;
 
         // Return the newly signed request message
         Ok(RequestMessage {
@@ -114,6 +115,7 @@ impl<R: Request, K: SignatureKey> RequestMessage<R, K> {
             &[
                 self.request.to_bytes()?,
                 self.timestamp_unix_seconds.to_le_bytes().to_vec(),
+                b"espresso-request-response".to_vec(),
             ]
             .concat(),
         ) {
@@ -295,7 +297,6 @@ mod tests {
     use rand::Rng;
 
     use super::*;
-    use crate::request::Response;
 
     // A testing implementation of the [`Serializable`] trait for [`Vec<u8>`]
     impl Serializable for Vec<u8> {
@@ -311,15 +312,8 @@ mod tests {
     #[async_trait]
     impl Request for Vec<u8> {
         type Response = Vec<u8>;
-        async fn validate(&self) -> Result<()> {
-            Ok(())
-        }
-    }
 
-    /// A testing implementation of the [`Response`] trait for [`Vec<u8>`]
-    #[async_trait]
-    impl Response<Vec<u8>> for Vec<u8> {
-        async fn validate(&self, _request: &Vec<u8>) -> Result<()> {
+        async fn validate(&self) -> Result<()> {
             Ok(())
         }
     }

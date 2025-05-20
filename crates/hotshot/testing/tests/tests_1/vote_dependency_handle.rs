@@ -89,13 +89,16 @@ async fn test_vote_dependency_handle() {
                 consensus_metrics: Arc::clone(&consensus.read().await.metrics),
                 instance_state: handle.hotshot.instance_state(),
                 membership_coordinator: handle.hotshot.membership_coordinator.clone(),
-                storage: Arc::clone(&handle.storage()),
+                storage: handle.storage(),
                 view_number,
                 sender: event_sender.clone(),
                 receiver: event_receiver.clone().deactivate(),
                 upgrade_lock: handle.hotshot.upgrade_lock.clone(),
                 id: handle.hotshot.id,
                 epoch_height: handle.hotshot.config.epoch_height,
+                state_private_key: handle.state_private_key().clone(),
+                first_epoch: None,
+                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             };
 
         vote_dependency_handle_state

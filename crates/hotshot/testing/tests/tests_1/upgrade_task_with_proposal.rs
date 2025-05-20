@@ -87,6 +87,7 @@ async fn test_upgrade_task_with_proposal() {
         .membership_for_epoch(Some(EpochNumber::new(1)))
         .await
         .unwrap();
+    let num_storage_nodes = epoch_1_mem.total_nodes().await;
 
     let mut generator =
         TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
@@ -130,8 +131,9 @@ async fn test_upgrade_task_with_proposal() {
     let genesis_cert = proposals[0].data.justify_qc().clone();
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
     let builder_fee = null_block::builder_fee::<TestTypes, TestVersions>(
+        num_storage_nodes,
         <TestVersions as Versions>::Base::VERSION,
-        *ViewNumber::new(1),
+        
     )
     .unwrap();
 
@@ -172,7 +174,7 @@ async fn test_upgrade_task_with_proposal() {
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -190,7 +192,7 @@ async fn test_upgrade_task_with_proposal() {
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
         ],
@@ -209,7 +211,7 @@ async fn test_upgrade_task_with_proposal() {
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
                 vec1![builder_fee.clone()],
-                None,
+                
             ),
             VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
         ],

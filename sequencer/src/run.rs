@@ -1,15 +1,9 @@
-use std::sync::Arc;
-
 use anyhow::Context;
 use clap::Parser;
 use espresso_types::traits::SequencerPersistence;
 #[allow(unused_imports)]
-use espresso_types::{
-    traits::NullEventConsumer, FeeVersion, MarketplaceVersion, SequencerVersions,
-    SolverAuctionResultsProvider, V0_0,
-};
+use espresso_types::{traits::NullEventConsumer, FeeVersion, SequencerVersions, V0_0};
 use futures::future::FutureExt;
-use hotshot::MarketplaceConfig;
 use hotshot_types::traits::{metrics::NoMetrics, node_implementation::Versions};
 use vbs::version::StaticVersionType;
 
@@ -57,16 +51,6 @@ pub async fn main() -> anyhow::Result<()> {
             )
             .await
         },
-        #[cfg(all(feature = "fee", feature = "marketplace"))]
-        (FeeVersion::VERSION, espresso_types::MarketplaceVersion::VERSION) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<FeeVersion, MarketplaceVersion>::new(),
-            )
-            .await
-        },
         #[cfg(feature = "fee")]
         (FeeVersion::VERSION, _) => {
             run(
@@ -74,17 +58,6 @@ pub async fn main() -> anyhow::Result<()> {
                 modules,
                 opt,
                 SequencerVersions::<FeeVersion, espresso_types::V0_0>::new(),
-            )
-            .await
-        },
-        #[cfg(feature = "marketplace")]
-        (espresso_types::MarketplaceVersion::VERSION, _) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<espresso_types::MarketplaceVersion, espresso_types::V0_0>::new(
-                ),
             )
             .await
         },
@@ -193,14 +166,6 @@ where
         libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
     };
 
-    let marketplace_config = MarketplaceConfig {
-        auction_results_provider: Arc::new(SolverAuctionResultsProvider {
-            url: opt.auction_results_solver_url,
-            marketplace_path: opt.marketplace_solver_path,
-            results_path: opt.auction_results_path,
-        }),
-        fallback_builder_url: opt.fallback_builder_url,
-    };
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
     let persistence = storage_opt.create().await?;
@@ -240,7 +205,7 @@ where
             }
 
             http_opt
-                .serve(move |metrics, consumer| {
+                .serve(move |metrics, consumer, storage| {
                     async move {
                         init_node(
                             genesis,
@@ -248,11 +213,11 @@ where
                             &*metrics,
                             persistence,
                             l1_params,
+                            storage,
                             versions,
                             consumer,
                             opt.is_da,
                             opt.identity,
-                            marketplace_config,
                             proposal_fetcher_config,
                         )
                         .await
@@ -268,11 +233,11 @@ where
                 &NoMetrics,
                 persistence,
                 l1_params,
+                None,
                 versions,
                 NullEventConsumer,
                 opt.is_da,
                 opt.identity,
-                marketplace_config,
                 proposal_fetcher_config,
             )
             .await?
@@ -325,6 +290,7 @@ mod test {
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
             epoch_start_block: None,
+            stake_table_capacity: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

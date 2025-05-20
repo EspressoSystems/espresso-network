@@ -134,3 +134,58 @@ contract UpgradeLightClientArbitrumV2Script is Script {
         return address(proxy);
     }
 }
+
+/// @notice Upgrades the light client contract first by deploying the new implementation
+/// and then calling the upgradeToAndCall method of the proxy
+/// @dev This is used when the admin is not a multisig wallet
+/// used in staging deployments only
+contract UpgradeLightClientArbitrumV2PatchScript is Script {
+    /// @notice runs the upgrade
+    /// @param mostRecentlyDeployedProxy address of deployed proxy
+    /// @return address of the proxy
+    /// TODO get the most recent deployment from the devops tooling
+    function run(address mostRecentlyDeployedProxy) external returns (address) {
+        // get the deployer info from the environment and start broadcast as the deployer
+        address deployer;
+        string memory ledgerCommand = vm.envString("USE_HARDWARE_WALLET");
+        if (keccak256(bytes(ledgerCommand)) == keccak256(bytes("true"))) {
+            deployer = vm.envAddress("DEPLOYER_HARDWARE_WALLET_ADDRESS");
+        } else {
+            // get the deployer info from the environment
+            string memory seedPhrase = vm.envString("MNEMONIC");
+            uint32 seedPhraseOffset = uint32(vm.envUint("MNEMONIC_OFFSET"));
+            (deployer,) = deriveRememberKey(seedPhrase, seedPhraseOffset);
+        }
+
+        vm.startBroadcast(deployer);
+        // no initlaization needed for this patch, but a call to updateEpochStartBlock is needed
+        bytes memory data = abi.encodeWithSignature(
+            "updateEpochStartBlock(uint64)", vm.envUint("EPOCH_START_BLOCK")
+        );
+
+        LightClientArbitrumV2 lightClientArbitrumV2 = new LightClientArbitrumV2();
+
+        address proxy =
+            upgradeLightClient(mostRecentlyDeployedProxy, address(lightClientArbitrumV2), data);
+        return proxy;
+    }
+
+    /// @notice upgrades the light client contract by calling the upgrade function the
+    /// implementation contract via
+    /// the proxy
+    /// @param proxyAddress address of proxy
+    /// @param newLightClient address of new implementation
+    /// @param data data to be passed to the new implementation
+    /// @return address of the proxy
+    function upgradeLightClient(address proxyAddress, address newLightClient, bytes memory data)
+        public
+        returns (address)
+    {
+        LightClientArbitrum proxy = LightClientArbitrum(proxyAddress); //make the function call on
+            // the previous implementation
+        proxy.upgradeToAndCall(newLightClient, data); //proxy address now points to the new
+            // implementation
+        vm.stopBroadcast();
+        return address(proxy);
+    }
+}
