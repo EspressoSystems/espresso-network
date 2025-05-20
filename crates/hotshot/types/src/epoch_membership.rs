@@ -20,7 +20,7 @@ use crate::{
         node_implementation::{ConsensusTime, NodeType},
         storage::{
             store_drb_progress_fn, store_drb_result_fn, Storage, StoreDrbProgressFn,
-            StoreDrbResultFn,
+            StoreDrbResultFn, LoadDrbProgressFn, load_drb_progress_fn
         },
     },
     utils::{root_block_in_epoch, transition_block_for_epoch},
@@ -41,13 +41,16 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// wait for the actual catchup and allert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
-    /// Callback function to store a drb result in storage when one is calculated during catchup
-    store_drb_result_fn: StoreDrbResultFn<TYPES>,
-
     /// Number of blocks in an epoch
     pub epoch_height: u64,
 
     store_drb_progress_fn: StoreDrbProgressFn,
+
+    load_drb_progress_fn: LoadDrbProgressFn,
+
+    /// Callback function to store a drb result in storage when one is calculated during catchup
+    store_drb_result_fn: StoreDrbResultFn<TYPES>,
+
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -55,9 +58,10 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
         Self {
             membership: Arc::clone(&self.membership),
             catchup_map: Arc::clone(&self.catchup_map),
-            store_drb_result_fn: self.store_drb_result_fn.clone(),
             epoch_height: self.epoch_height,
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
+            load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
+            store_drb_result_fn: self.store_drb_result_fn.clone(),
         }
     }
 }
@@ -77,6 +81,7 @@ where
             catchup_map: Arc::default(),
             epoch_height,
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
+            load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
         }
     }
@@ -228,12 +233,11 @@ where
                 iteration: 0,
                 value: drb_seed_input,
             };
+
             let store_drb_progress_fn = self.store_drb_progress_fn.clone();
-            tokio::task::spawn_blocking(move || {
-                compute_drb_result(drb_input, store_drb_progress_fn)
-            })
-            .await
-            .unwrap()
+            let load_drb_progress_fn = self.load_drb_progress_fn.clone();
+
+            compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await
         };
 
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}");
