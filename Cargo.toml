@@ -251,9 +251,7 @@ opt-level = 1
 
 [profile.test.package.sequencer]
 opt-level = 0
-
 [profile.test.package.hotshot-testing]
 opt-level = 0
-
 [profile.test.package.hotshot-state-prover]
 opt-level = 3

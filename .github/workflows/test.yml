@@ -39,7 +39,9 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: test-artifacts
           prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: github
 
       - name: Show memory
@@ -58,6 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-postgres
+          if-no-files-found: error
           path: nextest-archive-postgres.tar.zst
 
   build-test-artifacts-sqlite:
@@ -75,6 +78,8 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: test-artifacts
+          save-if: false
           prefix-key: v1-rust
           cache-provider: github
 
@@ -94,6 +99,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-sqlite
+          if-no-files-found: error
           path: nextest-archive-sqlite.tar.zst
 
   build-test-bins:
@@ -107,23 +113,21 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: build-test-bins
           prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: github
 
-      - name: Build binaries (postgres)
+      - name: Build all binaries (postgres)
         run: |
           cargo build --locked --profile test --bins
         timeout-minutes: 60
-
-      - name: Build binaries (sqlite)
-        run: |
-          cargo build --locked --profile test --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
-        timeout-minutes: 30
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
         with:
           name: test-binaries
+          if-no-files-found: error
           path: |
             target/debug/orchestrator
             target/debug/cdn-broker
@@ -140,12 +144,67 @@ jobs:
             target/debug/keygen
             target/debug/permissionless-builder
             target/debug/nasty-client
-            target/debug/espresso-dev-node
             target/debug/pub-key
             target/debug/espresso-bridge
             target/debug/node-metrics
-            target/debug/sequencer-sqlite
             target/debug/staking-cli
+
+  build-test-bins-sqlite:
+    name: Build sequencer-sqlite test binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: rui314/setup-mold@v1
+      - uses: actions/checkout@v4
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          shared-key: build-test-bins
+          prefix-key: v1-rust
+          cache-provider: github
+
+      - name: Build sequencer-sqlite binary
+        run: |
+          cargo build --locked --profile test --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
+        timeout-minutes: 30
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries-sqlite
+          if-no-files-found: error
+          path: |
+            target/debug/sequencer-sqlite
+
+  # The go-sdk test job only needs the dev-node binary, compile it separately.
+  build-test-bins-dev-node:
+    name: Build espresso-dev-node test binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: rui314/setup-mold@v1
+      - uses: actions/checkout@v4
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          shared-key: build-test-bins
+          prefix-key: v1-rust
+          cache-provider: github
+
+      - name: Build espresso-dev-node binary
+        run: |
+          cargo build --locked --profile test --features "embedded-db testing" --bin espresso-dev-node
+        timeout-minutes: 30
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries-dev-node
+          if-no-files-found: error
+          path: |
+            target/debug/espresso-dev-node
 
   test-postgres:
     needs: build-test-artifacts-postgres
@@ -182,10 +241,6 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
-      - name: Fix submodule permissions check
-        run: |
-          git config --global --add safe.directory '*'
-
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
@@ -210,7 +265,7 @@ jobs:
         timeout-minutes: 20
 
   test-integration:
-    needs: [build-test-bins, build-test-artifacts-postgres]
+    needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]
     strategy:
       matrix:
         include:
@@ -239,6 +294,7 @@ jobs:
           mv nextest-archive-postgres/* .
           mkdir -p target/debug
           mv test-binaries/* target/debug
+          mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
       # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
@@ -272,22 +328,23 @@ jobs:
 
 
   demo-native:
-    needs: build-test-bins
+    needs: [build-test-bins, build-test-bins-sqlite]
     runs-on: ubuntu-latest
     steps:
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-
+      - uses: cachix/install-nix-action@v31
       - uses: actions/checkout@v4
 
+        # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
+        # downloads always fail if I try to select a subset.
       - name: Download archive
         uses: actions/download-artifact@v4
-        with:
-          name: test-binaries
-          path: target/debug
 
-      - name: chmod +x
-        run: chmod -c +x target/debug/*
+      - name: Move files
+        run: |
+          mkdir -p target/debug
+          mv test-binaries/* target/debug
+          mv test-binaries-sqlite/* target/debug
+          chmod -c +x target/debug/*
 
       # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
       - name: Install process-compose
