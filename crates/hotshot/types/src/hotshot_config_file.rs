@@ -59,7 +59,12 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     /// Epoch start block
     pub epoch_start_block: u64,
     /// Stake table capacity for light client use
+    #[serde(default = "default_stake_table_capacity")]
     pub stake_table_capacity: usize,
+}
+
+fn default_stake_table_capacity() -> usize {
+    crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY
 }
 
 impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
