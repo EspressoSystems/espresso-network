@@ -50,7 +50,7 @@ use itertools::Itertools;
 use jf_merkle_tree::MerkleTreeScheme;
 use rand::Rng;
 use request_response::RequestType;
-use tokio::time::{timeout, Timeout};
+use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
@@ -79,18 +79,15 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-struct ConsensusState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
+struct ConsensusState {
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
     node_state: NodeState,
     network_config: NetworkConfig<SeqTypes>,
-
-    #[derivative(Debug = "ignore")]
-    handle: Arc<RwLock<Consensus<N, P, V>>>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
-    From<&SequencerContext<N, P, V>> for ConsensusState<N, P, V>
+    From<&SequencerContext<N, P, V>> for ConsensusState
 {
     fn from(ctx: &SequencerContext<N, P, V>) -> Self {
         Self {
@@ -98,7 +95,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
             event_streamer: ctx.event_streamer(),
             node_state: ctx.node_state(),
             network_config: ctx.network_config(),
-            handle: ctx.consensus(),
         }
     }
 }

@@ -11,8 +11,3 @@ DOC = "Get the stake table for the given epoch"
 PATH = ["validators/:epoch_number"]
 ":epoch_number" = "Integer"
 DOC = "Get the validators map for the given epoch."
-
-[route.incorrect_encoding_proof]
-PATH = ["incorrect-encoding-proof/:block_number"]
-":block_number" = "Integer"
-DOC = "Generate a proof of incorrect encoding for the given block number."

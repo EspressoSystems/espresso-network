@@ -283,6 +283,102 @@ where
                     }
                 }
                 .boxed()
+            })?
+            .at("incorrect_encoding_proof", |req, state| {
+                async move {
+                    // Get the block number from the request
+                    let block_number =
+                        req.integer_param::<_, u64>("block_number").map_err(|_| {
+                            hotshot_query_service::availability::Error::Custom {
+                                message: "Block number is required".to_string(),
+                                status: StatusCode::BAD_REQUEST,
+                            }
+                        })?;
+
+                    // Get or fetch the VID common data for the given block number
+                    // TODO: Time this out
+                    let vid_common = state
+                        .read(|state| state.get_vid_common(block_number as usize).boxed())
+                        .await
+                        .await;
+
+                    // Request the VID shares from other nodes. Use the VID common and common metadata to
+                    // verify that they are correct
+                    let vid_common_clone = vid_common.clone();
+                    let mut vid_shares = state
+                        .read(|state| {
+                            state.request_vid_shares(
+                                block_number,
+                                vid_common_clone,
+                                Duration::from_secs(40),
+                            )
+                        })
+                        .await
+                        .map_err(|err| {
+                            warn!("Failed to request VID shares from network: {err:#}");
+                            hotshot_query_service::availability::Error::Custom {
+                                message: "Failed to request VID shares from network".to_string(),
+                                status: StatusCode::NOT_FOUND,
+                            }
+                        })?;
+
+                    // Get our own share and add it. We don't need to verify here
+                    let vid_share = state
+                        .read(|state| state.vid_share(block_number as usize).boxed())
+                        .await;
+                    if let Ok(vid_share) = vid_share {
+                        vid_shares.push(vid_share);
+                    };
+
+                    // Get the total VID weight based on the VID common data
+                    let avidm_param = match vid_common.common() {
+                        VidCommon::V0(_) => {
+                            // TODO: This needs to be done via the stake table
+                            return Err(hotshot_query_service::availability::Error::Custom {
+                                message: "V0 shares not supported yet".to_string(),
+                                status: StatusCode::NOT_FOUND,
+                            });
+                        },
+                        VidCommon::V1(v1) => v1,
+                    };
+
+                    // Get the payload hash
+                    let VidCommitment::V1(local_payload_hash) = vid_common.payload_hash() else {
+                        return Err(hotshot_query_service::availability::Error::Custom {
+                            message: "V0 shares not supported yet".to_string(),
+                            status: StatusCode::NOT_FOUND,
+                        });
+                    };
+
+                    // Collect the shares as V1 shares
+                    let avidm_shares: Vec<AvidMShare> = vid_shares
+                        .into_iter()
+                        .filter_map(|share| {
+                            if let VidShare::V1(share) = share {
+                                Some(share)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    match NsAvidMScheme::proof_of_incorrect_encoding(
+                        avidm_param,
+                        &local_payload_hash,
+                        &avidm_shares,
+                    ) {
+                        Ok(proof) => Ok(proof),
+                        Err(err) => {
+                            warn!("Failed to generate proof of incorrect encoding: {err:#}");
+                            Err(hotshot_query_service::availability::Error::Custom {
+                                message: "Failed to generate proof of incorrect encoding"
+                                    .to_string(),
+                                status: StatusCode::INTERNAL_SERVER_ERROR,
+                            })
+                        },
+                    }
+                }
+                .boxed()
             })?;
         }
     } else {
@@ -371,8 +467,7 @@ where
         + Sync
         + StakeTableDataSource<SeqTypes>
         + NodeDataSource<SeqTypes>
-        + AvailabilityDataSource<SeqTypes>
-        + RequestResponseDataSource<SeqTypes>,
+        + AvailabilityDataSource<SeqTypes>,
 {
     // Extend the base API
     let mut options = node::Options::default();
@@ -434,100 +529,6 @@ where
                     message: format!("failed to get validators mapping: err: {err}"),
                     status: StatusCode::NOT_FOUND,
                 })
-        }
-        .boxed()
-    })?
-    .at("incorrect_encoding_proof", |req, state| {
-        async move {
-            // Get the block number from the request
-            let block_number = req.integer_param::<_, u64>("block_number").map_err(|_| {
-                hotshot_query_service::node::Error::Custom {
-                    message: "Block number is required".to_string(),
-                    status: StatusCode::BAD_REQUEST,
-                }
-            })?;
-
-            // Get or fetch the VID common data for the given block number
-            // TODO: Time this out
-            let vid_common = state
-                .read(|state| state.get_vid_common(block_number as usize).boxed())
-                .await
-                .await;
-
-            // Request the VID shares from other nodes. Use the VID common and common metadata to
-            // verify that they are correct
-            let vid_common_clone = vid_common.clone();
-            let mut vid_shares = state
-                .read(|state| {
-                    state.request_vid_shares(
-                        block_number,
-                        vid_common_clone,
-                        Duration::from_secs(40),
-                    )
-                })
-                .await
-                .map_err(|err| {
-                    warn!("Failed to request VID shares from network: {err:#}");
-                    hotshot_query_service::node::Error::Custom {
-                        message: "Failed to request VID shares from network".to_string(),
-                        status: StatusCode::NOT_FOUND,
-                    }
-                })?;
-
-            // Get our own share and add it. We don't need to verify here
-            let vid_share = state
-                .read(|state| state.vid_share(block_number as usize).boxed())
-                .await;
-            if let Ok(vid_share) = vid_share {
-                vid_shares.push(vid_share);
-            };
-
-            // Get the total VID weight based on the VID common data
-            let avidm_param = match vid_common.common() {
-                VidCommon::V0(_) => {
-                    // TODO: This needs to be done via the stake table
-                    return Err(hotshot_query_service::node::Error::Custom {
-                        message: "V0 shares not supported yet".to_string(),
-                        status: StatusCode::NOT_FOUND,
-                    });
-                },
-                VidCommon::V1(v1) => v1,
-            };
-
-            // Get the payload hash
-            let VidCommitment::V1(local_payload_hash) = vid_common.payload_hash() else {
-                return Err(hotshot_query_service::node::Error::Custom {
-                    message: "V0 shares not supported yet".to_string(),
-                    status: StatusCode::NOT_FOUND,
-                });
-            };
-
-            // Collect the shares as V1 shares
-            let avidm_shares: Vec<AvidMShare> = vid_shares
-                .into_iter()
-                .filter_map(|share| {
-                    if let VidShare::V1(share) = share {
-                        Some(share)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            match NsAvidMScheme::proof_of_incorrect_encoding(
-                avidm_param,
-                &local_payload_hash,
-                &avidm_shares,
-            ) {
-                Ok(proof) => Ok(proof),
-                Err(err) => {
-                    warn!("Failed to generate proof of incorrect encoding: {err:#}");
-                    Err(hotshot_query_service::node::Error::Custom {
-                        message: "Failed to generate proof of incorrect encoding".to_string(),
-                        status: StatusCode::INTERNAL_SERVER_ERROR,
-                    })
-                },
-            }
         }
         .boxed()
     })?;
