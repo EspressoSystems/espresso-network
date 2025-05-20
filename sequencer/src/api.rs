@@ -15,8 +15,7 @@ use espresso_types::{
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardMerkleTree},
-    v0_3::Validator,
-    v0_99::ChainConfig,
+    v0_3::{ChainConfig, Validator},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
 };
@@ -31,7 +30,7 @@ use hotshot_events_service::events_source::{
 use hotshot_query_service::data_source::ExtensibleDataSource;
 use hotshot_types::{
     data::ViewNumber,
-    event::Event,
+    event::{Event, LegacyEvent},
     light_client::StateSignatureRequestBody,
     network::NetworkConfig,
     traits::{
@@ -141,6 +140,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
     for ApiState<N, P, V>
 {
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
+    type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
 
     async fn get_event_stream(
         &self,
@@ -153,6 +153,19 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
             .get_event_stream(None)
             .await
     }
+
+    async fn get_legacy_event_stream(
+        &self,
+        _filter: Option<EventFilterSet<SeqTypes>>,
+    ) -> Self::LegacyEventStream {
+        self.event_streamer()
+            .await
+            .read()
+            .await
+            .get_legacy_event_stream(None)
+            .await
+    }
+
     async fn get_startup_info(&self) -> StartupInfo<SeqTypes> {
         self.event_streamer()
             .await
@@ -1855,8 +1868,8 @@ mod test {
         traits::NullEventConsumer,
         v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::StakeTableFetcher,
-        validators_from_l1_events, EpochVersion, FeeAmount, Header, L1ClientOptions,
-        MarketplaceVersion, MockSequencerVersions, SequencerVersions, ValidatedState,
+        validators_from_l1_events, FeeAmount, Header, L1ClientOptions, MockSequencerVersions,
+        SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -1886,7 +1899,7 @@ mod test {
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use tokio::time::sleep;
-    use vbs::version::{StaticVersion, StaticVersionType};
+    use vbs::version::StaticVersion;
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -2635,110 +2648,6 @@ mod test {
 
         network.server.shut_down().await;
         drop(network);
-    }
-
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_marketplace_upgrade_view_based() {
-        type MarketplaceUpgrade = SequencerVersions<EpochVersion, MarketplaceVersion>;
-        test_upgrade_helper::<MarketplaceUpgrade>(MarketplaceUpgrade::new()).await;
-    }
-
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_marketplace_upgrade_time_based() {
-        type MarketplaceUpgrade = SequencerVersions<EpochVersion, MarketplaceVersion>;
-        test_upgrade_helper::<MarketplaceUpgrade>(MarketplaceUpgrade::new()).await;
-    }
-
-    async fn test_upgrade_helper<V: Versions>(version: V) {
-        setup_test();
-        // wait this number of views beyond the configured first view
-        // before asserting anything.
-        let wait_extra_views = 10;
-        // Number of nodes running in the test network.
-        const NUM_NODES: usize = 5;
-        let upgrade_version = <V as Versions>::Upgrade::VERSION;
-        let port = pick_unused_port().expect("No ports free");
-
-        let test_config = TestConfigBuilder::default()
-            .epoch_height(200)
-            .epoch_start_block(321)
-            .set_upgrades(upgrade_version)
-            .await
-            .build();
-
-        let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
-        tracing::debug!(?chain_config_upgrade);
-
-        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(Options::from(options::Http {
-                port,
-                max_connections: None,
-            }))
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
-                    Default::default(),
-                    &NoMetrics,
-                )
-            }))
-            .network_config(test_config)
-            .build();
-
-        let mut network = TestNetwork::new(config, version).await;
-        let mut events = network.server.event_stream().await;
-
-        // First loop to get an `UpgradeProposal`. Note that the
-        // actual upgrade will take several to many subsequent views for
-        // voting and finally the actual upgrade.
-        let upgrade = loop {
-            let event = events.next().await.unwrap();
-            match event.event {
-                EventType::UpgradeProposal { proposal, .. } => {
-                    tracing::info!(?proposal, "proposal");
-                    let upgrade = proposal.data.upgrade_proposal;
-                    let new_version = upgrade.new_version;
-                    tracing::info!(?new_version, "upgrade proposal new version");
-                    assert_eq!(new_version, <V as Versions>::Upgrade::VERSION);
-                    break upgrade;
-                },
-                _ => continue,
-            }
-        };
-
-        let wanted_view = upgrade.new_version_first_view + wait_extra_views;
-        // Loop until we get the `new_version_first_view`, then test the upgrade.
-        loop {
-            let event = events.next().await.unwrap();
-            let view_number = event.view_number;
-
-            tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
-            if view_number > wanted_view {
-                let states: Vec<_> = network
-                    .peers
-                    .iter()
-                    .map(|peer| async { peer.consensus().read().await.decided_state().await })
-                    .collect();
-
-                let configs: Option<Vec<ChainConfig>> = join_all(states)
-                    .await
-                    .iter()
-                    .map(|state| state.chain_config.resolve())
-                    .collect();
-
-                tracing::debug!(?configs, "`ChainConfig`s for nodes");
-                if let Some(configs) = configs {
-                    for config in configs {
-                        assert_eq!(config, chain_config_upgrade);
-                    }
-                    break; // if assertion did not panic, the test was successful, so we exit the loop
-                }
-            }
-            sleep(Duration::from_millis(200)).await;
-        }
-
-        network.server.shut_down().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

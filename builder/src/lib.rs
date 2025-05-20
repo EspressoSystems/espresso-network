@@ -53,8 +53,8 @@ pub mod testing {
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
-        traits::SequencerPersistence, v0_99::ChainConfig, Event, FeeAccount, NamespaceId,
-        NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+        traits::SequencerPersistence, v0_3::ChainConfig, Event, FeeAccount, NamespaceId, NodeState,
+        PrivKey, PubKey, Transaction, ValidatedState,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
@@ -143,6 +143,7 @@ pub mod testing {
                 stop_voting_time: 0,
                 epoch_height: 0,
                 epoch_start_block: 0,
+                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             };
 
             Self {
@@ -253,7 +254,7 @@ pub mod testing {
             source: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         ) {
             // Start the web server.
-            let hotshot_events_api = hotshot_events_service::events::define_api::<
+            let hotshot_events_api_v0 = hotshot_events_service::events::define_api::<
                 Arc<RwLock<EventsStreamer<SeqTypes>>>,
                 SeqTypes,
                 StaticVersion<0, 1>,
@@ -261,12 +262,24 @@ pub mod testing {
                 &EventStreamingApiOptions::default(),
                 "0.0.1".parse().unwrap(),
             )
-            .expect("Failed to define hotshot eventsAPI");
+            .expect("Failed to define hotshot events API v0");
+
+            let hotshot_events_api_v1 = hotshot_events_service::events::define_api::<
+                Arc<RwLock<EventsStreamer<SeqTypes>>>,
+                SeqTypes,
+                StaticVersion<0, 1>,
+            >(
+                &EventStreamingApiOptions::default(),
+                "1.0.0".parse().unwrap(),
+            )
+            .expect("Failed to define hotshot events API v1");
 
             let mut app = App::<_, EventStreamApiError>::with_state(source);
 
-            app.register_module("hotshot-events", hotshot_events_api)
-                .expect("Failed to register hotshot events API");
+            app.register_module("hotshot-events", hotshot_events_api_v0)
+                .expect("Failed to register hotshot events API v0")
+                .register_module("hotshot-events", hotshot_events_api_v1)
+                .expect("Failed to register hotshot events API v1");
 
             tokio::spawn(app.serve(url, SequencerApiVersion::instance()));
         }

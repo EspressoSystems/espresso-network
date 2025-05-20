@@ -42,7 +42,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
 };
 use crate::{
-    v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,
+    v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
     FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes,
 };
 

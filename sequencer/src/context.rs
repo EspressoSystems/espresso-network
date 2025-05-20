@@ -10,7 +10,7 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
-    NodeState, PubKey, SolverAuctionResultsProvider, Transaction, ValidatedState,
+    NodeState, PubKey, Transaction, ValidatedState,
 };
 use futures::{
     future::{join_all, Future},
@@ -18,7 +18,7 @@ use futures::{
 };
 use hotshot::{
     types::{Event, EventType, SystemContextHandle},
-    MarketplaceConfig, SystemContext,
+    SystemContext,
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
@@ -144,12 +144,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             initializer,
             ConsensusMetricsValue::new(metrics),
             Arc::clone(&persistence),
-            // TODO: MA: will be removed when more marketplace code is removed,
-            // at the moment we need to pass in a config to hotshot.
-            MarketplaceConfig {
-                auction_results_provider: Arc::new(SolverAuctionResultsProvider::default()),
-                fallback_builder_url: "http://dummy".parse().unwrap(),
-            },
         )
         .await?
         .0;

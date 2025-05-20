@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_broadcast::TrySendError;
 use hotshot::traits::BlockPayload;
-use hotshot_builder_api::v0_99::builder::BuildError;
+use hotshot_builder_api::v0_2::builder::BuildError;
 use hotshot_types::traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey};
 use thiserror::Error;
 

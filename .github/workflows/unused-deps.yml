@@ -19,6 +19,8 @@ jobs:
       - run: rustup override set ${{steps.toolchain.outputs.name}}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       
       - name: Run cargo-udeps
         uses: aig787/cargo-udeps-action@v1

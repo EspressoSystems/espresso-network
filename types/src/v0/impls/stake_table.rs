@@ -40,8 +40,9 @@ use tracing::Instrument;
 use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{EventKey, StakeTableEvent, StakeTableFetcher, StakeTableUpdateTask, Validator},
-    v0_99::ChainConfig,
+    v0_3::{
+        ChainConfig, EventKey, StakeTableEvent, StakeTableFetcher, StakeTableUpdateTask, Validator,
+    },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 use crate::traits::EventsPersistenceRead;

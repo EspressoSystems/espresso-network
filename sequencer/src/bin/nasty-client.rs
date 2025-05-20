@@ -28,7 +28,7 @@ use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use espresso_types::{
-    parse_duration, v0_99::IterableFeeInfo, ADVZNamespaceProofQueryData, BlockMerkleTree,
+    parse_duration, v0_1::IterableFeeInfo, ADVZNamespaceProofQueryData, BlockMerkleTree,
     FeeMerkleTree, Header, SeqTypes,
 };
 use futures::{

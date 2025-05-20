@@ -19,7 +19,6 @@ members = [
     "crates/hotshot/example-types",
     "crates/hotshot/examples",
     "crates/hotshot/hotshot",
-    "crates/hotshot/hotshot-fakeapi",
     "crates/hotshot/libp2p-networking",
     "crates/hotshot/macros",
     "crates/hotshot/orchestrator",
@@ -243,11 +242,16 @@ inherits = "dev"
 strip = "none"
 debug = "full"
 
+# Don't optimize the binaries in the workspace. Compilation of dependencies can be cached
+# effectively on the CI because they rarely change, whereas the workspace code usually changes and
+# workspace compilation artifacts are therefore not cached. However, some of our tests don't work if
+# we don't have any optimizations in the workspace.
 [profile.test]
 opt-level = 1
-[profile.test.package.tests]
+
+[profile.test.package.sequencer]
 opt-level = 0
-[profile.test.package.client]
+[profile.test.package.hotshot-testing]
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
 opt-level = 3

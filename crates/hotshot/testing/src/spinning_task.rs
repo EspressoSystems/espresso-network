@@ -19,7 +19,6 @@ use hotshot::{
     SystemContext,
 };
 use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider,
     block_types::TestBlockHeader,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
@@ -102,12 +101,7 @@ impl<
     > TestTaskState for SpinningTask<TYPES, N, I, V>
 where
     I: TestableNodeImplementation<TYPES>,
-    I: NodeImplementation<
-        TYPES,
-        Network = N,
-        Storage = TestStorage<TYPES>,
-        AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
-    >,
+    I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
 {
     type Event = Event<TYPES>;
     type Error = Error;
@@ -165,7 +159,6 @@ where
                                             storage,
                                             memberships,
                                             config,
-                                            marketplace_config,
                                         } = late_context_params;
 
                                         let initializer = HotShotInitializer::<TYPES>::load(
@@ -202,7 +195,6 @@ where
                                             config,
                                             validator_config,
                                             storage,
-                                            marketplace_config,
                                         )
                                         .await
                                     },
@@ -251,8 +243,6 @@ where
                                 let storage = node.handle.storage().clone();
                                 let memberships = node.handle.membership_coordinator.clone();
                                 let config = node.handle.hotshot.config.clone();
-                                let marketplace_config =
-                                    node.handle.hotshot.marketplace_config.clone();
 
                                 let next_epoch_high_qc = storage.next_epoch_high_qc_cloned().await;
                                 let start_view = storage.last_actioned_view().await;
@@ -314,7 +304,6 @@ where
                                         config,
                                         validator_config,
                                         storage.clone(),
-                                        marketplace_config.clone(),
                                         internal_chan,
                                         (
                                             node.handle.external_channel_sender(),

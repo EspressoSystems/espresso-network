@@ -27,7 +27,6 @@ futures = { workspace = true }
 hotshot = { path = "../hotshot", features = ["hotshot-testing"] }
 hotshot-builder-api = { workspace = true }
 hotshot-example-types = { workspace = true }
-hotshot-fakeapi = { path = "../hotshot-fakeapi" }
 hotshot-macros = { workspace = true }
 hotshot-task = { workspace = true }
 hotshot-task-impls = { workspace = true }

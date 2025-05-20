@@ -37,7 +37,7 @@ use vbs::version::{StaticVersion, StaticVersionType};
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_99);
+        $m!($($arg,)* v0_1, v0_2, v0_3);
     };
 }
 
@@ -142,7 +142,6 @@ impl NodeType for SeqTypes {
     type ValidatedState = ValidatedState;
     type Membership = EpochCommittees;
     type BuilderSignatureKey = FeeAccount;
-    type AuctionResult = SolverAuctionResults;
     type StateSignatureKey = SchnorrPubKey;
 }
 
@@ -169,7 +168,6 @@ impl<Base: StaticVersionType + 'static, Upgrade: StaticVersionType + 'static> Ve
         0, 0,
     ];
 
-    type Marketplace = MarketplaceVersion;
     type Epochs = EpochVersion;
 }
 
@@ -179,7 +177,6 @@ pub type V0_0 = StaticVersion<0, 0>;
 pub type V0_1 = StaticVersion<0, 1>;
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
-pub type MarketplaceVersion = StaticVersion<0, 99>;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
@@ -191,9 +188,9 @@ pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
 
 pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 
-pub use self::impls::{NodeState, SolverAuctionResultsProvider, UpgradeMap, ValidatedState};
+pub use self::impls::{NodeState, UpgradeMap, ValidatedState};
 pub use crate::v0_1::{
     BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
     NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
 };
-use crate::v0_99::{ChainConfig, SolverAuctionResults};
+use crate::v0_3::ChainConfig;
