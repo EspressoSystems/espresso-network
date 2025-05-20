@@ -16,7 +16,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{
@@ -216,6 +216,13 @@ impl SequencerPersistence for NoStorage {
         _drb_result: DrbResult,
     ) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn store_drb_input(&self, _drb_input: DrbInput) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn load_drb_input(&self, _epoch: u64) -> anyhow::Result<DrbInput> {
+        bail!("Cannot load from NoStorage")
     }
 
     async fn add_epoch_root(

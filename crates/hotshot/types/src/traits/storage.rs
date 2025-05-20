@@ -150,35 +150,31 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         epoch: TYPES::Epoch,
         block_header: TYPES::BlockHeader,
     ) -> Result<()>;
-    async fn add_drb_input(&self, _epoch: u64, _iteration: u64, _drb_input: [u8; 32]) {}
-    async fn load_drb_input(&self, _epoch: u64) -> Result<DrbInput> {
-        Err(anyhow::anyhow!("load_drb_input unimplemented"))
-    }
+    async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()>;
+    async fn load_drb_input(&self, _epoch: u64) -> Result<DrbInput>;
 }
 
-async fn store_drb_input_impl<TYPES: NodeType>(
+pub async fn store_drb_input_impl<TYPES: NodeType>(
     storage: impl Storage<TYPES>,
-    epoch: u64,
-    iteration: u64,
-    value: [u8; 32],
-) {
-    storage.add_drb_input(epoch, iteration, value).await
+    drb_input: DrbInput,
+) -> Result<()> {
+    storage.store_drb_input(drb_input).await
 }
 
 pub type StoreDrbProgressFn =
-    std::sync::Arc<dyn Fn(u64, u64, DrbResult) -> BoxFuture<'static, ()> + Send + Sync>;
+    std::sync::Arc<dyn Fn(DrbInput) -> BoxFuture<'static, Result<()>> + Send + Sync>;
 
 pub fn store_drb_progress_fn<TYPES: NodeType>(
     storage: impl Storage<TYPES> + 'static,
 ) -> StoreDrbProgressFn {
-    Arc::new(move |epoch, iteration, value| {
+    Arc::new(move |drb_input| {
         let storage = storage.clone();
-        Box::pin(store_drb_input_impl(storage, epoch, iteration, value))
+        Box::pin(store_drb_input_impl(storage, drb_input))
     })
 }
 
 pub fn null_store_drb_progress_fn() -> StoreDrbProgressFn {
-    Arc::new(move |_epoch, _iteration, _value| Box::pin(async {}))
+    Arc::new(move |_drb_input| Box::pin(async { Ok(()) }))
 }
 
 pub type StoreDrbResultFn<TYPES> = Arc<
