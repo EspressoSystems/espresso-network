@@ -770,7 +770,7 @@ pub async fn deploy_timelock(
 
 #[cfg(test)]
 mod tests {
-    use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
+    use alloy::{primitives::utils::parse_ether, providers::ProviderBuilder, sol_types::SolValue};
 
     use super::*;
 
@@ -1056,7 +1056,7 @@ mod tests {
 
         let init_recipient = provider.get_accounts().await?[0];
         let rand_owner = Address::random();
-        let initial_supply = parse_units("10000000000", "ether").unwrap();
+        let initial_supply = parse_ether("3590000000").unwrap();
         let name = "Espresso".to_string();
         let symbol = "ESP".to_string();
 
@@ -1065,7 +1065,7 @@ mod tests {
             &mut contracts,
             rand_owner,
             init_recipient,
-            initial_supply,
+            initial_supply.into(),
             name,
             symbol,
         )
@@ -1091,8 +1091,19 @@ mod tests {
         // deploy token
         let init_recipient = provider.get_accounts().await?[0];
         let token_owner = Address::random();
-        let token_addr =
-            deploy_token_proxy(&provider, &mut contracts, token_owner, init_recipient).await?;
+        let token_name = "Espresso".to_string();
+        let token_symbol = "ESP".to_string();
+        let initial_supply = parse_ether("3590000000").unwrap();
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            token_owner,
+            init_recipient,
+            initial_supply,
+            token_name,
+            token_symbol,
+        )
+        .await?;
 
         // deploy light client
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;

@@ -1,6 +1,6 @@
 use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{utils::parse_ether, Address, U256};
 use clap::Parser;
 use espresso_contract_deployer::{
     build_provider, builder::DeployerArgsBuilder, network_config::light_client_genesis, Contract,
@@ -148,15 +148,15 @@ struct Options {
     initial_token_grant_recipient: Option<Address>,
 
     /// The initial supply of the tokens.
-    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = 3590000000)]
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = parse_ether("3590000000").unwrap().into())]
     initial_token_supply: U256,
 
     /// The name of the tokens.
-    #[clap(long, env = "ESP_TOKEN_NAME", default_value_t = "Espresso".to_string())]
+    #[clap(long, env = "ESP_TOKEN_NAME", default_value = "Espresso")]
     token_name: String,
 
     /// The symbol of the tokens.
-    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value_t = "ESP".to_string())]
+    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP")]
     token_symbol: String,
 
     #[clap(flatten)]
@@ -224,9 +224,6 @@ async fn main() -> anyhow::Result<()> {
             args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
         }
     }
-    args_builder.token_name(opt.token_name);
-    args_builder.token_symbol(opt.token_symbol);
-    args_builder.initial_token_supply(opt.initial_token_supply);
 
     // then deploy specified contracts
     let args = args_builder.build()?;

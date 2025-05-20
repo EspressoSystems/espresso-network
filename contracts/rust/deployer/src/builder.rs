@@ -1,7 +1,7 @@
 //! builder pattern for
 
 use alloy::{
-    primitives::{Address, U256},
+    primitives::{utils::parse_ether, Address, U256},
     providers::WalletProvider,
 };
 use anyhow::{Context, Result};
@@ -60,8 +60,19 @@ impl DeployerArgs {
             },
             Contract::EspTokenProxy => {
                 let token_recipient = self.token_recipient.unwrap_or(admin);
-                let addr =
-                    crate::deploy_token_proxy(provider, contracts, admin, token_recipient).await?;
+                let token_name = "Espresso".to_string();
+                let token_symbol = "ESP".to_string();
+                let initial_supply = parse_ether("3590000000").unwrap().into();
+                let addr = crate::deploy_token_proxy(
+                    provider,
+                    contracts,
+                    admin,
+                    token_recipient,
+                    initial_supply,
+                    token_name,
+                    token_symbol,
+                )
+                .await?;
 
                 if let Some(multisig) = self.multisig {
                     crate::transfer_ownership(provider, target, addr, multisig).await?;
