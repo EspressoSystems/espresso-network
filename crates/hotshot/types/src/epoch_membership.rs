@@ -30,6 +30,11 @@ use crate::{
 type EpochMap<TYPES> =
     HashMap<<TYPES as NodeType>::Epoch, InactiveReceiver<Result<EpochMembership<TYPES>>>>;
 
+type EpochSender<TYPES> = (
+    <TYPES as NodeType>::Epoch,
+    Sender<Result<EpochMembership<TYPES>>>,
+);
+
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// The underlying membhersip
@@ -176,7 +181,7 @@ where
         let mut fetch_epochs = vec![];
         fetch_epochs.push((epoch, epoch_tx));
 
-        let mut try_epoch = TYPES::Epoch::new(*epoch - 1);
+        let mut try_epoch = TYPES::Epoch::new(epoch.saturating_sub(1));
         let maybe_first_epoch = self.membership.read().await.first_epoch();
         let Some(first_epoch) = maybe_first_epoch else {
             let err = anytrace::error!(
@@ -192,13 +197,16 @@ where
             let has_stake_table = self.membership.read().await.has_stake_table(try_epoch);
             if has_stake_table {
                 // We have this stake table but we need to make sure we have the epoch root of the requested epoch
-                if try_epoch <= epoch - 2 {
+                if try_epoch <= TYPES::Epoch::new(epoch.saturating_sub(2)) {
                     break;
                 }
-                try_epoch = TYPES::Epoch::new(*try_epoch - 1);
+                try_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
             } else {
-                if try_epoch == first_epoch || try_epoch == first_epoch + 1 {
-                    let err = anytrace::error!("We are trying to catchup to the first or second epoch! This means the initial stake table is missing!");
+                if try_epoch <= first_epoch + 1 {
+                    let err = anytrace::error!(
+                        "We are trying to catchup to an epoch lower than the second epoch! \
+                        This means the initial stake table is missing!"
+                    );
                     self.catchup_cleanup(epoch, fetch_epochs, err).await;
                     return;
                 }
@@ -220,7 +228,7 @@ where
                     map_lock.insert(try_epoch, rx.deactivate());
                     drop(map_lock);
                     fetch_epochs.push((try_epoch, tx));
-                    try_epoch = TYPES::Epoch::new(*try_epoch - 1);
+                    try_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
                 }
             };
         }
@@ -297,7 +305,7 @@ where
     async fn catchup_cleanup(
         &mut self,
         req_epoch: TYPES::Epoch,
-        cancel_epochs: Vec<(TYPES::Epoch, Sender<Result<EpochMembership<TYPES>>>)>,
+        cancel_epochs: Vec<EpochSender<TYPES>>,
         err: Error,
     ) {
         // Cleanup in case of error
@@ -328,7 +336,7 @@ where
     /// * `Ok(Leaf2<TYPES>)` containing the epoch root leaf if successful.
     /// * `Err(Error)` if the root membership or root leaf cannot be found, or if updating the membership fails.
     async fn fetch_stake_table(&self, epoch: TYPES::Epoch) -> Result<Leaf2<TYPES>> {
-        let root_epoch = TYPES::Epoch::new(*epoch - 2);
+        let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
             return Err(anytrace::error!(
                 "We tried to fetch stake table for epoch {:?} \
@@ -387,7 +395,7 @@ where
         epoch: TYPES::Epoch,
         root_leaf: Leaf2<TYPES>,
     ) -> Result<()> {
-        let root_epoch = TYPES::Epoch::new(*epoch - 2);
+        let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
             return Err(anytrace::error!("We tried to fetch drb result for epoch {:?} but we don't have its root epoch {:?}. This should not happen", epoch, root_epoch));
         };

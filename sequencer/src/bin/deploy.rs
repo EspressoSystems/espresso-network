@@ -7,7 +7,7 @@ use espresso_contract_deployer::{
     Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
-use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
+use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use tide_disco::error::ServerError;
 use url::Url;
@@ -121,7 +121,7 @@ struct Options {
     pub use_mock: bool,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
     ///
     /// If the light client contract is being deployed and this is set, the prover will be

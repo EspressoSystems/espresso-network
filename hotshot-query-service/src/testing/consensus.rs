@@ -10,7 +10,7 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::{fmt::Display, num::NonZeroUsize, str::FromStr, sync::Arc, time::Duration};
+use std::{fmt::Display, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use async_lock::RwLock;
@@ -22,12 +22,9 @@ use futures::{
 use hotshot::{
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{Event, SystemContextHandle},
-    HotShotInitializer, MarketplaceConfig, SystemContext,
+    HotShotInitializer, SystemContext,
 };
-use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider, state_types::TestInstanceState,
-    storage_types::TestStorage,
-};
+use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
@@ -159,6 +156,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             stop_voting_time: 0,
             epoch_height: EPOCH_HEIGHT,
             epoch_start_block: 0,
+            stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         };
         update_config(&mut config);
 
@@ -222,12 +220,6 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             .unwrap(),
                             ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                             hs_storage,
-                            MarketplaceConfig {
-                                auction_results_provider: Arc::new(
-                                    TestAuctionResultsProvider::default(),
-                                ),
-                                fallback_builder_url: Url::from_str("https://some.url").unwrap(),
-                            },
                         )
                         .await
                         .unwrap()

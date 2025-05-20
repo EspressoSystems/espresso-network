@@ -47,6 +47,7 @@ jobs:
         name: Enable Rust Caching
         with:
           prefix-key: v0-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Activate nix env
         run: nix develop --accept-flake-config -c echo Ok

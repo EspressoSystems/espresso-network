@@ -6,7 +6,7 @@ use std::{
 use alloy::primitives::Address;
 use anyhow::{Context, Ok};
 use espresso_types::{
-    v0_99::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
+    v0_3::ChainConfig, FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
     Upgrade,
 };
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,7 @@ pub struct Genesis {
     pub upgrade_version: Version,
     pub epoch_height: Option<u64>,
     pub epoch_start_block: Option<u64>,
+    pub stake_table_capacity: Option<usize>,
     pub chain_config: ChainConfig,
     pub stake_table: StakeTableConfig,
     #[serde(default)]
@@ -374,7 +375,6 @@ mod test {
                 base_fee: 1.into(),
                 fee_recipient: FeeAccount::default(),
                 fee_contract: Some(Address::default()),
-                bid_recipient: None,
                 stake_table_contract: None
             }
         );
@@ -446,7 +446,6 @@ mod test {
                 max_block_size: 30000.into(),
                 base_fee: 1.into(),
                 fee_recipient: FeeAccount::default(),
-                bid_recipient: None,
                 fee_contract: None,
                 stake_table_contract: None,
             }
@@ -629,21 +628,9 @@ mod test {
             fee_recipient = "0x0000000000000000000000000000000000000000"
             fee_contract = "{:?}"
 
-            [[upgrade]]
-            version = "0.3"
-            start_proposing_view = 5
-            stop_proposing_view = 15
-
-            [upgrade.marketplace]
-            [upgrade.marketplace.chain_config]
-            chain_id = 999999999
-            max_block_size = 3000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            bid_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "{:?}"
+           
         "#,
-            proxy_addr, proxy_addr,
+            proxy_addr,
         )
         .to_string();
 
@@ -700,8 +687,8 @@ mod test {
             start_proposing_view = 5
             stop_proposing_view = 15
 
-            [upgrade.marketplace]
-            [upgrade.marketplace.chain_config]
+            [upgrade.epoch]
+            [upgrade.epoch.chain_config]
             chain_id = 999999999
             max_block_size = 3000
             base_fee = 1
@@ -1065,60 +1052,13 @@ mod test {
     }
 
     #[test]
-    fn test_marketplace_upgrade_toml() {
-        let toml = toml! {
-            base_version = "0.3"
-            upgrade_version = "0.99"
-
-            [stake_table]
-            capacity = 10
-
-            [chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
-
-            [header]
-            timestamp = 123456
-
-            [accounts]
-            "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
-            "0x0000000000000000000000000000000000000000" = 42
-
-            [l1_finalized]
-            number = 64
-            timestamp = "0x123def"
-            hash = "0x80f5dd11f2bdda2814cb1ad94ef30a47de02cf28ad68c89e104c00c4e51bb7a5"
-
-            [[upgrade]]
-            version = "0.3"
-            start_proposing_view = 1
-            stop_proposing_view = 10
-
-            [upgrade.marketplace]
-            [upgrade.marketplace.chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            bid_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
-
-        }
-        .to_string();
-
-        toml::from_str::<Genesis>(&toml).unwrap();
-    }
-
-    #[test]
     fn test_fee_and_epoch_upgrade_toml() {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
             epoch_height = 20
             epoch_start_block = 1
+            stake_table_capacity = 200
 
             [stake_table]
             capacity = 10
@@ -1153,85 +1093,6 @@ mod test {
             max_block_size = 30000
             base_fee = 1
             fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
-            stake_table_contract = "0x0000000000000000000000000000000000000000"
-
-            [[upgrade]]
-            version = "0.2"
-            start_proposing_view = 1
-            stop_proposing_view = 15
-
-            [upgrade.fee]
-
-            [upgrade.fee.chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
-        }
-        .to_string();
-
-        toml::from_str::<Genesis>(&toml).unwrap();
-    }
-
-    #[test]
-    fn test_fee_and_epoch_and_marketplace_upgrade_toml() {
-        let toml = toml! {
-            base_version = "0.1"
-            upgrade_version = "0.2"
-            epoch_height = 20
-            epoch_start_block = 1
-
-            [stake_table]
-            capacity = 10
-
-            [chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
-
-            [header]
-            timestamp = 123456
-
-            [accounts]
-            "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f" = 100000
-            "0x0000000000000000000000000000000000000000" = 42
-
-            [l1_finalized]
-            number = 64
-            timestamp = "0x123def"
-            hash = "0x80f5dd11f2bdda2814cb1ad94ef30a47de02cf28ad68c89e104c00c4e51bb7a5"
-
-            [[upgrade]]
-            version = "0.99"
-            start_proposing_view = 1
-            stop_proposing_view = 10
-
-            [upgrade.marketplace]
-            [upgrade.marketplace.chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            bid_recipient = "0x0000000000000000000000000000000000000000"
-            fee_contract = "0x0000000000000000000000000000000000000000"
-            stake_table_contract = "0x0000000000000000000000000000000000000000"
-
-            [[upgrade]]
-            version = "0.3"
-            start_proposing_view = 1
-            stop_proposing_view = 10
-
-            [upgrade.epoch]
-            [upgrade.epoch.chain_config]
-            chain_id = 12345
-            max_block_size = 30000
-            base_fee = 1
-            fee_recipient = "0x0000000000000000000000000000000000000000"
-            bid_recipient = "0x0000000000000000000000000000000000000000"
             fee_contract = "0x0000000000000000000000000000000000000000"
             stake_table_contract = "0x0000000000000000000000000000000000000000"
 

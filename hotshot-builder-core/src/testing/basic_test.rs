@@ -23,7 +23,6 @@ mod tests {
     use hotshot::types::SignatureKey;
     use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
     use hotshot_example_types::{
-        auction_results_provider_types::TestAuctionResult,
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
         node_types::TestVersions,
         state_types::{TestInstanceState, TestValidatedState},
@@ -88,7 +87,6 @@ mod tests {
             type InstanceState = TestInstanceState;
             type Membership = StaticCommittee<Self>;
             type BuilderSignatureKey = BuilderKey;
-            type AuctionResult = TestAuctionResult;
             type StateSignatureKey = SchnorrPubKey;
         }
         // no of test messages to send

@@ -24,6 +24,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build Docs
         run: |
