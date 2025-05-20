@@ -27,27 +27,27 @@ async function main() {
       upgradeData.safeAddress = getEnvVar("SAFE_MULTISIG_ADDRESS");
     }
 
-    // Initialize web3 provider using the RPC URL from environment variables
-    const web3Provider = new ethers.JsonRpcProvider(upgradeData.rpcUrl);
-
-    // Get the signer, this signer must be one of the signers on the Safe Multisig Wallet
-    const orchestratorSigner = getSigner(web3Provider, upgradeData.useHardwareWallet);
-
-    // Set up Eth Adapter with ethers and the signer
-    const ethAdapter = new EthersAdapter({
-      ethers,
-      signerOrProvider: orchestratorSigner,
-    });
-
-    const chainId = await ethAdapter.getChainId();
-    const safeService = new SafeApiKit({ chainId });
-    validateEthereumAddress(upgradeData.safeAddress);
-    const safeSdk = await Safe.create({ ethAdapter, safeAddress: upgradeData.safeAddress });
-    const orchestratorSignerAddress = await orchestratorSigner.getAddress();
-
-    await proposeUpgradeTransaction(safeSdk, safeService, orchestratorSignerAddress, upgradeData, dryRun);
-
     if (!dryRun) {
+      // Initialize web3 provider using the RPC URL from environment variables
+      const web3Provider = new ethers.JsonRpcProvider(upgradeData.rpcUrl);
+
+      // Get the signer, this signer must be one of the signers on the Safe Multisig Wallet
+      const orchestratorSigner = getSigner(web3Provider, upgradeData.useHardwareWallet);
+
+      // Set up Eth Adapter with ethers and the signer
+      const ethAdapter = new EthersAdapter({
+        ethers,
+        signerOrProvider: orchestratorSigner,
+      });
+
+      const chainId = await ethAdapter.getChainId();
+      const safeService = new SafeApiKit({ chainId });
+      validateEthereumAddress(upgradeData.safeAddress);
+      const safeSdk = await Safe.create({ ethAdapter, safeAddress: upgradeData.safeAddress });
+      const orchestratorSignerAddress = await orchestratorSigner.getAddress();
+
+      await proposeUpgradeTransaction(safeSdk, safeService, orchestratorSignerAddress, upgradeData);
+
       console.log(
         `The other owners of the Safe Multisig wallet need to sign the transaction via the Safe UI https://app.safe.global/transactions/queue?safe=sep:${upgradeData.safeAddress}`,
       );
@@ -166,7 +166,6 @@ async function proposeUpgradeTransaction(
   safeService: SafeApiKit,
   signerAddress: string,
   upgradeData: UpgradeData,
-  dryRun: boolean,
 ) {
   // Prepare the transaction data to upgrade the proxy
   const abi = ["function upgradeToAndCall(address,bytes)"];
@@ -183,11 +182,6 @@ async function proposeUpgradeTransaction(
     data,
     upgradeData.useHardwareWallet,
   );
-
-  if (dryRun) {
-    console.log("Dry run, not proposing transaction");
-    process.exit(0);
-  }
 
   // Propose the transaction which can be signed by other owners via the Safe UI
   await safeService.proposeTransaction({

@@ -849,7 +849,6 @@ pub async fn call_upgrade_proxy_script(
         "Script not found at {:?}",
         script_path
     );
-
     let output = Command::new(script_path)
         .arg("--from-rust")
         .arg("--proxy")
@@ -1236,8 +1235,8 @@ mod tests {
             std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
             "Script not found!"
         );
-        let mut sepolia_rpc_url = String::new();
-        let mut multisig_admin = Address::ZERO;
+        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
+        let mut multisig_admin = Address::random();
         if !dry_run {
             dotenvy::from_filename_override(".env.deployer.rs.test").ok();
 
@@ -1280,7 +1279,6 @@ mod tests {
             Some(prover),
         )
         .await?;
-
         // transfer ownership to multisig
         let _receipt = transfer_ownership(
             &provider,
@@ -1291,7 +1289,6 @@ mod tests {
         .await?;
         let lc = LightClient::new(lc_proxy_addr, &provider);
         assert_eq!(lc.owner().call().await?._0, multisig_admin);
-
         // then send upgrade proposal to the multisig wallet
         let (result, success) = upgrade_light_client_v2_multisig_owner(
             &provider,
