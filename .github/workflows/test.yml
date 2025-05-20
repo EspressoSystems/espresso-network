@@ -331,8 +331,11 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: test-binaries*
-          merge-multiple: true
+          name: test-binaries-sqlite
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-binaries
 
       - name: chmod +x
         run: chmod -c +x target/debug/*
