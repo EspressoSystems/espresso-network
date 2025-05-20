@@ -8,7 +8,7 @@ use std::{
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::{Address, Bytes, U256},
+    primitives::{utils::parse_ether, Address, Bytes, U256},
     providers::{Provider, ProviderBuilder, WalletProvider},
     signers::{
         k256::ecdsa::SigningKey,
@@ -208,15 +208,15 @@ struct Args {
     epoch_height: u64,
 
     /// The initial supply of the tokens.
-    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = 3590000000)]
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = parse_ether("3590000000").unwrap())]
     initial_token_supply: U256,
 
     /// The name of the tokens.
-    #[clap(long, env = "ESP_TOKEN_NAME", default_value_t = "Espresso".to_string())]
+    #[clap(long, env = "ESP_TOKEN_NAME", default_value = "Espresso")]
     token_name: String,
 
     /// The symbol of the tokens.
-    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value_t = "ESP".to_string())]
+    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP")]
     token_symbol: String,
 
     #[clap(flatten)]
@@ -266,6 +266,9 @@ async fn main() -> anyhow::Result<()> {
         epoch_height,
         contracts,
         l1_deployment,
+        initial_token_supply,
+        token_name,
+        token_symbol,
     } = cli_params;
 
     logging.init();
@@ -475,8 +478,8 @@ async fn main() -> anyhow::Result<()> {
                 admin,
                 admin,
                 initial_token_supply,
-                token_name,
-                token_symbol,
+                token_name.clone(),
+                token_symbol.clone(),
             )
             .await?;
             if let Some(multisig) = multisig_address {
