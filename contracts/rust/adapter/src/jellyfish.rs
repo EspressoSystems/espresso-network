@@ -459,7 +459,6 @@ impl From<ChallengesSol> for Challenges<Fr> {
 
 impl ChallengesSol {
     /// dummy challenges
-    #[allow(dead_code)]
     pub fn dummy<R: Rng>(rng: &mut R) -> Self {
         let alpha = Fr::rand(rng);
         let alpha_2 = alpha * alpha;
