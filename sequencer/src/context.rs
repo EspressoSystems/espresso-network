@@ -166,11 +166,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         // Configure the request-response protocol
         let request_response_config = RequestResponseConfig {
             incoming_request_ttl: Duration::from_secs(40),
-            response_send_timeout: Duration::from_secs(10),
-            request_batch_size: 15,
+            incoming_request_timeout: Duration::from_secs(5),
+            incoming_response_timeout: Duration::from_secs(5),
+            request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
-            max_outgoing_responses: 20,
-            response_validate_timeout: Duration::from_secs(1),
+            max_incoming_requests: 10,
+            max_incoming_requests_per_key: 1,
             max_incoming_responses: 20,
         };
 
