@@ -1077,8 +1077,8 @@ mod tests {
             token.balanceOf(init_recipient).call().await?._0,
             initial_supply.into(),
         );
-        assert_eq!(token.name().call().await?._0, name);
-        assert_eq!(token.symbol().call().await?._0, symbol);
+        assert_eq!(token.name().clone().call().await?._0, name);
+        assert_eq!(token.symbol().clone().call().await?._0, symbol);
 
         Ok(())
     }
