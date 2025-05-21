@@ -31,20 +31,22 @@ jobs:
       matrix:
         include:
           - binary: sequencer
-            shared-key:  postgres
+            shared-key: postgres
             save-cache: false
 
           - binary: other
-            shared-key:  postgres
+            shared-key: postgres
             save-cache: true
 
           - binary: sequencer-sqlite
-            shared-key: embedded
+            # uses it's own lock file
+            shared-key: sequencer-embedded
             save-cache: true
 
           - binary: espresso-dev-node
-            shared-key: embedded
-            save-cache: false
+            # uses differend features testing,emdbedded-db
+            shared-key: espresso-dev-node
+            save-cache: true
 
     steps:
       - uses: rui314/setup-mold@v1
@@ -94,20 +96,22 @@ jobs:
       matrix:
         include:
           - binary: sequencer
-            shared-key:  postgres
+            shared-key: postgres
             save-cache: false
 
           - binary: other
-            shared-key:  postgres
+            shared-key: postgres
             save-cache: true
 
           - binary: sequencer-sqlite
-            shared-key: embedded
+            # uses it's own lock file
+            shared-key: sequencer-embedded
             save-cache: true
 
           - binary: espresso-dev-node
-            shared-key: embedded
-            save-cache: false
+            # uses differend features testing,emdbedded-db
+            shared-key: espresso-dev-node
+            save-cache: true
 
     steps:
       - uses: rui314/setup-mold@v1
