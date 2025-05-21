@@ -398,7 +398,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             membership_coordinator,
             storage,
             metrics,
-            marketplace_config,
             external_event_stream,
             internal_event_stream,
             ..
@@ -426,7 +425,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             initializer,
             metrics,
             storage,
-            marketplace_config,
             (internal_sender, internal_reciever.activate()), // I think we don't need this one anyway
             (external_sender, external_reciever.activate()), // TODO probably not the correct place to activate
         )
