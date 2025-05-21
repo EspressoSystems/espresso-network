@@ -871,7 +871,6 @@ pub async fn call_upgrade_proxy_script(
         .stderr(Stdio::piped())
         .output();
 
-    println!("output: {:?}", output);
     let output = output.unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1320,12 +1319,13 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "nodejs")]
+    #[cfg(feature = "safesdk")]
     #[tokio::test]
     async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(false, true).await
     }
 
+    #[cfg(feature = "safesdk")]
     #[tokio::test]
     #[ignore]
     async fn test_upgrade_light_client_to_v2_multisig_owner_real_run() -> Result<()> {
