@@ -40,7 +40,11 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') || github.event_name == 'workflow_dispatch' }}
+          save-if: >
+            ${{ (matrix.binary == 'other') && (
+            github.ref == 'refs/heads/main'
+            || startsWith(github.ref, 'refs/heads/release-')
+            || github.event_name == 'workflow_dispatch' ) }}
           cache-provider: github
 
       - name: Build ${{ matrix.binary }}
@@ -82,7 +86,11 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') || github.event_name == 'workflow_dispatch' }}
+          save-if: >
+            ${{ (matrix.binary == 'other') && (
+            github.ref == 'refs/heads/main'
+            || startsWith(github.ref, 'refs/heads/release-')
+            || github.event_name == 'workflow_dispatch' ) }}
           cache-provider: buildjet
 
       - name: Build ${{ matrix.binary }}
