@@ -57,7 +57,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: ${{ matrix.shared-key }}
           save-if: >
             ${{ matrix.save-cache && (
@@ -122,7 +122,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v2-rust
+          prefix-key: v3-rust
           shared-key: ${{ matrix.shared-key }}
           save-if: >
             ${{ matrix.save-cache && (
