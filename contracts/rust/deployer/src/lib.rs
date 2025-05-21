@@ -4,7 +4,7 @@ use alloy::{
     contract::RawCallBuilder,
     hex::{FromHex, ToHexExt},
     network::{Ethereum, EthereumWallet, TransactionBuilder},
-    primitives::{utils::parse_ether, Address, Bytes, U256},
+    primitives::{Address, Bytes, U256},
     providers::{
         fillers::{FillProvider, JoinFill, WalletFiller},
         utils::JoinedRecommendedFillers,

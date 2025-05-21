@@ -66,7 +66,7 @@ impl TestSystem {
 
         // `EspToken.sol`
         let token_impl = EspToken::deploy(provider.clone()).await?;
-        let initial_supply = 3590000000;
+        let initial_supply = U256::from(3590000000u64);
         let token_name = "Espresso".to_string();
         let token_symbol = "ESP".to_string();
         let data = token_impl

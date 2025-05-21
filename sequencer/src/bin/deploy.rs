@@ -148,7 +148,7 @@ struct Options {
     initial_token_grant_recipient: Option<Address>,
 
     /// The initial supply of the tokens.
-    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = 3590000000)]
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = U256::from(3590000000u64))]
     initial_token_supply: U256,
 
     /// The name of the tokens.
