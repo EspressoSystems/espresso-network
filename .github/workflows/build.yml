@@ -51,7 +51,7 @@ jobs:
               cargo build --locked --release --bin sequencer
               ;;
             "sequencer-sqlite")
-              cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml
+              cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
               ;;
             "espresso-dev-node")
               cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
