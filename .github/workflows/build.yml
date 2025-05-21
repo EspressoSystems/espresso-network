@@ -21,32 +21,18 @@ env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
   DOCKER_PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-  ARTIFACT_PATHS: |
-    target/release/cdn-broker
-    target/release/cdn-marshal
-    target/release/cdn-whitelist
-    target/release/cli
-    target/release/deploy
-    target/release/espresso-bridge
-    target/release/espresso-dev-node
-    target/release/keygen
-    target/release/nasty-client
-    target/release/node-metrics
-    target/release/orchestrator
-    target/release/permissionless-builder
-    target/release/pub-key
-    target/release/reset-storage
-    target/release/sequencer
-    target/release/sequencer-sqlite
-    target/release/staking-cli
-    target/release/state-prover
-    target/release/state-relay-server
-    target/release/submit-transactions
-    target/release/utils
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04-8core
+  build-matrix:
+    name: Build ${{ matrix.binary }} on ${{ matrix.arch }}
+    # runs-on: ${{ matrix.arch == 'x86_64' && 'ubuntu-24.04-8core' || 'buildjet-8vcpu-ubuntu-2204-arm' }}
+    runs-on: ${{ matrix.arch == 'x86_64' && 'ubuntu-latest' || 'buildjet-8vcpu-ubuntu-2204-arm' }}
+    if: ${{ matrix.arch == 'x86_64' || github.event_name != 'pull_request' }}
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+        binary: [sequencer, sequencer-sqlite, espresso-dev-node, other]
+
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -57,62 +43,36 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
+          shared-key: build
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-provider: github
+          cache-provider: ${{ matrix.arch == 'x86_64' && 'github' || 'buildjet' }}
 
-      - name: Build
-        # Build in release without `testing` feature, this should work without `hotshot_example` config.
+      - name: Build ${{ matrix.binary }}
         run: |
-          cargo build --locked --release --workspace
+          case "${{ matrix.binary }}" in
+            "sequencer")
+              cargo build --locked --release --bin sequencer
+              ;;
+            "sequencer-sqlite")
+              cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml
+              ;;
+            "espresso-dev-node")
+              cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
+              ;;
+            "other")
+              cargo build --locked --release --workspace \
+                --exclude sequencer \
+                --exclude espresso-dev-node \
+                --exclude sequencer-sqlite
+              ;;
+          esac
 
-      - name: Build sequencer-sqlite
-        run: cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
-
-      - name: Build Espresso Dev Node
-        # Espresso Dev Node currently requires testing feature, so it is built separately.
-        run: |
-          cargo build --locked --release --features "testing embedded-db" --bin espresso-dev-node
-
-      - name: Upload artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: x86_64-unknown-linux-gnu-services
-          path: ${{ env.ARTIFACT_PATHS }}
-
-  build-arm:
-    if: github.event_name != 'pull_request'
-    runs-on: buildjet-8vcpu-ubuntu-2204-arm
-    env:
-      CARGO_BUILD_JOBS: '6'
-    steps:
-      - uses: rui314/setup-mold@v1
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-provider: buildjet
-
-      - name: Build
-        run: |
-          cargo build --locked --release --workspace
-
-      - name: Build sequencer-sqlite
-        run: cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
-
-      - name: Build Espresso Dev Node
-        # Espresso Dev Node currently requires testing feature, so it is built separately.
-        run: |
-          cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: aarch64-unknown-linux-gnu-services
-          path: ${{ env.ARTIFACT_PATHS }}
+          name: ${{ matrix.arch }}-${{ matrix.binary }}
+          path: |
+            target/release/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
   build-dockers:
     runs-on: ubuntu-latest
@@ -149,15 +109,17 @@ jobs:
       - name: Download executables AMD
         uses: actions/download-artifact@v4
         with:
-          name: x86_64-unknown-linux-gnu-services
+          pattern: x86_64-*
           path: target/amd64/release
+          merge_multiple: true
 
       - name: Download executables ARM
         if: github.event_name != 'pull_request'
         uses: actions/download-artifact@v4
         with:
-          name: aarch64-unknown-linux-gnu-services
+          pattern: aarch64-*
           path: target/arm64/release
+          merge_multiple: true
 
       - name: Setup QEMU
         if: ${{ github.event_name != 'pull_request' }}
