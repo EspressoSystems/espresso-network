@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::traits::{
@@ -13,6 +14,7 @@ use crate::traits::{
     storage::StoreDrbProgressFn,
 };
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DrbInput {
     /// The epoch we are calculating the result for
     pub epoch: u64,
@@ -78,7 +80,7 @@ pub fn compute_drb_result(
     let mut iteration = drb_input.iteration;
     let remaining_iterations = DIFFICULTY_LEVEL
       .checked_sub(iteration)
-      .unwrap_or_else( ||
+      .unwrap_or_else(||
         panic!(
           "DRB difficulty level {} exceeds the iteration {} of the input we were given. This is a fatal error", 
           DIFFICULTY_LEVEL,
@@ -101,9 +103,17 @@ pub fn compute_drb_result(
 
         iteration += DRB_CHECKPOINT_INTERVAL;
 
-        let storage = store_drb_progress.clone();
+        let updated_drb_input = DrbInput {
+            epoch: drb_input.epoch,
+            iteration,
+            value: partial_drb_result,
+        };
+
+        let store_drb_progress = store_drb_progress.clone();
         tokio::spawn(async move {
-            storage(drb_input.epoch, iteration, partial_drb_result).await;
+            if let Err(e) = store_drb_progress(updated_drb_input).await {
+                tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+            }
         });
     }
 

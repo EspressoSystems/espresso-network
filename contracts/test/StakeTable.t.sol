@@ -1443,6 +1443,22 @@ contract StakeTableUpgradeTest is Test {
         StakeTableV2(proxy).updateExitEscrowPeriod(100 days);
         vm.stopPrank();
     }
+
+    function test_RevertWhen_DeprecatedFunctionsAreCalled() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        bytes memory initData = "";
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+    }
 }
 
 contract StakeTableTimelockTest is Test {

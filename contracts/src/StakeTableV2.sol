@@ -41,6 +41,9 @@ contract StakeTableV2 is StakeTable {
     /// The exit escrow period is invalid (either too short or too long)
     error ExitEscrowPeriodInvalid();
 
+    /// The function is deprecated as it was replaced by a new function
+    error DeprecatedFunction();
+
     constructor() {
         _disableInitializers();
     }
@@ -129,5 +132,24 @@ contract StakeTableV2 is StakeTable {
         }
         exitEscrowPeriod = newExitEscrowPeriod;
         emit ExitEscrowPeriodUpdated(newExitEscrowPeriod);
+    }
+
+    // deprecate previous registration function
+    function registerValidator(
+        BN254.G2Point memory,
+        EdOnBN254.EdOnBN254Point memory,
+        BN254.G1Point memory,
+        uint16
+    ) external pure override {
+        revert DeprecatedFunction();
+    }
+
+    // deprecate previous updateConsensusKeys function
+    function updateConsensusKeys(
+        BN254.G2Point memory,
+        EdOnBN254.EdOnBN254Point memory,
+        BN254.G1Point memory
+    ) external pure override {
+        revert DeprecatedFunction();
     }
 }
