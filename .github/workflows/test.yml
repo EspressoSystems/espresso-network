@@ -264,6 +264,33 @@ jobs:
           --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 20
 
+  test-go-sdk:
+    needs: build-test-bins
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - uses: actions/checkout@v4
+
+      - name: Build verification module
+        run: |
+          nix develop --accept-flake-config -c just build-go-crypto-helper
+
+      - name: Test
+        run: |
+          nix develop --accept-flake-config -c just test-go
+
   test-integration:
     needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]
     strategy:

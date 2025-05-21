@@ -1,0 +1,32 @@
+
+[package]
+name = "espresso-crypto-helper"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+crate-type = ["cdylib"]
+
+[dependencies]
+jf-rescue = { workspace = true, features = ["std"] }
+
+ark-ed-on-bn254 = { workspace = true }
+ark-ff = { workspace = true }
+ark-serialize = { workspace = true }
+committable = { version = "0.2", features = ["ark-serialize"] }
+espresso-types = { path = "../../types" }
+ethers = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-types = { workspace = true }
+jf-crhf = { workspace = true }
+jf-merkle-tree = { workspace = true, features = ["std"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tagged-base64 = { workspace = true }
+
+# https://tikv.github.io/doc/openssl/index.html
+# We need this for the target `aarch64-unknown-linux-gnu` in CI.
+# This can be removed if we figure out this build issue.
+openssl = { version = "0.10", features = ["vendored"] }
