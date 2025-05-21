@@ -261,7 +261,8 @@ where
                         epoch
                     );
                     // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
-                    let (tx, rx) = broadcast(1);
+                    let (mut tx, rx) = broadcast(1);
+                    tx.set_overflow(true);
                     map_lock.insert(try_epoch, rx.deactivate());
                     drop(map_lock);
                     fetch_epochs.push((try_epoch, tx));
@@ -311,12 +312,16 @@ where
                 epoch
             );
             // Signal the other tasks about the success
-            let _ = tx
-                .broadcast_direct(Ok(EpochMembership {
-                    epoch: Some(current_fetch_epoch),
-                    coordinator: self.clone(),
-                }))
-                .await;
+            if let Ok(Some(res)) = tx.try_broadcast(Ok(EpochMembership {
+                epoch: Some(current_fetch_epoch),
+                coordinator: self.clone(),
+            })) {
+                tracing::warn!(
+                    "The catchup channel for epoch {} was overflown, dropped message {:?}",
+                    current_fetch_epoch,
+                    res.map(|em| em.epoch)
+                );
+            }
 
             tracing::error!(
                 "Remove from map epoch {}, request epoch is {}",
