@@ -1,0 +1,15 @@
+# Set linker flags for macOS dynamic library builds to control the install_name.
+# This ensures that the produced .dylib uses @rpath for its install name, making
+# it relocatable and easier for consumers to load at runtime, regardless of the
+# absolute path where the library is installed.
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,-install_name,@rpath/libespresso_crypto_helper-aarch64-apple-darwin.dylib",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,-install_name,@rpath/libespresso_crypto_helper-x86_64-apple-darwin.dylib",
+]

@@ -34,12 +34,13 @@ members = [
     "hotshot-state-prover",
     "node-metrics",
     "request-response",
+    "sdks/crypto-helper",
     "sequencer",
     "staking-cli",
     "tests",
     "types",
     "utils",
-    "vid"
+    "vid",
 ]
 
 exclude = ["sequencer-sqlite"]
@@ -151,7 +152,7 @@ hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 hotshot-example-types = { path = "crates/hotshot/example-types" }
 
 # VID import
-vid = { path = "vid", features = [ "parallel", "keccak256" ] }
+vid = { path = "vid", features = ["parallel", "keccak256"] }
 
 jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.5.1", features = [
     "test-apis",
@@ -212,7 +213,7 @@ serde_json = "^1.0.113"
 staking-cli = { path = "./staking-cli" }
 tempfile = "3.10"
 toml = "0.8"
-url = { version = "2.3", features = [ "serde" ] }
+url = { version = "2.3", features = ["serde"] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "8.3", features = ["git", "gitcl"] }
