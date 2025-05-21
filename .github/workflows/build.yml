@@ -40,11 +40,11 @@ jobs:
 
           - binary: sequencer-sqlite
             shared-key: embedded
-            save-cache: false
+            save-cache: true
 
           - binary: espresso-dev-node
             shared-key: embedded
-            save-cache: true
+            save-cache: false
 
     steps:
       - uses: rui314/setup-mold@v1
@@ -55,6 +55,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: v2-rust
           shared-key: ${{ matrix.shared-key }}
           save-if: >
             ${{ matrix.save-cache && (
@@ -102,11 +103,11 @@ jobs:
 
           - binary: sequencer-sqlite
             shared-key: embedded
-            save-cache: false
+            save-cache: true
 
           - binary: espresso-dev-node
             shared-key: embedded
-            save-cache: true
+            save-cache: false
 
     steps:
       - uses: rui314/setup-mold@v1
@@ -117,6 +118,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: v2-rust
           shared-key: ${{ matrix.shared-key }}
           save-if: >
             ${{ matrix.save-cache && (
