@@ -25,4 +25,4 @@ else
     exit 1
 fi
 
-ts-node "$path" "$@"
+npx ts-node "$path" "$@"
