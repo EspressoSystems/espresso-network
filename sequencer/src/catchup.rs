@@ -233,16 +233,56 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         my_own_validator_config: ValidatorConfig<SeqTypes>,
     ) -> anyhow::Result<NetworkConfig<SeqTypes>> {
         self.backoff()
-            .retry(self, move |provider, retry| {
+            .retry(self, move |provider, _retry| {
                 let my_own_validator_config = my_own_validator_config.clone();
+
                 async move {
-                    let cfg = provider
-                        .fetch(retry, |client| {
-                            client.get::<PublicNetworkConfig>("config/hotshot").send()
-                        })
-                        .await?;
-                    cfg.into_network_config(my_own_validator_config)
-                        .context("fetched config, but failed to convert to private config")
+                    for client in &provider.clients {
+                        // Calculate the config URL
+                        let config_url = client.url.join("config/hotshot").unwrap();
+
+                        // Make the request
+                        let response = match reqwest::get(config_url.to_string()).await {
+                            Ok(response) => response,
+                            Err(err) => {
+                                tracing::warn!(
+                                    peer = %client.url,
+                                    "error fetching config: {err:#}"
+                                );
+                                continue;
+                            },
+                        };
+
+                        // Parse the response
+                        let config = match response.json::<PublicNetworkConfig>().await {
+                            Ok(config) => config,
+                            Err(err) => {
+                                tracing::warn!(
+                                    peer = %client.url,
+                                    "error parsing config: {err:#}"
+                                );
+                                continue;
+                            },
+                        };
+
+                        // Convert the config into the public config
+                        let public_config =
+                            match config.into_network_config(my_own_validator_config.clone()) {
+                                Ok(public_config) => public_config,
+                                Err(err) => {
+                                    tracing::warn!(
+                                        peer = %client.url,
+                                        "error converting config: {err:#}"
+                                    );
+                                    continue;
+                                },
+                            };
+
+                        // Return the public config
+                        return anyhow::Ok(public_config);
+                    }
+
+                    Err(anyhow::anyhow!("no valid config found"))
                 }
                 .boxed()
             })

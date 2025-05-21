@@ -103,6 +103,7 @@ rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 request-response = { path = "../request-response" }
+reqwest = { workspace = true }
 semver = { workspace = true }
 sequencer-utils = { path = "../utils" }
 serde = { workspace = true }
