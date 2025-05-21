@@ -64,18 +64,15 @@ jobs:
               ;;
           esac
 
-      - name: Remove everything except binaries from target/release directory
+      - name: Move binaries to upload directory
         shell: bash
         run: |
-          cd target/release
-          shopt -s dotglob nullglob
-          for item in *; do
+          mkdir -p upload
+          for item in target/release/*; do
             if [[ -f "$item" && -x "$item" ]]; then
-              echo "keeping $item binary"
+              mv -v "$item" ./upload
               continue
             fi
-            echo "removing $item"
-            rm -rf "$item"
           done
 
       - name: Upload Artifacts
@@ -83,7 +80,7 @@ jobs:
         with:
           name: x86-${{ matrix.binary }}
           path: |
-            target/release/${{ matrix.binary == 'other' && '*' || matrix.binary }}
+            upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
   build-arm:
     name: Build ${{ matrix.binary }}
@@ -127,12 +124,22 @@ jobs:
               ;;
           esac
 
+      - name: Move binaries to upload directory
+        run: |
+          mkdir -p upload
+          for item in target/release/*; do
+            if [[ -f "$item" && -x "$item" ]]; then
+              mv -v "$item" ./upload
+              continue
+            fi
+          done
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: arm-${{ matrix.binary }}
           path: |
-            target/release/${{ matrix.binary == 'other' && '*' || matrix.binary }}
+            upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
   build-dockers:
     runs-on: ubuntu-latest
@@ -180,6 +187,12 @@ jobs:
           pattern: arm-*
           path: target/arm64/release
           merge-multiple: true
+
+      - name: DEBUG binaries
+        run: |
+          # List the binaries in the target directory
+          echo "Binaries in target/amd64/release:"
+          ls -lah target/amd64/release
 
       - name: Setup QEMU
         if: ${{ github.event_name != 'pull_request' }}
