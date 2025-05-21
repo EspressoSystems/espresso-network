@@ -1319,6 +1319,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "nodejs")]
     #[tokio::test]
     async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(false, true).await
