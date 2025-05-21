@@ -1072,8 +1072,8 @@ mod tests {
             rand_owner,
             init_recipient,
             initial_supply,
-            &name,
-            &symbol,
+            name,
+            symbol,
         )
         .await?;
         let token = EspToken::new(addr, &provider);
@@ -1111,8 +1111,8 @@ mod tests {
             token_owner,
             init_recipient,
             initial_supply,
-            &token_name,
-            &token_symbol,
+            token_name,
+            token_symbol,
         )
         .await?;
 

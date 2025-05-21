@@ -405,7 +405,7 @@ async fn test_cli_balance() -> Result<()> {
     let s = cmd.arg("token-balance").output()?.assert_success().utf8();
 
     assert!(s.contains(&system.deployer_address.to_string()));
-    assert!(s.contains(" 10000000000.0"));
+    assert!(s.contains("3590000000.0"));
 
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";

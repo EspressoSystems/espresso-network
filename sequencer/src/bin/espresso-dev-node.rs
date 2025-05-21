@@ -212,11 +212,11 @@ struct Args {
     initial_token_supply: U256,
 
     /// The name of the tokens.
-    #[clap(long, env = "ESP_TOKEN_NAME", default_value = "Espresso")]
+    #[clap(long, env = "ESP_TOKEN_NAME", default_value = "Espresso".to_string())]
     token_name: String,
 
     /// The symbol of the tokens.
-    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP")]
+    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP".to_string())]
     token_symbol: String,
 
     #[clap(flatten)]
