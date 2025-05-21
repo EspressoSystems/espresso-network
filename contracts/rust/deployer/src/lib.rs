@@ -1231,6 +1231,7 @@ mod tests {
     // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
     // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
     // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
+    #[cfg(feature = "safesdk")]
     async fn test_upgrade_light_client_to_v2_multisig_owner_helper(
         is_mock: bool,
         dry_run: bool,
