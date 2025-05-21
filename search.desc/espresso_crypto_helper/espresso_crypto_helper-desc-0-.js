@@ -1,0 +1,1 @@
+searchState.loadedDescShard("espresso_crypto_helper", 0, "Safety\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.")

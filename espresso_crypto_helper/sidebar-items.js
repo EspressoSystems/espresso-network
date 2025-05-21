@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["field_to_u256","free_error_string","hash_txns","slice_from_raw_parts","verify_merkle_proof_helper","verify_namespace_helper"],"macro":["handle_result"],"struct":["VerificationResult"],"type":["CircuitField","Proof"]};
