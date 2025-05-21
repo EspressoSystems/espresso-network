@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["null_store_drb_progress_fn","store_drb_input_impl","store_drb_progress_fn","store_drb_result_fn","store_drb_result_impl"],"trait":["Storage"],"type":["StoreDrbProgressFn","StoreDrbResultFn"]};
+window.SIDEBAR_ITEMS = {"fn":["load_drb_input_impl","load_drb_progress_fn","null_load_drb_progress_fn","null_store_drb_progress_fn","store_drb_input_impl","store_drb_progress_fn","store_drb_result_fn","store_drb_result_impl"],"trait":["Storage"],"type":["LoadDrbProgressFn","StoreDrbProgressFn","StoreDrbResultFn"]};
