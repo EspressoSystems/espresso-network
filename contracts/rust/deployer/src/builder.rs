@@ -1,7 +1,7 @@
 //! builder pattern for
 
 use alloy::{
-    primitives::{utils::parse_ether, Address, U256},
+    primitives::{Address, U256},
     providers::WalletProvider,
 };
 use anyhow::{Context, Result};
@@ -79,15 +79,15 @@ impl DeployerArgs {
                     .unwrap_or_else(|| "ESP".to_string());
                 let initial_supply = self
                     .initial_token_supply
-                    .unwrap_or_else(|| parse_ether("3590000000").unwrap().into());
+                    .unwrap_or_else(|| U256::from(3590000000u64));
                 let addr = crate::deploy_token_proxy(
                     provider,
                     contracts,
                     admin,
                     token_recipient,
                     initial_supply,
-                    token_name,
-                    token_symbol,
+                    &token_name,
+                    &token_symbol,
                 )
                 .await?;
 

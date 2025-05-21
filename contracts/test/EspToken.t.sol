@@ -16,6 +16,10 @@ contract EspTokenUpgradabilityTest is Test {
     address public admin;
     address tokenGrantRecipient;
     EspToken public token;
+    uint256 public initialSupply = 3_590_000_000;
+    uint256 public initialSupplyEther = initialSupply * 10 ** 18;
+    string public name = "Espresso";
+    string public symbol = "ESP";
 
     function setUp() public {
         tokenGrantRecipient = makeAddr("tokenGrantRecipient");
@@ -26,9 +30,9 @@ contract EspTokenUpgradabilityTest is Test {
             "initialize(address,address,uint256,string,string)",
             admin,
             tokenGrantRecipient,
-            3_590_000_000,
-            "Espresso Token",
-            "ESP"
+            initialSupply,
+            name,
+            symbol
         );
         ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
         token = EspToken(payable(address(proxy)));
@@ -37,9 +41,9 @@ contract EspTokenUpgradabilityTest is Test {
     // For now we just check that the contract is deployed and minted balance is as expected.
 
     function testDeployment() public payable {
-        assertEq(token.name(), "Espresso Token");
-        assertEq(token.symbol(), "ESP");
-        assertEq(token.balanceOf(tokenGrantRecipient), 3_590_000_000 ether);
+        assertEq(token.name(), name);
+        assertEq(token.symbol(), symbol);
+        assertEq(token.balanceOf(tokenGrantRecipient), initialSupplyEther);
     }
 
     function testUpgrade() public {
@@ -47,9 +51,9 @@ contract EspTokenUpgradabilityTest is Test {
         vm.startPrank(admin);
         token.upgradeToAndCall(address(tokenV2), "");
         vm.stopPrank();
-        assertEq(token.name(), "Espresso");
-        assertEq(token.symbol(), "ESP");
-        assertEq(token.balanceOf(tokenGrantRecipient), 3_590_000_000 ether);
+        assertEq(token.name(), name);
+        assertEq(token.symbol(), symbol);
+        assertEq(token.balanceOf(tokenGrantRecipient), initialSupplyEther);
         (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion) = token.getVersion();
         assertEq(majorVersion, 2);
         assertEq(minorVersion, 0);

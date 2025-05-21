@@ -8,7 +8,7 @@ use std::{
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::{utils::parse_ether, Address, Bytes, U256},
+    primitives::{Address, Bytes, U256},
     providers::{Provider, ProviderBuilder, WalletProvider},
     signers::{
         k256::ecdsa::SigningKey,
@@ -208,7 +208,7 @@ struct Args {
     epoch_height: u64,
 
     /// The initial supply of the tokens.
-    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = parse_ether("3590000000").unwrap())]
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = 3590000000)]
     initial_token_supply: U256,
 
     /// The name of the tokens.

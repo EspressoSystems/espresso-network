@@ -1,6 +1,6 @@
 use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
-use alloy::primitives::{utils::parse_ether, Address, U256};
+use alloy::primitives::{Address, U256};
 use clap::Parser;
 use espresso_contract_deployer::{
     build_provider, builder::DeployerArgsBuilder, network_config::light_client_genesis, Contract,
@@ -148,7 +148,7 @@ struct Options {
     initial_token_grant_recipient: Option<Address>,
 
     /// The initial supply of the tokens.
-    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = parse_ether("3590000000").unwrap().into())]
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = 3590000000)]
     initial_token_supply: U256,
 
     /// The name of the tokens.
