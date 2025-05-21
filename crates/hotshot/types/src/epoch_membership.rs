@@ -177,7 +177,6 @@ where
         epoch: TYPES::Epoch,
         epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
     ) {
-        tracing::error!("Fetching epoch membership for epoch {}", epoch);
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
         fetch_epochs.push((epoch, epoch_tx));
@@ -192,31 +191,15 @@ where
             self.catchup_cleanup(epoch, fetch_epochs, err).await;
             return;
         };
-        tracing::error!("First epoch is {}, request epoch is {}", first_epoch, epoch);
 
         // First figure out which epochs we need to fetch
         loop {
-            tracing::error!(
-                "Checking whether we have stake table for epoch {}, request epoch is {}",
-                try_epoch,
-                epoch
-            );
             let has_stake_table = self.membership.read().await.has_stake_table(try_epoch);
             if has_stake_table {
-                tracing::error!(
-                    "We have a stake table for epoch {}, request epoch is {}",
-                    try_epoch,
-                    epoch
-                );
                 // We have this stake table but we need to make sure we have the epoch root of the requested epoch
                 if try_epoch <= TYPES::Epoch::new(epoch.saturating_sub(2)) {
                     break;
                 }
-                tracing::error!(
-                    "We need to fetch the epoch root for epoch {}, request epoch is {}",
-                    try_epoch,
-                    epoch
-                );
                 try_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
             } else {
                 if try_epoch <= first_epoch + 1 {
@@ -233,33 +216,13 @@ where
                     .get(&try_epoch)
                     .map(InactiveReceiver::activate_cloned)
                 {
-                    tracing::error!(
-                        "Another catchup is in progress for epoch {}, request epoch is {}",
-                        try_epoch,
-                        epoch
-                    );
                     // Somebody else is already fetching this epoch, drop the lock and wait for them to finish
                     drop(map_lock);
                     if let Ok(Ok(_)) = rx.recv_direct().await {
-                        tracing::error!(
-                            "We received the epoch {}, request epoch is {}",
-                            try_epoch,
-                            epoch
-                        );
                         break;
                     };
-                    tracing::error!(
-                        "We didn't receive the epoch {}, request epoch is {}",
-                        try_epoch,
-                        epoch
-                    );
                     // If we didn't receive the epoch then we need to try again
                 } else {
-                    tracing::error!(
-                        "No one is fetching epoch {}, request epoch is {}",
-                        try_epoch,
-                        epoch
-                    );
                     // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
                     let (mut tx, rx) = broadcast(1);
                     tx.set_overflow(true);
@@ -271,18 +234,8 @@ where
             };
         }
 
-        tracing::error!(
-            "Epochs to be fetched: {:?}, request epoch is {}",
-            fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>(),
-            epoch
-        );
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            tracing::error!(
-                "Current epoch is {}, request epoch is {}",
-                current_fetch_epoch,
-                epoch
-            );
             let root_leaf = match self.fetch_stake_table(current_fetch_epoch).await {
                 Ok(roof_leaf) => roof_leaf,
                 Err(err) => {
@@ -292,11 +245,6 @@ where
                 },
             };
 
-            tracing::error!(
-                "Calling fetch or calc drb results for epoch {}, request epoch is {}",
-                current_fetch_epoch,
-                epoch
-            );
             if let Err(err) = self
                 .fetch_or_calc_drb_results(current_fetch_epoch, root_leaf)
                 .await
@@ -306,11 +254,6 @@ where
                 return;
             }
 
-            tracing::error!(
-                "Broadcast epoch {}, request epoch is {}",
-                current_fetch_epoch,
-                epoch
-            );
             // Signal the other tasks about the success
             if let Ok(Some(res)) = tx.try_broadcast(Ok(EpochMembership {
                 epoch: Some(current_fetch_epoch),
@@ -323,15 +266,9 @@ where
                 );
             }
 
-            tracing::error!(
-                "Remove from map epoch {}, request epoch is {}",
-                current_fetch_epoch,
-                epoch
-            );
             // Remove the epoch from the catchup map to indicate that the catchup is complete
             self.catchup_map.lock().await.remove(&current_fetch_epoch);
         }
-        tracing::error!("Epoch {} is caught up", epoch);
     }
 
     /// Call this method if you think catchup is in progress for a given epoch
@@ -383,9 +320,15 @@ where
             map_lock.remove(epoch);
         }
         drop(map_lock);
-        for (_, tx) in cancel_epochs {
+        for (cancel_epoch, tx) in cancel_epochs {
             // Signal the other tasks about the failures
-            let _ = tx.broadcast_direct(Err(err.clone())).await;
+            if let Ok(Some(res)) = tx.try_broadcast(Err(err.clone())) {
+                tracing::warn!(
+                    "The catchup channel for epoch {} was overflown during cleanup, dropped message {:?}",
+                    cancel_epoch,
+                    res.map(|em| em.epoch)
+                );
+            }
         }
         tracing::error!("catchup for epoch {:?} failed: {:?}", req_epoch, err);
     }
