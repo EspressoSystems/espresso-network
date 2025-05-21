@@ -46,23 +46,7 @@ jobs:
 
       - name: Build ${{ matrix.binary }}
         run: |
-          case "${{ matrix.binary }}" in
-            "sequencer")
-              cargo build --locked --release --bin sequencer
-              ;;
-            "sequencer-sqlite")
-              cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
-              ;;
-            "espresso-dev-node")
-              cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
-              ;;
-            "other")
-              cargo build --locked --release --workspace \
-                --exclude sequencer \
-                --exclude espresso-dev-node \
-                --exclude sequencer-sqlite
-              ;;
-          esac
+          scripts/ci-build-binary ${{ matrix.binary }}
 
       - name: Move binaries to upload directory
         shell: bash
@@ -106,23 +90,7 @@ jobs:
 
       - name: Build ${{ matrix.binary }}
         run: |
-          case "${{ matrix.binary }}" in
-            "sequencer")
-              cargo build --locked --release --bin sequencer
-              ;;
-            "sequencer-sqlite")
-              cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml
-              ;;
-            "espresso-dev-node")
-              cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
-              ;;
-            "other")
-              cargo build --locked --release --workspace \
-                --exclude sequencer \
-                --exclude espresso-dev-node \
-                --exclude sequencer-sqlite
-              ;;
-          esac
+          scripts/ci-build-binary ${{ matrix.binary }}
 
       - name: Move binaries to upload directory
         run: |
