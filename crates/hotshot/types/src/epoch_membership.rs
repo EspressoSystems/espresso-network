@@ -320,9 +320,15 @@ where
             map_lock.remove(epoch);
         }
         drop(map_lock);
-        for (_, tx) in cancel_epochs {
+        for (cancel_epoch, tx) in cancel_epochs {
             // Signal the other tasks about the failures
-            let _ = tx.broadcast_direct(Err(err.clone())).await;
+            if let Ok(Some(res)) = tx.try_broadcast(Err(err.clone())) {
+                tracing::warn!(
+                    "The catchup channel for epoch {} was overflown during cleanup, dropped message {:?}",
+                    cancel_epoch,
+                    res.map(|em| em.epoch)
+                );
+            }
         }
         tracing::error!("catchup for epoch {:?} failed: {:?}", req_epoch, err);
     }
