@@ -64,6 +64,20 @@ jobs:
               ;;
           esac
 
+      - name: Remove everything except binaries from target/release directory
+        shell: bash
+        run: |
+          cd target/release
+          shopt -s dotglob nullglob
+          for item in *; do
+            if [[ -f "$item" && -x "$item" ]]; then
+              echo "keeping $item binary"
+              continue
+            fi
+            echo "removing $item"
+            rm -rf "$item"
+          done
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -157,7 +171,7 @@ jobs:
         with:
           pattern: x86-*
           path: target/amd64/release
-          merge_multiple: true
+          merge-multiple: true
 
       - name: Download executables ARM
         if: github.event_name != 'pull_request'
@@ -165,7 +179,7 @@ jobs:
         with:
           pattern: arm-*
           path: target/arm64/release
-          merge_multiple: true
+          merge-multiple: true
 
       - name: Setup QEMU
         if: ${{ github.event_name != 'pull_request' }}
