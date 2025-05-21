@@ -7,11 +7,12 @@ on:
     tags:
       # YYYYMMDD
       - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
-  schedule:
-    - cron: "0 0 * * 1"
     paths:
       - 'contracts/rust/deployer/**'
-      - '.github/workflows/rust-node-special-test.yml'
+      - '.github/workflows/test-rust-node.yml'
+  schedule:
+    - cron: "0 0 * * 1"
+    
 env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
@@ -38,5 +39,7 @@ jobs:
         run: |
           npm install
 
+      - name: Build rust
+        run: cargo build -p espresso-contract-deployer --features nodejs
       - name: Run specific Rust test
         run: cargo test -p espresso-contract-deployer --features nodejs test_upgrade_light_client_to_v2_multisig_owner_dry_run -- --nocapture
