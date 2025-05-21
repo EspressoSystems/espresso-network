@@ -1082,7 +1082,7 @@ mod tests {
         let total_supply = token.totalSupply().call().await?._0;
         assert_eq!(
             total_supply,
-            parse_ether(&initial_supply.to_string()).unwrap().into()
+            parse_ether(&initial_supply.to_string()).unwrap()
         );
         assert_eq!(
             token.balanceOf(init_recipient).call().await?._0,
