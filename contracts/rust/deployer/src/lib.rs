@@ -776,7 +776,7 @@ pub async fn deploy_timelock(
 
 #[cfg(test)]
 mod tests {
-    use alloy::{providers::ProviderBuilder, sol_types::SolValue};
+    use alloy::{primitives::utils::parse_ether, providers::ProviderBuilder, sol_types::SolValue};
 
     use super::*;
 
