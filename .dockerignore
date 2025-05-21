@@ -9,4 +9,3 @@ target*/**/examples
 target*/**/incremental
 target*/**/doc
 node_modules/
-docker/
