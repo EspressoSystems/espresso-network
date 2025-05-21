@@ -1,7 +1,9 @@
-use anyhow::bail;
+use std::ops::Add;
+
+use alloy::primitives::{Address, U256};
+use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
-use ethers::types::Address;
-use ethers_conv::ToAlloy;
+use hotshot::types::BLSPubKey;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, ViewNumber},
@@ -19,18 +21,24 @@ use jf_merkle_tree::{
 };
 use num_traits::CheckedSub;
 use serde::{Deserialize, Serialize};
-use std::ops::Add;
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::Version;
+use vbs::version::{StaticVersionType, Version};
 
 use super::{
-    auction::ExecutionError, fee_info::FeeError, instance_state::NodeState, BlockMerkleCommitment,
-    BlockSize, FeeMerkleCommitment, L1Client,
+    fee_info::FeeError,
+    instance_state::NodeState,
+    reward::{find_validator_info, first_two_epochs},
+    v0_1::{
+        IterableFeeInfo, RewardAccount, RewardAmount, RewardMerkleCommitment, RewardMerkleTree,
+        REWARD_MERKLE_TREE_HEIGHT,
+    },
+    v0_3::Validator,
+    BlockMerkleCommitment, BlockSize, EpochVersion, FeeMerkleCommitment, L1Client,
 };
 use crate::{
     traits::StateCatchup,
-    v0_99::{ChainConfig, FullNetworkTx, IterableFeeInfo, ResolvableChainConfig},
+    v0_3::{ChainConfig, ResolvableChainConfig},
     BlockMerkleTree, Delta, FeeAccount, FeeAmount, FeeInfo, FeeMerkleTree, Header, Leaf2,
     NsTableValidationError, PayloadByteLen, SeqTypes, UpgradeType, BLOCK_MERKLE_TREE_HEIGHT,
     FEE_MERKLE_TREE_HEIGHT,
@@ -82,15 +90,20 @@ pub enum ProposalValidationError {
         parent_height: u64,
         proposal_height: u64,
     },
-    #[error("Invalid Block Root Error: expected={expected_root}, proposal={proposal_root}")]
+    #[error("Invalid Block Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
     InvalidBlockRoot {
         expected_root: BlockMerkleCommitment,
         proposal_root: BlockMerkleCommitment,
     },
-    #[error("Invalid Fee Root Error: expected={expected_root}, proposal={proposal_root}")]
+    #[error("Invalid Fee Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
     InvalidFeeRoot {
         expected_root: FeeMerkleCommitment,
         proposal_root: FeeMerkleCommitment,
+    },
+    #[error("Invalid Reward Root Error: expected={expected_root:?}, proposal={proposal_root:?}")]
+    InvalidRewardRoot {
+        expected_root: RewardMerkleCommitment,
+        proposal_root: RewardMerkleCommitment,
     },
     #[error("Invalid namespace table: {0}")]
     InvalidNsTable(NsTableValidationError),
@@ -120,6 +133,8 @@ pub enum ProposalValidationError {
     BuilderValidationError(BuilderValidationError),
     #[error("Invalid proposal: l1 finalized does not match the proposal")]
     InvalidL1Finalized,
+    #[error("reward root not found")]
+    RewardRootNotFound {},
 }
 
 impl StateDelta for Delta {}
@@ -131,6 +146,7 @@ pub struct ValidatedState {
     pub block_merkle_tree: BlockMerkleTree,
     /// Frontier of [`FeeMerkleTree`]
     pub fee_merkle_tree: FeeMerkleTree,
+    pub reward_merkle_tree: RewardMerkleTree,
     /// Configuration [`Header`] proposals will be validated against.
     pub chain_config: ResolvableChainConfig,
 }
@@ -152,11 +168,18 @@ impl Default for ValidatedState {
         )
         .unwrap();
 
+        let reward_merkle_tree = RewardMerkleTree::from_kv_set(
+            REWARD_MERKLE_TREE_HEIGHT,
+            Vec::<(RewardAccount, RewardAmount)>::new(),
+        )
+        .unwrap();
+
         let chain_config = ResolvableChainConfig::from(ChainConfig::default());
 
         Self {
             block_merkle_tree,
             fee_merkle_tree,
+            reward_merkle_tree,
             chain_config,
         }
     }
@@ -189,6 +212,22 @@ impl ValidatedState {
             .unique()
             .filter(|account| {
                 self.fee_merkle_tree
+                    .lookup(*account)
+                    .expect_not_in_memory()
+                    .is_ok()
+            })
+            .collect()
+    }
+
+    pub fn forgotten_reward_accounts(
+        &self,
+        accounts: impl IntoIterator<Item = RewardAccount>,
+    ) -> Vec<RewardAccount> {
+        accounts
+            .into_iter()
+            .unique()
+            .filter(|account| {
+                self.reward_merkle_tree
                     .lookup(*account)
                     .expect_not_in_memory()
                     .is_ok()
@@ -254,6 +293,24 @@ impl ValidatedState {
         }
         Ok(())
     }
+
+    pub fn distribute_rewards(
+        &mut self,
+        delta: &mut Delta,
+        validator: Validator<BLSPubKey>,
+    ) -> anyhow::Result<()> {
+        let reward_state = validator.apply_rewards(self.reward_merkle_tree.clone())?;
+        self.reward_merkle_tree = reward_state;
+
+        // Update delta rewards
+        delta.rewards_delta.insert(RewardAccount(validator.account));
+        delta
+            .rewards_delta
+            .extend(validator.delegators.keys().map(|d| RewardAccount(*d)));
+
+        Ok(())
+    }
+
     /// Charge a fee to an account, transferring the funds to the fee recipient account.
     pub fn charge_fee(&mut self, fee_info: FeeInfo, recipient: FeeAccount) -> Result<(), FeeError> {
         if fee_info.amount == 0.into() {
@@ -392,16 +449,10 @@ pub(crate) struct ValidatedTransition<'a> {
     expected_chain_config: ChainConfig,
     parent: &'a Header,
     proposal: Proposal<'a>,
-    view_number: u64,
 }
 
 impl<'a> ValidatedTransition<'a> {
-    pub(crate) fn new(
-        state: ValidatedState,
-        parent: &'a Header,
-        proposal: Proposal<'a>,
-        view_number: u64,
-    ) -> Self {
+    pub(crate) fn new(state: ValidatedState, parent: &'a Header, proposal: Proposal<'a>) -> Self {
         let expected_chain_config = state
             .chain_config
             .resolve()
@@ -411,13 +462,12 @@ impl<'a> ValidatedTransition<'a> {
             expected_chain_config,
             parent,
             proposal,
-            view_number,
         }
     }
 
     /// Top level validation routine. Performs all validation units in
     /// the given order.
-    /// ```
+    /// ```ignore
     /// self.validate_timestamp()?;
     /// self.validate_builder_fee()?;
     /// self.validate_height()?;
@@ -439,6 +489,7 @@ impl<'a> ValidatedTransition<'a> {
         self.validate_fee()?;
         self.validate_fee_merkle_tree()?;
         self.validate_block_merkle_tree()?;
+        self.validate_reward_merkle_tree()?;
         self.validate_l1_finalized()?;
         self.validate_l1_head()?;
         self.validate_namespace_table()?;
@@ -457,8 +508,9 @@ impl<'a> ValidatedTransition<'a> {
             // cases. The hash seems less useful and explodes the size
             // of the error, so we strip it out.
             return Err(ProposalValidationError::L1FinalizedDecrementing {
-                parent: parent_finalized.map(|block| (block.number, block.timestamp.as_u64())),
-                proposed: proposed_finalized.map(|block| (block.number, block.timestamp.as_u64())),
+                parent: parent_finalized.map(|block| (block.number, block.timestamp.to::<u64>())),
+                proposed: proposed_finalized
+                    .map(|block| (block.number, block.timestamp.to::<u64>())),
             });
         }
         Ok(())
@@ -510,7 +562,7 @@ impl<'a> ValidatedTransition<'a> {
     /// verifying signatures. Signatures are identified by index of fee `Vec`.
     fn validate_builder_fee(&self) -> Result<(), ProposalValidationError> {
         // TODO move logic from stand alone fn to here.
-        if let Err(err) = validate_builder_fee(self.proposal.header, self.view_number) {
+        if let Err(err) = validate_builder_fee(self.proposal.header) {
             return Err(ProposalValidationError::BuilderValidationError(err));
         }
         Ok(())
@@ -533,7 +585,7 @@ impl<'a> ValidatedTransition<'a> {
         }
         Ok(())
     }
-    /// Validate that [`FeeAmount`] (or sum of fees for Marketplace Version) is
+    /// Validate that [`FeeAmount`] that is
     /// sufficient for block size.
     fn validate_fee(&self) -> Result<(), ProposalValidationError> {
         // TODO this should be updated to `base_fee * bundle_size` when we have
@@ -542,7 +594,7 @@ impl<'a> ValidatedTransition<'a> {
             return Err(ProposalValidationError::SomeFeeAmountOutOfRange);
         };
 
-        if amount < self.expected_chain_config.base_fee * self.proposal.block_size {
+        if amount < self.expected_chain_config.base_fee * U256::from(self.proposal.block_size) {
             return Err(ProposalValidationError::InsufficientFee {
                 max_block_size: self.expected_chain_config.max_block_size,
                 base_fee: self.expected_chain_config.base_fee,
@@ -585,6 +637,21 @@ impl<'a> ValidatedTransition<'a> {
 
         Ok(())
     }
+
+    /// Validate [`RewardMerkleTree`] by comparing proposed commitment
+    /// against that stored in [`ValidatedState`].
+    fn validate_reward_merkle_tree(&self) -> Result<(), ProposalValidationError> {
+        let reward_merkle_tree_root = self.state.reward_merkle_tree.commitment();
+        if self.proposal.header.reward_merkle_tree_root() != reward_merkle_tree_root {
+            return Err(ProposalValidationError::InvalidRewardRoot {
+                expected_root: reward_merkle_tree_root,
+                proposal_root: self.proposal.header.reward_merkle_tree_root(),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Validate [`FeeMerkleTree`] by comparing proposed commitment
     /// against that stored in [`ValidatedState`].
     fn validate_fee_merkle_tree(&self) -> Result<(), ProposalValidationError> {
@@ -617,6 +684,9 @@ impl ValidatedState {
             block_merkle_tree: BlockMerkleTree::from_commitment(
                 self.block_merkle_tree.commitment(),
             ),
+            reward_merkle_tree: RewardMerkleTree::from_commitment(
+                self.reward_merkle_tree.commitment(),
+            ),
             chain_config: ResolvableChainConfig::from(self.chain_config.commit()),
         }
     }
@@ -643,12 +713,7 @@ impl From<MerkleTreeError> for FeeError {
 
 /// Validate builder accounts by verifying signatures. All fees are
 /// verified against signature by index.
-fn validate_builder_fee(
-    proposed_header: &Header,
-    view_number: u64,
-) -> Result<(), BuilderValidationError> {
-    let version = proposed_header.version();
-
+fn validate_builder_fee(proposed_header: &Header) -> Result<(), BuilderValidationError> {
     // TODO since we are iterating, should we include account/amount in errors?
     for (fee_info, signature) in proposed_header
         .fee_info()
@@ -662,30 +727,20 @@ fn validate_builder_fee(
             .ok_or(BuilderValidationError::FeeAmountOutOfRange(fee_info.amount))?;
 
         // Verify signatures.
-
-        // TODO Marketplace signatures are placeholders for now. In
-        // finished Marketplace signatures will cover the full
-        // transaction.
-        if version.minor >= 3 {
-            fee_info
-                .account()
-                .validate_sequencing_fee_signature_marketplace(
-                    &signature,
-                    fee_info.amount().as_u64().unwrap(),
-                    view_number,
-                )
-                .then_some(())
-                .ok_or(BuilderValidationError::InvalidBuilderSignature)?;
-        } else {
-            fee_info
-                .account()
-                .validate_fee_signature(
-                    &signature,
-                    fee_info.amount().as_u64().unwrap(),
-                    proposed_header.metadata(),
-                )
-                .then_some(())
-                .ok_or(BuilderValidationError::InvalidBuilderSignature)?;
+        if !fee_info.account().validate_fee_signature(
+            &signature,
+            fee_info.amount().as_u64().unwrap(),
+            proposed_header.metadata(),
+        ) && !fee_info
+            .account()
+            .validate_fee_signature_with_vid_commitment(
+                &signature,
+                fee_info.amount().as_u64().unwrap(),
+                proposed_header.metadata(),
+                &proposed_header.payload_commitment(),
+            )
+        {
+            return Err(BuilderValidationError::InvalidBuilderSignature);
         }
     }
 
@@ -705,6 +760,7 @@ impl ValidatedState {
         parent_leaf: &Leaf2,
         proposed_header: &Header,
         version: Version,
+        view_number: ViewNumber,
     ) -> anyhow::Result<(Self, Delta)> {
         // Clone state to avoid mutation. Consumer can take update
         // through returned value.
@@ -795,6 +851,19 @@ impl ValidatedState {
             chain_config.fee_recipient,
         )?;
 
+        if version >= EpochVersion::version()
+            && !first_two_epochs(parent_leaf.height() + 1, instance).await?
+        {
+            let validator =
+                find_validator_info(instance, &mut validated_state, parent_leaf, view_number)
+                    .await?;
+
+            // apply rewards
+            validated_state
+                .distribute_rewards(&mut delta, validator)
+                .context("failed to distribute rewards")?;
+        }
+
         Ok((validated_state, delta))
     }
 
@@ -811,7 +880,6 @@ impl ValidatedState {
 
         let cf = match upgrade.upgrade_type {
             UpgradeType::Fee { chain_config } => chain_config,
-            UpgradeType::Marketplace { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
         };
 
@@ -847,15 +915,6 @@ impl ValidatedState {
     }
 }
 
-fn _apply_full_transactions(
-    validated_state: &mut ValidatedState,
-    full_network_txs: Vec<FullNetworkTx>,
-) -> Result<(), ExecutionError> {
-    full_network_txs
-        .iter()
-        .try_for_each(|tx| tx.execute(validated_state))
-}
-
 pub async fn get_l1_deposits(
     instance: &NodeState,
     header: &Header,
@@ -866,7 +925,7 @@ pub async fn get_l1_deposits(
         instance
             .l1_client
             .get_finalized_deposits(
-                addr.to_alloy(),
+                addr,
                 parent_leaf
                     .block_header()
                     .l1_finalized()
@@ -906,26 +965,24 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
-        // Unwrapping here is okay as we retry in a loop
-        //so we should either get a validated state or until hotshot cancels the task
         let (validated_state, delta) = self
             // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
             .apply_header(
                 instance,
-                &instance.peers,
+                &instance.state_catchup,
                 parent_leaf,
                 proposed_header,
                 version,
+                ViewNumber::new(view_number),
             )
             .await
-            .unwrap();
+            .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
         // Validate the proposal.
         let validated_state = ValidatedTransition::new(
             validated_state,
             parent_leaf.block_header(),
             Proposal::new(proposed_header, payload_byte_len),
-            view_number,
         )
         .validate()?
         .wait_for_l1(&instance.l1_client)
@@ -958,14 +1015,20 @@ impl HotShotState<SeqTypes> for ValidatedState {
             BlockMerkleTree::from_commitment(block_header.block_merkle_tree_root())
         };
 
+        let reward_merkle_tree = if block_header.reward_merkle_tree_root().size() == 0 {
+            RewardMerkleTree::new(REWARD_MERKLE_TREE_HEIGHT)
+        } else {
+            RewardMerkleTree::from_commitment(block_header.reward_merkle_tree_root())
+        };
+
         Self {
             fee_merkle_tree,
             block_merkle_tree,
+            reward_merkle_tree,
             chain_config: block_header.chain_config(),
         }
     }
     /// Construct a genesis validated state.
-    #[must_use]
     fn genesis(instance: &Self::Instance) -> (Self, Self::Delta) {
         (instance.genesis_state.clone(), Delta::default())
     }
@@ -1054,9 +1117,40 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
     }
 }
 
+impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
+    type Key = Self::Index;
+    type Entry = Self::Element;
+    type T = Sha3Node;
+    type Commit = Self::Commitment;
+    type Digest = Sha3Digest;
+
+    fn state_type() -> &'static str {
+        "reward_merkle_tree"
+    }
+
+    fn header_state_commitment_field() -> &'static str {
+        "reward_merkle_tree_root"
+    }
+
+    fn tree_height() -> usize {
+        REWARD_MERKLE_TREE_HEIGHT
+    }
+
+    fn insert_path(
+        &mut self,
+        key: Self::Key,
+        proof: &MerkleProof<Self::Entry, Self::Key, Self::T, { Self::ARITY }>,
+    ) -> anyhow::Result<()> {
+        match proof.elem() {
+            Some(elem) => self.remember(key, elem, proof)?,
+            None => self.non_membership_remember(key, proof)?,
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use ethers::types::U256;
     use hotshot::{helpers::initialize_logging, traits::BlockPayload};
     use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
     use hotshot_types::{
@@ -1069,10 +1163,8 @@ mod test {
 
     use super::*;
     use crate::{
-        eth_signature_key::{BuilderSignature, EthKeyPair},
-        v0_1, v0_2, v0_3,
-        v0_99::{self, BidTx},
-        BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, Transaction,
+        eth_signature_key::EthKeyPair, v0_1, v0_2, v0_3, BlockSize, FeeAccountProof,
+        FeeMerkleProof, Leaf, Payload, Transaction,
     };
 
     impl Transaction {
@@ -1116,9 +1208,6 @@ mod test {
                     timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
                     ..parent.clone()
                 }),
-                Header::V99(_) => {
-                    panic!("You called `Header.next()` on unimplemented version (v3)")
-                }
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1145,9 +1234,6 @@ mod test {
                     builder_signature: Some(sig),
                     ..header.clone()
                 }),
-                Header::V99(_) => {
-                    panic!("You called `Header.sign()` on unimplemented version (v3)")
-                }
             }
         }
 
@@ -1178,9 +1264,6 @@ mod test {
                     builder_signature: Some(sig),
                     ..parent.clone()
                 }),
-                Header::V99(_) => panic!(
-                    "You called `Header.invalid_builder_signature()` on unimplemented version (v3)"
-                ),
             }
         }
     }
@@ -1194,37 +1277,8 @@ mod test {
                 expected_chain_config,
                 parent,
                 proposal,
-                view_number: 1,
             }
         }
-    }
-
-    pub fn mock_full_network_txs(key: Option<EthKeyPair>) -> Vec<FullNetworkTx> {
-        // if no key is supplied, use `test_key_pair`. Since default `BidTxBody` is
-        // signed with `test_key_pair`, it will verify successfully
-        let key = key.unwrap_or_else(FeeAccount::test_key_pair);
-        vec![FullNetworkTx::Bid(BidTx::mock(key))]
-    }
-
-    #[test]
-    #[ignore]
-    // TODO Currently we have some mismatch causing tests using
-    // `Leaf::genesis` to generate a a Header to
-    // fail. `NodeState::mock` is setting version to `v1` resulting in
-    // an empty `bid_recipient` field on chain_config. We need a way to
-    // pass in desired version, or so some other change before this can be enabled.
-    fn test_apply_full_tx() {
-        let mut state = ValidatedState::default();
-        let txs = mock_full_network_txs(None);
-        // Default key can be verified b/c it is the same that signs the mock tx
-        _apply_full_transactions(&mut state, txs).unwrap();
-
-        // Tx will be invalid if it is signed by a different key than
-        // set in `account` field.
-        let key = FeeAccount::generated_from_seed_indexed([1; 32], 0).1;
-        let invalid = mock_full_network_txs(Some(key));
-        let err = _apply_full_transactions(&mut state, invalid).unwrap_err();
-        assert_eq!(ExecutionError::InvalidSignature, err);
     }
 
     #[test]
@@ -1250,9 +1304,9 @@ mod test {
         // Non-membership proof.
         let (proof2, balance) = FeeAccountProof::prove(&tree, account2).unwrap();
         tracing::info!(?proof2, %balance);
-        assert_eq!(balance, 0.into());
+        assert_eq!(balance, U256::ZERO);
         assert!(matches!(proof2.proof, FeeMerkleProof::Absence(_)));
-        assert_eq!(proof2.verify(&tree.commitment()).unwrap(), 0.into());
+        assert_eq!(proof2.verify(&tree.commitment()).unwrap(), U256::ZERO);
 
         // Test forget/remember. We cannot generate proofs in a completely sparse tree:
         let mut tree = FeeMerkleTree::from_commitment(tree.commitment());
@@ -1731,8 +1785,9 @@ mod test {
     #[test]
     fn test_fee_amount_serde_bincode_unchanged() {
         // For non-human-readable formats, FeeAmount just serializes as the underlying U256.
-        let n = U256::from(123);
-        let amt = FeeAmount(n);
+        // note: for backward compat, it has to be the same as ethers' U256 instead of alloy's
+        let n = ethers_core::types::U256::from(123);
+        let amt = FeeAmount(U256::from(123));
         assert_eq!(
             bincode::serialize(&n).unwrap(),
             bincode::serialize(&amt).unwrap(),
@@ -1791,83 +1846,8 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
-            Header::V99(header) => Header::V99(v0_99::Header {
-                builder_signature: vec![sig],
-                fee_info: vec![FeeInfo::new(account, data)],
-                ..header
-            }),
         };
 
-        validate_builder_fee(&header, *parent.view_number() + 1).unwrap();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_validate_builder_fee_marketplace() {
-        initialize_logging();
-        let max_block_size = 10;
-
-        let validated_state = ValidatedState::default();
-        let instance_state = NodeState::mock_v99().with_chain_config(ChainConfig {
-            base_fee: 1000.into(), // High base fee
-            max_block_size: max_block_size.into(),
-            ..validated_state.chain_config.resolve().unwrap()
-        });
-
-        let parent: Leaf2 =
-            Leaf::genesis::<MockVersions>(&instance_state.genesis_state, &instance_state)
-                .await
-                .into();
-        let header = parent.block_header().clone();
-
-        debug!("{:?}", header.version());
-
-        let key_pair = EthKeyPair::random();
-        let account = key_pair.fee_account();
-
-        let data = header.fee_info()[0].amount().as_u64().unwrap();
-
-        // test v3 sig
-        let sig =
-            FeeAccount::sign_sequencing_fee_marketplace(&key_pair, data, *parent.view_number() + 1)
-                .unwrap();
-        // test dedicated marketplace validation function
-        account
-            .validate_sequencing_fee_signature_marketplace(&sig, data, *parent.view_number() + 1)
-            .then_some(())
-            .unwrap();
-
-        let header = match header {
-            Header::V1(header) => Header::V1(v0_1::Header {
-                builder_signature: Some(sig),
-                fee_info: FeeInfo::new(account, data),
-                ..header
-            }),
-            Header::V2(header) => Header::V2(v0_2::Header {
-                builder_signature: Some(sig),
-                fee_info: FeeInfo::new(account, data),
-                ..header
-            }),
-            Header::V3(header) => Header::V3(v0_3::Header {
-                builder_signature: Some(sig),
-                fee_info: FeeInfo::new(account, data),
-                ..header
-            }),
-            Header::V99(header) => Header::V99(v0_99::Header {
-                builder_signature: vec![sig],
-                fee_info: vec![FeeInfo::new(account, data)],
-                ..header
-            }),
-        };
-
-        let sig: Vec<BuilderSignature> = header.builder_signature();
-        let fee = header.fee_info()[0].amount().as_u64().unwrap();
-
-        // assert expectations
-        account
-            .validate_sequencing_fee_signature_marketplace(&sig[0], fee, *parent.view_number() + 1)
-            .then_some(())
-            .unwrap();
-
-        validate_builder_fee(&header, *parent.view_number() + 1).unwrap();
+        validate_builder_fee(&header).unwrap();
     }
 }

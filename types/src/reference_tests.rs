@@ -23,13 +23,18 @@
 
 use std::{fmt::Debug, path::Path, str::FromStr};
 
+use alloy::primitives::U256;
 use committable::Committable;
-use hotshot_query_service::{availability::QueryablePayload, testing::mocks::MockVersions};
+use hotshot_query_service::{
+    availability::QueryablePayload, testing::mocks::MockVersions, VidCommon,
+};
 use hotshot_types::{
     data::vid_commitment,
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
+    vid::{advz::advz_scheme, avidm::init_avidm_param},
 };
 use jf_merkle_tree::MerkleTreeScheme;
+use jf_vid::VidScheme;
 use pretty_assertions::assert_eq;
 use rand::{Rng, RngCore};
 use sequencer_utils::{commitment_to_u256, test_utils::setup_test};
@@ -42,19 +47,21 @@ use vbs::{
 };
 
 use crate::{
-    v0_1, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId, NsTable, Payload, SeqTypes,
-    Transaction, ValidatedState,
+    v0_1::{self, ADVZNsProof},
+    v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
+    NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
 type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
-type V99Serializer = vbs::Serializer<StaticVersion<0, 99>>;
+
+const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
 async fn reference_payload() -> Payload {
     const NUM_NS_IDS: usize = 3;
     let ns_ids: [NamespaceId; NUM_NS_IDS] = [
-        12648430_u32.into(),
+        REFERENCE_NAMESPACE_ID.into(),
         314159265_u32.into(),
         2718281828_u32.into(),
     ];
@@ -76,6 +83,67 @@ async fn reference_payload() -> Payload {
         .0
 }
 
+async fn reference_ns_proof_legacy() -> ADVZNamespaceProofQueryData {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+    let enc = payload.encode();
+    let mut scheme = advz_scheme(10);
+    let disperse = VidScheme::disperse(&mut scheme, &enc).unwrap();
+
+    let proof = ADVZNsProof::new(&payload, &ns_index, &disperse.common);
+    let transactions = proof
+        .as_ref()
+        .unwrap()
+        .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+    ADVZNamespaceProofQueryData {
+        proof,
+        transactions,
+    }
+}
+
+async fn reference_ns_proof_enum_advz() -> NamespaceProofQueryData {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+    let enc = payload.encode();
+    let mut scheme = advz_scheme(10);
+    let disperse = VidScheme::disperse(&mut scheme, &enc).unwrap();
+
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V0(disperse.common));
+    let transactions = proof
+        .as_ref()
+        .unwrap()
+        .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+    NamespaceProofQueryData {
+        proof,
+        transactions,
+    }
+}
+
+async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+
+    let avid_m_param = init_avidm_param(10).unwrap();
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avid_m_param));
+    let transactions = proof
+        .as_ref()
+        .unwrap()
+        .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+    NamespaceProofQueryData {
+        proof,
+        transactions,
+    }
+}
+
 async fn reference_ns_table() -> NsTable {
     reference_payload().await.ns_table().clone()
 }
@@ -85,7 +153,7 @@ const REFERENCE_NS_TABLE_COMMITMENT: &str = "NSTABLE~tMW0-hGn0563bgYgvsO9r95f2AU
 fn reference_l1_block() -> L1BlockInfo {
     L1BlockInfo {
         number: 123,
-        timestamp: 0x456.into(),
+        timestamp: U256::from(0x456),
         hash: "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             .parse()
             .unwrap(),
@@ -94,14 +162,13 @@ fn reference_l1_block() -> L1BlockInfo {
 
 const REFERENCE_L1_BLOCK_COMMITMENT: &str = "L1BLOCK~4HpzluLK2Isz3RdPNvNrDAyQcWOF2c9JeLZzVNLmfpQ9";
 
-fn reference_chain_config() -> crate::v0_99::ChainConfig {
-    crate::v0_99::ChainConfig {
+fn reference_chain_config() -> crate::v0_3::ChainConfig {
+    crate::v0_3::ChainConfig {
         chain_id: 0x8a19.into(),
         max_block_size: 10240.into(),
         base_fee: 0.into(),
         fee_contract: Some(Default::default()),
         fee_recipient: Default::default(),
-        bid_recipient: Some(Default::default()),
         stake_table_contract: Some(Default::default()),
     }
 }
@@ -109,8 +176,11 @@ fn reference_chain_config() -> crate::v0_99::ChainConfig {
 const REFERENCE_V1_CHAIN_CONFIG_COMMITMENT: &str =
     "CHAIN_CONFIG~L6HmMktJbvnEGgpmRrsiYvQmIBstSj9UtDM7eNFFqYFO";
 
-const REFERENCE_V99_CHAIN_CONFIG_COMMITMENT: &str =
-    "CHAIN_CONFIG~ucfYQZSMbWCUHdtwYMc6vsw-4jDmlu3hi2lGDBxCRpI-";
+const REFERENCE_V2_CHAIN_CONFIG_COMMITMENT: &str =
+    "CHAIN_CONFIG~L6HmMktJbvnEGgpmRrsiYvQmIBstSj9UtDM7eNFFqYFO";
+
+const REFERENCE_V3_CHAIN_CONFIG_COMMITMENT: &str =
+    "CHAIN_CONFIG~eGc90bEB8zFN4GTo2nForM7pox7r4OiHd2LrtgotiNMO";
 
 fn reference_fee_info() -> FeeInfo {
     FeeInfo::new(
@@ -145,6 +215,7 @@ async fn reference_header(version: Version) -> Header {
         ns_table,
         state.fee_merkle_tree.commitment(),
         state.block_merkle_tree.commitment(),
+        state.reward_merkle_tree.commitment(),
         vec![fee_info],
         vec![builder_signature],
         version,
@@ -153,7 +224,7 @@ async fn reference_header(version: Version) -> Header {
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
-const REFERENCE_V99_HEADER_COMMITMENT: &str = "BLOCK~2FW3kAbMvo3UVx3sFbv5nG-xz76LBzMDGnzTGpuITRt6";
+const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~jcrvSlMuQnR2bK6QtraQ4RhlP_F3-v_vae5Zml0rtPbl";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -185,7 +256,8 @@ fn reference_test_without_committable<T: Serialize + DeserializeOwned + Eq + Deb
 
     let file_path = data_dir.join(format!("{name}.json"));
 
-    let expected_bytes = std::fs::read(file_path).unwrap();
+    let expected_bytes =
+        std::fs::read(&file_path).unwrap_or_else(|_| panic!("file {} exists", file_path.display()));
     let expected: Value = serde_json::from_slice(&expected_bytes).unwrap();
 
     // Check that the reference object matches the expected serialized form.
@@ -225,13 +297,14 @@ change in the serialization of this data structure.
     );
 
     // Check that the reference object matches the expected binary form.
-    let expected = std::fs::read(data_dir.join(format!("{name}.bin"))).unwrap();
+    let file_path = data_dir.join(format!("{name}.bin"));
+    let expected =
+        std::fs::read(&file_path).unwrap_or_else(|_| panic!("file {} exists", file_path.display()));
     // todo (ab) : cleanup
     let actual = match version {
         "v1" => V1Serializer::serialize(&reference).unwrap(),
         "v2" => V2Serializer::serialize(&reference).unwrap(),
         "v3" => V3Serializer::serialize(&reference).unwrap(),
-        "v99" => V99Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -261,7 +334,6 @@ change in the serialization of this data structure.
         "v1" => V1Serializer::deserialize(&expected).unwrap(),
         "v2" => V2Serializer::deserialize(&expected).unwrap(),
         "v3" => V3Serializer::deserialize(&expected).unwrap(),
-        "v99" => V99Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -348,12 +420,22 @@ fn test_reference_v1_chain_config() {
 }
 
 #[test]
-fn test_reference_v99_chain_config() {
+fn test_reference_v2_chain_config() {
     reference_test(
-        "v99",
+        "v2",
+        "chain_config",
+        v0_2::ChainConfig::from(reference_chain_config()),
+        REFERENCE_V2_CHAIN_CONFIG_COMMITMENT,
+    );
+}
+
+#[test]
+fn test_reference_v3_chain_config() {
+    reference_test(
+        "v3",
         "chain_config",
         reference_chain_config(),
-        REFERENCE_V99_CHAIN_CONFIG_COMMITMENT,
+        REFERENCE_V3_CHAIN_CONFIG_COMMITMENT,
     );
 }
 
@@ -388,14 +470,15 @@ async fn test_reference_header_v2() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_reference_header_v99() {
+async fn test_reference_header_v3() {
     reference_test(
-        "v99",
+        "v3",
         "header",
-        reference_header(StaticVersion::<0, 99>::version()).await,
-        REFERENCE_V99_HEADER_COMMITMENT,
+        reference_header(StaticVersion::<0, 3>::version()).await,
+        REFERENCE_V3_HEADER_COMMITMENT,
     );
 }
+
 #[test]
 fn test_reference_transaction() {
     reference_test(
@@ -404,4 +487,22 @@ fn test_reference_transaction() {
         reference_transaction(12648430_u32.into(), &mut jf_utils::test_rng()),
         REFERENCE_TRANSACTION_COMMITMENT,
     );
+}
+
+// "legacy" refers to the proof type used before it was an enum.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_ns_proof_legacy() {
+    reference_test_without_committable("v1", "ns_proof_legacy", &reference_ns_proof_legacy().await);
+}
+
+// "V0" does not refer to the version scheme used in this crate but to the NSProof::VO variant.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_ns_proof_enum_advz() {
+    reference_test_without_committable("v3", "ns_proof_V0", &reference_ns_proof_enum_advz().await);
+}
+
+// "V1" does not refer to the version scheme used in this crate but to the NSProof::V1 variant.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reference_ns_proof_enum_avidm() {
+    reference_test_without_committable("v3", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
 }

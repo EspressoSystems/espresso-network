@@ -1,37 +1,30 @@
-pub mod cdn;
 pub mod create_node_validator_api;
 
-use crate::service::client_message::{ClientMessage, InternalClientMessage};
-use crate::service::data_state::{LocationDetails, NodeIdentity};
-use crate::service::server_message::ServerMessage;
+use std::{fmt, future::Future, io::BufRead, pin::Pin, str::FromStr, time::Duration};
+
 use espresso_types::{BackoffParams, SeqTypes};
-use futures::channel::mpsc::SendError;
-use futures::future::Either;
 use futures::{
-    channel::mpsc::{self, Sender},
-    FutureExt, Sink, SinkExt, Stream, StreamExt,
+    channel::mpsc::{self, SendError, Sender},
+    future::{BoxFuture, Either},
+    pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt,
 };
-use hotshot_query_service::Leaf;
-use hotshot_stake_table::vec_based::StakeTable;
-use hotshot_types::light_client::{CircuitField, StateVerKey};
-use hotshot_types::signature_key::BLSPubKey;
-use hotshot_types::traits::{signature_key::StakeTableEntryType, stake_table::StakeTableScheme};
-use hotshot_types::PeerConfig;
+use hotshot_query_service::{
+    availability::{BlockQueryData, Leaf1QueryData},
+    types::HeightIndexed,
+};
+use hotshot_types::{signature_key::BLSPubKey, PeerConfig};
 use prometheus_parse::{Sample, Scrape};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::future::Future;
-use std::io::BufRead;
-use std::pin::Pin;
-use std::str::FromStr;
-use std::time::Duration;
-use tide_disco::socket::Connection;
-use tide_disco::{api::ApiError, Api};
-use tokio::spawn;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use tide_disco::{api::ApiError, socket::Connection, Api};
+use tokio::{spawn, task::JoinHandle};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
+
+use crate::service::{
+    client_message::{ClientMessage, InternalClientMessage},
+    data_state::{LocationDetails, NodeIdentity},
+    server_message::ServerMessage,
+};
 
 /// CONSTANT for protocol major version
 pub const VERSION_MAJ: u16 = 0;
@@ -64,11 +57,11 @@ impl fmt::Display for Error {
         match self {
             Self::UnhandledSurfDisco(status, msg) => {
                 write!(f, "Unhandled Surf Disco Error: {} - {}", status, msg)
-            }
+            },
 
             Self::UnhandledTideDisco(status, msg) => {
                 write!(f, "Unhandled Tide Disco Error: {} - {}", status, msg)
-            }
+            },
         }
     }
 }
@@ -255,7 +248,7 @@ where
                             // let's queue up the next client message to receive
                             next_client_message = socket_stream.next();
                             next_server_message = remaining_server_message;
-                        }
+                        },
                         Either::Right((server_message, remaining_client_message)) => {
                             // Alright, we have a server message, we want to forward it
                             // to the down-stream client.
@@ -277,7 +270,7 @@ where
                             // let's queue up the next server message to receive
                             next_server_message = server_message_receiver.next();
                             next_client_message = remaining_client_message;
-                        }
+                        },
                     }
                 }
 
@@ -297,23 +290,25 @@ where
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PublishHotShotConfig {
-    pub known_nodes_with_stake: Vec<PeerConfig<BLSPubKey>>,
+pub struct PublicHotShotConfig {
+    pub known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
+    pub epoch_height: Option<u64>,
+    pub epoch_start_block: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SequencerConfig {
-    pub config: PublishHotShotConfig,
+    pub config: PublicHotShotConfig,
 }
 
-/// [get_stake_table_from_sequencer] retrieves the stake table from the
+/// [get_config_stake_table_from_sequencer] retrieves the stake table from the
 /// Sequencer.  It expects a [surf_disco::Client] to be provided so that it can
 /// make the request to the Hotshot Query Service.  It will return a
 /// [StakeTable] that is populated with the data retrieved from the Hotshot
 /// Query Service.
-pub async fn get_stake_table_from_sequencer(
+pub async fn get_config_stake_table_from_sequencer(
     client: surf_disco::Client<hotshot_query_service::Error, Version01>,
-) -> Result<StakeTable<BLSPubKey, StateVerKey, CircuitField>, hotshot_query_service::Error> {
+) -> Result<PublicHotShotConfig, hotshot_query_service::Error> {
     let request = client
         .get("config/hotshot")
         // We need to set the Accept header, otherwise the Content-Type
@@ -327,29 +322,37 @@ pub async fn get_stake_table_from_sequencer(
         Err(err) => {
             tracing::info!("retrieve stake table request failed: {}", err);
             return Err(err);
-        }
+        },
     };
 
-    let public_hot_shot_config = sequencer_config.config;
+    Ok(sequencer_config.config)
+}
 
-    let mut stake_table = StakeTable::<BLSPubKey, StateVerKey, CircuitField>::new(
-        public_hot_shot_config.known_nodes_with_stake.len(),
-    );
+// [get_node_stake_table_from_sequencer] is a function that is similar to
+// [get_config_stake_table_from_sequencer], but it retrieves the stake table,
+// and only the stake table from a sequencer for a given epoch.
+pub async fn get_node_stake_table_from_sequencer(
+    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    epoch: u64,
+) -> Result<Vec<PeerConfig<SeqTypes>>, hotshot_query_service::Error> {
+    let path = format!("node/stake-table/{epoch}");
+    // Let's figure out our epoch height
+    let request = client
+        .get(&path)
+        // We need to set the Accept header, otherwise the Content-Type
+        // will be application/octet-stream, and we won't be able to
+        // deserialize the response.
+        .header("Accept", "application/json");
 
-    for node in public_hot_shot_config.known_nodes_with_stake.into_iter() {
-        stake_table
-            .register(
-                *node.stake_table_entry.key(),
-                node.stake_table_entry.stake(),
-                node.state_ver_key,
-            )
-            .expect("registering stake table entry");
-    }
+    let peer_configs: Vec<PeerConfig<SeqTypes>> = match request.send().await {
+        Ok(peer_configs) => peer_configs,
+        Err(err) => {
+            tracing::info!("retrieve stake table request failed: {}", err);
+            return Err(err);
+        },
+    };
 
-    stake_table.advance();
-    stake_table.advance();
-
-    Ok(stake_table)
+    Ok(peer_configs)
 }
 
 pub enum GetNodeIdentityFromUrlError {
@@ -416,148 +419,349 @@ pub async fn get_node_identity_from_url(
     }
 }
 
-/// LeafStreamRetriever is a general trait that allows for the retrieval of a
-/// list of Leaves from a source. The specific implementation doesn't care about
-/// the source, only that it is able to retrieve a stream of Leaves.
+/// [AvailabilityConnection] is a simple short-hand type alias for a
+/// surf-disco [Connection] that is used to retrieve data from the
+/// Availability API.
+type AvailabilityConnection<T> = surf_disco::socket::Connection<
+    T,
+    surf_disco::socket::Unsupported,
+    hotshot_query_service::Error,
+    Version01,
+>;
+
+/// BoxFutureConnection is a simple short-hand type alias for a
+/// [BoxFuture] that is used to retrieve a [AvailabilityConnection].
+type BoxFutureConnection<'a, T> =
+    BoxFuture<'a, Result<AvailabilityConnection<T>, hotshot_query_service::Error>>;
+
+pub struct SurfDiscoAvailabilityAPIStream<'a, T> {
+    // path_url: Url,
+    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+
+    connection: Option<AvailabilityConnection<T>>,
+
+    connection_future: Option<BoxFutureConnection<'a, T>>,
+
+    last_received_block: u64,
+
+    backoff_params: BackoffParams,
+}
+
+const MAX_STREAM_RECONNECT_ATTEMPTS: usize = 100;
+
+/// [SurfDiscoAvailabilityAPIPathResolver] is a trait that allows for the
+/// specification of a sub path to the base URL that will resolve in a
+/// URL to point to the correct endpoint for the desired Stream type.
 ///
-/// This allows us to swap the implementation of the [LeafStreamRetriever] for
-/// testing purposes, or for newer sources in the future.
-pub trait LeafStreamRetriever: Send {
-    type Item;
-    type ItemError: std::error::Error + Send;
-    type Error: std::error::Error + Send;
-    type Stream: Stream<Item = Result<Self::Item, Self::ItemError>> + Send + Unpin;
-    type Future: Future<Output = Result<Self::Stream, Self::Error>> + Send;
-
-    /// [retrieve_stream] retrieves a stream of [Leaf]s from the source.  It
-    /// expects the current block height to be provided so that it can determine
-    /// the starting block height to retrieve the stream of [Leaf]s from.
-    ///
-    /// It should check the current height of the chain so that it only needs
-    /// to retrieve the number of older blocks that are needed, instead of
-    /// starting from the beginning of time.
-    fn retrieve_stream(&self, current_block_height: Option<u64>) -> Self::Future;
+/// Many streams in the Availability API have a path that is based on the
+/// specific type of data you are wanting to stream, and the block height
+/// to start retrieving that data for.  This trait allows for us to
+/// abstract out these endpoints.
+pub trait SurfDiscoAvailabilityAPIPathResolver {
+    /// [resolve_path_for_height] resolves the path for the given height.
+    /// It is expected that the path will be appended to the base URL
+    /// to create a full URL that can be used to connect to the stream.
+    fn resolve_path_for_height(&self, height: u64) -> String;
 }
 
-/// [HotshotQueryServiceLeafStreamRetriever] is a [LeafStreamRetriever] that
-/// retrieves a stream of [Leaf]s from the Hotshot Query Service.  It expects
-/// the base URL of the Hotshot Query Service to be provided so that it can
-/// make the request to the Hotshot Query Service.
-pub struct HotshotQueryServiceLeafStreamRetriever {
-    base_url: Url,
-}
-
-impl HotshotQueryServiceLeafStreamRetriever {
-    /// [new] creates a new [HotshotQueryServiceLeafStreamRetriever] that
-    /// will use the given base [Url] to be able to retrieve the stream of
-    /// [Leaf]s from the Hotshot Query Service.
-    ///
-    /// The [Url] is expected to point to the API version root of the
-    /// Hotshot Query Service.  Example:
-    ///   https://example.com/v0
-    pub fn new(base_url: Url) -> Self {
-        Self { base_url }
+impl SurfDiscoAvailabilityAPIPathResolver
+    for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
+{
+    fn resolve_path_for_height(&self, height: u64) -> String {
+        format!("availability/stream/leaves/{}", height)
     }
 }
 
-impl LeafStreamRetriever for HotshotQueryServiceLeafStreamRetriever {
-    type Item = Leaf<SeqTypes>;
-    type ItemError = hotshot_query_service::Error;
-    type Error = hotshot_query_service::Error;
-    type Stream = surf_disco::socket::Connection<
-        Leaf<SeqTypes>,
-        surf_disco::socket::Unsupported,
-        Self::ItemError,
-        Version01,
-    >;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Stream, Self::Error>> + Send>>;
+impl SurfDiscoAvailabilityAPIPathResolver
+    for SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
+{
+    fn resolve_path_for_height(&self, height: u64) -> String {
+        format!("availability/stream/blocks/{}", height)
+    }
+}
 
-    fn retrieve_stream(&self, current_block_height: Option<u64>) -> Self::Future {
-        let client = surf_disco::Client::new(self.base_url.clone());
-        async move {
-            let block_height_result = client.get("status/block-height").send().await;
-            let block_height: u64 = match block_height_result {
-                Ok(block_height) => block_height,
-                Err(err) => {
-                    tracing::info!("retrieve block height request failed: {}", err);
-                    return Err(err);
-                }
-            };
+/// [UpdateBlockHeightForEntry] is a trait that allows for the updating of
+/// the block height for a given entry.  This is useful for updating the
+/// last received block height for a stream.
+pub trait UpdateBlockHeightForEntry<T> {
+    /// [block_height_for_entry] returns the block height for the given entry.
+    /// This is useful for updating the last received block height for a stream.
+    fn block_height_for_entry(&self, entry: &T) -> u64;
 
-            let latest_block_start = block_height.saturating_sub(50);
-            let start_block_height = if let Some(known_height) = current_block_height {
-                std::cmp::min(known_height, latest_block_start)
-            } else {
-                latest_block_start
-            };
+    /// [update_block_height_for_entry] updates the block height for the
+    /// given entry.  This is useful for updating the last received block
+    /// height for a stream.
+    fn update_block_height_for_entry(&mut self, entry: &T);
+}
 
-            let leaves_stream_result = client
-                .socket(&format!(
-                    "availability/stream/leaves/{}",
-                    start_block_height
-                ))
-                .subscribe::<espresso_types::Leaf>()
-                .await;
+impl UpdateBlockHeightForEntry<Leaf1QueryData<SeqTypes>>
+    for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
+{
+    fn block_height_for_entry(&self, entry: &Leaf1QueryData<SeqTypes>) -> u64 {
+        entry.leaf().height()
+    }
 
-            let leaves_stream = match leaves_stream_result {
-                Ok(leaves_stream) => leaves_stream,
-                Err(err) => {
-                    tracing::info!("retrieve leaves stream failed: {}", err);
-                    return Err(err);
-                }
-            };
+    fn update_block_height_for_entry(&mut self, entry: &Leaf1QueryData<SeqTypes>) {
+        self.last_received_block = self.block_height_for_entry(entry);
+    }
+}
 
-            Ok(leaves_stream)
+impl UpdateBlockHeightForEntry<BlockQueryData<SeqTypes>>
+    for SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
+{
+    fn block_height_for_entry(&self, entry: &BlockQueryData<SeqTypes>) -> u64 {
+        entry.height()
+    }
+
+    fn update_block_height_for_entry(&mut self, entry: &BlockQueryData<SeqTypes>) {
+        self.last_received_block = self.block_height_for_entry(entry);
+    }
+}
+
+impl SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
+    pub fn new_leaf_stream(
+        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        starting_block: u64,
+    ) -> Self {
+        Self {
+            client,
+            connection: None,
+            last_received_block: starting_block,
+            backoff_params: BackoffParams::default(),
+            connection_future: None,
         }
-        .boxed()
     }
 }
 
-/// [RetrieveLeafStreamError] indicates the various failure conditions that can
-/// occur when attempting to retrieve a stream of [Leaf]s using the
-/// [ProcessProduceLeafStreamTask::retrieve_leaf_stream] function.
-enum RetrieveLeafStreamError {
-    /// [MaxAttemptsExceeded] indicates that the maximum number of attempts to
-    /// attempt to retrieve the [Stream] of [Leaf]s has been exceeded.
-    /// In this case, it doesn't make sense to continue to re-attempt to
-    /// reconnect to the service, as it does not seem to be available.
-    MaxAttemptsExceeded,
+impl SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
+    pub fn new_block_stream(
+        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        starting_block: u64,
+    ) -> Self {
+        Self {
+            client,
+            connection: None,
+            last_received_block: starting_block,
+            backoff_params: BackoffParams::default(),
+            connection_future: None,
+        }
+    }
 }
 
-/// [ProcessProduceLeafStreamTask] is a task that produce a stream of [Leaf]s
-/// from the Hotshot Query Service.  It will attempt to retrieve the [Leaf]s
-/// from the Hotshot Query Service and then send them to the [Sink] provided.
-pub struct ProcessProduceLeafStreamTask {
+impl<T> SurfDiscoAvailabilityAPIStream<'_, T>
+where
+    T: serde::de::DeserializeOwned,
+    Self: SurfDiscoAvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
+{
+}
+
+impl<T> Stream for SurfDiscoAvailabilityAPIStream<'_, T>
+where
+    T: serde::de::DeserializeOwned,
+    Self: SurfDiscoAvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
+{
+    type Item = T;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        // We want pausable polling, with mutation. We want to ensure that
+        // each step along the way is just fine.
+        let self_mut = self.get_mut();
+
+        // Next, do we already have a connection?
+        if self_mut.connection.is_some() {
+            // Alright, then we'll want to retrieve the next entry
+            let connection_mut = self_mut.connection.as_mut().expect("unreachable");
+            pin_mut!(connection_mut);
+
+            return match connection_mut.poll_next(cx) {
+                // We're waiting for the next entry, still
+                std::task::Poll::Pending => std::task::Poll::Pending,
+
+                // We've received a result from the connection
+                std::task::Poll::Ready(Some(Ok(entry))) => {
+                    let block_height = self_mut.block_height_for_entry(&entry);
+                    if block_height <= self_mut.last_received_block {
+                        tracing::debug!("we received an entry for a height prior to the last we've seen: {block_height} <= {}", self_mut.last_received_block);
+                        // We've received a block that we've already received
+                        // before.  We should skip this block and try again.
+                        // We need to reschedule ourselves in order to make progress
+                        cx.waker().wake_by_ref();
+                        return std::task::Poll::Pending;
+                    }
+
+                    tracing::debug!("received entry for block height: {block_height}");
+
+                    self_mut.update_block_height_for_entry(&entry);
+                    std::task::Poll::Ready(Some(entry))
+                },
+
+                // The Stream Closed
+                std::task::Poll::Ready(None) => {
+                    tracing::debug!("stream ended unexpectedly. Will reacquire");
+                    self_mut.connection = None;
+                    // We need to reschedule ourselves in order to make progress
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                },
+
+                // The Stream encountered an error.
+                std::task::Poll::Ready(Some(Err(err))) => {
+                    tracing::debug!("encountered error retrieving entry from Stream: {}", err);
+                    self_mut.connection = None;
+                    // We need to reschedule ourselves in order to make progress
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                },
+            };
+        }
+
+        // Do we have an attempt to retrieve a connection in progress?
+        if self_mut.connection_future.is_some() {
+            tracing::debug!("waiting for connection to be established");
+            let connection_future = self_mut.connection_future.as_mut().expect("unreachable");
+            pin_mut!(connection_future);
+            match connection_future.poll(cx) {
+                std::task::Poll::Pending => {
+                    return std::task::Poll::Pending;
+                },
+
+                std::task::Poll::Ready(Ok(connection)) => {
+                    self_mut.connection_future = None;
+                    self_mut.connection = Some(connection);
+                    // We need to reschedule ourselves in order to make progress
+                    cx.waker().wake_by_ref();
+                    return std::task::Poll::Pending;
+                },
+
+                std::task::Poll::Ready(Err(err)) => {
+                    tracing::debug!("encountered error retrieving connection: {}", err);
+                    self_mut.connection_future = None;
+                    // We need to reschedule ourselves in order to make progress
+                    cx.waker().wake_by_ref();
+                    return std::task::Poll::Pending;
+                },
+            }
+        }
+
+        tracing::debug!("attempting to open connection for availability stream");
+        // We're not connected yet. So let's try to connect.
+        let path = self_mut.resolve_path_for_height(self_mut.last_received_block);
+        let client = self_mut.client.clone();
+        let backoff_params = self_mut.backoff_params;
+        self_mut.connection_future.replace(
+            async move {
+                let path = path;
+                let client = client;
+                let backoff_params = backoff_params;
+                let mut delay = Duration::from_millis(100);
+
+                for attempt in 0..MAX_STREAM_RECONNECT_ATTEMPTS {
+                    match client.socket(&path).subscribe().await {
+                        Ok(connection) => {
+                            tracing::debug!(
+                                "attempt {}: successfully acquired connection",
+                                attempt
+                            );
+                            return Ok(connection);
+                        },
+
+                        Err(err) => {
+                            tracing::debug!(
+                                "attempt {}: encountered error retrieving connection: {}",
+                                attempt,
+                                err
+                            );
+                            delay = backoff_params.backoff(delay);
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        },
+                    }
+                }
+
+                tracing::warn!(
+                    "unable to retrieve connection after {} attempts",
+                    MAX_STREAM_RECONNECT_ATTEMPTS
+                );
+                panic!(
+                    "unable to retrieve connection after {} attempts",
+                    MAX_STREAM_RECONNECT_ATTEMPTS
+                );
+            }
+            .boxed(),
+        );
+
+        // Let's wake ourselves up
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    }
+}
+
+/// AvailabilityAPILeafStream is a trait that represents a stream of [Leaf]s
+/// in their simplest form.  This acts as a simple type declaration for
+/// quick reference.
+pub trait AvailabilityAPILeafStream: Stream<Item = Leaf1QueryData<SeqTypes>> {}
+
+/// We implicitly implement the [AvailabilityAPILeafStream] trait for any
+/// Stream that matches the produced item [Leaf]s.
+impl<S> AvailabilityAPILeafStream for S where S: Stream<Item = Leaf1QueryData<SeqTypes>> {}
+
+/// [ProcessProduceLeafStreamTask] is a task that produce a stream of
+/// [BlockQueryData]s. This acts as a simple type declaration for quick
+/// reference.
+pub trait AvailabilityAPIBlockStream: Stream<Item = BlockQueryData<SeqTypes>> {}
+
+/// We implicitly implement the [AvailabilityAPIBlockStream] trait for any
+/// Stream that matches the produced item [BlockQueryData]s.
+impl<S> AvailabilityAPIBlockStream for S where S: Stream<Item = BlockQueryData<SeqTypes>> {}
+
+/// [LeafAndBlock] is a tuple that contains a [Leaf] and a [BlockQueryData].
+/// This acts as a simple type declaration for quick reference.
+pub type LeafAndBlock<T> = (Leaf1QueryData<T>, BlockQueryData<T>);
+
+/// [LeafAndBlockPairStream] is a trait that represents a stream of [Leaf1QueryData]s
+/// and [BlockQueryData]s.  This acts as a simple type declaration for quick
+/// reference.
+pub trait LeafAndBlockPairStream: Stream<Item = LeafAndBlock<SeqTypes>> {}
+
+/// We implicitly implement the [LeafAndBlockPairStream] trait for any
+/// Stream that matches the produced a pair of [Leaf1QueryData], and [BlockQueryData].
+impl<S> LeafAndBlockPairStream for S where S: Stream<Item = LeafAndBlock<SeqTypes>> {}
+
+/// [BridgeLeafAndBlockStreamToSenderTask] is a task that produce a stream of
+/// pairs of [Leaf1QueryData]s and [BlockQueryData]s from the Hotshot Query Service. It
+/// will attempt to retrieve the [Leaf1QueryData]s and [BlockQueryData]s from the Hotshot
+/// Query Service and then send them to the [Sink] provided.
+pub struct BridgeLeafAndBlockStreamToSenderTask {
     pub task_handle: Option<JoinHandle<()>>,
 }
 
-impl ProcessProduceLeafStreamTask {
+impl BridgeLeafAndBlockStreamToSenderTask {
     /// [new] creates a new [ProcessConsumeLeafStreamTask] that produces a
-    /// stream of [Leaf]s from the Hotshot Query Service.
+    /// stream of [Leaf1QueryData]s from the Hotshot Query Service.
     ///
     /// Calling this function will create an async task that will start
     /// processing immediately.  The task's handle will be stored in the
     /// returned state.
-    pub fn new<R, K>(leaf_stream_retriever: R, leaf_sender: K) -> Self
+    pub fn new<R, K>(item_stream: R, item_sender: K) -> Self
     where
-        R: LeafStreamRetriever<Item = Leaf<SeqTypes>> + Send + Sync + 'static,
-        K: Sink<Leaf<SeqTypes>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
+        R: LeafAndBlockPairStream + Send + Unpin + 'static,
+        K: Sink<LeafAndBlock<SeqTypes>, Error = SendError> + Clone + Send + Unpin + 'static,
     {
         // let future = Self::process_consume_leaf_stream(leaf_stream_retriever, leaf_sender);
-        let task_handle = spawn(Self::connect_and_process_leaves(
-            leaf_stream_retriever,
-            leaf_sender,
-        ));
+        let task_handle = spawn(Self::bridge_stream(item_stream, item_sender));
 
         Self {
             task_handle: Some(task_handle),
         }
     }
 
-    async fn connect_and_process_leaves<R, K>(leaf_stream_retriever: R, leaf_sender: K)
+    async fn bridge_stream<R, K>(item_stream: R, item_sender: K)
     where
-        R: LeafStreamRetriever<Item = Leaf<SeqTypes>>,
-        K: Sink<Leaf<SeqTypes>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
+        R: LeafAndBlockPairStream + Unpin,
+        K: Sink<LeafAndBlock<SeqTypes>, Error = SendError> + Clone + Unpin + 'static,
     {
         // We want to try and ensure that we are connected to the HotShot Query
         // Service, and are consuming leaves.
@@ -571,65 +775,9 @@ impl ProcessProduceLeafStreamTask {
         //   also attempt to reestablish the connection to start consuming
         //   the leave again.
 
-        loop {
-            // Retrieve a stream
-            let Ok(stream) = Self::retrieve_leaf_stream(&leaf_stream_retriever).await else {
-                panic!("failed to retrieve leaf stream");
-            };
-
-            // Consume the leaves of a stream
-            Self::process_consume_leaf_stream::<R, K>(stream, leaf_sender.clone()).await;
-            tracing::warn!("leaf stream ended, will attempt to re-acquire leaf stream");
-        }
-    }
-
-    /// [retrieve_leaf_stream] attempts to retrieve the Stream of Leaves from
-    /// the given [LeafStreamRetriever].
-    ///
-    /// This function will loop on failure until it is able to retrieve the
-    /// [Stream].  This does mean that it could potentially get in a state
-    /// where it can loop indefinitely.
-    ///
-    /// This function also implements exponential backoff with a maximum
-    /// delay of 5 seconds.
-    async fn retrieve_leaf_stream<R>(
-        leaf_stream_receiver: &R,
-    ) -> Result<R::Stream, RetrieveLeafStreamError>
-    where
-        R: LeafStreamRetriever<Item = Leaf<SeqTypes>>,
-    {
-        let backoff_params = BackoffParams::default();
-        let mut delay = Duration::ZERO;
-
-        for attempt in 1..=100 {
-            let leaves_stream_result = leaf_stream_receiver.retrieve_stream(None).await;
-
-            let leaves_stream = match leaves_stream_result {
-                Err(error) => {
-                    // We failed to retrieve the stream. We will try again, but we
-                    // should sleep for a bit before so as not to overwhelm the
-                    // service.
-                    tracing::warn!(
-                        "attempt {attempt} to connect to leaf stream failed with error {error}"
-                    );
-
-                    // Our retry penalty will be a minimum of 100ms, and a maximum
-                    // of 5 seconds.
-                    // For every failed iteration, we will double our delay, up
-                    // to the maximum of 5 seconds.
-
-                    delay = backoff_params.backoff(delay);
-                    sleep(delay).await;
-                    continue;
-                }
-
-                Ok(leaves_stream) => leaves_stream,
-            };
-
-            return Ok(leaves_stream);
-        }
-
-        Err(RetrieveLeafStreamError::MaxAttemptsExceeded)
+        // Consume the leaves of a stream
+        Self::process_consume_leaf_stream::<R, K>(item_stream, item_sender.clone()).await;
+        tracing::warn!("leaf stream ended, will attempt to re-acquire leaf stream");
     }
 
     /// [process_consume_leaf_stream] produces a stream of [Leaf]s from the
@@ -637,17 +785,17 @@ impl ProcessProduceLeafStreamTask {
     /// Hotshot Query Service and then send them to the [Sink] provided.  If the
     /// [Sink] is closed, or if the Stream ends prematurely, then the function
     /// will return.
-    async fn process_consume_leaf_stream<R, K>(leaves_stream: R::Stream, leaf_sender: K)
+    async fn process_consume_leaf_stream<R, K>(item_stream: R, item_sender: K)
     where
-        R: LeafStreamRetriever<Item = Leaf<SeqTypes>>,
-        K: Sink<Leaf<SeqTypes>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
+        R: LeafAndBlockPairStream + Unpin,
+        K: Sink<LeafAndBlock<SeqTypes>, Error = SendError> + Clone + Unpin + 'static,
     {
-        let mut leaf_sender = leaf_sender;
-        let mut leaves_stream = leaves_stream;
+        let mut leaf_sender = item_sender;
+        let mut leaves_stream = item_stream;
 
         loop {
             let leaf_result = leaves_stream.next().await;
-            let leaf = if let Some(Ok(leaf)) = leaf_result {
+            let leaf = if let Some(leaf) = leaf_result {
                 leaf
             } else {
                 tracing::info!("leaf stream closed");
@@ -665,7 +813,7 @@ impl ProcessProduceLeafStreamTask {
 
 /// [Drop] implementation for [ProcessConsumeLeafStreamTask] that will cancel
 /// the task if it hasn't already been completed.
-impl Drop for ProcessProduceLeafStreamTask {
+impl Drop for BridgeLeafAndBlockStreamToSenderTask {
     fn drop(&mut self) {
         if let Some(task_handle) = self.task_handle.take() {
             task_handle.abort();
@@ -795,7 +943,7 @@ pub fn populate_node_identity_from_scrape(node_identity: &mut NodeIdentity, scra
                     // We couldn't parse the public key, so we can't create a NodeIdentity.
                     tracing::info!("parsing public key failed: {}", err);
                     return;
-                }
+                },
             }
         } else {
             // We were unable to find the public key in the scrape result.
@@ -878,7 +1026,7 @@ pub fn node_identity_from_scrape(scrape: Scrape) -> Option<NodeIdentity> {
         Err(err) => {
             tracing::info!("parsing public key failed: {}", err);
             return None;
-        }
+        },
     };
 
     let mut node_identity = NodeIdentity::from_public_key(public_key);
@@ -937,8 +1085,10 @@ impl ProcessNodeIdentityUrlStreamTask {
                 None => {
                     tracing::info!("node identity url stream closed");
                     return;
-                }
+                },
             };
+
+            tracing::debug!("received url to scrape: {}", node_identity_url);
 
             // Alright we have a new Url to try and scrape for a Node Identity.
             // Let's attempt to do that.
@@ -949,8 +1099,13 @@ impl ProcessNodeIdentityUrlStreamTask {
                 Err(err) => {
                     tracing::warn!("get node identity from url failed.  bad base url?: {}", err);
                     continue;
-                }
+                },
             };
+
+            tracing::debug!(
+                "successfully retrieved node identity from url: {}",
+                node_identity.public_key(),
+            );
 
             let send_result = node_identity_sender.send(node_identity).await;
             if let Err(err) = send_result {

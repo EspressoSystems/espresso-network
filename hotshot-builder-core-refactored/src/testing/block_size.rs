@@ -1,22 +1,27 @@
+use std::{
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
+
 use async_broadcast::broadcast;
 use committable::Committable;
 use hotshot_builder_api::v0_1::builder::TransactionStatus;
-use hotshot_example_types::block_types::TestTransaction;
-use hotshot_example_types::state_types::TestInstanceState;
-use hotshot_types::data::VidCommitment;
-use hotshot_types::data::ViewNumber;
-use hotshot_types::traits::node_implementation::ConsensusTime;
-use marketplace_builder_shared::block::{BlockId, BuilderStateId};
-use marketplace_builder_shared::testing::consensus::SimulatedChainState;
-use marketplace_builder_shared::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
+use hotshot_example_types::{block_types::TestTransaction, state_types::TestInstanceState};
+use hotshot_types::{
+    data::{VidCommitment, ViewNumber},
+    traits::node_implementation::ConsensusTime,
+};
+use marketplace_builder_shared::{
+    block::{BlockId, BuilderStateId},
+    testing::{consensus::SimulatedChainState, constants::TEST_NUM_NODES_IN_VID_COMPUTATION},
+};
 use tracing_test::traced_test;
 
-use crate::block_size_limits::BlockSizeLimits;
-use crate::service::{BuilderConfig, GlobalState};
-use crate::testing::TestServiceWrapper;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::time::Duration;
+use crate::{
+    block_size_limits::BlockSizeLimits,
+    service::{BuilderConfig, GlobalState},
+    testing::TestServiceWrapper,
+};
 
 /// This tests simulates size limits being decreased lower than our capacity
 /// and then checks that size limits return to protocol maximum over time

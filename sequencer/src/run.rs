@@ -1,4 +1,11 @@
-use std::sync::Arc;
+use anyhow::Context;
+use clap::Parser;
+use espresso_types::traits::SequencerPersistence;
+#[allow(unused_imports)]
+use espresso_types::{traits::NullEventConsumer, FeeVersion, SequencerVersions, V0_0};
+use futures::future::FutureExt;
+use hotshot_types::traits::{metrics::NoMetrics, node_implementation::Versions};
+use vbs::version::StaticVersionType;
 
 use super::{
     api::{self, data_source::DataSourceOptions},
@@ -7,16 +14,6 @@ use super::{
     options::{Modules, Options},
     persistence, Genesis, L1Params, NetworkParams,
 };
-use clap::Parser;
-#[allow(unused_imports)]
-use espresso_types::{
-    traits::NullEventConsumer, FeeVersion, MarketplaceVersion, SequencerVersions,
-    SolverAuctionResultsProvider, V0_0,
-};
-use futures::future::FutureExt;
-use hotshot::MarketplaceConfig;
-use hotshot_types::traits::{metrics::NoMetrics, node_implementation::Versions};
-use vbs::version::StaticVersionType;
 
 pub async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
@@ -26,49 +23,44 @@ pub async fn main() -> anyhow::Result<()> {
     tracing::warn!(?modules, "sequencer starting up");
 
     let genesis = Genesis::from_file(&opt.genesis_file)?;
-
-    // validate that the fee contract is a proxy and panic otherwise
-    genesis
-        .validate_fee_contract(opt.l1_provider_url[0].clone())
-        .await
-        .unwrap();
-
     tracing::info!(?genesis, "genesis");
 
     let base = genesis.base_version;
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        #[cfg(all(feature = "fee", feature = "marketplace"))]
-        (FeeVersion::VERSION, MarketplaceVersion::VERSION) => {
+        #[cfg(all(feature = "fee", feature = "pos"))]
+        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
             run(
                 genesis,
                 modules,
                 opt,
-                SequencerVersions::<FeeVersion, MarketplaceVersion>::new(),
+                SequencerVersions::<espresso_types::FeeVersion, espresso_types::EpochVersion>::new(
+                ),
             )
             .await
-        }
+        },
+        #[cfg(feature = "pos")]
+        (espresso_types::EpochVersion::VERSION, _) => {
+            run(
+                genesis,
+                modules,
+                opt,
+                // Specifying V0_0 disables upgrades
+                SequencerVersions::<espresso_types::EpochVersion, espresso_types::V0_0>::new(),
+            )
+            .await
+        },
         #[cfg(feature = "fee")]
         (FeeVersion::VERSION, _) => {
             run(
                 genesis,
                 modules,
                 opt,
-                SequencerVersions::<FeeVersion, V0_0>::new(),
+                SequencerVersions::<FeeVersion, espresso_types::V0_0>::new(),
             )
             .await
-        }
-        #[cfg(feature = "marketplace")]
-        (MarketplaceVersion::VERSION, _) => {
-            run(
-                genesis,
-                modules,
-                opt,
-                SequencerVersions::<MarketplaceVersion, V0_0>::new(),
-            )
-            .await
-        }
+        },
         _ => panic!(
             "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."
         ),
@@ -174,17 +166,13 @@ where
         libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
     };
 
-    let marketplace_config = MarketplaceConfig {
-        auction_results_provider: Arc::new(SolverAuctionResultsProvider {
-            url: opt.auction_results_solver_url,
-            marketplace_path: opt.marketplace_solver_path,
-            results_path: opt.auction_results_path,
-        }),
-        fallback_builder_url: opt.fallback_builder_url,
-    };
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
     let persistence = storage_opt.create().await?;
+    persistence
+        .migrate_consensus()
+        .await
+        .context("failed to migrate consensus data")?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
@@ -217,7 +205,7 @@ where
             }
 
             http_opt
-                .serve(move |metrics, consumer| {
+                .serve(move |metrics, consumer, storage| {
                     async move {
                         init_node(
                             genesis,
@@ -225,11 +213,11 @@ where
                             &*metrics,
                             persistence,
                             l1_params,
+                            storage,
                             versions,
                             consumer,
                             opt.is_da,
                             opt.identity,
-                            marketplace_config,
                             proposal_fetcher_config,
                         )
                         .await
@@ -237,7 +225,7 @@ where
                     .boxed()
                 })
                 .await?
-        }
+        },
         None => {
             init_node(
                 genesis,
@@ -245,15 +233,15 @@ where
                 &NoMetrics,
                 persistence,
                 l1_params,
+                None,
                 versions,
                 NullEventConsumer,
                 opt.is_da,
                 opt.identity,
-                marketplace_config,
                 proposal_fetcher_config,
             )
             .await?
-        }
+        },
     };
 
     Ok(ctx)
@@ -263,23 +251,22 @@ where
 mod test {
     use std::time::Duration;
 
-    use tokio::spawn;
-
-    use crate::{
-        api::options::Http,
-        genesis::{L1Finalized, StakeTableConfig},
-        persistence::fs,
-        SequencerApiVersion,
-    };
     use espresso_types::{MockSequencerVersions, PubKey};
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey};
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
     use surf_disco::{error::ClientError, Client, Url};
     use tempfile::TempDir;
+    use tokio::spawn;
     use vbs::version::Version;
 
     use super::*;
+    use crate::{
+        api::options::Http,
+        genesis::{L1Finalized, StakeTableConfig},
+        persistence::fs,
+        SequencerApiVersion,
+    };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_startup_before_orchestrator() {
@@ -301,6 +288,9 @@ mod test {
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
+            epoch_height: None,
+            epoch_start_block: None,
+            stake_table_capacity: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

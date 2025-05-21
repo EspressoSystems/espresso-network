@@ -9,11 +9,11 @@ set -euxo pipefail
 
 nix develop .#crossShell --ignore-environment --command bash -c "cargo build --release \
 && cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml \
-&& cargo build --bin espresso-dev-node --release --all-features"
+&& cargo build --bin espresso-dev-node --release --features='testing embedded-db'"
 
 nix develop .#armCrossShell --ignore-environment --command bash -c "cargo build --release \
 && cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml \
-&& cargo build --bin espresso-dev-node --release --all-features"
+&& cargo build --bin espresso-dev-node --release --features='testing embedded-db'"
 
 # The rest of the script doesn't run in a nix shell but we need to know where
 # the binaries are.
@@ -32,6 +32,29 @@ cleanup(){
 mkdir -p ${WORKDIR}/data
 cp -rv data/genesis ${WORKDIR}/data/
 
+binaries=(
+  cdn-broker
+  cdn-marshal
+  cdn-whitelist
+  deploy
+  espresso-bridge
+  espresso-dev-node
+  keygen
+  nasty-client
+  node-metrics
+  orchestrator
+  permissionless-builder
+  pub-key
+  reset-storage
+  sequencer
+  sequencer-sqlite
+  state-prover
+  state-relay-server
+  staking-cli
+  submit-transactions
+  utils
+)
+
 for ARCH in "amd64" "arm64"; do
   case "$ARCH" in
     amd64)
@@ -46,7 +69,7 @@ for ARCH in "amd64" "arm64"; do
       ;;
   esac
   mkdir -p ${WORKDIR}/target/$ARCH/release
-    for binary in "cdn-broker" "cdn-marshal" "cdn-whitelist" "deploy" "dev-rollup" "espresso-bridge" "espresso-dev-node" "keygen" "marketplace-builder" "marketplace-solver" "nasty-client" "node-metrics" "orchestrator" "permissionless-builder" "pub-key" "reset-storage" "sequencer" "sequencer-sqlite" "state-prover" "state-relay-server" "submit-transactions" "utils"; do
+  for binary in "${binaries[@]}"; do
     cp -v "${CARGO_TARGET_DIR}/${TARGET}/release/$binary" ${WORKDIR}/target/$ARCH/release
   done
 done
@@ -56,23 +79,26 @@ cp -v docker/scripts/sequencer-awssecretsmanager.sh ${WORKDIR}/docker/scripts
 
 # Copy the dev-node and sequencer script
 mkdir -p ${WORKDIR}/scripts
-cp -v scripts/{launch-dev-node-with-postgres,sequencer-entrypoint} ${WORKDIR}/scripts
+cp -v scripts/sequencer-entrypoint ${WORKDIR}/scripts
 
 export DOCKER_BUILDKIT=1
-docker build -t ghcr.io/espressosystems/espresso-sequencer/orchestrator:main -f docker/orchestrator.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/cdn-broker:main -f docker/cdn-broker.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/cdn-marshal:main -f docker/cdn-marshal.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist:main -f docker/cdn-whitelist.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/state-relay-server:main -f docker/state-relay-server.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/prover-service:main -f docker/prover-service.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/sequencer:main -f docker/sequencer.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/submit-transactions:main -f docker/submit-transactions.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/deploy:main -f docker/deploy.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/builder:main -f docker/permissionless-builder.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/nasty-client:main -f docker/nasty-client.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node:main -f docker/espresso-dev-node.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/bridge:main -f docker/espresso-bridge.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/marketplace-solver:main -f docker/marketplace-solver.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/marketplace-builder:main -f docker/marketplace-builder.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/node-validator:main -f docker/node-validator.Dockerfile ${WORKDIR}
-docker build -t ghcr.io/espressosystems/espresso-sequencer/dev-rollup:main -f docker/dev-rollup.Dockerfile ${WORKDIR}
+images=(
+ bridge
+ builder
+ cdn-broker
+ cdn-marshal
+ cdn-whitelist
+ deploy
+ espresso-dev-node
+ nasty-client
+ node-validator
+ orchestrator
+ prover-service
+ sequencer
+ state-relay-server
+ staking-cli
+ submit-transactions
+)
+for image in "${images[@]}"; do
+  docker build --platform $PLATFORM -t ghcr.io/espressosystems/espresso-sequencer/$image:main -f docker/$image.Dockerfile ${WORKDIR}
+done

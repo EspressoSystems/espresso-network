@@ -1,5 +1,9 @@
 //! Utility program to submit random transactions to an Espresso Sequencer.
 
+#[cfg(feature = "benchmarking")]
+use std::fs::OpenOptions;
+#[cfg(feature = "benchmarking")]
+use std::num::NonZeroUsize;
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -7,6 +11,8 @@ use std::{
 
 use clap::Parser;
 use committable::{Commitment, Committable};
+#[cfg(feature = "benchmarking")]
+use csv::Writer;
 use espresso_types::{parse_duration, parse_size, SeqTypes, Transaction};
 use futures::{
     channel::mpsc::{self, Sender},
@@ -23,13 +29,6 @@ use surf_disco::{Client, Url};
 use tide_disco::{error::ServerError, App};
 use tokio::{task::spawn, time::sleep};
 use vbs::version::StaticVersionType;
-
-#[cfg(feature = "benchmarking")]
-use csv::Writer;
-#[cfg(feature = "benchmarking")]
-use std::fs::OpenOptions;
-#[cfg(feature = "benchmarking")]
-use std::num::NonZeroUsize;
 
 /// Submit random transactions to an Espresso Sequencer.
 #[derive(Clone, Debug, Parser)]
@@ -229,14 +228,14 @@ async fn main() {
             Err(err) => {
                 tracing::warn!("error getting block: {err}");
                 continue;
-            }
+            },
         };
         let received_at = Instant::now();
         tracing::debug!("got block {}", block.height());
         #[cfg(feature = "benchmarking")]
         {
             num_block += 1;
-            if !has_started && (num_block as usize) >= opt.benchmark_start_block.into() {
+            if !has_started && (num_block as usize) >= usize::from(opt.benchmark_start_block) {
                 has_started = true;
                 start = Instant::now();
             }
@@ -287,7 +286,7 @@ async fn main() {
         }
 
         #[cfg(feature = "benchmarking")]
-        if !benchmark_finish && (num_block as usize) >= opt.benchmark_end_block.into() {
+        if !benchmark_finish && (num_block as usize) >= usize::from(opt.benchmark_end_block) {
             let block_range = format!("{}~{}", opt.benchmark_start_block, opt.benchmark_end_block,);
             let transaction_size_range_in_bytes = format!("{}~{}", opt.min_size, opt.max_size,);
             let transactions_per_batch_range = format!(

@@ -1,9 +1,9 @@
 //! sequencer utility programs
 
 use clap::{Parser, Subcommand};
-
 use sequencer_utils::logging;
 mod keygen;
+mod ns_aggregator;
 mod pubkey;
 mod reset_storage;
 
@@ -22,6 +22,7 @@ enum Command {
     Pubkey(pubkey::Options),
     #[command(subcommand)]
     ResetStorage(reset_storage::Commands),
+    NsAggregator(ns_aggregator::Options),
 }
 
 #[tokio::main]
@@ -34,7 +35,8 @@ async fn main() -> anyhow::Result<()> {
         Command::Pubkey(opt) => {
             pubkey::run(opt);
             Ok(())
-        }
+        },
         Command::ResetStorage(opt) => reset_storage::run(opt).await,
+        Command::NsAggregator(opt) => ns_aggregator::run(opt).await,
     }
 }

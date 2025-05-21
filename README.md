@@ -1,21 +1,21 @@
-# Espresso Sequencer
+# Espresso Network
 
-[![Build](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/build.yml/badge.svg)](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/build.yml)
-[![Test](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/test.yml/badge.svg)](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/test.yml)
-[![Docs rust](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/doc-rust.yml/badge.svg)](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/doc-rust.yml)
-[![Contracts](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/contracts.yml/badge.svg)](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/contracts.yml)
-[![Lint](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/lint.yml/badge.svg)](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/lint.yml)
-[![Audit](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/audit.yml/badge.svg)](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/audit.yml)
-[![Ubuntu](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/ubuntu-install-without-nix.yml/badge.svg)](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/ubuntu-install-without-nix.yml)
-[![Build without lockfile](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/build-without-lockfile.yml/badge.svg)](https://github.com/EspressoSystems/espresso-sequencer/actions/workflows/build-without-lockfile.yml)
-[![Coverage Status](https://coveralls.io/repos/github/EspressoSystems/espresso-sequencer/badge.svg?branch=main)](https://coveralls.io/github/EspressoSystems/espresso-sequencer?branch=main)
+[![Build](https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml)
+[![Test](https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/test.yml)
+[![Docs rust](https://github.com/EspressoSystems/espresso-network/actions/workflows/doc-rust.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/doc-rust.yml)
+[![Contracts](https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/contracts.yml)
+[![Lint](https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/lint.yml)
+[![Audit](https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/audit.yml)
+[![Ubuntu](https://github.com/EspressoSystems/espresso-network/actions/workflows/ubuntu-install-without-nix.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/ubuntu-install-without-nix.yml)
+[![Build without lockfile](https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml/badge.svg)](https://github.com/EspressoSystems/espresso-network/actions/workflows/build-without-lockfile.yml)
+[![Coverage Status](https://coveralls.io/repos/github/EspressoSystems/espresso-network/badge.svg?branch=main)](https://coveralls.io/github/EspressoSystems/espresso-network?branch=main)
 
-The Espresso Sequencer offers rollups credible neutrality and enhanced interoperability, without compromising on scale.
-Consisting of a data availability solution and a decentralized network of nodes that sequences transactions, layer-2
-rollups can leverage the Espresso Sequencer to give developers and end users fast confirmations, low (and fair) fees,
-and robust infrastructure.
+The Espresso Network is the global confirmation layer for rollups in the Ethereum ecosystem. Espresso's
+[global confirmation layer(GCL)](https://docs.espressosys.com/network) provides agreement on inputs to a collection of
+composable blockchains, providing a high trust, fast, and verifiable way to process inputs on any chain, providing fast
+confirmations in return.
 
-[Official Documentation](https://docs.espressosys.com/sequencer/espresso-sequencer-architecture/readme)
+[Official Documentation](https://docs.espressosys.com/network/)
 
 ### Architecture
 
@@ -36,7 +36,7 @@ a dockerized Espresso Sequencer network with an example Layer 2 rollup applicati
 
 # Development
 
-- Obtain code: `git clone git@github.com:EspressoSystems/espresso-sequencer`.
+- Obtain code: `git clone git@github.com:EspressoSystems/espresso-network`.
 - Make sure [nix](https://nixos.org/download.html) is installed.
 - Activate the environment with `nix-shell`, or `nix develop`, or `direnv allow` if using [direnv](https://direnv.net/).
 - For installation without nix please see [ubuntu.md](./doc/ubuntu.md).
@@ -174,18 +174,6 @@ In order to profile the gas consumption of the light client contract do the foll
 3. Create an account on [sentio.xyz](https://app.sentio.xyz/).
 4. Use the hash of the transaction generated in step two when calling the function `newFinalizedState` in order to
    obtain the gas profile.
-
-## Misc
-
-### Authenticate with GitHub container registry
-
-This is only necessary to fetch private images.
-
-- Go to your github profile
-- Developer Settings > Personal access tokens > Personal access tokens (classic)
-- Generate a new token
-  - for the scope options of the token, tick the _repo_ box.
-- Run `docker login ghcr.io --username <you_github_id> --password <your_personal_access_token>`
 
 # License
 

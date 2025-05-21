@@ -76,10 +76,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::thread::sleep;
+
     use tracing_test::traced_test;
 
     use super::*;
-    use std::thread::sleep;
 
     #[test]
     #[traced_test]

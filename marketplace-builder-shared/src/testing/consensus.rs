@@ -2,8 +2,6 @@
 
 use std::marker::PhantomData;
 
-use crate::block::BuilderStateId;
-use crate::testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION;
 use async_broadcast::Sender;
 use committable::Committable;
 use hotshot::{
@@ -17,18 +15,23 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
-    data::vid_commitment,
-    data::{DaProposal2, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    data::{
+        vid_commitment, DaProposal2, EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper,
+        ViewNumber,
+    },
     message::Proposal,
-    simple_certificate::{QuorumCertificate, SimpleCertificate, SuccessThreshold},
+    simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
     traits::{
         node_implementation::{ConsensusTime, Versions},
         EncodeBytes,
     },
+    utils::EpochTransitionIndicator,
 };
 use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;
+
+use crate::{block::BuilderStateId, testing::constants::TEST_NUM_NODES_IN_VID_COMPUTATION};
 
 pub struct SimulatedChainState {
     epoch: Option<EpochNumber>,
@@ -90,6 +93,7 @@ impl SimulatedChainState {
             metadata,
             view_number: self.round,
             epoch: self.epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let block_header = TestBlockHeader {
@@ -102,17 +106,20 @@ impl SimulatedChainState {
         };
 
         let justify_qc = match self.previous_quorum_proposal.as_ref() {
-            None => QuorumCertificate::<TestTypes>::genesis::<TestVersions>(
-                &TestValidatedState::default(),
-                &TestInstanceState::default(),
-            )
-            .await
-            .to_qc2(),
+            None => {
+                QuorumCertificate2::<TestTypes>::genesis::<TestVersions>(
+                    &TestValidatedState::default(),
+                    &TestInstanceState::default(),
+                )
+                .await
+            },
             Some(prev_proposal) => {
                 let prev_justify_qc = &prev_proposal.justify_qc();
+                let prev_leaf = Leaf2::from_quorum_proposal(prev_proposal);
                 let quorum_data = QuorumData2::<TestTypes> {
-                    leaf_commit: Committable::commit(&Leaf2::from_quorum_proposal(prev_proposal)),
+                    leaf_commit: Committable::commit(&prev_leaf),
                     epoch: self.epoch,
+                    block_number: Some(prev_leaf.height()),
                 };
 
                 // form a justify qc
@@ -123,7 +130,7 @@ impl SimulatedChainState {
                     prev_justify_qc.signatures.clone(),
                     PhantomData,
                 )
-            }
+            },
         };
 
         tracing::debug!("Iteration: {} justify_qc: {:?}", self.round, justify_qc);
@@ -138,6 +145,7 @@ impl SimulatedChainState {
                 next_drb_result: None,
                 next_epoch_justify_qc: None,
                 epoch: self.epoch,
+                state_cert: None,
             },
         };
 

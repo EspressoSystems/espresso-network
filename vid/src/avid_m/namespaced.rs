@@ -1,13 +1,15 @@
 //! This file implements the namespaced AvidM scheme.
 
+use std::ops::Range;
+
+use jf_merkle_tree::MerkleTreeScheme;
+use serde::{Deserialize, Serialize};
+
 use super::{AvidMCommit, AvidMShare, RawAvidMShare};
 use crate::{
     avid_m::{AvidMScheme, MerkleTree},
     VidError, VidResult, VidScheme,
 };
-use jf_merkle_tree::MerkleTreeScheme;
-use serde::{Deserialize, Serialize};
-use std::ops::Range;
 
 /// Dummy struct for namespaced AvidM scheme
 pub struct NsAvidMScheme;
@@ -52,6 +54,8 @@ impl NsAvidMScheme {
     }
 
     /// Commit to a payload given namespace table.
+    /// WARN: it assumes that the namespace table is well formed, i.e. ranges
+    /// are non-overlapping and cover the whole payload.
     pub fn commit(
         param: &NsAvidMParam,
         payload: &[u8],
@@ -122,7 +126,7 @@ impl NsAvidMScheme {
         if !(share.ns_commits.len() == share.ns_lens.len()
             && share.ns_commits.len() == share.content.len())
         {
-            return Err(VidError::Argument("Invalid share".to_string()));
+            return Err(VidError::InvalidShare);
         }
         // Verify the share for each namespace
         for (commit, content) in share.ns_commits.iter().zip(share.content.iter()) {
@@ -148,6 +152,9 @@ impl NsAvidMScheme {
 
     /// Recover the entire payload from enough share
     pub fn recover(param: &NsAvidMParam, shares: &[NsAvidMShare]) -> VidResult<Vec<u8>> {
+        if shares.is_empty() {
+            return Err(VidError::InsufficientShares);
+        }
         let mut result = vec![];
         for ns_id in 0..shares[0].ns_lens.len() {
             result.append(&mut Self::ns_recover(param, ns_id, shares)?)
@@ -155,12 +162,23 @@ impl NsAvidMScheme {
         Ok(result)
     }
 
-    /// Recover the payload for a given namespace
+    /// Recover the payload for a given namespace.
+    /// Given namespace ID should be valid for all shares, i.e. `ns_commits` and `content` have
+    /// at least `ns_id` elements for all shares.
     pub fn ns_recover(
         param: &NsAvidMParam,
         ns_id: usize,
         shares: &[NsAvidMShare],
     ) -> VidResult<Vec<u8>> {
+        if shares.is_empty() {
+            return Err(VidError::InsufficientShares);
+        }
+        if shares
+            .iter()
+            .any(|share| ns_id >= share.ns_lens.len() || ns_id >= share.content.len())
+        {
+            return Err(VidError::IndexOutOfBound);
+        }
         let ns_commit = shares[0].ns_commits[ns_id];
         let shares: Vec<_> = shares
             .iter()
@@ -221,7 +239,7 @@ pub mod tests {
 
         // verify shares
         shares.iter().for_each(|share| {
-            assert!(NsAvidMScheme::verify_share(&params, &commit, share).is_ok())
+            assert!(NsAvidMScheme::verify_share(&params, &commit, share).is_ok_and(|r| r.is_ok()))
         });
 
         // test payload recovery on a random subset of shares

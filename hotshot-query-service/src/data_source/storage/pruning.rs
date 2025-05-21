@@ -10,9 +10,10 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::{fmt::Debug, time::Duration};
+
 use anyhow::bail;
 use async_trait::async_trait;
-use std::{fmt::Debug, time::Duration};
 
 #[derive(Clone, Debug)]
 pub struct PrunerCfg {
@@ -22,6 +23,7 @@ pub struct PrunerCfg {
     batch_size: u64,
     max_usage: u16,
     interval: Duration,
+    incremental_vacuum_pages: u64,
     state_tables: Vec<String>,
 }
 
@@ -35,6 +37,10 @@ pub trait PruneStorage: PrunerConfig {
 
     async fn prune(&self, _pruner: &mut Self::Pruner) -> anyhow::Result<Option<u64>> {
         Ok(None)
+    }
+
+    async fn vacuum(&self) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -113,6 +119,11 @@ impl PrunerCfg {
         self
     }
 
+    pub fn with_incremental_vacuum_pages(mut self, pages: u64) -> Self {
+        self.incremental_vacuum_pages = pages;
+        self
+    }
+
     /// Disk space threshold (in bytes).
     ///
     /// If the disk usage exceeds this threshold, pruning of data starts from
@@ -156,6 +167,11 @@ impl PrunerCfg {
         self.interval
     }
 
+    /// pages to remove from freelist during SQLite vacuuming
+    pub fn incremental_vacuum_pages(&self) -> u64 {
+        self.incremental_vacuum_pages
+    }
+
     /// State tables to prune
     pub fn state_tables(&self) -> Vec<String> {
         self.state_tables.clone()
@@ -176,6 +192,8 @@ impl Default for PrunerCfg {
             max_usage: 8000,
             // 1.5 hour
             interval: Duration::from_secs(5400),
+            // 8000 pages
+            incremental_vacuum_pages: 8000,
             state_tables: Vec::new(),
         }
     }

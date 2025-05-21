@@ -44,10 +44,13 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     use std::sync::Arc;
 
     use async_lock::RwLock;
-    use espresso_types::{EpochCommittees, Leaf, Payload, SeqTypes, Transaction};
-    use hotshot_example_types::node_types::TestVersions;
+    use espresso_types::{
+        v0_3::StakeTableFetcher, EpochCommittees, Leaf, Payload, SeqTypes, Transaction,
+    };
+    use hotshot_example_types::{node_types::TestVersions, storage_types::TestStorage};
     use hotshot_types::{
         data::vid_disperse::{ADVZDisperse, ADVZDisperseShare},
+        epoch_membership::EpochMembershipCoordinator,
         simple_certificate::{
             TimeoutCertificate, ViewSyncCommitCertificate, ViewSyncFinalizeCertificate,
             ViewSyncPreCommitCertificate,
@@ -62,12 +65,17 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
     let committee = vec![PeerConfig::default()]; /* one committee member, necessary to generate a VID share */
-    let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
-        committee.clone(),
-        committee,
-        &NodeState::default(),
+    let storage = TestStorage::default();
+
+    let membership = EpochMembershipCoordinator::new(
+        Arc::new(RwLock::new(EpochCommittees::new_stake(
+            committee.clone(),
+            committee,
+            StakeTableFetcher::mock(),
+        ))),
         10,
-    )));
+        &storage,
+    );
     let upgrade_data = UpgradeProposalData {
         old_version: Version { major: 0, minor: 1 },
         new_version: Version { major: 1, minor: 0 },

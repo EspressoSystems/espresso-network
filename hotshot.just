@@ -1,50 +1,49 @@
-test-ci-rest *ARGS:
+# Excluding packages with `--exclude` instead of the filterset prevents nextest from compiling them.
+# We should find a better way to handle this for example by having consistent crate names.
+test-ci-rest *args:
   echo Running unit tests
-  RUST_LOG=error cargo nextest run -E 'not (test(tests_1) | test(tests_2) | test(tests_3) | test(tests_4) | test(tests_5) | test(tests_6))' --profile hotshot --lib --bins --tests --benches --workspace --no-fail-fast {{ARGS}}
+  RUST_LOG=error cargo nextest run \
+  --exclude "marketplace-*" \
+  --exclude "sequencer*" \
+  --exclude builder \
+  --exclude client \
+  --exclude espresso-* \
+  --exclude hotshot-builder-core-refactored \
+  --exclude hotshot-query-service \
+  --exclude hotshot-state-prover \
+  --exclude hotshot-testing \
+  --exclude node-metrics \
+  --exclude staking-cli \
+  --exclude tests \
+  --exclude diff-test-hotshot \
+  --exclude gen-vk-contract \
+  --profile hotshot --lib --bins --tests --benches --workspace {{args}}
 
-test-ci-1:
-  echo Running integration test group 1
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_1 --no-fail-fast
+# Build and run an integration test target
+test-ci test *args:
+  echo Running integration test group {{test}}
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot --test {{test}} {{args}}
 
-test-ci-2:
-  echo Running integration test group 2
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_2 --no-fail-fast
+# Run all hotshot integration tests
+test-all *args:
+  RUST_LOG=error cargo nextest run -p hotshot-testing --profile hotshot {{args}}
 
-test-ci-3:
-  echo Running integration test group 3
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_3 --no-fail-fast
+# List all integration test targets in the hotshot-testing crate
+list-tests:
+    cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hotshot-testing") | .targets[] | select(.kind[] == "test") | .name'
 
-test-ci-4:
-  echo Running integration test group 4
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_4 --no-fail-fast
+# Build the github action matrix from integration test targets
+matrix:
+    #!/usr/bin/env bash
+    targets=$(just hotshot::list-tests)
 
-test-ci-5:
-  echo Running integration test group 5
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_5 --no-fail-fast
+    # Prefix with "test-ci" and make a JSON array
+    test_suites=$(printf '%s\n' $targets | jq -R . | jq -s 'map("test-ci " + .)')
 
-test-ci-6-1:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:1/6
+    # Add the extra "test-ci-rest"
+    test_suites=$(echo "$test_suites" | jq '. + ["test-ci-rest"]')
 
-test-ci-6-2:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:2/6
-
-test-ci-6-3:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:3/6
-
-test-ci-6-4:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:4/6
-
-test-ci-6-5:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:5/6
-
-test-ci-6-6:
-  echo Running integration test group 6
-  RUST_LOG=error cargo nextest run --profile hotshot --test tests_6 --no-fail-fast --partition hash:6/6
+    echo "{\"test_suites\": $test_suites}" | jq -c
 
 # Usage:
 #
@@ -53,9 +52,9 @@ test-ci-6-6:
 # To display logs from a test run:
 #
 #   just test memoryimpl_::test_success --nocapture
-test *ARGS:
-  echo Running test {{ARGS}}
-  cargo nextest run --profile hotshot {{ARGS}}
+test *args:
+  echo Running test {{args}}
+  cargo nextest run -p hotshot-testing --profile hotshot {{args}}
 
-example *ARGS:
-  cargo run --package hotshot-examples --example {{ARGS}}
+example *args:
+  cargo run --package hotshot-examples --example {{args}}

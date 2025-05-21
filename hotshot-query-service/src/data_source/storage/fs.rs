@@ -12,13 +12,38 @@
 
 #![cfg(feature = "file-system-data-source")]
 
+use std::{
+    collections::{
+        hash_map::{Entry, HashMap},
+        BTreeMap,
+    },
+    hash::Hash,
+    ops::{Bound, Deref, RangeBounds},
+    path::Path,
+};
+
+use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use async_trait::async_trait;
+use atomic_store::{AtomicStore, AtomicStoreLoader, PersistenceError};
+use committable::Committable;
+use futures::future::Future;
+use hotshot_types::{
+    data::{VidCommitment, VidShare},
+    traits::{
+        block_contents::BlockHeader,
+        node_implementation::{ConsensusTime, NodeType},
+    },
+};
+use serde::{de::DeserializeOwned, Serialize};
+use snafu::OptionExt;
+
 use super::{
     ledger_log::{Iter, LedgerLog},
     pruning::{PruneStorage, PrunedHeightStorage, PrunerConfig},
+    sql::MigrateTypes,
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, PayloadMetadata,
     UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
 };
-
 use crate::{
     availability::{
         data_source::{BlockId, LeafId},
@@ -26,6 +51,7 @@ use crate::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
         },
+        StateCertQueryData,
     },
     data_source::{update, VersionedDataSource},
     metrics::PrometheusMetrics,
@@ -33,27 +59,12 @@ use crate::{
     status::HasMetrics,
     types::HeightIndexed,
     ErrorSnafu, Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
-    VidCommitment, VidShare,
 };
-use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use async_trait::async_trait;
-use atomic_store::{AtomicStore, AtomicStoreLoader, PersistenceError};
-use committable::Committable;
-use futures::future::Future;
-use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
-use serde::{de::DeserializeOwned, Serialize};
-use snafu::OptionExt;
-use std::collections::{
-    hash_map::{Entry, HashMap},
-    BTreeMap,
-};
-use std::hash::Hash;
-use std::ops::{Bound, Deref, RangeBounds};
-use std::path::Path;
 
 const CACHED_LEAVES_COUNT: usize = 100;
 const CACHED_BLOCKS_COUNT: usize = 100;
 const CACHED_VID_COMMON_COUNT: usize = 100;
+const CACHED_STATE_CERT_COUNT: usize = 5;
 
 #[derive(custom_debug::Debug)]
 pub struct FileSystemStorageInner<Types>
@@ -73,6 +84,7 @@ where
     leaf_storage: LedgerLog<LeafQueryData<Types>>,
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
+    state_cert_storage: LedgerLog<StateCertQueryData<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -85,10 +97,10 @@ where
             BlockId::Number(n) => Ok(n),
             BlockId::Hash(h) => {
                 Ok(*self.index_by_block_hash.get(&h).context(NotFoundSnafu)? as usize)
-            }
+            },
             BlockId::PayloadHash(h) => {
                 Ok(*self.index_by_payload_hash.get(&h).context(NotFoundSnafu)? as usize)
-            }
+            },
         }
     }
 
@@ -131,6 +143,16 @@ where
     Payload<Types>: QueryablePayload<Types>,
 {
     type Pruner = ();
+}
+
+#[async_trait]
+impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
+where
+    Payload<Types>: QueryablePayload<Types>,
+{
+    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 impl<Types: NodeType> FileSystemStorage<Types>
@@ -188,6 +210,11 @@ where
                 leaf_storage: LedgerLog::create(loader, "leaves", CACHED_LEAVES_COUNT)?,
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
+                state_cert_storage: LedgerLog::create(
+                    loader,
+                    "state_cert",
+                    CACHED_STATE_CERT_COUNT,
+                )?,
             }),
             metrics: Default::default(),
         })
@@ -210,6 +237,11 @@ where
             loader,
             "vid_common",
             CACHED_VID_COMMON_COUNT,
+        )?;
+        let state_cert_storage = LedgerLog::<StateCertQueryData<Types>>::open(
+            loader,
+            "state_cert",
+            CACHED_STATE_CERT_COUNT,
         )?;
 
         let mut index_by_block_hash = HashMap::new();
@@ -258,6 +290,7 @@ where
                 leaf_storage,
                 block_storage,
                 vid_storage,
+                state_cert_storage,
                 top_storage: None,
             }),
             metrics: Default::default(),
@@ -270,6 +303,7 @@ where
         inner.leaf_storage.skip_version()?;
         inner.block_storage.skip_version()?;
         inner.vid_storage.skip_version()?;
+        inner.state_cert_storage.skip_version()?;
         if let Some(store) = &mut inner.top_storage {
             store.commit_version()?;
         }
@@ -290,6 +324,7 @@ where
         self.leaf_storage.revert_version().unwrap();
         self.block_storage.revert_version().unwrap();
         self.vid_storage.revert_version().unwrap();
+        self.state_cert_storage.revert_version().unwrap();
     }
 }
 
@@ -322,6 +357,7 @@ where
         self.inner.leaf_storage.commit_version().await?;
         self.inner.block_storage.commit_version().await?;
         self.inner.vid_storage.commit_version().await?;
+        self.inner.state_cert_storage.commit_version().await?;
         if let Some(store) = &mut self.inner.top_storage {
             store.commit_version()?;
         }
@@ -392,11 +428,11 @@ where
                 iter.nth(n - 1);
             }
             n
-        }
+        },
         Bound::Excluded(n) => {
             iter.nth(n);
             n + 1
-        }
+        },
         Bound::Unbounded => 0,
     };
 
@@ -572,6 +608,15 @@ where
         // `from` itself if we can, or fail.
         self.get_leaf((from as usize).into()).await
     }
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+        self.inner
+            .state_cert_storage
+            .iter()
+            .nth(epoch as usize)
+            .context(NotFoundSnafu)?
+            .context(MissingSnafu)
+    }
 }
 
 impl<Types: NodeType> UpdateAvailabilityStorage<Types>
@@ -636,6 +681,16 @@ where
             .insert(common.height() as usize, (common, share))?;
         Ok(())
     }
+
+    async fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .state_cert_storage
+            .insert(state_cert.0.epoch.u64() as usize, state_cert)?;
+        Ok(())
+    }
 }
 
 /// Update an index mapping hashes of objects to their positions in the ledger.
@@ -649,10 +704,10 @@ fn update_index_by_hash<H: Eq + Hash, P: Ord>(index: &mut HashMap<H, P>, hash: H
                 // Overwrite the existing entry if the new object was sequenced first.
                 e.insert(pos);
             }
-        }
+        },
         Entry::Vacant(e) => {
             e.insert(pos);
-        }
+        },
     }
 }
 
@@ -759,7 +814,7 @@ where
                 // entry in `index_by_time` has a non-empty list associated with it, so this
                 // indexing is safe.
                 blocks[0]
-            }
+            },
         } as usize;
 
         let mut res = TimeWindowQueryData::default();

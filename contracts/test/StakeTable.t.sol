@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Unlicensed
+    // SPDX-License-Identifier: Unlicensed
 
 /* solhint-disable contract-name-camelcase, func-name-mixedcase, one-contract-per-file */
 
@@ -14,31 +14,41 @@ import { ERC20 } from "solmate/utils/SafeTransferLib.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "../src/libraries/BLSSig.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
-import { AbstractStakeTable } from "../src/interfaces/AbstractStakeTable.sol";
 import { LightClient } from "../src/LightClient.sol";
-import { LightClientMock } from "../test/mocks/LightClientMock.sol";
-import { InitializedAt } from "../src/InitializedAt.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { LightClientV2 } from "../src/LightClientV2.sol";
 import { IPlonkVerifier as V } from "../src/interfaces/IPlonkVerifier.sol";
+import { LightClientCommonTest } from "./LightClientV2.t.sol";
+import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Timelock } from "../src/Timelock.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
+import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 // Token contract
-import { ExampleToken } from "../src/ExampleToken.sol";
+import { EspToken } from "../src/EspToken.sol";
 
-// Target contract
+// Target contracts
 import { StakeTable as S } from "../src/StakeTable.sol";
-import { StakeTableMock } from "../test/mocks/StakeTableMock.sol";
+import { StakeTableV2 } from "../src/StakeTableV2.sol";
 
-contract StakeTable_register_Test is Test {
-    StakeTableMock public stakeTable;
-    ExampleToken public token;
-    LightClientMock public lcMock;
-    uint256 public constant INITIAL_BALANCE = 10 ether;
-    uint256 public constant MIN_STAKE_AMOUNT = 10 ether;
-    address public exampleTokenCreator;
-    uint64 public churnRate = 10;
-    uint64 public hotShotBlocksPerEpoch = 1;
+contract StakeTable_register_Test is LightClientCommonTest {
+    S public stakeTable;
+    // NOTE: address admin defined in LightClientCommonTest
+    EspToken public token;
+    uint256 public constant INITIAL_BALANCE = 5 ether;
+    uint256 public constant ESCROW_PERIOD = 1 weeks;
+    uint16 public constant COMMISSION = 1234; // 12.34 %
+    address public tokenGrantRecipient;
+    address public delegator;
+    address public validator;
+    string seed1 = "1";
+    string seed2 = "255";
 
-    function genClientWallet(address sender, string memory seed)
+    function genClientWallet(address sender, string memory _seed)
         private
         returns (BN254.G2Point memory, EdOnBN254.EdOnBN254Point memory, BN254.G1Point memory)
     {
@@ -47,15 +57,15 @@ contract StakeTable_register_Test is Test {
         cmds[0] = "diff-test";
         cmds[1] = "gen-client-wallet";
         cmds[2] = vm.toString(sender);
-        cmds[3] = seed;
+        cmds[3] = _seed;
 
         bytes memory result = vm.ffi(cmds);
         (
             BN254.G1Point memory blsSig,
             BN254.G2Point memory blsVK,
             uint256 schnorrVKx,
-            uint256 schnorrVKy,
-        ) = abi.decode(result, (BN254.G1Point, BN254.G2Point, uint256, uint256, address));
+            uint256 schnorrVKy
+        ) = abi.decode(result, (BN254.G1Point, BN254.G2Point, uint256, uint256));
 
         return (
             blsVK, // blsVK
@@ -64,62 +74,63 @@ contract StakeTable_register_Test is Test {
         );
     }
 
-    function setUpCustom(uint64 _churnRate, uint64 _blocksPerEpoch) public {
-        exampleTokenCreator = makeAddr("tokenCreator");
-        vm.prank(exampleTokenCreator);
-        token = new ExampleToken(INITIAL_BALANCE);
-
-        string[] memory cmds = new string[](3);
-        cmds[0] = "diff-test";
-        cmds[1] = "mock-genesis";
-        cmds[2] = "5";
-
-        bytes memory result = vm.ffi(cmds);
+    function registerValidatorOnStakeTable(
+        address validator,
+        string memory seed,
+        uint16 commission,
+        S stakeTable
+    ) public {
         (
-            LightClientMock.LightClientState memory state,
-            LightClientMock.StakeTableState memory stakeState
-        ) = abi.decode(result, (LightClient.LightClientState, LightClient.StakeTableState));
-        LightClientMock.LightClientState memory genesis = state;
-        LightClientMock.StakeTableState memory genesisStakeTableState = stakeState;
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed);
 
-        lcMock = new LightClientMock(genesis, genesisStakeTableState, 864000);
-        stakeTable = new StakeTableMock(
-            address(token),
-            address(lcMock),
-            _churnRate,
-            _blocksPerEpoch,
-            MIN_STAKE_AMOUNT,
-            exampleTokenCreator
-        );
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, commission);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, commission);
+        vm.stopPrank();
     }
 
     function setUp() public {
-        setUpCustom(churnRate, hotShotBlocksPerEpoch);
-    }
+        init(); // light client init
+        tokenGrantRecipient = makeAddr("tokenGrantRecipient");
+        validator = makeAddr("validator");
+        delegator = makeAddr("delegator");
+        admin = makeAddr("admin");
 
-    function test_RevertWhen_InvalidHotShotBlocksPerEpoch() external {
-        vm.expectRevert(S.InvalidHotShotBlocksPerEpoch.selector);
-        new StakeTableMock(
-            address(token), address(lcMock), churnRate, 0, MIN_STAKE_AMOUNT, exampleTokenCreator
+        // deploy EspToken and its proxy
+        EspToken tokenImpl = new EspToken();
+        bytes memory initData =
+            abi.encodeWithSignature("initialize(address,address)", admin, tokenGrantRecipient);
+        ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
+        token = EspToken(payable(address(proxy)));
+
+        // transfer minted coin
+        vm.prank(tokenGrantRecipient);
+        token.transfer(address(validator), INITIAL_BALANCE);
+
+        // deploy stake table and its proxy
+        S staketableImpl = new S();
+        initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)",
+            address(token),
+            address(lc),
+            ESCROW_PERIOD,
+            admin
         );
+        proxy = new ERC1967Proxy(address(staketableImpl), initData);
+        stakeTable = S(payable(address(proxy)));
     }
 
-    function test_Deployment_StoresBlockNumber() public {
-        setUp();
+    function test_Deployment_StoresBlockNumber() public view {
         assertEq(stakeTable.initializedAtBlock(), block.number);
     }
 
     function testFuzz_RevertWhen_InvalidBLSSig(uint256 scalar) external {
-        uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
-
         (BN254.G2Point memory blsVK, EdOnBN254.EdOnBN254Point memory schnorrVK,) =
-            genClientWallet(exampleTokenCreator, seed);
-
-        // Prepare for the token transfer
-        vm.startPrank(exampleTokenCreator);
-        token.approve(address(stakeTable), depositAmount);
+            genClientWallet(validator, seed1);
 
         // Ensure the scalar is valid
         // Note: Apparently BN254.scalarMul is not well defined when the scalar is 0
@@ -130,191 +141,81 @@ contract StakeTable_register_Test is Test {
 
         // Failed signature verification
         vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, badSig, validUntilEpoch);
+        stakeTable.registerValidator(blsVK, schnorrVK, badSig, COMMISSION);
         vm.stopPrank();
     }
 
-    // commenting out epoch related tests for now
-    // function testFuzz_RevertWhen_InvalidNextRegistrationEpoch(uint64 rand) external {
-    //     LCMock.setCurrentEpoch(3);
-    //     uint64 currentEpoch = stakeTable.currentEpoch();
-
-    //     uint64 depositAmount = 10 ether;
-    //     vm.prank(exampleTokenCreator);
-    //     token.approve(address(stakeTable), depositAmount);
-
-    //     (
-    //         BN254.G2Point memory blsVK,
-    //         EdOnBN254.EdOnBN254Point memory schnorrVK,
-    //         BN254.G1Point memory sig
-    //     ) = genClientWallet(exampleTokenCreator);
-
-    //     // Invalid next registration epoch
-    //     uint64 validUntilEpoch = uint64(bound(rand, 0, currentEpoch - 1));
-    //     vm.prank(exampleTokenCreator);
-    //     vm.expectRevert(
-    //         abi.encodeWithSelector(
-    //             S.InvalidNextRegistrationEpoch.selector, currentEpoch + 1, validUntilEpoch
-    //         )
-    //     );
-    //     stakeTable.register(
-    //         blsVK,
-    //         schnorrVK,
-    //         depositAmount,
-    //         sig,
-    //         validUntilEpoch
-    //     );
-
-    //     // Valid next registration epoch
-    //     validUntilEpoch = uint64(bound(rand, currentEpoch + 1, type(uint64).max));
-    //     vm.prank(exampleTokenCreator);
-    //     stakeTable.register(
-    //         blsVK,
-    //         schnorrVK,
-    //         depositAmount,
-    //         sig,
-    //         validUntilEpoch
-    //     );
-    // }
-
     function test_RevertWhen_NodeAlreadyRegistered() external {
         uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
 
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
         // Prepare for the token transfer
-        vm.prank(exampleTokenCreator);
+        vm.prank(validator);
         token.approve(address(stakeTable), depositAmount);
 
         // Successful call to register
-        vm.prank(exampleTokenCreator);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        vm.prank(validator);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // The node is already registered
-        vm.prank(exampleTokenCreator);
-        vm.expectRevert(S.NodeAlreadyRegistered.selector);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        vm.prank(validator);
+        vm.expectRevert(S.ValidatorAlreadyRegistered.selector);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
     }
 
     function test_RevertWhen_NoTokenAllowanceOrBalance() external {
         uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 10;
-        string memory seed = "123";
 
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
-        assertEq(ERC20(token).balanceOf(exampleTokenCreator), INITIAL_BALANCE);
-        vm.prank(exampleTokenCreator);
+        vm.startPrank(delegator);
         // The call to register is expected to fail because the depositAmount has not been approved
         // and thus the stake table contract cannot lock the stake.
         vm.expectRevert(abi.encodeWithSelector(S.InsufficientAllowance.selector, 0, depositAmount));
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        stakeTable.delegate(validator, depositAmount);
 
-        // A user with 0 balance cannot register either
-        address newUser = makeAddr("New user with zero balance");
-        (blsVK, schnorrVK, sig) = genClientWallet(newUser, seed);
-
-        vm.startPrank(newUser);
         // Prepare for the token transfer by giving the StakeTable contract the required allowance
         token.approve(address(stakeTable), depositAmount);
-        vm.expectRevert(abi.encodeWithSelector(S.InsufficientBalance.selector, 0));
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+
+        // TODO MA: this error is from solady's ERC20 implementation, needs to be updated in case we
+        // use another ERC20 implementation for our token. I think it's fair to expect a revert from
+        // *our* ERC20 token if the does not have the balance.
+        vm.expectRevert("TRANSFER_FROM_FAILED");
+        stakeTable.delegate(validator, depositAmount);
+
         vm.stopPrank();
-    }
-
-    function test_RevertWhen_InsufficientStakeAmount() external {
-        uint64 depositAmount = uint64(stakeTable.minStakeAmount()) - 1;
-        uint64 validUntilEpoch = 10;
-        string memory seed = "123";
-
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
-
-        assertEq(ERC20(token).balanceOf(exampleTokenCreator), INITIAL_BALANCE);
-        vm.prank(exampleTokenCreator);
-        // The call to register is expected to fail because the correct depositAmount has not been
-        // approved/supplied
-        // and thus the stake table contract cannot lock the stake.
-        vm.expectRevert(abi.encodeWithSelector(S.InsufficientStakeAmount.selector, depositAmount));
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
     }
 
     /// @dev Tests a correct registration
     function test_Registration_succeeds() external {
-        uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
-
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
-        // Prepare for the token transfer
-        vm.prank(exampleTokenCreator);
-        token.approve(address(stakeTable), depositAmount);
-
-        // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
-
-        uint256 totalStakeAmount;
-        totalStakeAmount = stakeTable.totalStake();
-        assertEq(totalStakeAmount, 0);
-
-        // Check event is emitted after calling successfully `register`
+        vm.prank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Registered(exampleTokenCreator, 1, depositAmount);
-        vm.prank(exampleTokenCreator);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
-
-        // Balance after registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE - depositAmount);
-        totalStakeAmount = stakeTable.totalStake();
-        assertEq(totalStakeAmount, depositAmount);
-
-        // lookup the node and verify the data
-        AbstractStakeTable.Node memory node = stakeTable.lookupNode(exampleTokenCreator);
-        assertEq(node.account, exampleTokenCreator);
-        assertEq(node.balance, depositAmount);
-        assertEq(node.registerEpoch, 1);
-        assertTrue(stakeTable._isEqualBlsKey(node.blsVK, blsVK));
-        assertTrue(EdOnBN254.isEqual(node.schnorrVK, schnorrVK));
-
-        // lookup the stake and verify the amount
-        uint256 stakeAmount = stakeTable.lookupStake(exampleTokenCreator);
-        assertEq(stakeAmount, depositAmount);
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
     }
 
     /// @dev Tests a correct registration
     function test_RevertWhen_InvalidBlsVK_or_InvalidSchnorrVK_on_Registration() external {
-        uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
-
         // generate a valid blsVK and schnorrVK
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
         // Prepare for the token transfer
-        vm.startPrank(exampleTokenCreator);
-        token.approve(address(stakeTable), depositAmount);
+        vm.startPrank(validator);
 
         // revert when the blsVK is the zero point
         BN254.G2Point memory zeroBlsVK = BN254.G2Point(
@@ -323,95 +224,58 @@ contract StakeTable_register_Test is Test {
             BN254.BaseField.wrap(0),
             BN254.BaseField.wrap(0)
         );
-        vm.expectRevert(S.InvalidBlsVK.selector);
-        stakeTable.register(zeroBlsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
+        stakeTable.registerValidator(zeroBlsVK, schnorrVK, sig, COMMISSION);
 
         // revert when the schnorrVK is the zero point
         EdOnBN254.EdOnBN254Point memory zeroSchnorrVK = EdOnBN254.EdOnBN254Point(0, 0);
         vm.expectRevert(S.InvalidSchnorrVK.selector);
-        stakeTable.register(blsVK, zeroSchnorrVK, depositAmount, sig, validUntilEpoch);
-
-        // lookup the node and verify the data but expect the node to be empty
-        AbstractStakeTable.Node memory node = stakeTable.lookupNode(exampleTokenCreator);
-        assertEq(node.account, address(0));
+        stakeTable.registerValidator(blsVK, zeroSchnorrVK, sig, COMMISSION);
 
         vm.stopPrank();
     }
 
     function test_UpdateConsensusKeys_Succeeds() public {
-        uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
-
-        //Step 1: generate a new blsVK and schnorrVK and register this node
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
-
-        // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
-        token.approve(address(stakeTable), depositAmount);
-
-        // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
-
-        // Check event is emitted after calling successfully `register`
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Registered(exampleTokenCreator, 1, depositAmount);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        // Step 1: register the validator
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
         // Step 2: generate a new blsVK and schnorrVK
-        seed = "234";
         (
             BN254.G2Point memory newBlsVK,
             EdOnBN254.EdOnBN254Point memory newSchnorrVK,
             BN254.G1Point memory newBlsSig
-        ) = genClientWallet(exampleTokenCreator, seed);
-
-        // assert that the new blsVK and schnorrVK are not the same as the old ones
-        assertFalse(stakeTable._isEqualBlsKey(newBlsVK, blsVK));
-        assertFalse(EdOnBN254.isEqual(newSchnorrVK, schnorrVK));
+        ) = genClientWallet(validator, seed2);
 
         // Step 3: update the consensus keys
+        vm.startPrank(validator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.UpdatedConsensusKeys(exampleTokenCreator, newBlsVK, newSchnorrVK);
+        emit S.ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
         stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newBlsSig);
-
-        // Step 4: verify the update
-        AbstractStakeTable.Node memory node = stakeTable.lookupNode(exampleTokenCreator);
-        assertTrue(stakeTable._isEqualBlsKey(node.blsVK, newBlsVK));
-        assertTrue(EdOnBN254.isEqual(node.schnorrVK, newSchnorrVK));
-        assertEq(node.balance, depositAmount);
-        assertEq(node.account, exampleTokenCreator);
 
         vm.stopPrank();
     }
 
-    function test_RevertWhen_UpdateConsensusKeysWithSameKeys() public {
+    function test_RevertWhen_UpdateConsensusKeysWithSameBlsKey() public {
         uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
 
         //Step 1: generate a new blsVK and schnorrVK and register this node
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
         // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
+        vm.startPrank(validator);
         token.approve(address(stakeTable), depositAmount);
 
         // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // Step 2: update the consensus keys with the same keys
-        vm.expectRevert(S.NoKeyChange.selector);
+        vm.expectRevert(S.BlsKeyAlreadyUsed.selector);
         stakeTable.updateConsensusKeys(blsVK, schnorrVK, sig);
 
         vm.stopPrank();
@@ -419,24 +283,22 @@ contract StakeTable_register_Test is Test {
 
     function test_RevertWhen_UpdateConsensusKeysWithEmptyKeys() public {
         uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
 
         //Step 1: generate a new blsVK and schnorrVK and register this node
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
         // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
+        vm.startPrank(validator);
         token.approve(address(stakeTable), depositAmount);
 
         // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // empty keys
         BN254.G2Point memory emptyBlsVK = BN254.G2Point(
@@ -448,7 +310,7 @@ contract StakeTable_register_Test is Test {
         EdOnBN254.EdOnBN254Point memory emptySchnorrVK = EdOnBN254.EdOnBN254Point(0, 0);
 
         // Step 2: attempt to update the consensus keys with the same keys
-        vm.expectRevert(S.InvalidBlsVK.selector);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
         stakeTable.updateConsensusKeys(emptyBlsVK, emptySchnorrVK, sig);
 
         vm.stopPrank();
@@ -456,32 +318,29 @@ contract StakeTable_register_Test is Test {
 
     function test_RevertWhen_UpdateConsensusKeysWithInvalidSignature() public {
         uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
 
         //Step 1: generate a new blsVK and schnorrVK and register this node
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
         // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
+        vm.startPrank(validator);
         token.approve(address(stakeTable), depositAmount);
 
         // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
         BN254.G1Point memory badSig =
             BN254.G1Point(BN254.BaseField.wrap(0), BN254.BaseField.wrap(0));
 
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // Step 2: generate a new blsVK and schnorrVK
-        seed = "234";
         (BN254.G2Point memory newBlsVK, EdOnBN254.EdOnBN254Point memory newSchnorrVK,) =
-            genClientWallet(exampleTokenCreator, seed);
+            genClientWallet(validator, seed2);
 
         // Step 3: attempt to update the consensus keys with the new keys but invalid signature
         vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
@@ -492,31 +351,27 @@ contract StakeTable_register_Test is Test {
 
     function test_RevertWhen_UpdateConsensusKeysWithZeroBlsKeyButNewSchnorrVK() public {
         uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
 
         //Step 1: generate a new blsVK and schnorrVK and register this node
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
         // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
+        vm.startPrank(validator);
         token.approve(address(stakeTable), depositAmount);
 
         // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Registered(exampleTokenCreator, 1, depositAmount);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // Step 2: generate an empty and new schnorrVK
-        seed = "234";
-        (, EdOnBN254.EdOnBN254Point memory newSchnorrVK,) =
-            genClientWallet(exampleTokenCreator, seed);
+        (, EdOnBN254.EdOnBN254Point memory newSchnorrVK,) = genClientWallet(validator, seed2);
 
         BN254.G2Point memory emptyBlsVK = BN254.G2Point(
             BN254.BaseField.wrap(0),
@@ -525,9 +380,8 @@ contract StakeTable_register_Test is Test {
             BN254.BaseField.wrap(0)
         );
 
-        // Step 3: update the consensus keys with the new schnorr Key but zero bls key which
-        // indicates no change in the bls key
-        vm.expectRevert(S.InvalidBlsVK.selector);
+        // Step 3: empty bls key -> wrong signature
+        vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
         stakeTable.updateConsensusKeys(emptyBlsVK, newSchnorrVK, sig);
 
         vm.stopPrank();
@@ -535,29 +389,26 @@ contract StakeTable_register_Test is Test {
 
     function test_RevertWhen_UpdateConsensusKeysWithZeroSchnorrVKButNewBlsVK() public {
         uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
 
         //Step 1: generate a new blsVK and schnorrVK and register this node
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
         // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
+        vm.startPrank(validator);
         token.approve(address(stakeTable), depositAmount);
 
         // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // Step 2: generate a new blsVK
-        seed = "234";
         (BN254.G2Point memory newBlsVK,, BN254.G1Point memory newSig) =
-            genClientWallet(exampleTokenCreator, seed);
+            genClientWallet(validator, seed2);
 
         // Step 3: generate empty schnorrVK
         EdOnBN254.EdOnBN254Point memory emptySchnorrVK = EdOnBN254.EdOnBN254Point(0, 0);
@@ -569,548 +420,1401 @@ contract StakeTable_register_Test is Test {
         vm.stopPrank();
     }
 
-    function test_UpdateConsensusKeysWithSameBlsKeyButNewSchnorrVK_Succeeds() public {
-        uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
-
-        //Step 1: generate a new blsVK and schnorrVK and register this node
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory blsSig
-        ) = genClientWallet(exampleTokenCreator, seed);
-
-        // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
-        token.approve(address(stakeTable), depositAmount);
-
-        // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
-
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Registered(exampleTokenCreator, 1, depositAmount);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, blsSig, validUntilEpoch);
-
-        // Step 2: generate a new schnorrVK
-        seed = "234";
-        (, EdOnBN254.EdOnBN254Point memory newSchnorrVK,) =
-            genClientWallet(exampleTokenCreator, seed);
-
-        // Step 3: update the consensus keys with the new schnorrVK
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.UpdatedConsensusKeys(exampleTokenCreator, blsVK, newSchnorrVK);
-        stakeTable.updateConsensusKeys(blsVK, newSchnorrVK, blsSig);
-
-        // Step 4: verify the update
-        AbstractStakeTable.Node memory node = stakeTable.lookupNode(exampleTokenCreator);
-        assertTrue(stakeTable._isEqualBlsKey(node.blsVK, blsVK)); // same as current bls vk
-        assertTrue(EdOnBN254.isEqual(node.schnorrVK, newSchnorrVK)); // new schnorr vk
-        assertEq(node.balance, depositAmount); //same balance
-        assertEq(node.account, exampleTokenCreator); //same account
-
-        vm.stopPrank();
-    }
-
     function test_UpdateConsensusKeysWithNewBlsKeyButSameSchnorrVK_Succeeds() public {
         uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
 
         //Step 1: generate a new blsVK and schnorrVK and register this node
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
         // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
+        vm.startPrank(validator);
         token.approve(address(stakeTable), depositAmount);
 
         // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(validator), INITIAL_BALANCE);
 
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Registered(exampleTokenCreator, 1, depositAmount);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, COMMISSION);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
 
         // Step 2: generate an empty and new schnorrVK
-        seed = "234";
         (BN254.G2Point memory newBlsVK,, BN254.G1Point memory newSig) =
-            genClientWallet(exampleTokenCreator, seed);
+            genClientWallet(validator, seed2);
 
         // Step 3: update the consensus keys with the same bls keys but new schnorrV
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.UpdatedConsensusKeys(exampleTokenCreator, newBlsVK, schnorrVK);
+        emit S.ConsensusKeysUpdated(validator, newBlsVK, schnorrVK);
         stakeTable.updateConsensusKeys(newBlsVK, schnorrVK, newSig);
 
-        // Step 4: verify the update
-        AbstractStakeTable.Node memory node = stakeTable.lookupNode(exampleTokenCreator);
-        assertTrue(stakeTable._isEqualBlsKey(node.blsVK, newBlsVK)); // same as current bls vk
-        assertTrue(EdOnBN254.isEqual(node.schnorrVK, schnorrVK)); // same as current schnorr vk
-        assertEq(node.balance, depositAmount); //same balance
-        assertEq(node.account, exampleTokenCreator); //same account
+        vm.stopPrank();
+    }
+
+    function test_ClaimWithdrawalSucceeds() public {
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        // Delegating zero amount fails
+        vm.expectRevert(S.ZeroAmount.selector);
+        stakeTable.delegate(validator, 0);
+
+        // Delegate some funds
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, 3 ether);
+        stakeTable.delegate(validator, 3 ether);
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
+        assertEq(token.balanceOf(address(stakeTable)), 3 ether);
+
+        // Withdraw from non-existent validator fails
+        vm.expectRevert(S.NothingToWithdraw.selector);
+        stakeTable.claimWithdrawal(makeAddr("nobody"));
+
+        // Withdraw without undelegation fails
+        vm.expectRevert(S.NothingToWithdraw.selector);
+        stakeTable.claimWithdrawal(validator);
+
+        // Undelegating zero amount fails
+        vm.expectRevert(S.ZeroAmount.selector);
+        stakeTable.undelegate(validator, 0);
+
+        // Partial undelegation of funds ok
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator, 1 ether);
+        stakeTable.undelegate(validator, 1 ether);
+
+        // Withdraw too early fails
+        vm.expectRevert(S.PrematureWithdrawal.selector);
+        stakeTable.claimWithdrawal(validator);
+
+        // Withdraw after escrow period ok
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        stakeTable.claimWithdrawal(validator);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 2 ether);
+
+        vm.stopPrank();
+
+        // Validator exit succeeds
+        vm.prank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+
+        vm.startPrank(delegator);
+
+        // Claim validator exit too early fails
+        vm.expectRevert(S.PrematureWithdrawal.selector);
+        stakeTable.claimValidatorExit(validator);
+
+        // Undelegate after validator exit fails
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        stakeTable.undelegate(validator, 1);
+
+        // Claim validator exit after escrow period ok
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        stakeTable.claimValidatorExit(validator);
+
+        // The delegator withdrew all their funds
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
 
         vm.stopPrank();
     }
 
-    function test_lookupNodeAndLookupStake_fails() public {
-        address randomUser = makeAddr("randomUser");
+    // solhint-disable-next-line no-empty-blocks
+    function test_RevertWhen_UndelegateAfterValidatorExit() public {
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
-        // lookup the stake for an address that is not registered and verify the amount is empty
-        uint256 stakeAmount = stakeTable.lookupStake(randomUser);
-        assertEq(stakeAmount, 0);
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
 
-        // lookup the node for an address that is not registered and verify the data is empty
-        AbstractStakeTable.Node memory node = stakeTable.lookupNode(randomUser);
-        assertEq(node.account, address(0));
-        assertEq(node.balance, 0);
-        assertEq(node.registerEpoch, 0);
-        assertTrue(
-            stakeTable._isEqualBlsKey(
-                node.blsVK,
-                BN254.G2Point(
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0)
-                )
-            )
-        );
-        assertTrue(EdOnBN254.isEqual(node.schnorrVK, EdOnBN254.EdOnBN254Point(0, 0)));
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
 
-        // look up the stake for the zero address and verify the amount is empty
-        stakeAmount = stakeTable.lookupStake(address(0));
-        assertEq(stakeAmount, 0);
+        // Delegate some funds
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, 3 ether);
+        stakeTable.delegate(validator, 3 ether);
 
-        // look up the node for the zero address and verify the data is empty
-        node = stakeTable.lookupNode(address(0));
-        assertEq(node.account, address(0));
-        assertEq(node.balance, 0);
-        assertEq(node.registerEpoch, 0);
-        assertTrue(
-            stakeTable._isEqualBlsKey(
-                node.blsVK,
-                BN254.G2Point(
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0)
-                )
-            )
-        );
-        assertTrue(EdOnBN254.isEqual(node.schnorrVK, EdOnBN254.EdOnBN254Point(0, 0)));
+        // exit validator
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // undelegate after validator exit fails
+        vm.startPrank(delegator);
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        stakeTable.undelegate(validator, 1 ether);
+        vm.stopPrank();
     }
 
-    function test_WithdrawFunds_succeeds() public {
-        // register -> updateEpoch -> requestExit -> updateEpoch -> withdraw
-        // Register the node and set exit epoch
-        uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
+    function test_MultipleUndelegationsAfterExitEpochSucceeds() public {
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
 
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        // Delegate some funds
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, 3 ether);
+        stakeTable.delegate(validator, 3 ether);
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether);
+        assertEq(token.balanceOf(address(stakeTable)), 3 ether);
+
+        (uint256 delegatedAmountBefore,) = stakeTable.validators(validator);
+        stakeTable.undelegate(validator, 2 ether);
+        (uint256 delegatedAmountAfter,) = stakeTable.validators(validator);
+        assertEq(delegatedAmountAfter, delegatedAmountBefore - 2 ether);
+
+        vm.expectRevert(S.UndelegationAlreadyExists.selector);
+        stakeTable.undelegate(validator, 1 ether);
+
+        // can't undelegate until the previous undelegation is withdrawn
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectRevert(S.UndelegationAlreadyExists.selector);
+        stakeTable.undelegate(validator, 1 ether);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, 2 ether);
+        stakeTable.claimWithdrawal(validator);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE - 3 ether + 2 ether);
+
+        assertEq(stakeTable.delegations(validator, delegator), 1 ether);
+
+        // now the delegator can undelegate again
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator, 1 ether);
+        stakeTable.undelegate(validator, 1 ether);
+
+        assertEq(stakeTable.delegations(validator, delegator), 0);
+        (uint256 amountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, 1 ether);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        assertEq(token.balanceOf(address(stakeTable)), 1 ether);
+
+        vm.expectRevert(S.PrematureWithdrawal.selector);
+        stakeTable.claimWithdrawal(validator);
+        (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, 1 ether);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, 1 ether);
+        stakeTable.claimWithdrawal(validator);
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
+
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_DelegateToZeroAddress() public {
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.delegate(address(0), 1 ether);
+    }
+
+    function test_RevertWhen_DelegateToNonExistentValidator() public {
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.delegate(makeAddr("non-existent"), 1 ether);
+    }
+
+    function test_MultiDelegationsToSameValidator() public {
+        // Should test multiple delegations to same validator accumulate correctly
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+        vm.stopPrank();
+
+        assertEq(
+            stakeTable.delegations(validator, delegator), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3
+        );
+    }
+
+    function test_DelegationsToMultipleValidators() public {
+        // Should test delegating to multiple validators works correctly
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        // register validator 1
+        address validator1 = makeAddr("validator1");
+        registerValidatorOnStakeTable(validator1, seed1, COMMISSION, stakeTable);
+
+        // register validator 2
+        address validator2 = makeAddr("validator2");
+        registerValidatorOnStakeTable(validator2, seed2, COMMISSION, stakeTable);
+
+        // delegate to validator 1
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator1, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator1, INITIAL_BALANCE / 3);
+
+        // delegate to validator 2
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator2, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator2, INITIAL_BALANCE / 3);
+
+        // delegate to validator 1
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator1, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator1, INITIAL_BALANCE / 3);
+
+        // check the delegations
+        assertEq(
+            stakeTable.delegations(validator1, delegator), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3
+        );
+        assertEq(stakeTable.delegations(validator2, delegator), INITIAL_BALANCE / 3);
+
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_UndelegateMoreThanDelegated() public {
+        // Should test undelegating more than delegated amount fails
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+
+        vm.expectRevert(abi.encodeWithSelector(S.InsufficientBalance.selector, INITIAL_BALANCE));
+        stakeTable.undelegate(validator, INITIAL_BALANCE + 1);
+        vm.stopPrank();
+    }
+
+    function test_PartialUndelegationsAccounting() public {
+        // Should test multiple partial undelegations are accounted correctly
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+
+        uint256 amountToUndelegate = INITIAL_BALANCE / 2;
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator, amountToUndelegate);
+        stakeTable.undelegate(validator, amountToUndelegate);
+
+        assertEq(stakeTable.delegations(validator, delegator), INITIAL_BALANCE - amountToUndelegate);
+        (uint256 amountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, amountToUndelegate);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, INITIAL_BALANCE - amountToUndelegate);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE);
+
+        //warp to the exitEscrowPeriod and claim the withdrawal
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+
+        uint256 delegatorBalanceBefore = token.balanceOf(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, amountToUndelegate);
+        stakeTable.claimWithdrawal(validator);
+        assertEq(token.balanceOf(delegator), delegatorBalanceBefore + amountToUndelegate);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE - amountToUndelegate);
+        (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator, delegator);
+        assertEq(amountUndelegated, 0);
+        assertEq(unlocksAt, 0);
+        vm.stopPrank();
+    }
+
+    function test_UndelegateFromMultipleValidators() public {
+        // Should test undelegating from multiple validators works correctly
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        vm.prank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+
+        address validator1 = makeAddr("validator1");
+        address validator2 = makeAddr("validator2");
+        registerValidatorOnStakeTable(validator1, seed1, COMMISSION, stakeTable);
+        registerValidatorOnStakeTable(validator2, seed2, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator1, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator1, INITIAL_BALANCE / 3);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator2, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator2, INITIAL_BALANCE / 3);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator1, INITIAL_BALANCE / 3);
+        stakeTable.undelegate(validator1, INITIAL_BALANCE / 3);
+        (uint256 amountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator1, delegator);
+        assertEq(amountUndelegated, INITIAL_BALANCE / 3);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3);
+        (uint256 validatorDelegatedAmount,) = stakeTable.validators(validator1);
+        assertEq(validatorDelegatedAmount, 0);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator2, INITIAL_BALANCE / 3);
+        stakeTable.undelegate(validator2, INITIAL_BALANCE / 3);
+        (amountUndelegated, unlocksAt) = stakeTable.undelegations(validator2, delegator);
+        assertEq(amountUndelegated, INITIAL_BALANCE / 3);
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 3 + INITIAL_BALANCE / 3);
+        (validatorDelegatedAmount,) = stakeTable.validators(validator2);
+        assertEq(validatorDelegatedAmount, 0);
+
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        uint256 delegatorBalanceBefore = token.balanceOf(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE / 3);
+        stakeTable.claimWithdrawal(validator1);
+        assertEq(token.balanceOf(delegator), delegatorBalanceBefore + INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 3);
+
+        delegatorBalanceBefore = token.balanceOf(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE / 3);
+        stakeTable.claimWithdrawal(validator2);
+        assertEq(token.balanceOf(delegator), delegatorBalanceBefore + INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
+
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_WithdrawWithoutUndelegation() public {
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+
+        vm.expectRevert(S.NothingToWithdraw.selector);
+        stakeTable.claimWithdrawal(validator);
+        vm.stopPrank();
+    }
+
+    function test_WithdrawalAfterValidatorExit() public {
+        // Should test withdrawing after validator exit
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+        vm.stopPrank();
+
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+        (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        (uint256 delegatorAmountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(delegatorAmountUndelegated, 0); // undelegated amount is zero because the user did
+            // not undelegate
+        assertEq(unlocksAt, 0); // unlocks at is zero because the user did not undelegate
+
+        vm.startPrank(delegator);
+        vm.expectRevert(abi.encodeWithSelector(S.ValidatorAlreadyExited.selector));
+        stakeTable.undelegate(validator, INITIAL_BALANCE);
+
+        //validator already exited so call claim withdaral exit
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
+        (validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
+        assertEq(delegatedAmount, 0);
+    }
+
+    function test_ValidatorExitDuringUndelegationPeriod() public {
+        // Should test withdrawing after validator exit
+        vm.prank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE);
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE);
+        stakeTable.delegate(validator, INITIAL_BALANCE);
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Undelegated(delegator, validator, INITIAL_BALANCE / 2);
+        stakeTable.undelegate(validator, INITIAL_BALANCE / 2);
+        vm.stopPrank();
+
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+        (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        (uint256 delegatorAmountUndelegated, uint256 unlocksAt) =
+            stakeTable.undelegations(validator, delegator);
+        assertEq(delegatorAmountUndelegated, INITIAL_BALANCE / 2); // undelegated amount is
+            // INITIAL_BALANCE/2 because the user undelegated INITIAL_BALANCE/2
+        assertEq(unlocksAt, block.timestamp + ESCROW_PERIOD); // unlocks at is the current timestamp
+            // + ESCROW_PERIOD because the user undelegated INITIAL_BALANCE/2
+
+        vm.startPrank(delegator);
+        vm.expectRevert(abi.encodeWithSelector(S.ValidatorAlreadyExited.selector));
+        stakeTable.undelegate(validator, INITIAL_BALANCE);
+
+        //validator already exited so call claim validator exit
+        uint256 remainderStakedBalance = INITIAL_BALANCE - INITIAL_BALANCE / 2;
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, remainderStakedBalance);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE / 2);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 2);
+        (validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        uint256 delegatedAmount = stakeTable.delegations(validator, delegator);
+        assertEq(delegatedAmount, 0);
+
+        // now claim the previous undelegation
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE / 2);
+        stakeTable.claimWithdrawal(validator);
+        vm.stopPrank();
+    }
+
+    function test_ValidatorExitWithMultipleDelegators() public {
+        address delegator2 = makeAddr("delegator2");
+        address delegator3 = makeAddr("delegator3");
+        vm.startPrank(tokenGrantRecipient);
+        token.transfer(delegator, INITIAL_BALANCE / 3);
+        token.transfer(delegator2, INITIAL_BALANCE / 3);
+        token.transfer(delegator3, INITIAL_BALANCE / 3);
+        vm.stopPrank();
+
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        vm.startPrank(delegator);
+        token.approve(address(stakeTable), INITIAL_BALANCE / 3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+        vm.stopPrank();
+
+        vm.startPrank(delegator2);
+        token.approve(address(stakeTable), INITIAL_BALANCE / 3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator2, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+
+        vm.startPrank(delegator3);
+        token.approve(address(stakeTable), INITIAL_BALANCE / 3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Delegated(delegator3, validator, INITIAL_BALANCE / 3);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 3);
+
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + ESCROW_PERIOD);
+
+        vm.startPrank(delegator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator, INITIAL_BALANCE / 3);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        vm.startPrank(delegator2);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator2, INITIAL_BALANCE / 3);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        vm.startPrank(delegator3);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.Withdrawal(delegator3, INITIAL_BALANCE / 3);
+        stakeTable.claimValidatorExit(validator);
+        vm.stopPrank();
+
+        assertEq(token.balanceOf(delegator), INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(delegator2), INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(delegator3), INITIAL_BALANCE / 3);
+        assertEq(token.balanceOf(address(stakeTable)), 0);
+    }
+
+    function test_ValidatorRegistration_CommissionRates() public {
+        uint16 commission1234 = 1234; // 12.34%
+        registerValidatorOnStakeTable(validator, seed1, commission1234, stakeTable);
+
+        address validator2 = makeAddr("validator2");
+        uint16 commission10000 = 10000; // 100.00%
+        registerValidatorOnStakeTable(validator2, seed2, commission10000, stakeTable);
+
+        address validator3 = makeAddr("validator3");
+        uint16 commission0 = 0; // 0.00%
+        registerValidatorOnStakeTable(validator3, "135", commission0, stakeTable);
+
+        // Test invalid commission > 100.00%
+        address validator4 = makeAddr("validator4");
+        (
+            BN254.G2Point memory blsVK4,
+            EdOnBN254.EdOnBN254Point memory schnorrVK4,
+            BN254.G1Point memory sig4
+        ) = genClientWallet(validator4, "145");
+
+        uint16 invalidCommission = 10001; // 100.01%
+        vm.startPrank(validator4);
+        vm.expectRevert(S.InvalidCommission.selector);
+        stakeTable.registerValidator(blsVK4, schnorrVK4, sig4, invalidCommission);
+        vm.stopPrank();
+    }
+
+    function test_ValidatorExit() public {
+        // Setup - register validator
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        // Test 1: Non-validator cannot exit
+        address nonValidator = makeAddr("nonValidator");
+        vm.startPrank(nonValidator);
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // Test 2: Wrong validator cannot exit another validator's position
+        address wrongValidator = makeAddr("wrongValidator");
+        vm.startPrank(wrongValidator);
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // Test 3: Successful exit by correct validator
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ValidatorExit(validator);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // Test 4: Cannot exit again after already exited
+        vm.startPrank(validator);
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        stakeTable.deregisterValidator();
+        vm.stopPrank();
+
+        // Verify validator status after exit
+        (uint256 validatorAmountDelegated, S.ValidatorStatus status) =
+            stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        assertEq(uint256(status), uint256(S.ValidatorStatus.Exited));
+    }
+
+    function test_ConsensusKeyUpdateAuthorization() public {
+        // Setup - register initial validator
+        registerValidatorOnStakeTable(validator, seed1, COMMISSION, stakeTable);
+
+        (
+            BN254.G2Point memory newBlsVK,
+            EdOnBN254.EdOnBN254Point memory newSchnorrVK,
+            BN254.G1Point memory newSig
+        ) = genClientWallet(validator, seed2);
+
+        // Test 1: Non-validator cannot update keys
+        address nonValidator = makeAddr("nonValidator");
+        vm.startPrank(nonValidator);
+        vm.expectRevert(S.ValidatorInactive.selector);
+        stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newSig);
+        vm.stopPrank();
+
+        // Test 2: Successful update by  validator
+        vm.startPrank(validator);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit S.ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
+        stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newSig);
+        (uint256 validatorAmountDelegated, S.ValidatorStatus status) =
+            stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, 0);
+        assertEq(uint256(status), uint256(S.ValidatorStatus.Active));
+
+        // Test 3: Cannot update with same BLS key
+        vm.expectRevert(S.BlsKeyAlreadyUsed.selector);
+        stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, newSig);
+        vm.stopPrank();
+
+        // Test 4: Cannot update after exit
+        vm.startPrank(validator);
+        stakeTable.deregisterValidator();
+
+        // Generate another set of new keys
+        (
+            BN254.G2Point memory postExitBlsVK,
+            EdOnBN254.EdOnBN254Point memory postExitSchnorrVK,
+            BN254.G1Point memory postExitSig
+        ) = genClientWallet(validator, "145");
+
+        vm.expectRevert(S.ValidatorAlreadyExited.selector);
+        stakeTable.updateConsensusKeys(postExitBlsVK, postExitSchnorrVK, postExitSig);
+        vm.stopPrank();
+
+        // TODO test the v2 events
+    }
+
+    function test_ValidatorSelfDelegation() public {
+        uint256 validatorBalance = token.balanceOf(validator);
+        assertEq(validatorBalance, INITIAL_BALANCE);
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
+        ) = genClientWallet(validator, seed1);
 
-        // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
-        token.approve(address(stakeTable), depositAmount);
+        vm.startPrank(validator);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+        token.approve(address(stakeTable), INITIAL_BALANCE);
 
-        // Balances before registration
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
-
-        // register the node
-        vm.startPrank(exampleTokenCreator);
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Registered(exampleTokenCreator, 1, depositAmount);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        emit S.Delegated(validator, validator, INITIAL_BALANCE / 2);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 2);
 
-        // the node must be registered before you can exit so update the hotshot block number on the
-        // light client contract
-        S.Node memory node = stakeTable.lookupNode(exampleTokenCreator);
-        lcMock.setFinalizedState(
-            LightClient.LightClientState(0, node.registerEpoch + 1, BN254.ScalarField.wrap(0))
-        );
-        assertGe(stakeTable.currentEpoch(), node.registerEpoch + 1);
+        validatorBalance = token.balanceOf(validator);
+        uint256 stakeTableBalance = token.balanceOf(address(stakeTable));
+        assertEq(validatorBalance, INITIAL_BALANCE / 2);
+        assertEq(stakeTableBalance, INITIAL_BALANCE / 2);
+        (uint256 validatorAmountDelegated,) = stakeTable.validators(validator);
+        assertEq(validatorAmountDelegated, INITIAL_BALANCE / 2);
+        uint256 delegatedAmount = stakeTable.delegations(validator, validator);
+        assertEq(delegatedAmount, INITIAL_BALANCE / 2);
 
-        stakeTable.requestExit();
-
-        // update the hotshot block number on the light client contract to be greater than the
-        // exitEpoch
-        // and the exitEscrowPeriod is over
-        node = stakeTable.lookupNode(exampleTokenCreator);
-        uint64 exitEscrowPeriod = stakeTable.mockExitEscrowPeriod(node);
-        uint64 validWithdrawalEpoch = node.exitEpoch + exitEscrowPeriod + 1;
-        lcMock.setFinalizedState(
-            LightClient.LightClientState(0, validWithdrawalEpoch, BN254.ScalarField.wrap(0))
-        );
-        assertGe(stakeTable.currentEpoch(), validWithdrawalEpoch);
-
-        // Withdraw the funds
-        vm.startPrank(exampleTokenCreator);
-        uint256 balance = stakeTable.withdrawFunds();
-        vm.stopPrank();
-
-        // verify the withdraw
-        assertEq(balance, depositAmount);
-        assertEq(token.balanceOf(exampleTokenCreator), INITIAL_BALANCE);
-        assertEq(stakeTable.totalStake(), 0);
-        assertEq(stakeTable.lookupNode(exampleTokenCreator).balance, 0);
-        assertEq(stakeTable.lookupNode(exampleTokenCreator).account, address(0));
-
-        // test withdraw fails if the user tries to withdraw again
-        vm.expectRevert(S.NodeNotRegistered.selector);
-        stakeTable.withdrawFunds();
-
-        vm.stopPrank();
-    }
-
-    function test_WithdrawFunds_RevertWhen_NodeNotRegistered() public {
-        // Register the node and set exit epoch
-        uint64 depositAmount = 10 ether;
-        uint64 validUntilEpoch = 5;
-        string memory seed = "123";
-
-        // generate a new blsVK and schnorrVK and register this node
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = genClientWallet(exampleTokenCreator, seed);
-
-        // Prepare for the token transfer by granting allowance to the contract
-        vm.startPrank(exampleTokenCreator);
-        token.approve(address(stakeTable), depositAmount);
-
-        // register the node
+        // Can add more self-delegation
         vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.Registered(exampleTokenCreator, 1, depositAmount);
-        stakeTable.register(blsVK, schnorrVK, depositAmount, sig, validUntilEpoch);
+        emit S.Delegated(validator, validator, INITIAL_BALANCE / 4);
+        stakeTable.delegate(validator, INITIAL_BALANCE / 4);
 
+        // Verify accumulated self-delegation
+        assertEq(token.balanceOf(validator), INITIAL_BALANCE / 4);
+        assertEq(token.balanceOf(address(stakeTable)), INITIAL_BALANCE / 2 + INITIAL_BALANCE / 4);
+        assertEq(
+            stakeTable.delegations(validator, validator), INITIAL_BALANCE / 2 + INITIAL_BALANCE / 4
+        );
         vm.stopPrank();
+    }
+}
 
-        vm.startPrank(makeAddr("randomUser"));
-        // withdraw the funds
-        vm.expectRevert(S.NodeNotRegistered.selector);
-        stakeTable.withdrawFunds();
-        vm.stopPrank();
+contract StakeTableV2Test is S {
+    uint256 public newValue;
+
+    function initializeV2(uint256 _newValue) public reinitializer(2) {
+        newValue = _newValue;
     }
 
-    // test set admin succeeds
-    function test_setAdmin_succeeds() public {
-        vm.prank(exampleTokenCreator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit Ownable.OwnershipTransferred(exampleTokenCreator, makeAddr("admin"));
-        stakeTable.transferOwnership(makeAddr("admin"));
-        assertEq(stakeTable.owner(), makeAddr("admin"));
-    }
-
-    // test set admin fails if not admin or invalid admin address
-    function test_revertWhen_setAdmin_NotAdminOrInvalidAdminAddress() public {
-        vm.startPrank(makeAddr("randomUser"));
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector, makeAddr("randomUser")
-            )
-        );
-        stakeTable.transferOwnership(makeAddr("admin"));
-        vm.stopPrank();
-
-        vm.prank(exampleTokenCreator);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
-        stakeTable.transferOwnership(address(0));
-    }
-
-    // test update min stake amount succeeds
-    function test_updateMinStakeAmount_succeeds() public {
-        vm.prank(exampleTokenCreator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.MinStakeAmountUpdated(10 ether);
-        stakeTable.updateMinStakeAmount(10 ether);
-        assertEq(stakeTable.minStakeAmount(), 10 ether);
-    }
-
-    // test update min stake amount fails if not admin or invalid stake amount
-    function test_revertWhen_updateMinStakeAmount_NotAdminOrInvalidStakeAmount() public {
-        vm.startPrank(makeAddr("randomUser"));
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector, makeAddr("randomUser")
-            )
-        );
-        stakeTable.updateMinStakeAmount(10 ether);
-        vm.stopPrank();
-
-        vm.prank(exampleTokenCreator);
-        vm.expectRevert(S.InvalidValue.selector);
-        stakeTable.updateMinStakeAmount(0);
-    }
-
-    // test update max churn rate succeeds
-    function test_updateMaxChurnRate_succeeds() public {
-        vm.prank(exampleTokenCreator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.MaxChurnRateUpdated(10);
-        stakeTable.updateMaxChurnRate(10);
-        assertEq(stakeTable.maxNumChurnPerEpoch(), 10);
-    }
-
-    // test update max churn rate fails if not admin or invalid churn amount
-    function test_revertWhen_updateMaxChurnRate_NotAdminOrInvalidChurnAmount() public {
-        vm.startPrank(makeAddr("randomUser"));
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector, makeAddr("randomUser")
-            )
-        );
-        stakeTable.updateMaxChurnRate(10);
-        vm.stopPrank();
-
-        vm.prank(exampleTokenCreator);
-        vm.expectRevert(S.InvalidValue.selector);
-        stakeTable.updateMaxChurnRate(0);
-    }
-
-    // test update light client address succeeds
-    function test_updateLightClientAddress_succeeds() public {
-        vm.prank(exampleTokenCreator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit AbstractStakeTable.LightClientAddressUpdated(makeAddr("lightClient"));
-        stakeTable.updateLightClientAddress(makeAddr("lightClient"));
-        assertEq(address(stakeTable.lightClient()), makeAddr("lightClient"));
-    }
-
-    // test update light client address fails if not admin or bad address
-    function test_revertWhen_updateLightClientAddress_NotAdminOrBadAddress() public {
-        vm.startPrank(makeAddr("randomUser"));
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector, makeAddr("randomUser")
-            )
-        );
-        stakeTable.updateLightClientAddress(makeAddr("lightClient"));
-        vm.stopPrank();
-
-        vm.prank(exampleTokenCreator);
-        vm.expectRevert(S.InvalidAddress.selector);
-        stakeTable.updateLightClientAddress(address(0));
-    }
-
-    // TESTS FOR CURRENT EPOCH
-    function test_initialEpoch_isZero() public view {
-        // assert the current block height is initialBlockHeight
-        uint64 initialBlockHeight = 0;
-        (, uint64 currentBlockHeight,) = lcMock.finalizedState();
-        assertEq(currentBlockHeight, initialBlockHeight);
-
-        // Calculate the expected epoch
-        uint64 expectedEpoch = 0;
-
-        // Call the currentEpoch function
-        uint64 currentEpoch = stakeTable.currentEpoch();
-
-        // Assert that the current epoch is calculated correctly
-        assertEq(currentEpoch, expectedEpoch);
-        assertEq(currentEpoch, 0);
-    }
-
-    function test_currentEpoch_isUpdated() public {
-        test_initialEpoch_isZero();
-
-        // set new finalized state on the light client contract
-        lcMock.setFinalizedState(LightClient.LightClientState(0, 10, BN254.ScalarField.wrap(0)));
-
-        // verify the current epoch is updated and is non-zero
-        assertNotEq(stakeTable.currentEpoch(), 0);
-
-        // verify the expected epoch
-        uint64 expectedEpoch = 10; // 10 / 1
-        assertEq(stakeTable.currentEpoch(), expectedEpoch);
-    }
-
-    function test_currentEpoch_blocksPerEpochNotOne() public {
-        setUpCustom(10, /*churn*/ 3 /*blocksPerEpoch*/ );
-        test_initialEpoch_isZero();
-        lcMock.setFinalizedState(LightClient.LightClientState(0, 2, BN254.ScalarField.wrap(0)));
-        assertEq(stakeTable.currentEpoch(), 0);
-        lcMock.setFinalizedState(LightClient.LightClientState(0, 3, BN254.ScalarField.wrap(0)));
-        assertEq(stakeTable.currentEpoch(), 1);
-    }
-
-    // test various edge cases for the currentEpoch
-    function test_currentEpoch_edgeCases() public {
-        // test edge case when the block height is less than the hotShotBlocksPerEpoch
-        uint64 hotShotBlockHeight = 0;
-        lcMock.setFinalizedState(
-            LightClient.LightClientState(0, hotShotBlockHeight, BN254.ScalarField.wrap(0))
-        );
-        assertEq(stakeTable.currentEpoch(), 0);
-
-        // test edge case when the block height is exactly divisible by the hotShotBlocksPerEpoch
-        hotShotBlockHeight = 1;
-        lcMock.setFinalizedState(
-            LightClient.LightClientState(0, hotShotBlockHeight, BN254.ScalarField.wrap(0))
-        );
-        assertEq(stakeTable.currentEpoch(), 1);
-
-        // test edge case when the block height is greater than the hotShotBlocksPerEpoch
-        hotShotBlockHeight = 2;
-        lcMock.setFinalizedState(
-            LightClient.LightClientState(0, hotShotBlockHeight, BN254.ScalarField.wrap(0))
-        );
-        assertEq(stakeTable.currentEpoch(), 2);
-
-        // test edge case when the block height is very large
-        hotShotBlockHeight = type(uint64).max;
-        lcMock.setFinalizedState(
-            LightClient.LightClientState(0, hotShotBlockHeight, BN254.ScalarField.wrap(0))
-        );
-        assertEq(stakeTable.currentEpoch(), hotShotBlockHeight / hotShotBlocksPerEpoch);
-    }
-
-    // TESTS FOR NEXT REGISTRATION EPOCH
-
-    /// @notice test the next available epoch (registration/exit) when the current epoch is zero
-    function test_nextAvailableEpoch_whenCurrentEpochIsZero() public {
-        // test for registration
-        // check that the current epoch is zero
-        assertEq(stakeTable.currentEpoch(), 0);
-
-        // check that the first registration epoch is equal to one
-        assertEq(stakeTable.registrationEpoch(), 1);
-
-        // assert that the next registration epoch is equal to the  registration
-        // epoch
-        stakeTable.mockPushToRegistrationQueue();
-        assertEq(stakeTable.registrationEpoch(), 1);
-        assertEq(stakeTable.numPendingRegistrationsInEpoch(), 1);
-
-        // test for exit
-        // assert that the next exit epoch is equal to the  exit epoch
-        assertEq(stakeTable.exitEpoch(), 1);
-        stakeTable.mockPushToExitQueue();
-        assertEq(stakeTable.exitEpoch(), 1); // the epoch is one as you just pushed one exit
-        assertEq(stakeTable.numPendingExitsInEpoch(), 1);
-    }
-
-    /// @notice test the next available epoch (registration/exit) when the current epoch + 1
-    /// is greater than the  registration/exit epoch
-    function test_nextAvailableEpoch_whenCurrentEpochPlusOneIsGreaterThanregistrationEpoch()
+    function getVersion()
         public
+        pure
+        virtual
+        override
+        returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
     {
-        // test for registration
-        // set the current epoch to 1 by updating the latest hotshot block number on the LC contract
-        lcMock.setFinalizedState(LightClient.LightClientState(0, 1, BN254.ScalarField.wrap(0)));
-        assertEq(stakeTable.currentEpoch(), 1);
+        return (2, 0, 0);
+    }
+}
 
-        // assert that the registrationEpoch is 1
-        assertEq(stakeTable.registrationEpoch(), 1);
-        assertGe(stakeTable.currentEpoch() + 1, stakeTable.registrationEpoch());
-
-        // assert that the next registration epoch is equal to stakeTable.currentEpoch() + 1
-        stakeTable.mockPushToRegistrationQueue();
-        assertEq(stakeTable.registrationEpoch(), stakeTable.currentEpoch() + 1);
-        assertEq(stakeTable.numPendingRegistrationsInEpoch(), 0);
-
-        // test for exit
-        assertEq(stakeTable.exitEpoch(), 1);
-
-        // assert that the next exit epoch is equal to 2
-        stakeTable.mockPushToExitQueue();
-        assertEq(stakeTable.exitEpoch(), stakeTable.currentEpoch() + 1);
-        assertEq(stakeTable.numPendingExitsInEpoch(), 0);
+contract StakeTableMissingFieldTest is Test {
+    struct Validator {
+        uint256 delegatedAmount;
+        ValidatorStatus status;
     }
 
-    /// @notice test nextAvailableEpoch when firstAvailableEpoch (registration/exit) is greater than
-    /// currentEpoch + 1
-    function test_nextAvailableEpoch_whenFirstAvailableEpochIsGreaterThanCurrentEpochPlusOne()
-        public
-    {
-        // set the current epoch to 1 by updating the latest hotshot block number on the LC contract
-        lcMock.setFinalizedState(LightClient.LightClientState(0, 1, BN254.ScalarField.wrap(0)));
-        assertEq(stakeTable.currentEpoch(), 1);
-
-        // set the  registration epoch to 3
-        uint64 registrationEpoch = 3;
-        stakeTable.setRegistrationEpoch(registrationEpoch);
-
-        // assert that the next registration epoch is greater than the current epoch
-        assertGt(stakeTable.registrationEpoch(), stakeTable.currentEpoch());
-
-        // assert that the next registration epoch is equal to 3
-        stakeTable.mockPushToRegistrationQueue();
-        assertEq(stakeTable.registrationEpoch(), registrationEpoch);
-        assertEq(stakeTable.numPendingRegistrationsInEpoch(), 1);
-
-        // set the  registration epoch to max uint64
-        registrationEpoch = type(uint64).max;
-        stakeTable.setRegistrationEpoch(registrationEpoch);
-
-        // assert that the next registration epoch is equal to max uint64
-        stakeTable.mockPushToRegistrationQueue();
-        assertEq(stakeTable.registrationEpoch(), registrationEpoch);
-        assertEq(stakeTable.numPendingRegistrationsInEpoch(), 2);
-
-        // test for exit
-        // set the  exit epoch to 3
-        uint64 exitEpoch = 3;
-        stakeTable.setExitEpoch(exitEpoch);
-
-        // assert that the next exit epoch is equal to 3
-        stakeTable.mockPushToExitQueue();
-        assertEq(stakeTable.exitEpoch(), exitEpoch);
-        assertEq(stakeTable.numPendingExitsInEpoch(), 1);
+    enum ValidatorStatus {
+        Unknown,
+        Active,
+        Exited
     }
 
-    /// @notice test registrationEpoch when the current epoch + 1 is equal to the
-    /// registration/exit epoch
-    function test_registrationEpoch_whenCurrentEpochPlusOneIsEqualToregistrationEpoch() public {
-        // test for registration
-        // set the current epoch to 1 by updating the latest hotshot block number on the LC contract
-        lcMock.setFinalizedState(LightClient.LightClientState(0, 1, BN254.ScalarField.wrap(0)));
-        assertEq(stakeTable.currentEpoch(), 1);
-
-        // set the  registration epoch to 2
-        uint64 registrationEpoch = 2;
-        stakeTable.setRegistrationEpoch(registrationEpoch);
-
-        // assert that the next registration epoch is equal to 2
-        stakeTable.mockPushToRegistrationQueue();
-        assertEq(stakeTable.registrationEpoch(), registrationEpoch);
-        assertEq(stakeTable.numPendingRegistrationsInEpoch(), 1);
-
-        // test for exit
-        // set the  exit epoch to 2
-        uint64 exitEpoch = 2;
-        stakeTable.setExitEpoch(exitEpoch);
-
-        // assert that the next exit epoch is equal to 2
-        stakeTable.mockPushToExitQueue();
-        assertEq(stakeTable.exitEpoch(), exitEpoch);
-        assertEq(stakeTable.numPendingExitsInEpoch(), 1);
+    struct Undelegation {
+        uint256 amount;
+        uint256 unlocksAt;
     }
 
-    // test pushToRegistrationQueue reverts when the current epoch is max uint64
-    // note, the current epoch is max uint64 only when the hotshot blocks per epoch is 1
-    // and the hotshot block number is max uint64
-    function test_revertWhen_pushToRegistrationQueue_whenCurrentEpochIsMaxUint64() public {
-        // set the current hotshot block number to max uint64
-        lcMock.setFinalizedState(
-            LightClient.LightClientState(0, type(uint64).max, BN254.ScalarField.wrap(0))
+    LightClient public lightClient;
+    ERC20 public token;
+    mapping(address account => Validator validator) public validators;
+    mapping(bytes32 blsKeyHash => bool used) public blsKeys;
+    mapping(address validator => uint256 unlocksAt) public validatorExits;
+    mapping(address validator => mapping(address delegator => uint256 amount)) delegations;
+    mapping(address validator => mapping(address delegator => Undelegation)) undelegations;
+    // missing field: exitEscrowPeriod
+}
+
+contract StakeTableFieldsReorderedTest is Test {
+    struct Validator {
+        uint256 delegatedAmount;
+        ValidatorStatus status;
+    }
+
+    enum ValidatorStatus {
+        Unknown,
+        Active,
+        Exited
+    }
+
+    struct Undelegation {
+        uint256 amount;
+        uint256 unlocksAt;
+    }
+
+    ERC20 public token;
+    mapping(address account => Validator validator) public validators;
+    mapping(bytes32 blsKeyHash => bool used) public blsKeys;
+    mapping(address validator => uint256 unlocksAt) public validatorExits;
+    mapping(address validator => mapping(address delegator => uint256 amount)) delegations;
+    mapping(address validator => mapping(address delegator => Undelegation)) undelegations;
+    uint256 exitEscrowPeriod;
+    LightClient public lightClient; //re-ordered field
+}
+
+contract StakeTableUpgradeTest is Test {
+    StakeTable_register_Test stakeTableRegisterTest;
+
+    function setUp() public {
+        stakeTableRegisterTest = new StakeTable_register_Test();
+        stakeTableRegisterTest.setUp();
+    }
+
+    function test_UpgradeSucceeds() public {
+        (uint8 majorVersion,,) = S(stakeTableRegisterTest.stakeTable()).getVersion();
+        assertEq(majorVersion, 1);
+
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2Test()), "");
+
+        (uint8 majorVersionNew,,) = StakeTableV2Test(proxy).getVersion();
+        assertEq(majorVersionNew, 2);
+
+        assertNotEq(majorVersion, majorVersionNew);
+        vm.stopPrank();
+    }
+
+    /// forge-config: default.allow_internal_expect_revert = true
+    function test_RevertWhen_NotAdmin() public {
+        address notAdmin = makeAddr("not_admin");
+        S proxy = stakeTableRegisterTest.stakeTable();
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 1);
+
+        vm.startPrank(notAdmin);
+
+        address impl = address(new StakeTableV2Test());
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
         );
-        assertEq(stakeTable.currentEpoch(), type(uint64).max);
 
-        // set the hotshot blocks per epoch to 1
-        vm.prank(exampleTokenCreator);
-        stakeTable.mockUpdateHotShotBlocksPerEpoch(1);
-        assertEq(stakeTable.hotShotBlocksPerEpoch(), 1);
+        proxy.upgradeToAndCall(impl, "");
 
-        // push to registration queue and expect a panic due to arithmetic overflow
-        vm.expectRevert(stdError.arithmeticError);
-        stakeTable.mockPushToRegistrationQueue();
+        (uint8 majorVersionNew,,) = proxy.getVersion();
+        assertEq(majorVersionNew, 1);
+
+        assertEq(majorVersion, majorVersionNew);
+        vm.stopPrank();
+    }
+
+    function test_InitializeFunction_IsProtected() public {
+        S proxy = stakeTableRegisterTest.stakeTable();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxy.initialize(address(0), address(0), 0, address(0));
+    }
+
+    function test_InitializeFunction_IsProtected_WhenUpgraded() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(address(new StakeTableV2Test()), "");
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxy.initialize(address(0), address(0), 0, address(0));
+
+        vm.stopPrank();
+    }
+
+    function test_StorageLayout_IsCompatible() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableV2Test";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "true");
+    }
+
+    function test_StorageLayoutIsCompatibleWithStakeTableV2() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableV2";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "true");
+    }
+
+    function test_StorageLayout_IsIncompatibleIfFieldIsMissing() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableMissingFieldTest";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_StorageLayout_IsIncompatibleIfFieldsAreReordered() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableFieldsReorderedTest";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_StorageLayout_IsIncompatibleBetweenDiffContracts() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "LightClient";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_RevertWhen_StakeTableV2InitializationAttempted() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)", address(0), address(0), 0, address(0)
+        );
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+    }
+
+    function test_ReinitializeSucceedsOnlyOnce() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+        proxy.upgradeToAndCall(
+            address(new StakeTableV2Test()), abi.encodeWithSignature("initializeV2(uint256)", 2)
+        );
+
+        StakeTableV2Test proxyV2 = StakeTableV2Test(address(stakeTableRegisterTest.stakeTable()));
+        assertEq(proxyV2.newValue(), 2);
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxyV2.initializeV2(3);
+
+        vm.stopPrank();
+    }
+
+    function test_updateExitEscrowPeriod() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.expectEmit(false, false, false, true, address(proxy));
+        emit StakeTableV2.ExitEscrowPeriodUpdated(200 seconds);
+        StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_NotOwner() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+        address notAdmin = makeAddr("notAdmin");
+        vm.startPrank(notAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+        );
+        StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ExitEscrowPeriodTooShort() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+
+        vm.expectRevert(StakeTableV2.ExitEscrowPeriodInvalid.selector);
+        StakeTableV2(proxy).updateExitEscrowPeriod(100 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ExitEscrowPeriodTooLong() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.expectRevert(StakeTableV2.ExitEscrowPeriodInvalid.selector);
+        StakeTableV2(proxy).updateExitEscrowPeriod(100 days);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_DeprecatedFunctionsAreCalled() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        bytes memory initData = "";
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+    }
+}
+
+contract StakeTableTimelockTest is Test {
+    address public impl;
+    address public proxyAddress;
+    address public tokenGrantRecipient;
+    address public validator;
+    address public delegator;
+    address public timelockAdmin;
+    address[] public proposers = [makeAddr("proposer")];
+    address[] public executors = [makeAddr("executor")];
+    LightClientV2 public lcV2;
+    EspToken public token;
+    S public stakeTable;
+    Timelock public timelockController;
+    uint256 public constant INITIAL_BALANCE = 5 ether;
+    uint256 public constant ESCROW_PERIOD = 1 weeks;
+    uint256 public constant DELAY = 15 seconds;
+
+    function deployEspToken(address _admin, address _tokenGrantRecipient) public {
+        EspToken tokenImpl = new EspToken();
+        bytes memory initData =
+            abi.encodeWithSignature("initialize(address,address)", _admin, _tokenGrantRecipient);
+        ERC1967Proxy _proxy = new ERC1967Proxy(address(tokenImpl), initData);
+        token = EspToken(payable(address(_proxy)));
+    }
+
+    function deployStakeTable(
+        address _token,
+        address _lightClient,
+        uint256 _escrowPeriod,
+        address _admin
+    ) public {
+        S stakeTableImpl = new S();
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)",
+            _token,
+            _lightClient,
+            _escrowPeriod,
+            _admin
+        );
+        ERC1967Proxy _proxy = new ERC1967Proxy(address(stakeTableImpl), initData);
+        stakeTable = S(payable(address(_proxy)));
+        proxyAddress = address(_proxy);
+    }
+
+    function setUp() public {
+        tokenGrantRecipient = makeAddr("tokenGrantRecipient");
+        validator = makeAddr("validator");
+        delegator = makeAddr("delegator");
+        timelockAdmin = makeAddr("timelockAdmin");
+
+        string[] memory cmds = new string[](3);
+        cmds[0] = "diff-test";
+        cmds[1] = "mock-genesis";
+        cmds[2] = "5";
+
+        lcV2 = new LightClientV2();
+
+        //deploy timelock
+        timelockController = new Timelock(DELAY, proposers, executors, timelockAdmin);
+
+        deployEspToken(address(timelockController), tokenGrantRecipient);
+
+        vm.prank(tokenGrantRecipient);
+        token.transfer(address(validator), INITIAL_BALANCE);
+
+        deployStakeTable(address(token), address(lcV2), ESCROW_PERIOD, address(timelockController));
+        stakeTable = S(proxyAddress);
+    }
+
+    function test_InitializeSetsTimelockAsOwner() public view {
+        assertEq(stakeTable.owner(), address(timelockController));
+    }
+
+    function test_UpgradeProposalAndExecutionSucceeds() public {
+        vm.startPrank(proposers[0]);
+
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + DELAY - 1);
+
+        vm.assertFalse(timelockController.isOperationReady(txId));
+
+        vm.warp(block.timestamp + 1);
+
+        vm.assertTrue(timelockController.isOperationReady(txId));
+
+        vm.startPrank(executors[0]);
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        vm.assertTrue(timelockController.isOperationDone(txId));
+    }
+
+    function test_RevertWhen_TimelockIsNotOwner() public {
+        assertEq(stakeTable.owner(), address(timelockController));
+        vm.startPrank(address(timelockController));
+        stakeTable.transferOwnership(makeAddr("newOwner"));
+        vm.stopPrank();
+
+        vm.startPrank(proposers[0]);
+
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        vm.assertFalse(timelockController.isOperationReady(txId));
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.assertTrue(timelockController.isOperationReady(txId));
+
+        vm.startPrank(executors[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUpgradeable.OwnableUnauthorizedAccount.selector, address(timelockController)
+            )
+        );
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        vm.assertFalse(timelockController.isOperationDone(txId));
+    }
+
+    function test_RevertWhen_UpgradeProposalAndExecutionBeforeDelay() public {
+        vm.startPrank(proposers[0]);
+
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        vm.startPrank(executors[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TimelockController.TimelockUnexpectedOperationState.selector,
+                txId,
+                bytes32(1 << uint8(TimelockController.OperationState.Ready))
+            )
+        );
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        vm.assertFalse(timelockController.isOperationDone(txId));
+    }
+
+    function test_RevertWhen_ExecutionWithoutCorrectPermission() public {
+        vm.startPrank(makeAddr("notProposer"));
+
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(makeAddr("notProposer")),
+                timelockController.PROPOSER_ROLE()
+            )
+        );
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        vm.stopPrank();
+
+        vm.startPrank(proposers[0]);
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.startPrank(makeAddr("notExecutor"));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(makeAddr("notExecutor")),
+                timelockController.EXECUTOR_ROLE()
+            )
+        );
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+        vm.assertFalse(timelockController.isOperationDone(txId));
+    }
+
+    function test_RevertWhen_ExecuteWithWrongSalt() public {
+        // Encode upgrade call
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        bytes32 correctSalt = keccak256("salt-A");
+        bytes32 wrongSalt = keccak256("salt-B");
+
+        bytes32 wrongTxId =
+            timelockController.hashOperation(address(stakeTable), 0, data, wrongSalt, bytes32(0));
+        vm.startPrank(proposers[0]);
+        timelockController.schedule(address(stakeTable), 0, data, correctSalt, bytes32(0), DELAY);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.startPrank(executors[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TimelockController.TimelockUnexpectedOperationState.selector,
+                wrongTxId,
+                bytes32(1 << uint8(TimelockController.OperationState.Ready))
+            )
+        );
+        timelockController.execute(address(stakeTable), 0, data, wrongSalt, bytes32(0));
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_UnauthorizedCannotUpgrade() public {
+        address notAdmin = makeAddr("notAdmin");
+        vm.startPrank(notAdmin);
+        S newStakeTable = new S();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+        );
+        stakeTable.upgradeToAndCall(address(newStakeTable), "");
+    }
+
+    function test_AdminCanGrantRolesWithoutDelay() public {
+        vm.startPrank(timelockAdmin);
+        timelockController.grantRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
+        assertTrue(timelockController.hasRole(timelockController.PROPOSER_ROLE(), timelockAdmin));
+
+        timelockController.grantRole(timelockController.EXECUTOR_ROLE(), timelockAdmin);
+        assertTrue(timelockController.hasRole(timelockController.EXECUTOR_ROLE(), timelockAdmin));
+
+        vm.stopPrank();
+    }
+
+    function test_CancelOperation() public {
+        vm.startPrank(proposers[0]);
+
+        bytes memory data = abi.encodeWithSignature(
+            "upgradeToAndCall(address,bytes)", address(new StakeTableV2Test()), ""
+        );
+
+        bytes32 txId =
+            timelockController.hashOperation(address(stakeTable), 0, data, bytes32(0), bytes32(0));
+
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), DELAY);
+
+        vm.stopPrank();
+
+        bytes32 cancelRole = timelockController.CANCELLER_ROLE();
+        assertFalse(timelockController.hasRole(cancelRole, timelockAdmin));
+        vm.startPrank(timelockAdmin);
+        timelockController.grantRole(cancelRole, timelockAdmin);
+        assertTrue(timelockController.hasRole(cancelRole, timelockAdmin));
+        timelockController.cancel(txId);
+        assertEq(timelockController.getTimestamp(txId), 0);
+        vm.stopPrank();
+
+        // Attempt to execute the canceled operation
+        vm.warp(block.timestamp + DELAY + 1);
+        vm.startPrank(executors[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TimelockController.TimelockUnexpectedOperationState.selector,
+                txId,
+                bytes32(1 << uint8(TimelockController.OperationState.Ready))
+            )
+        );
+        timelockController.execute(address(proxyAddress), 0, data, bytes32(0), bytes32(0));
+        vm.stopPrank();
+    }
+
+    function test_RevokeRole() public {
+        vm.startPrank(timelockAdmin);
+        timelockController.grantRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
+        assertTrue(timelockController.hasRole(timelockController.PROPOSER_ROLE(), timelockAdmin));
+        timelockController.revokeRole(timelockController.PROPOSER_ROLE(), timelockAdmin);
+        assertFalse(timelockController.hasRole(timelockController.PROPOSER_ROLE(), timelockAdmin));
+        vm.stopPrank();
+    }
+
+    function test_MultipleOperations_OnTimelock() public {
+        vm.startPrank(proposers[0]);
+
+        bytes memory data1 =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+        bytes32 txId1 =
+            timelockController.hashOperation(address(stakeTable), 0, data1, bytes32(0), bytes32(0));
+
+        bytes memory data2 =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+        bytes32 txId2 =
+            timelockController.hashOperation(address(stakeTable), 0, data2, bytes32(0), bytes32(0));
+
+        timelockController.schedule(address(stakeTable), 0, data1, bytes32(0), bytes32(0), DELAY);
+        timelockController.schedule(address(stakeTable), 0, data2, bytes32(0), bytes32(0), DELAY);
+
+        vm.warp(block.timestamp + DELAY + 1);
+
+        vm.startPrank(executors[0]);
+        timelockController.execute(address(stakeTable), 0, data1, bytes32(0), bytes32(0));
+        timelockController.execute(address(stakeTable), 0, data2, bytes32(0), bytes32(0));
+        vm.stopPrank();
+
+        assertTrue(timelockController.isOperationDone(txId1));
+        assertTrue(timelockController.isOperationDone(txId2));
+    }
+
+    function test_RevertWhen_ZeroDelaySchedule() public {
+        vm.startPrank(proposers[0]);
+
+        bytes memory data =
+            abi.encodeWithSignature("upgradeToAndCall(address,bytes)", address(new S()), "");
+
+        vm.expectRevert(
+            abi.encodeWithSelector(TimelockController.TimelockInsufficientDelay.selector, 0, DELAY)
+        );
+        timelockController.schedule(address(stakeTable), 0, data, bytes32(0), bytes32(0), 0);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_InvalidDataOperation() public {
+        vm.startPrank(proposers[0]);
+
+        // Encode an upgrade call with invalid data
+        bytes memory invalidData = abi.encodeWithSignature("nonExistentFunction()");
+        timelockController.schedule(
+            address(stakeTable), 0, invalidData, bytes32(0), bytes32(0), DELAY
+        );
+
+        vm.stopPrank();
+
+        // Warp time to after the delay
+        vm.warp(block.timestamp + DELAY + 1);
+
+        // Attempt to execute the invalid data operation
+        vm.startPrank(executors[0]);
+        vm.expectRevert();
+        timelockController.execute(address(proxyAddress), 0, invalidData, bytes32(0), bytes32(0));
+        vm.stopPrank();
     }
 }

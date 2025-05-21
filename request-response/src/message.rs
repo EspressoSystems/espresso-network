@@ -65,18 +65,19 @@ impl<R: Request, K: SignatureKey> RequestMessage<R, K> {
             .as_secs();
 
         // Concatenate the content and timestamp
-        let timestamped_content = [
+        let content_to_sign = [
             request
                 .to_bytes()
                 .with_context(|| "failed to serialize request content")?
                 .as_slice(),
             timestamp_unix_seconds.to_le_bytes().as_slice(),
+            b"espresso-request-response",
         ]
         .concat();
 
-        // Sign the actual request content with the private key
+        // Sign the actual request content (+ a namespace) with the private key
         let signature =
-            K::sign(private_key, &timestamped_content).with_context(|| "failed to sign message")?;
+            K::sign(private_key, &content_to_sign).with_context(|| "failed to sign message")?;
 
         // Return the newly signed request message
         Ok(RequestMessage {
@@ -114,6 +115,7 @@ impl<R: Request, K: SignatureKey> RequestMessage<R, K> {
             &[
                 self.request.to_bytes()?,
                 self.timestamp_unix_seconds.to_le_bytes().to_vec(),
+                b"espresso-request-response".to_vec(),
             ]
             .concat(),
         ) {
@@ -140,14 +142,14 @@ impl<R: Request, K: SignatureKey> Serializable for Message<R, K> {
 
                 // Write the request content
                 bytes.extend_from_slice(request_message.to_bytes()?.as_slice());
-            }
+            },
             Message::Response(response_message) => {
                 // Write the type (response)
                 bytes.push(1);
 
                 // Write the response content
                 bytes.extend_from_slice(response_message.to_bytes()?.as_slice());
-            }
+            },
         };
 
         Ok(bytes)
@@ -168,13 +170,13 @@ impl<R: Request, K: SignatureKey> Serializable for Message<R, K> {
                 Ok(Message::Request(RequestMessage::from_bytes(&read_to_end(
                     &mut bytes,
                 )?)?))
-            }
+            },
             1 => {
                 // Read the `ResponseMessage`
                 Ok(Message::Response(ResponseMessage::from_bytes(
                     &read_to_end(&mut bytes)?,
                 )?))
-            }
+            },
             _ => Err(anyhow::anyhow!("invalid message type")),
         }
     }
@@ -295,7 +297,6 @@ mod tests {
     use rand::Rng;
 
     use super::*;
-    use crate::request::Response;
 
     // A testing implementation of the [`Serializable`] trait for [`Vec<u8>`]
     impl Serializable for Vec<u8> {
@@ -311,15 +312,8 @@ mod tests {
     #[async_trait]
     impl Request for Vec<u8> {
         type Response = Vec<u8>;
-        async fn validate(&self) -> Result<()> {
-            Ok(())
-        }
-    }
 
-    /// A testing implementation of the [`Response`] trait for [`Vec<u8>`]
-    #[async_trait]
-    impl Response<Vec<u8>> for Vec<u8> {
-        async fn validate(&self, _request: &Vec<u8>) -> Result<()> {
+        async fn validate(&self) -> Result<()> {
             Ok(())
         }
     }
@@ -353,7 +347,7 @@ mod tests {
 
                     // It should not be valid anymore
                     (false, Duration::from_secs(1))
-                }
+                },
 
                 2 => {
                     // Alter the timestamp
@@ -361,13 +355,13 @@ mod tests {
 
                     // It should not be valid anymore
                     (false, Duration::from_secs(1))
-                }
+                },
 
                 3 => {
                     // Change the request ttl to be 0. This should make the request
                     // invalid immediately
                     (true, Duration::from_secs(0))
-                }
+                },
 
                 _ => unreachable!(),
             };

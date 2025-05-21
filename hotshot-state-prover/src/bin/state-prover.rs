@@ -1,14 +1,18 @@
 use std::time::Duration;
 
-use clap::Parser;
-use espresso_types::parse_duration;
-use ethers::{
-    providers::{Http, Middleware, Provider},
-    signers::{coins_bip39::English, MnemonicBuilder, Signer},
-    types::Address,
+use alloy::{
+    primitives::{utils::parse_units, Address},
+    providers::{Provider, ProviderBuilder},
+    signers::{
+        local::{coins_bip39::English, MnemonicBuilder},
+        Signer,
+    },
 };
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
+use clap::Parser;
+use espresso_contract_deployer::network_config::fetch_epoch_config_from_sequencer;
+use espresso_types::parse_duration;
 use hotshot_state_prover::service::{run_prover_once, run_prover_service, StateProverConfig};
+use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -35,6 +39,14 @@ struct Args {
     #[clap(long = "retry-freq", value_parser = parse_duration, default_value = "2s", env = "ESPRESSO_STATE_PROVER_RETRY_INTERVAL")]
     retry_interval: Duration,
 
+    /// Interval between retries if a state update fails
+    #[clap(
+        long = "retries",
+        default_value = "10",
+        env = "ESPRESSO_STATE_PROVER_ONESHOT_RETRIES"
+    )]
+    max_retries: u64,
+
     /// URL of layer 1 Ethereum JSON-RPC provider.
     #[clap(
         long,
@@ -44,7 +56,7 @@ struct Args {
     l1_provider: Url,
 
     /// Address of LightClient contract on layer 1.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHTCLIENT_ADDRESS")]
+    #[clap(long, env = "ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")]
     light_client_address: Address,
 
     /// Mnemonic phrase for a funded Ethereum wallet.
@@ -75,8 +87,12 @@ struct Args {
     pub port: Option<u16>,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
+
+    /// max acceptable gas price **in Gwei** for prover to send light client update transaction
+    #[clap(short, long, env = "ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI")]
+    pub max_gas_price: Option<String>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -88,27 +104,59 @@ async fn main() {
     args.logging.init();
 
     // prepare config for state prover from user options
-    let provider = Provider::<Http>::try_from(args.l1_provider.to_string()).unwrap();
-    let chain_id = provider.get_chainid().await.unwrap().as_u64();
+    let l1_provider = ProviderBuilder::new().on_http(args.l1_provider.clone());
+    let chain_id = l1_provider.get_chain_id().await.unwrap();
+    let signer = MnemonicBuilder::<English>::default()
+        .phrase(args.eth_mnemonic)
+        .index(args.eth_account_index)
+        .expect("wrong mnemonic or index")
+        .build()
+        .expect("fail to build signer")
+        .with_chain_id(Some(chain_id));
+
+    let (blocks_per_epoch, epoch_start_block) =
+        fetch_epoch_config_from_sequencer(&args.sequencer_url)
+            .await
+            .unwrap_or((u64::MAX, u64::MAX));
+
+    // If the sequencer returns 0 for pre-epoch configuration.
+    let blocks_per_epoch = if blocks_per_epoch == 0 {
+        u64::MAX
+    } else {
+        blocks_per_epoch
+    };
+    let epoch_start_block = if epoch_start_block == 0 {
+        u64::MAX
+    } else {
+        epoch_start_block
+    };
+
+    tracing::info!(
+        "Epoch config fetched from sequencer: blocks_per_epoch = {}, epoch_start_block = {}",
+        blocks_per_epoch,
+        epoch_start_block
+    );
+    let max_gas_price = args.max_gas_price.map(|v| {
+        parse_units(&v, "gwei")
+            .expect("parse_unit on max_gas_price in GWEI failed")
+            .try_into()
+            .expect("fail to convert gas price to u128")
+    });
+
     let config = StateProverConfig {
         relay_server: args.relay_server,
         update_interval: args.update_interval,
         retry_interval: args.retry_interval,
-        provider: args.l1_provider,
+        provider_endpoint: args.l1_provider,
         light_client_address: args.light_client_address,
-        signing_key: MnemonicBuilder::<English>::default()
-            .phrase(args.eth_mnemonic.as_str())
-            .index(args.eth_account_index)
-            .expect("error building wallet")
-            .build()
-            .expect("error opening wallet")
-            .with_chain_id(chain_id)
-            .signer()
-            .clone(),
-
+        signer,
         sequencer_url: args.sequencer_url,
         port: args.port,
         stake_table_capacity: args.stake_table_capacity,
+        blocks_per_epoch,
+        epoch_start_block,
+        max_retries: args.max_retries,
+        max_gas_price,
     };
 
     // validate that the light client contract is a proxy, panics otherwise

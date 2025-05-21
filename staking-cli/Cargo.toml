@@ -1,0 +1,43 @@
+[package]
+name = "staking-cli"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+description = "A CLI to interact with the Espresso stake table contract"
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+ark-ec = { workspace = true }
+ark-ed-on-bn254 = { workspace = true }
+clap = { workspace = true }
+clap-serde = "0.5.1"
+clap-serde-derive = "0.2.1"
+derive_more = { workspace = true }
+directories = "6.0.0"
+dotenvy = { workspace = true }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
+espresso-types = { version = "0.1.0", path = "../types" }
+futures-util = "0.3.31"
+git-version = "0.3.9"
+hotshot-contract-adapter = { workspace = true }
+hotshot-state-prover = { workspace = true }
+hotshot-types = { workspace = true }
+jf-signature = { workspace = true, features = ["bls", "schnorr"] }
+portpicker = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+rust_decimal = "1.36.0"
+sequencer-utils = { version = "0.1.0", path = "../utils" }
+serde = { workspace = true }
+sysinfo = "0.33.1"
+tagged-base64 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

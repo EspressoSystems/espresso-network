@@ -24,13 +24,15 @@
 //! updated implicitly via the [availability API update
 //! trait](crate::availability::UpdateAvailabilityData).
 
-use super::query_data::{BlockHash, BlockId, SyncStatus, TimeWindowQueryData};
-use crate::{Header, QueryResult, VidShare};
+use std::ops::RangeBounds;
+
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::From;
-use hotshot_types::traits::node_implementation::NodeType;
-use std::ops::RangeBounds;
+use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
+
+use super::query_data::{BlockHash, BlockId, SyncStatus, TimeWindowQueryData};
+use crate::{Header, QueryResult};
 
 #[derive(Derivative, From)]
 #[derivative(Copy(bound = ""), Debug(bound = ""))]

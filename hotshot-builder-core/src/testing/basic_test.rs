@@ -1,62 +1,58 @@
-pub use crate::builder_state::{BuilderState, MessageType};
 pub use async_broadcast::broadcast;
 pub use hotshot::traits::election::static_committee::StaticCommittee;
 pub use hotshot_types::{
     data::{EpochNumber, Leaf, ViewNumber},
     message::Proposal,
     signature_key::BLSPubKey,
-    simple_certificate::{QuorumCertificate, SimpleCertificate, SuccessThreshold},
+    simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     traits::{
         block_contents::BlockPayload,
         node_implementation::{ConsensusTime, NodeType},
     },
 };
 use vbs::version::StaticVersionType;
+
+pub use crate::builder_state::{BuilderState, MessageType};
 /// The following tests are performed:
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-    use std::{hash::Hash, marker::PhantomData};
+    use std::{collections::VecDeque, hash::Hash, marker::PhantomData, sync::Arc, time::Duration};
 
-    use hotshot::types::SignatureKey;
-    use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
-    use hotshot_example_types::auction_results_provider_types::TestAuctionResult;
-    use hotshot_example_types::node_types::TestVersions;
-    use hotshot_types::data::{DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper};
-    use hotshot_types::simple_vote::QuorumData2;
-    use hotshot_types::traits::node_implementation::Versions;
-    use hotshot_types::{
-        data::vid_commitment, signature_key::BuilderKey, traits::block_contents::BlockHeader,
-        traits::EncodeBytes, utils::BuilderCommitment,
-    };
-
-    use hotshot_example_types::{
-        block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-        state_types::{TestInstanceState, TestValidatedState},
-    };
-    use marketplace_builder_shared::block::ParentBlockReferences;
-    use marketplace_builder_shared::testing::constants::{
-        TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM, TEST_NUM_NODES_IN_VID_COMPUTATION,
-        TEST_PROTOCOL_MAX_BLOCK_SIZE,
-    };
-    use tokio::time::error::Elapsed;
-    use tokio::time::timeout;
-    use tracing_subscriber::EnvFilter;
-
-    use crate::builder_state::{
-        DaProposalMessage, DecideMessage, QuorumProposalMessage, TransactionSource,
-    };
-    use crate::service::{
-        handle_received_txns, GlobalState, ProxyGlobalState, ReceivedTransaction,
-    };
     use async_lock::RwLock;
     use committable::{Commitment, CommitmentBoundsArkless, Committable};
-    use sha2::{Digest, Sha256};
-    use std::sync::Arc;
-    use std::time::Duration;
-
+    use hotshot::types::SignatureKey;
+    use hotshot_builder_api::v0_2::data_source::BuilderDataSource;
+    use hotshot_example_types::{
+        block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
+        node_types::TestVersions,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
+    use hotshot_types::{
+        data::{vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper},
+        signature_key::{BuilderKey, SchnorrPubKey},
+        simple_vote::QuorumData2,
+        traits::{block_contents::BlockHeader, node_implementation::Versions, EncodeBytes},
+        utils::{BuilderCommitment, EpochTransitionIndicator},
+    };
+    use marketplace_builder_shared::{
+        block::ParentBlockReferences,
+        testing::constants::{
+            TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+            TEST_NUM_NODES_IN_VID_COMPUTATION, TEST_PROTOCOL_MAX_BLOCK_SIZE,
+        },
+    };
     use serde::{Deserialize, Serialize};
+    use sha2::{Digest, Sha256};
+    use tokio::time::{error::Elapsed, timeout};
+    use tracing_subscriber::EnvFilter;
+
+    use super::*;
+    use crate::{
+        builder_state::{
+            DaProposalMessage, DecideMessage, QuorumProposalMessage, TransactionSource,
+        },
+        service::{handle_received_txns, GlobalState, ProxyGlobalState, ReceivedTransaction},
+    };
     /// This test simulates multiple builder states receiving messages from the channels and processing them
     #[tokio::test]
     //#[instrument]
@@ -91,7 +87,7 @@ mod tests {
             type InstanceState = TestInstanceState;
             type Membership = StaticCommittee<Self>;
             type BuilderSignatureKey = BuilderKey;
-            type AuctionResult = TestAuctionResult;
+            type StateSignatureKey = SchnorrPubKey;
         }
         // no of test messages to send
         let num_test_messages = 5;
@@ -172,12 +168,11 @@ mod tests {
         let mut previous_commitment = initial_commitment;
         let mut previous_view = ViewNumber::new(0);
         let mut previous_quorum_proposal = {
-            let previous_jc = QuorumCertificate::<TestTypes>::genesis::<TestVersions>(
+            let previous_jc = QuorumCertificate2::<TestTypes>::genesis::<TestVersions>(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
             )
-            .await
-            .to_qc2();
+            .await;
 
             QuorumProposalWrapper::<TestTypes> {
                 proposal: QuorumProposal2::<TestTypes> {
@@ -198,6 +193,7 @@ mod tests {
                     next_epoch_justify_qc: None,
                     next_drb_result: None,
                     epoch: None,
+                    state_cert: None,
                 },
             }
         };
@@ -304,6 +300,7 @@ mod tests {
                         },
                         view_number: ViewNumber::new(round as u64),
                         epoch: None, // TODO: check if this is okay
+                        epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
                     };
                     let encoded_transactions_hash = Sha256::digest(&encoded_transactions);
                     let seed = [round as u8; 32];
@@ -376,6 +373,7 @@ mod tests {
                         let q_data = QuorumData2::<TestTypes> {
                             leaf_commit: leaf.commit(),
                             epoch: None, // TODO: check if this is okay
+                            block_number: Some(leaf.height()),
                         };
 
                         let previous_quorum_view_number =
@@ -409,6 +407,7 @@ mod tests {
                             next_epoch_justify_qc: None,
                             next_drb_result: None,
                             epoch: None,
+                            state_cert: None,
                         },
                     };
 
@@ -462,7 +461,7 @@ mod tests {
                                 )
                                 .unwrap();
                             current_leaf
-                        }
+                        },
                     };
 
                     DecideMessage::<TestTypes> {

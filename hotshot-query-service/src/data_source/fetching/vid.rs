@@ -12,6 +12,17 @@
 
 //! [`Fetchable`] implementation for [`VidCommonQueryData`].
 
+use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds, sync::Arc};
+
+use async_trait::async_trait;
+use derivative::Derivative;
+use derive_more::From;
+use futures::future::{BoxFuture, FutureExt};
+use hotshot_types::{
+    data::VidShare,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+};
+
 use super::{
     header::{fetch_header_and_then, HeaderCallback},
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
@@ -28,15 +39,8 @@ use crate::{
     },
     fetching::{self, request, Callback},
     types::HeightIndexed,
-    Header, Payload, QueryResult, VidShare,
+    Header, Payload, QueryResult, VidCommon,
 };
-use async_trait::async_trait;
-use derivative::Derivative;
-use derive_more::From;
-use futures::future::{BoxFuture, FutureExt};
-use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
-use std::sync::Arc;
-use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds};
 
 pub(super) type VidCommonFetcher<Types, S, P> =
     fetching::Fetcher<request::VidCommonRequest, VidCommonCallback<Types, S, P>>;
@@ -235,17 +239,15 @@ impl<Types: NodeType, S, P> PartialOrd for VidCommonCallback<Types, S, P> {
     }
 }
 
-impl<Types: NodeType, S, P> Callback<hotshot_types::vid::advz::ADVZCommon>
-    for VidCommonCallback<Types, S, P>
+impl<Types: NodeType, S, P> Callback<VidCommon> for VidCommonCallback<Types, S, P>
 where
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
-    async fn run(self, common: hotshot_types::vid::advz::ADVZCommon) {
-        tracing::info!("fetched VID common {:?}", self.header.payload_commitment());
-        let common = VidCommonQueryData::new(self.header, Some(common));
+    async fn run(self, common: VidCommon) {
+        let common = VidCommonQueryData::new(self.header, common);
         self.fetcher.store_and_notify(common).await;
     }
 }

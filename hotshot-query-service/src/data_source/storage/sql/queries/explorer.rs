@@ -12,6 +12,16 @@
 
 //! Explorer storage implementation for a database query engine.
 
+use std::{collections::VecDeque, num::NonZeroUsize};
+
+use async_trait::async_trait;
+use committable::{Commitment, Committable};
+use futures::stream::{self, StreamExt, TryStreamExt};
+use hotshot_types::traits::node_implementation::NodeType;
+use itertools::Itertools;
+use sqlx::{types::Json, FromRow, Row};
+use tagged_base64::{Tagged, TaggedBase64};
+
 use super::{
     super::transaction::{query, Transaction, TransactionMode},
     Database, Db, DecodeError, BLOCK_COLUMNS,
@@ -33,14 +43,6 @@ use crate::{
     },
     Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
 };
-use async_trait::async_trait;
-use committable::{Commitment, Committable};
-use futures::stream::{self, StreamExt, TryStreamExt};
-use hotshot_types::traits::node_implementation::NodeType;
-use itertools::Itertools;
-use sqlx::{types::Json, FromRow, Row};
-use std::{collections::VecDeque, num::NonZeroUsize};
-use tagged_base64::{Tagged, TaggedBase64};
 
 impl From<sqlx::Error> for GetExplorerSummaryError {
     fn from(err: sqlx::Error) -> Self {
@@ -282,7 +284,7 @@ where
         let query_stmt = match request.target {
             BlockIdentifier::Latest => {
                 query(&GET_BLOCK_SUMMARIES_QUERY_FOR_LATEST).bind(request.num_blocks.get() as i64)
-            }
+            },
             BlockIdentifier::Height(height) => query(&GET_BLOCK_SUMMARIES_QUERY_FOR_HEIGHT)
                 .bind(height as i64)
                 .bind(request.num_blocks.get() as i64),
@@ -305,10 +307,10 @@ where
             BlockIdentifier::Latest => query(&GET_BLOCK_DETAIL_QUERY_FOR_LATEST),
             BlockIdentifier::Height(height) => {
                 query(&GET_BLOCK_DETAIL_QUERY_FOR_HEIGHT).bind(height as i64)
-            }
+            },
             BlockIdentifier::Hash(hash) => {
                 query(&GET_BLOCK_DETAIL_QUERY_FOR_HASH).bind(hash.to_string())
-            }
+            },
         };
 
         let query_result = query_stmt.fetch_one(self.as_mut()).await?;
@@ -375,7 +377,7 @@ where
 
             TransactionSummaryFilter::Block(block) => {
                 query(&GET_TRANSACTION_SUMMARIES_QUERY_FOR_BLOCK).bind(*block as i64)
-            }
+            },
         };
 
         let block_stream = query_stmt
@@ -432,10 +434,10 @@ where
                 query(&GET_TRANSACTION_DETAIL_QUERY_FOR_HEIGHT_AND_OFFSET)
                     .bind(height as i64)
                     .bind(offset as i64)
-            }
+            },
             TransactionIdentifier::Hash(hash) => {
                 query(&GET_TRANSACTION_DETAIL_QUERY_FOR_HASH).bind(hash.to_string())
-            }
+            },
         };
 
         let query_row = query_stmt.fetch_one(self.as_mut()).await?;
@@ -444,7 +446,7 @@ where
         let txns = block.enumerate().map(|(_, txn)| txn).collect::<Vec<_>>();
 
         let (offset, txn) = match target {
-            TransactionIdentifier::Latest => txns.into_iter().enumerate().last().ok_or(
+            TransactionIdentifier::Latest => txns.into_iter().enumerate().next_back().ok_or(
                 GetTransactionDetailError::TransactionNotFound(NotFound {
                     key: "Latest".to_string(),
                 }),
@@ -455,7 +457,7 @@ where
                         key: format!("at {height} and {offset}"),
                     }),
                 )
-            }
+            },
             TransactionIdentifier::Hash(hash) => txns
                 .into_iter()
                 .enumerate()

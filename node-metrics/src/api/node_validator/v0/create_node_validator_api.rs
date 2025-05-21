@@ -1,43 +1,49 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use super::{get_stake_table_from_sequencer, ProcessNodeIdentityUrlStreamTask};
-use crate::service::{
-    client_id::ClientId,
-    client_message::InternalClientMessage,
-    client_state::{
-        ClientThreadState, InternalClientMessageProcessingTask,
-        ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
-        ProcessDistributeVotersHandlingTask,
-    },
-    data_state::{DataState, ProcessLeafStreamTask, ProcessNodeIdentityStreamTask},
-    server_message::ServerMessage,
-};
 use async_lock::RwLock;
-use espresso_types::{downgrade_leaf, PubKey, SeqTypes};
+use espresso_types::SeqTypes;
 use futures::{
     channel::mpsc::{self, Receiver, SendError, Sender},
-    Sink, SinkExt, Stream, StreamExt,
+    Sink, SinkExt,
 };
-use hotshot_query_service::Leaf;
-use hotshot_types::event::{Event, EventType};
-use serde::{Deserialize, Serialize};
+use hotshot_types::utils::epoch_from_block_number;
 use tokio::{spawn, task::JoinHandle};
 use url::Url;
+
+use super::{
+    get_config_stake_table_from_sequencer, LeafAndBlock, ProcessNodeIdentityUrlStreamTask,
+};
+use crate::{
+    api::node_validator::v0::get_node_stake_table_from_sequencer,
+    service::{
+        client_id::ClientId,
+        client_message::InternalClientMessage,
+        client_state::{
+            ClientThreadState, InternalClientMessageProcessingTask,
+            ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
+            ProcessDistributeVotersHandlingTask,
+        },
+        data_state::{DataState, ProcessLeafAndBlockPairStreamTask, ProcessNodeIdentityStreamTask},
+        server_message::ServerMessage,
+    },
+};
 
 pub struct NodeValidatorAPI<K> {
     pub process_internal_client_message_handle: Option<InternalClientMessageProcessingTask>,
     pub process_distribute_block_detail_handle: Option<ProcessDistributeBlockDetailHandlingTask>,
     pub process_distribute_node_identity_handle: Option<ProcessDistributeNodeIdentityHandlingTask>,
     pub process_distribute_voters_handle: Option<ProcessDistributeVotersHandlingTask>,
-    pub process_leaf_stream_handle: Option<ProcessLeafStreamTask>,
+    pub process_leaf_stream_handle: Option<ProcessLeafAndBlockPairStreamTask>,
     pub process_node_identity_stream_handle: Option<ProcessNodeIdentityStreamTask>,
     pub process_url_stream_handle: Option<ProcessNodeIdentityUrlStreamTask>,
+    pub submit_public_urls_handle: Option<SubmitPublicUrlsToScrapeTask>,
     pub url_sender: K,
 }
 
 pub struct NodeValidatorConfig {
     pub stake_table_url_base: Url,
     pub initial_node_public_base_urls: Vec<Url>,
+    pub starting_block_height: u64,
 }
 
 #[derive(Debug)]
@@ -45,227 +51,49 @@ pub enum CreateNodeValidatorProcessingError {
     FailedToGetStakeTable(hotshot_query_service::Error),
 }
 
-/// An external message that can be sent to or received from a node
-#[derive(Serialize, Deserialize, Clone)]
-pub enum ExternalMessage {
-    /// A request for a node to respond with its identifier
-    /// Contains the public key of the node that is requesting the roll call
-    RollCallRequest(PubKey),
-
-    /// A response to a roll call request
-    /// Contains the identifier of the node
-    RollCallResponse(RollCallInfo),
-}
-
-/// Information about a node that is used in a roll call response
-#[derive(Serialize, Deserialize, Clone)]
-pub struct RollCallInfo {
-    // The public API URL of the node
-    pub public_api_url: Url,
-}
-
-/// [HotShotEventProcessingTask] is a task that is capable of processing events
-/// that are coming in from a HotShot event stream.  This task will keep an
-/// eye out for ExternalMessageReceived events that can be decoded as a
-/// RollCallResponse.  When a RollCallResponse is received, the public API URL
-/// of the node that sent the message will be sent to the provided url_sender.
-///
-/// Additionally, this can receive Decide events and send the discovered leaves
-/// to the provided leaf_sender.  This can can be used as a means of receiving
-/// leaves that doesn't involve hitting an external service like the task
-/// [ProcessProduceLeafStreamTask] does.
-pub struct HotShotEventProcessingTask {
+/// [SubmitPublicUrlsToScrapeTask] is a task that is capable of submitting
+/// public urls to a url sender at a regular interval.  This task will
+/// submit the provided urls to the url sender every 5 minutes.
+pub struct SubmitPublicUrlsToScrapeTask {
     pub task_handle: Option<JoinHandle<()>>,
 }
 
-impl HotShotEventProcessingTask {
-    /// [new] creates a new [HotShotEventProcessingTask] that will process
-    /// events from the provided event_stream.
-    ///
-    /// Calls to [new] will spawn a new task that will start processing
-    /// immediately. The task handle will be stored in the returned structure.
-    pub fn new<S, K1, K2>(event_stream: S, url_sender: K1, leaf_sender: K2) -> Self
+const PUBLIC_URL_RESUBMIT_INTERVAL: Duration = Duration::from_secs(300);
+
+impl SubmitPublicUrlsToScrapeTask {
+    pub fn new<S>(url_sender: S, urls: Vec<Url>) -> Self
     where
-        S: Stream<Item = Event<SeqTypes>> + Send + Unpin + 'static,
-        K1: Sink<Url, Error = SendError> + Send + Unpin + 'static,
-        K2: Sink<Leaf<SeqTypes>, Error = SendError> + Send + Unpin + 'static,
+        S: Sink<Url, Error = SendError> + Send + Unpin + 'static,
     {
-        let task_handle = spawn(Self::process_messages(
-            event_stream,
-            url_sender,
-            leaf_sender,
-        ));
+        let task_handle = spawn(Self::submit_urls(url_sender, urls));
 
         Self {
             task_handle: Some(task_handle),
         }
     }
 
-    /// [process_messages] is a function that will process messages from the
-    /// provided event stream.
-    async fn process_messages<S, K1, K2>(event_receiver: S, url_sender: K1, leaf_sender: K2)
+    pub async fn submit_urls<S>(url_sender: S, urls: Vec<Url>)
     where
-        S: Stream<Item = Event<SeqTypes>> + Send + Unpin + 'static,
-        K1: Sink<Url, Error = SendError> + Unpin,
-        K2: Sink<Leaf<SeqTypes>, Error = SendError> + Unpin,
+        S: Sink<Url, Error = SendError> + Unpin + 'static,
     {
-        let mut event_stream = event_receiver;
+        if urls.is_empty() {
+            tracing::warn!("no urls to send to url sender");
+            return;
+        }
+
         let mut url_sender = url_sender;
-        let mut leaf_sender = leaf_sender;
+        tracing::debug!("sending initial urls to url sender to process node identity");
         loop {
-            let event_result = event_stream.next().await;
-            let event = match event_result {
-                Some(event) => event,
-                None => {
-                    tracing::info!("event stream closed");
-                    break;
-                }
-            };
-
-            let Event { event, .. } = event;
-
-            match event {
-                EventType::Decide { leaf_chain, .. } => {
-                    for leaf_info in leaf_chain.iter().rev() {
-                        let leaf2 = leaf_info.leaf.clone();
-                        let leaf = downgrade_leaf(leaf2);
-
-                        let send_result = leaf_sender.send(leaf).await;
-                        if let Err(err) = send_result {
-                            tracing::error!("leaf sender closed: {}", err);
-                            panic!("HotShotEventProcessingTask leaf sender is closed, unrecoverable, the block state will stagnate.");
-                        }
-                    }
-                }
-
-                EventType::ExternalMessageReceived { data, .. } => {
-                    let roll_call_info = match bincode::deserialize(&data) {
-                        Ok(ExternalMessage::RollCallResponse(roll_call_info)) => roll_call_info,
-
-                        Err(err) => {
-                            tracing::info!(
-                                "failed to deserialize external message, unrecognized: {}",
-                                err
-                            );
-                            continue;
-                        }
-
-                        _ => {
-                            // Ignore any other potentially recognized messages
-                            continue;
-                        }
-                    };
-
-                    let public_api_url = roll_call_info.public_api_url;
-
-                    // Send the discovered public url to the sink
-                    let send_result = url_sender.send(public_api_url).await;
-                    if let Err(err) = send_result {
-                        tracing::error!("url sender closed: {}", err);
-                        panic!("HotShotEventProcessingTask url sender is closed, unrecoverable, the node state will stagnate.");
-                    }
-                }
-                _ => {
-                    // Ignore all other events
-                    continue;
+            for url in urls.iter() {
+                let send_result = url_sender.send(url.clone()).await;
+                if let Err(err) = send_result {
+                    tracing::error!("url sender closed: {}", err);
+                    panic!("SubmitPublicUrlsToScrapeTask url sender is closed, unrecoverable, the node state will stagnate.");
                 }
             }
-        }
-    }
-}
 
-/// [Drop] implementation for [HotShotEventProcessingTask] that will cancel the
-/// task when the structure is dropped.
-impl Drop for HotShotEventProcessingTask {
-    fn drop(&mut self) {
-        if let Some(task_handle) = self.task_handle.take() {
-            task_handle.abort();
-        }
-    }
-}
-
-/// [ProcessExternalMessageHandlingTask] is a task that is capable of processing
-/// external messages that are coming in from an external message stream.  This
-/// task will keep an eye out for ExternalMessageReceived events that can be
-/// decoded as a RollCallResponse.  When a RollCallResponse is received, the
-/// public API URL of the node that sent the message will be sent to the
-/// provided url_sender.
-///
-/// This task can be used as a means of processing [ExternalMessage]s that are
-/// not being provided by a HotShot event stream.  It can be used as an
-/// alternative to the [HotShotEventProcessingTask] for processing external
-/// messages.
-pub struct ProcessExternalMessageHandlingTask {
-    pub task_handle: Option<JoinHandle<()>>,
-}
-
-impl ProcessExternalMessageHandlingTask {
-    /// [new] creates a new [ProcessExternalMessageHandlingTask] that will
-    /// process external messages from the provided external_message_receiver.
-    ///
-    /// Calls to [new] will spawn a new task that will start processing
-    /// immediately. The task handle will be stored in the returned structure.
-    pub fn new<S, K>(external_message_receiver: S, url_sender: K) -> Self
-    where
-        S: Stream<Item = ExternalMessage> + Send + Unpin + 'static,
-        K: Sink<Url, Error = SendError> + Send + Unpin + 'static,
-    {
-        let task_handle = spawn(Self::process_external_messages(
-            external_message_receiver,
-            url_sender,
-        ));
-
-        Self {
-            task_handle: Some(task_handle),
-        }
-    }
-
-    /// [process_external_messages] is a function that will process messages from
-    /// the provided external message stream.
-    async fn process_external_messages<S, K>(external_message_receiver: S, url_sender: K)
-    where
-        S: Stream<Item = ExternalMessage> + Send + Unpin + 'static,
-        K: Sink<Url, Error = SendError> + Send + Unpin + 'static,
-    {
-        let mut external_message_receiver = external_message_receiver;
-        let mut url_sender = url_sender;
-
-        loop {
-            let external_message_result = external_message_receiver.next().await;
-            let external_message = match external_message_result {
-                Some(external_message) => external_message,
-                None => {
-                    tracing::error!("external message receiver closed");
-                    break;
-                }
-            };
-
-            match external_message {
-                ExternalMessage::RollCallResponse(roll_call_info) => {
-                    let public_api_url = roll_call_info.public_api_url;
-
-                    let send_result = url_sender.send(public_api_url).await;
-                    if let Err(err) = send_result {
-                        tracing::error!("url sender closed: {}", err);
-                        break;
-                    }
-                }
-
-                _ => {
-                    // Ignore all other messages
-                    continue;
-                }
-            }
-        }
-    }
-}
-
-/// [Drop] implementation for [ProcessExternalMessageHandlingTask] that will
-/// cancel the task when the structure is dropped.
-impl Drop for ProcessExternalMessageHandlingTask {
-    fn drop(&mut self) {
-        if let Some(task_handle) = self.task_handle.take() {
-            task_handle.abort();
+            // Sleep for 5 minutes before sending the urls again
+            tokio::time::sleep(PUBLIC_URL_RESUBMIT_INTERVAL).await;
         }
     }
 }
@@ -280,7 +108,7 @@ impl Drop for ProcessExternalMessageHandlingTask {
 pub async fn create_node_validator_processing(
     config: NodeValidatorConfig,
     internal_client_message_receiver: Receiver<InternalClientMessage<Sender<ServerMessage>>>,
-    leaf_receiver: Receiver<Leaf<SeqTypes>>,
+    leaf_and_block_pair_receiver: Receiver<LeafAndBlock<SeqTypes>>,
 ) -> Result<NodeValidatorAPI<Sender<Url>>, CreateNodeValidatorProcessingError> {
     let client_thread_state = ClientThreadState::<Sender<ServerMessage>>::new(
         Default::default(),
@@ -290,11 +118,39 @@ pub async fn create_node_validator_processing(
         ClientId::from_count(1),
     );
 
-    let client_stake_table = surf_disco::Client::new(config.stake_table_url_base.clone());
+    let hotshot_client = surf_disco::Client::new(config.stake_table_url_base.clone());
 
-    let stake_table = get_stake_table_from_sequencer(client_stake_table)
+    let hotshot_config = get_config_stake_table_from_sequencer(hotshot_client.clone())
         .await
         .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
+    let mut stake_table = hotshot_config.known_nodes_with_stake.clone();
+
+    if let (Some(epoch_starting_block), Some(num_blocks_per_epoch)) = (
+        hotshot_config.epoch_start_block,
+        hotshot_config.epoch_height,
+    ) {
+        tracing::info!(
+            "epoch starting block: {}, num blocks per epoch: {}",
+            epoch_starting_block,
+            num_blocks_per_epoch
+        );
+        let epoch = epoch_from_block_number(config.starting_block_height, num_blocks_per_epoch);
+        if epoch > 1 {
+            // Let's fetch our initial stake table that is not derived from the
+            // initial configuration.
+
+            let node_stake_table =
+                get_node_stake_table_from_sequencer(hotshot_client.clone(), epoch)
+                    .await
+                    .map_err(CreateNodeValidatorProcessingError::FailedToGetStakeTable)?;
+
+            stake_table = node_stake_table;
+        }
+    } else {
+        tracing::warn!(
+            "epoch starting block or num blocks per epoch not found in retrieved hotshot config"
+        );
+    }
 
     let data_state = DataState::new(Default::default(), Default::default(), stake_table);
 
@@ -304,7 +160,7 @@ pub async fn create_node_validator_processing(
     let (node_identity_sender_1, node_identity_receiver_1) = mpsc::channel(32);
     let (node_identity_sender_2, node_identity_receiver_2) = mpsc::channel(32);
     let (voters_sender, voters_receiver) = mpsc::channel(32);
-    let (mut url_sender, url_receiver) = mpsc::channel(32);
+    let (url_sender, url_receiver) = mpsc::channel(32);
 
     let process_internal_client_message_handle = InternalClientMessageProcessingTask::new(
         internal_client_message_receiver,
@@ -325,9 +181,11 @@ pub async fn create_node_validator_processing(
     let process_distribute_voters_handle =
         ProcessDistributeVotersHandlingTask::new(client_thread_state.clone(), voters_receiver);
 
-    let process_leaf_stream_handle = ProcessLeafStreamTask::new(
-        leaf_receiver,
+    let process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
+        leaf_and_block_pair_receiver,
         data_state.clone(),
+        hotshot_client,
+        hotshot_config,
         block_detail_sender,
         voters_sender,
     );
@@ -343,17 +201,10 @@ pub async fn create_node_validator_processing(
 
     // Send any initial URLS to the url sender for immediate processing.
     // These urls are supplied by the configuration of this function
-    {
-        let urls = config.initial_node_public_base_urls;
-
-        for url in urls {
-            let send_result = url_sender.send(url).await;
-            if let Err(err) = send_result {
-                tracing::info!("url sender closed: {}", err);
-                break;
-            }
-        }
-    }
+    let submit_public_urls_handle = SubmitPublicUrlsToScrapeTask::new(
+        url_sender.clone(),
+        config.initial_node_public_base_urls.clone(),
+    );
 
     Ok(NodeValidatorAPI {
         process_internal_client_message_handle: Some(process_internal_client_message_handle),
@@ -363,106 +214,46 @@ pub async fn create_node_validator_processing(
         process_leaf_stream_handle: Some(process_leaf_stream_handle),
         process_node_identity_stream_handle: Some(process_node_identity_stream_handle),
         process_url_stream_handle: Some(process_url_stream_handle),
-        url_sender: url_sender.clone(),
+        submit_public_urls_handle: Some(submit_public_urls_handle),
+        url_sender,
     })
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        api::node_validator::v0::{
-            HotshotQueryServiceLeafStreamRetriever, ProcessProduceLeafStreamTask,
-            StateClientMessageSender, STATIC_VER_0_1,
-        },
-        service::{client_message::InternalClientMessage, server_message::ServerMessage},
-    };
-    use futures::channel::mpsc::{self, Sender};
-    use tide_disco::App;
-    use tokio::spawn;
+    use url::Url;
 
-    struct TestState(Sender<InternalClientMessage<Sender<ServerMessage>>>);
-
-    impl StateClientMessageSender<Sender<ServerMessage>> for TestState {
-        fn sender(&self) -> Sender<InternalClientMessage<Sender<ServerMessage>>> {
-            self.0.clone()
-        }
-    }
+    use crate::run_standalone_service;
 
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
     async fn test_full_setup_example() {
-        let (internal_client_message_sender, internal_client_message_receiver) = mpsc::channel(32);
-        let state = TestState(internal_client_message_sender);
+        use hotshot::helpers::initialize_logging;
+        initialize_logging();
 
-        let mut app: App<_, crate::api::node_validator::v0::Error> = App::with_state(state);
-        let node_validator_api_result = super::super::define_api::<TestState>();
-        let node_validator_api = match node_validator_api_result {
-            Ok(node_validator_api) => node_validator_api,
-            Err(err) => {
-                panic!("error defining node validator api: {:?}", err);
-            }
-        };
+        let base_url: Url = "https://query.main.net.espresso.network/v0/"
+            .parse()
+            .unwrap();
 
-        match app.register_module("node-validator", node_validator_api) {
-            Ok(_) => {}
-            Err(err) => {
-                panic!("error registering node validator api: {:?}", err);
-            }
-        }
-
-        let (leaf_sender, leaf_receiver) = mpsc::channel(10);
-
-        let process_consume_leaves = ProcessProduceLeafStreamTask::new(
-            HotshotQueryServiceLeafStreamRetriever::new(
-                "https://query.cappuccino.testnet.espresso.network/v0"
+        run_standalone_service(crate::Options {
+            stake_table_source_base_url: base_url.clone(),
+            leaf_stream_base_url: base_url,
+            initial_node_public_base_urls: vec![
+                "https://query-1.main.net.espresso.network/"
                     .parse()
                     .unwrap(),
-            ),
-            leaf_sender,
-        );
-
-        let node_validator_task_state = match super::create_node_validator_processing(
-            super::NodeValidatorConfig {
-                stake_table_url_base: "https://query.cappuccino.testnet.espresso.network/v0"
+                "https://query-2.main.net.espresso.network/"
                     .parse()
                     .unwrap(),
-                initial_node_public_base_urls: vec![
-                    "https://query-1.cappuccino.testnet.espresso.network/"
-                        .parse()
-                        .unwrap(),
-                    "https://query-2.cappuccino.testnet.espresso.network/"
-                        .parse()
-                        .unwrap(),
-                    "https://query-3.cappuccino.testnet.espresso.network/"
-                        .parse()
-                        .unwrap(),
-                    "https://query-4.cappuccino.testnet.espresso.network/"
-                        .parse()
-                        .unwrap(),
-                ],
-            },
-            internal_client_message_receiver,
-            leaf_receiver,
-        )
-        .await
-        {
-            Ok(node_validator_task_state) => node_validator_task_state,
-
-            Err(err) => {
-                panic!("error defining node validator api: {:?}", err);
-            }
-        };
-
-        // We would like to wait until being signaled
-        let app_serve_handle = spawn(async move {
-            let app_serve_result = app.serve("0.0.0.0:9000", STATIC_VER_0_1).await;
-            tracing::info!("app serve result: {:?}", app_serve_result);
-        });
-        tracing::info!("now listening on port 9000");
-
-        let _ = app_serve_handle.await;
-
-        drop(node_validator_task_state);
-        drop(process_consume_leaves);
+                "https://query-3.main.net.espresso.network/"
+                    .parse()
+                    .unwrap(),
+                "https://query-4.main.net.espresso.network/"
+                    .parse()
+                    .unwrap(),
+            ],
+            port: 9000,
+        })
+        .await;
     }
 }

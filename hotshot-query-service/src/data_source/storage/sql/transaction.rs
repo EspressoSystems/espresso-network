@@ -18,6 +18,34 @@
 //! database connection, so that the updated state of the database can be queried midway through a
 //! transaction.
 
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    time::Instant,
+};
+
+use anyhow::{bail, Context};
+use ark_serialize::CanonicalSerialize;
+use async_trait::async_trait;
+use committable::Committable;
+use derive_more::{Deref, DerefMut};
+use futures::{future::Future, stream::TryStreamExt};
+use hotshot_types::{
+    data::VidShare,
+    traits::{
+        block_contents::BlockHeader,
+        metrics::{Counter, Gauge, Histogram, Metrics},
+        node_implementation::{ConsensusTime, NodeType},
+        EncodeBytes,
+    },
+};
+use itertools::Itertools;
+use jf_merkle_tree::prelude::{MerkleNode, MerkleProof};
+pub use sqlx::Executor;
+use sqlx::{
+    pool::Pool, query_builder::Separated, types::BitVec, Encode, FromRow, QueryBuilder, Type,
+};
+
 use super::{
     queries::{
         self,
@@ -28,7 +56,8 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, StateCertQueryData,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
@@ -36,29 +65,7 @@ use crate::{
     },
     merklized_state::{MerklizedState, UpdateStateData},
     types::HeightIndexed,
-    Header, Payload, QueryError, QueryResult, VidShare,
-};
-use anyhow::{bail, Context};
-use ark_serialize::CanonicalSerialize;
-use async_trait::async_trait;
-use committable::Committable;
-use derive_more::{Deref, DerefMut};
-use futures::{future::Future, stream::TryStreamExt};
-use hotshot_types::traits::{
-    block_contents::BlockHeader,
-    metrics::{Counter, Gauge, Histogram, Metrics},
-    node_implementation::NodeType,
-    EncodeBytes,
-};
-use itertools::Itertools;
-use jf_merkle_tree::prelude::{MerkleNode, MerkleProof};
-use sqlx::types::BitVec;
-pub use sqlx::Executor;
-use sqlx::{pool::Pool, query_builder::Separated, Encode, FromRow, QueryBuilder, Type};
-use std::{
-    collections::{HashMap, HashSet},
-    marker::PhantomData,
-    time::Instant,
+    Header, Payload, QueryError, QueryResult,
 };
 
 pub type Query<'q> = sqlx::query::Query<'q, Db, <Db as Database>::Arguments<'q>>;
@@ -119,7 +126,7 @@ impl TransactionMode for Write {
         //
         // The proper way to begin a write transaction in SQLite is with `BEGIN IMMEDIATE`. However,
         // sqlx does not expose any way to customize the `BEGIN` statement that starts a
-        // transaction. A servicable workaround is to perform some write statement before performing
+        // transaction. A serviceable workaround is to perform some write statement before performing
         // any read statement, ensuring that the first lock we acquire is exclusive. A write
         // statement that has no actual effect on the database is suitable for this purpose, hence
         // the `WHERE false`.
@@ -496,15 +503,20 @@ where
         // Similarly, we can initialize the payload table with a null payload, which can help us
         // distinguish between blocks that haven't been produced yet and blocks we haven't received
         // yet when answering queries.
-        self.upsert("payload", ["height"], ["height"], [(height as i64,)])
-            .await?;
+        // We don't overwrite the payload if it already exists.
+        // During epoch transition in PoS, the same height block is sent multiple times.
+        // The first block may have the payload, but subsequent blocks might be missing it.
+        // Overwriting would cause the payload to be lost since the block height is the same
+        let query = query("INSERT INTO payload (height) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind(height as i64);
+        query.execute(self.as_mut()).await?;
 
         // Finally, we insert the leaf itself, which references the header row we created.
         // Serialize the full leaf and QC to JSON for easy storage.
         let leaf_json = serde_json::to_value(leaf.leaf()).context("failed to serialize leaf")?;
         let qc_json = serde_json::to_value(leaf.qc()).context("failed to serialize QC")?;
         self.upsert(
-            "leaf",
+            "leaf2",
             ["height", "hash", "block_hash", "leaf", "qc"],
             ["height"],
             [(
@@ -598,7 +610,7 @@ where
         if let Some(share) = share {
             let share_data = bincode::serialize(&share).context("failed to serialize VID share")?;
             self.upsert(
-                "vid",
+                "vid2",
                 ["height", "common", "share"],
                 ["height"],
                 [(height as i64, common_data, share_data)],
@@ -609,13 +621,45 @@ where
             // possible that this column already exists, and we are just upserting the common data,
             // in which case we don't want to overwrite the share with NULL.
             self.upsert(
-                "vid",
+                "vid2",
                 ["height", "common"],
                 ["height"],
                 [(height as i64, common_data)],
             )
             .await
         }
+    }
+
+    async fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
+    ) -> anyhow::Result<()> {
+        let height = state_cert.height();
+
+        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
+        // fetcher is racing with the pruner.
+        if let Some(pruned_height) = self.load_pruned_height().await? {
+            if height <= pruned_height {
+                tracing::info!(
+                    height,
+                    pruned_height,
+                    "ignoring state cert which is already pruned"
+                );
+                return Ok(());
+            }
+        }
+        let epoch = state_cert.0.epoch.u64();
+        let bytes = bincode::serialize(&state_cert.0).context("failed to serialize state cert")?;
+        // Directly upsert the state cert to the finalized_state_cert table because
+        // this is called only when the corresponding leaf is decided.
+        self.upsert(
+            "finalized_state_cert",
+            ["epoch", "state_cert"],
+            ["epoch"],
+            [(epoch as i64, bytes)],
+        )
+        .await?;
+        Ok(())
     }
 }
 
@@ -673,10 +717,10 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
                         [0_u8; 32].to_vec(),
                     ));
                     hashset.insert([0_u8; 32].to_vec());
-                }
+                },
                 MerkleNode::ForgettenSubtree { .. } => {
                     bail!("Node in the Merkle path contains a forgetten subtree");
-                }
+                },
                 MerkleNode::Leaf { value, pos, elem } => {
                     let mut leaf_commit = Vec::new();
                     // Serialize the leaf node hash value into a vector
@@ -703,7 +747,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
                     ));
 
                     hashset.insert(leaf_commit);
-                }
+                },
                 MerkleNode::Branch { value, children } => {
                     // Get hash
                     let mut branch_hash = Vec::new();
@@ -720,7 +764,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
                         match child {
                             MerkleNode::Empty => {
                                 children_bitvec.push(false);
-                            }
+                            },
                             MerkleNode::Branch { value, .. }
                             | MerkleNode::Leaf { value, .. }
                             | MerkleNode::ForgettenSubtree { value } => {
@@ -732,7 +776,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
                                 children_values.push(hash);
                                 // Mark the entry as 1 in bitvec to indicate a non-empty child
                                 children_bitvec.push(true);
-                            }
+                            },
                         }
                     }
 
@@ -750,7 +794,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
                     ));
                     hashset.insert(branch_hash);
                     hashset.extend(children_values);
-                }
+                },
             }
 
             // advance the traversal path for the internal nodes at each iteration
@@ -790,7 +834,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
             }
         }
 
-        Node::upsert(name, nodes.into_iter().map(|(n, _, _)| n), self).await?;
+        Node::upsert(name, nodes.into_iter().map(|(n, ..)| n), self).await?;
 
         Ok(())
     }

@@ -5,19 +5,25 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
+[features]
+default = ["fee", "pos"]
+fee = []
+pos = []
+
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 espresso-types = { path = "../types" }
-ethers = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-builder-core = { workspace = true }
 hotshot-events-service = { workspace = true }
+hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 marketplace-builder-shared = { workspace = true }

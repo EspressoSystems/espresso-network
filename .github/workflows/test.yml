@@ -19,15 +19,15 @@ concurrency:
 
 env:
   RUST_LOG: info,libp2p=off,node=error
-  RUSTFLAGS: "--cfg feature=\"fee\" --cfg feature=\"marketplace\""
   CARGO_TERM_COLOR: always
   # Save the process compose logs
-  PC_LOGS: /tmp/pc.log
+  NATIVE_DEMO_LOGS: /tmp/native-demo.log
+  PC_LOG_FILE: /tmp/pc-logs.log
 
 jobs:
   build-test-artifacts-postgres:
     name: Build test artifacts (postgres)
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -39,8 +39,10 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          cache-all-crates: true
-          cache-provider: buildjet
+          shared-key: test-artifacts
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-provider: github
 
       - name: Show memory
         run: free -h
@@ -51,17 +53,19 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        run: cargo nextest archive --locked --workspace --archive-file nextest-archive-postgres.tar.zst
+        # hotshot-testing is tested in hotshot.yml, exclude from compilation
+        run: cargo nextest archive --locked --workspace --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-postgres
+          if-no-files-found: error
           path: nextest-archive-postgres.tar.zst
 
   build-test-artifacts-sqlite:
     name: Build test artifacts (sqlite)
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -74,8 +78,10 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          cache-all-crates: true
-          cache-provider: buildjet
+          shared-key: test-artifacts
+          save-if: false
+          prefix-key: v1-rust
+          cache-provider: github
 
       - name: Show memory
         run: free -h
@@ -86,17 +92,19 @@ jobs:
           comment_on_pr: false
 
       - name: Build and archive tests
-        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --archive-file nextest-archive-sqlite.tar.zst
+        # hotshot-testing is tested in hotshot.yml, exclude from compilation
+        run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
         with:
           name: nextest-archive-sqlite
+          if-no-files-found: error
           path: nextest-archive-sqlite.tar.zst
 
   build-test-bins:
     name: Build test binaries
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -105,19 +113,21 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          cache-all-crates: true
-          cache-provider: buildjet
+          shared-key: build-test-bins
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-provider: github
 
-      - name: Build Bins
+      - name: Build all binaries (postgres)
         run: |
           cargo build --locked --profile test --bins
-          cargo build --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
         timeout-minutes: 60
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v4
         with:
           name: test-binaries
+          if-no-files-found: error
           path: |
             target/debug/orchestrator
             target/debug/cdn-broker
@@ -134,14 +144,67 @@ jobs:
             target/debug/keygen
             target/debug/permissionless-builder
             target/debug/nasty-client
-            target/debug/espresso-dev-node
             target/debug/pub-key
             target/debug/espresso-bridge
-            target/debug/marketplace-solver
-            target/debug/marketplace-builder
             target/debug/node-metrics
-            target/debug/dev-rollup
+            target/debug/staking-cli
+
+  build-test-bins-sqlite:
+    name: Build sequencer-sqlite test binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: rui314/setup-mold@v1
+      - uses: actions/checkout@v4
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          shared-key: build-test-bins
+          prefix-key: v1-rust
+          cache-provider: github
+
+      - name: Build sequencer-sqlite binary
+        run: |
+          cargo build --locked --profile test --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
+        timeout-minutes: 30
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries-sqlite
+          if-no-files-found: error
+          path: |
             target/debug/sequencer-sqlite
+
+  # The go-sdk test job only needs the dev-node binary, compile it separately.
+  build-test-bins-dev-node:
+    name: Build espresso-dev-node test binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: rui314/setup-mold@v1
+      - uses: actions/checkout@v4
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          shared-key: build-test-bins
+          prefix-key: v1-rust
+          cache-provider: github
+
+      - name: Build espresso-dev-node binary
+        run: |
+          cargo build --locked --profile test --features "embedded-db testing" --bin espresso-dev-node
+        timeout-minutes: 30
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries-dev-node
+          if-no-files-found: error
+          path: |
+            target/debug/espresso-dev-node
 
   test-postgres:
     needs: build-test-artifacts-postgres
@@ -178,10 +241,6 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       fail-fast: false
     steps:
-      - name: Fix submodule permissions check
-        run: |
-          git config --global --add safe.directory '*'
-
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
@@ -205,22 +264,47 @@ jobs:
           --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 20
 
+  test-go-sdk:
+    needs: build-test-bins
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Enable Cachix
+        uses: cachix/cachix-action@v16
+        # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: ${{ github.actor == 'dependabot[bot]' }}
+
+      - uses: actions/checkout@v4
+
+      - name: Build verification module
+        run: |
+          nix develop --accept-flake-config -c just build-go-crypto-helper
+
+      - name: Test
+        run: |
+          nix develop --accept-flake-config -c just test-go
+
   test-integration:
-    needs: [build-test-bins, build-test-artifacts-postgres]
+    needs: [build-test-bins, build-test-bins-sqlite, build-test-artifacts-postgres]
     strategy:
       matrix:
-        version: [02,99]
         include:
-          - version: 02
-            compose: "-f process-compose.yaml -D"
+          - test-name: test_native_demo_base
+          - test-name: test_native_demo_pos_base
+          - test-name: test_native_demo_pos_upgrade
 
-          - version: 99
-            compose: "-f process-compose.yaml -f process-compose-mp.yml -D"
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
       - name: Install Nix
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@v31
 
       - name: Configure PATH
         run: PATH="$PWD/target/debug:$PATH"
@@ -237,51 +321,66 @@ jobs:
           mv nextest-archive-postgres/* .
           mkdir -p target/debug
           mv test-binaries/* target/debug
+          mv test-binaries-sqlite/* target/debug
           chmod -c +x target/debug/*
 
+      # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
       - name: Install process-compose
-        run: nix profile install nixpkgs#process-compose
+        run: nix profile install nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae#process-compose
 
-      - name: Run Demo-Native ${{matrix.version}}
-        run: bash -x scripts/demo-native ${{matrix.compose}} --tui=false > ${{ env.PC_LOGS }} 2>&1 &
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
 
       - name: Test Integration
         env:
-          RUST_LOG: debug
           NEXTEST_PROFILE: integration
-          INTEGRATION_TEST_SEQUENCER_VERSION: ${{ matrix.version }}
         run: |
           cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast --nocapture \
-          --workspace-remap $PWD $(if [ "${{ matrix.version }}" == "2" ]; then echo " smoke"; fi)
-        timeout-minutes: 10
+          --workspace-remap $PWD ${{ matrix.test-name }}
+        timeout-minutes: 60
+
+      - name: Show end of logs
+        if: always()
+        run: |
+          tail -n 1000 ${{ env.NATIVE_DEMO_LOGS }}
 
       - name: Upload process compose logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: process-compose-logs-integration-v${{ matrix.version  }}
-          path: ${{ env.PC_LOGS }}
+          name: process-compose-logs-integration-v${{ matrix.test-name  }}
+          path: ${{ env.NATIVE_DEMO_LOGS }}
+
 
   demo-native:
-    needs: build-test-bins
+    needs: [build-test-bins, build-test-bins-sqlite]
     runs-on: ubuntu-latest
     steps:
-      - name: Install Nix
-        uses: cachix/install-nix-action@v30
-
+      - uses: cachix/install-nix-action@v31
       - uses: actions/checkout@v4
 
+        # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact
+        # downloads always fail if I try to select a subset.
       - name: Download archive
         uses: actions/download-artifact@v4
-        with:
-          name: test-binaries
-          path: target/debug
 
-      - name: chmod +x
-        run: chmod -c +x target/debug/*
+      - name: Move files
+        run: |
+          mkdir -p target/debug
+          mv test-binaries/* target/debug
+          mv test-binaries-sqlite/* target/debug
+          chmod -c +x target/debug/*
 
+      # TODO: our demo fails with process-compose 1.63, pinning an older version until we figure it out
       - name: Install process-compose
-        run: nix profile install nixpkgs#process-compose
+        run: nix profile install nixpkgs/3730d8a308f94996a9ba7c7138ede69c1b9ac4ae#process-compose
+
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
 
       - name: Test Demo
         run: |
@@ -289,3 +388,30 @@ jobs:
           set -o pipefail
           scripts/demo-native --tui=false &
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+      - name: Upload process compose logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-compose-logs-test-demo-native
+          path: ${{ env.PC_LOG_FILE }}
+
+  # This job enables having a single required status check in github for all GCL tests.
+  aggregate-gcl-tests:
+    needs: [test-postgres, test-sqlite, demo-native, test-integration]
+    runs-on: ubuntu-latest
+    # explicitly run and fail the job if dependencies failed
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Aggregate GCL test results
+        run: |
+          # useful for debugging
+          echo "All results: ${{ toJson(needs) }}"
+
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "One or more jobs failed."
+            exit 1
+          else
+            echo "All jobs succeeded."
+            exit 0
+          fi

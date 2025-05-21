@@ -2,6 +2,7 @@
 mod tests {
     use std::sync::Arc;
 
+    use alloy::primitives::U256;
     use async_lock::RwLock;
     use futures::stream::StreamExt;
     use hotshot_example_types::node_types::TestTypes;
@@ -53,11 +54,12 @@ mod tests {
         // Start the web server.
         let mut app = App::<_, Error>::with_state(events_streamer.clone());
 
-        let hotshot_events_api =
-            define_api::<Arc<RwLock<EventsStreamer<TestTypes>>>, TestTypes, StaticVersion<0, 1>>(
-                &Options::default(),
-            )
-            .expect("Failed to define hotshot eventsAPI");
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "0.0.1".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
 
         app.register_module("hotshot_events", hotshot_events_api)
             .expect("Failed to register hotshot events API");
@@ -96,8 +98,8 @@ mod tests {
         let pub_key = BLSPubKey::from_private(&private_key);
         let state_key_pair = StateKeyPair::generate();
 
-        let peer_config = PeerConfig::<BLSPubKey> {
-            stake_table_entry: pub_key.stake_table_entry(1),
+        let peer_config = PeerConfig::<TestTypes> {
+            stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
         };
 
@@ -112,11 +114,12 @@ mod tests {
         // Start the web server.
         let mut app = App::<_, Error>::with_state(events_streamer.clone());
 
-        let hotshot_events_api =
-            define_api::<Arc<RwLock<EventsStreamer<TestTypes>>>, TestTypes, StaticVersion<0, 1>>(
-                &Options::default(),
-            )
-            .expect("Failed to define hotshot eventsAPI");
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "0.0.1".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
 
         app.register_module("api", hotshot_events_api)
             .expect("Failed to register hotshot events API");
@@ -156,11 +159,12 @@ mod tests {
         // Start the web server.
         let mut app = App::<_, Error>::with_state(events_streamer.clone());
 
-        let hotshot_events_api =
-            define_api::<Arc<RwLock<EventsStreamer<TestTypes>>>, TestTypes, StaticVersion<0, 1>>(
-                &Options::default(),
-            )
-            .expect("Failed to define hotshot eventsAPI");
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "1.0.0".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
 
         app.register_module("hotshot_events", hotshot_events_api)
             .expect("Failed to register hotshot events API");

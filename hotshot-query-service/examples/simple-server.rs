@@ -16,18 +16,18 @@
 //! consensus network with two nodes and connects a query service to each node. It runs each query
 //! server on local host. The program continues until it is manually killed.
 
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use clap::Parser;
 use futures::future::{join_all, try_join_all};
 use hotshot::{
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{SignatureKey, SystemContextHandle},
-    HotShotInitializer, MarketplaceConfig, SystemContext,
+    HotShotInitializer, SystemContext,
 };
-use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider, state_types::TestInstanceState,
-    storage_types::TestStorage,
-};
+use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
 use hotshot_query_service::{
     data_source,
     fetching::provider::NoFetching,
@@ -42,12 +42,12 @@ use hotshot_query_service::{
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
+    epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
     traits::{election::Membership, network::Topic},
     HotShotConfig, PeerConfig,
 };
-use std::{num::NonZeroUsize, str::FromStr, sync::Arc, time::Duration};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 use vbs::version::StaticVersionType;
@@ -161,8 +161,8 @@ async fn init_consensus(
     let known_nodes_with_stake = pub_keys
         .iter()
         .zip(&state_key_pairs)
-        .map(|(pub_key, state_key_pair)| PeerConfig::<BLSPubKey> {
-            stake_table_entry: pub_key.stake_table_entry(1u64),
+        .map(|(pub_key, state_key_pair)| PeerConfig::<MockTypes> {
+            stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
             state_ver_key: state_key_pair.ver_key(),
         })
         .collect::<Vec<_>>();
@@ -218,6 +218,7 @@ async fn init_consensus(
         stop_voting_time: 0,
         epoch_height: 0,
         epoch_start_block: 0,
+        stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -225,6 +226,10 @@ async fn init_consensus(
             let pub_keys = pub_keys.clone();
             let config = config.clone();
             let master_map = master_map.clone();
+            let state_private_keys = state_key_pairs
+                .iter()
+                .map(|kp| kp.sign_key())
+                .collect::<Vec<_>>();
 
             let membership = membership.clone();
             async move {
@@ -236,13 +241,19 @@ async fn init_consensus(
                 ));
 
                 let storage: TestStorage<MockTypes> = TestStorage::default();
+                let coordinator = EpochMembershipCoordinator::new(
+                    Arc::new(RwLock::new(membership)),
+                    config.epoch_height,
+                    &storage.clone(),
+                );
 
                 SystemContext::init(
                     pub_keys[node_id],
                     priv_key,
+                    state_private_keys[node_id].clone(),
                     node_id as u64,
                     config,
-                    Arc::new(RwLock::new(membership)),
+                    coordinator,
                     network,
                     HotShotInitializer::from_genesis::<MockVersions>(
                         TestInstanceState::default(),
@@ -254,10 +265,6 @@ async fn init_consensus(
                     .unwrap(),
                     ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                     storage,
-                    MarketplaceConfig {
-                        auction_results_provider: Arc::new(TestAuctionResultsProvider::default()),
-                        fallback_builder_url: Url::from_str("https://some.url").unwrap(),
-                    },
                 )
                 .await
                 .unwrap()

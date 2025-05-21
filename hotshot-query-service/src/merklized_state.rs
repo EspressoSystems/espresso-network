@@ -15,14 +15,16 @@
 //! The state API provides an interface for serving queries against arbitrarily old snapshots of the state.
 //! This allows a full Merkle tree to be reconstructed from storage.
 //! If any parent state is missing then the partial snapshot can not be queried.
-use std::{fmt::Display, path::PathBuf};
+use std::{
+    fmt::{Debug, Display},
+    path::PathBuf,
+};
 
 use derive_more::From;
 use futures::FutureExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use std::fmt::Debug;
 use tagged_base64::TaggedBase64;
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
@@ -52,6 +54,7 @@ pub enum Error {
     Query {
         source: QueryError,
     },
+    #[snafu(display("error {status}: {message}"))]
     Custom {
         message: String,
         status: StatusCode,
@@ -76,6 +79,7 @@ pub fn define_api<
     const ARITY: usize,
 >(
     options: &Options,
+    api_ver: semver::Version,
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
@@ -89,7 +93,7 @@ where
         options.extensions.clone(),
     )?;
 
-    api.with_version("0.0.1".parse().unwrap())
+    api.with_version(api_ver)
         .get("get_path", move |req, state| {
             async move {
                 // Determine the snapshot type based on request parameters, either index or commit

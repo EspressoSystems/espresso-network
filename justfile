@@ -9,12 +9,11 @@ doc *args:
 demo *args:
     docker compose up {{args}}
 
-demo-native *args: build
+demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
 fmt:
     cargo fmt --all
-    cargo fmt -- hotshot-testing/tests/**/*.rs
 
 lint:
     #!/usr/bin/env bash
@@ -22,18 +21,22 @@ lint:
     # Use the same target dir for both `clippy` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
     cargo clippy --workspace --features testing --all-targets -- -D warnings
+    cargo clippy --workspace --features "embedded-db testing" --all-targets -- -D warnings
     cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml -- -D warnings
 
-build profile="test":
+build profile="dev" features="":
     #!/usr/bin/env bash
     set -euxo pipefail
     # Use the same target dir for both `build` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
-    cargo build --profile {{profile}}
-    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml
+    cargo build --profile {{profile}} {{features}}
+    cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
 
-demo-native-mp *args: build
-    scripts/demo-native -f process-compose.yaml -f process-compose-mp.yml {{args}}
+demo-native-pos *args: (build "test" "--features fee,pos")
+    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+demo-native-pos-base *args: (build "test" "--features pos")
+    ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -57,29 +60,29 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
+nextest *args:
+    # exclude hotshot-testing because it takes ages to compile and has its own hotshot.just file
+    cargo nextest run --locked --workspace --exclude hotshot-testing --verbose {{args}}
+
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --workspace --features embedded-db --verbose {{args}}
-    cargo nextest run --locked --workspace --verbose {{args}}
+    just nextest --features embedded-db  {{args}}
+    just nextest {{args}}
 
 test-slow:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --release --workspace --features embedded-db --verbose --profile slow
-    cargo nextest run --locked --release --workspace --verbose --profile slow
+    just nextest --features embedded-db --profile slow
+    just nextest --profile slow
 
 test-all:
     @echo 'features: "embedded-db"'
-    cargo nextest run --locked --release --workspace --features embedded-db --verbose --profile all
-    cargo nextest run --locked --release --workspace --verbose --profile all
+    just nextest --features embedded-db --profile all
+    just nextest --profile all
 
-test-integration:
-	@echo 'NOTE that demo-native must be running for this test to succeed.'
-	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run --all-features --nocapture --profile integration smoke
-test-integration-mp:
-    @echo 'NOTE that demo-native-mp must be running for this test to succeed.'
-    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run --all-features --nocapture --profile integration
+test-integration: (build "test" "--features fee")
+	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 clippy:
     @echo 'features: "embedded-db"'
@@ -88,6 +91,31 @@ clippy:
 
 check-features *args:
     cargo hack check --each-feature {{args}}
+
+check-features-ci *args:
+    # check each pair of features plus `default` and `--no-default-features`
+    cargo hack check --feature-powerset \
+        --depth 2 \
+        --exclude contract-bindings-alloy \
+        --exclude contract-bindings-ethers \
+        --exclude hotshot \
+        --exclude hotshot-builder-api \
+        --exclude hotshot-contract-adapter \
+        --exclude hotshot-events-service \
+        --exclude hotshot-example-types \
+        --exclude hotshot-libp2p-networking \
+        --exclude hotshot-macros \
+        --exclude hotshot-orchestrator \
+        --exclude hotshot-query-service \
+        --exclude hotshot-stake-table \
+        --exclude hotshot-state-prover \
+        --exclude hotshot-task \
+        --exclude hotshot-task-impls \
+        --exclude hotshot-testing \
+        --exclude hotshot-types \
+        --exclude hotshot-utils \
+        --exclude vid \
+        {{args}}
 
 # Helpful shortcuts for local development
 dev-orchestrator:
@@ -110,41 +138,31 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient$|^LightClientArbitrum$|^FeeContract$|PlonkVerifier$|^ERC1967Proxy$|^LightClientMock$|^PlonkVerifier2$|^PermissionedStakeTable$"
+REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^Timelock$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
 
-    # Generate the ethers bindings
-    forge bind --contracts ./contracts/src/ --ethers --crate-name contract-bindings-ethers --bindings-path contract-bindings-ethers --select "{{REGEXP}}" --overwrite --force
-
-    # Foundry doesn't include bytecode in the bindings for LightClient.sol, since it links with
-    # libraries. However, this bytecode is still needed to link and deploy the contract. Copy it to
-    # the source tree so that the deploy script can be compiled whenever the bindings are up to
-    # date, without needed to recompile the contracts.
-    #
-    # The bytecode is extracted *before* the forge bind --alloy ... step because we're forced to
-    # parse a library address to generate the bindings which leads to the bytecode being pre-linked
-    # with that library address. We need the unlinked contract bytecode to later link it at runtime.
-    mkdir -p contract-bindings/artifacts
-    jq '.bytecode.object' < contracts/out/LightClient.sol/LightClient.json > contract-bindings/artifacts/LightClient_bytecode.json
-    jq '.bytecode.object' < contracts/out/LightClientArbitrum.sol/LightClientArbitrum.json > contract-bindings/artifacts/LightClientArbitrum_bytecode.json
-    jq '.bytecode.object' < contracts/out/LightClientMock.sol/LightClientMock.json > contract-bindings/artifacts/LightClientMock_bytecode.json
-
     # Generate the alloy bindings
     # TODO: `forge bind --alloy ...` fails if there's an unliked library so we pass pass it an address for the PlonkVerifier contract.
-    forge bind --skip test --skip script --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0x5fbdb2315678afecb367f032d93f642f64180aa3 --alloy --contracts ./contracts/src/ --crate-name contract-bindings-alloy --bindings-path contract-bindings-alloy --select "{{REGEXP}}" --overwrite --force
-
-    # For some reason `alloy` likes to use the wrong version of itself in `contract-bindings`.
-    # Use the workspace version.
-    sed -i 's|{.*https://github.com/alloy-rs/alloy.*}|{ workspace = true }|' contract-bindings-alloy/Cargo.toml
-
-    # # Alloy requires us to copy the ABI in since it's not included in the bindings
-    # jq '.abi' < contracts/out/LightClient.sol/LightClient.json > contract-bindings/artifacts/LightClient_abi.json
-    # jq '.abi' < contracts/out/LightClientMock.sol/LightClientMock.json > contract-bindings/artifacts/LightClientMock_abi.json
+    forge bind --skip test --skip script --use "0.8.28" --alloy --alloy-version "0.13.0" --contracts ./contracts/src/ \
+      --module --bindings-path contracts/rust/adapter/src/bindings --select "{{REGEXP}}" --overwrite --force \
+      --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:0xffffffffffffffffffffffffffffffffffffffff \
+      --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:0xffffffffffffffffffffffffffffffffffffffff
 
     cargo fmt --all
     cargo sort -g -w
+
+    just export-contract-abis
+    just gen-go-bindings
+
+# export select ABIs, to let downstream projects can use them without solc compilation
+export-contract-abis:
+    rm -rv contracts/artifacts/abi
+    mkdir -p contracts/artifacts/abi
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable EspToken; do \
+        cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
+    done
 
 # Lint solidity files
 sol-lint:
@@ -153,9 +171,10 @@ sol-lint:
 
 # Build diff-test binary and forge test
 # Note: we use an invalid etherscan api key in order to avoid annoying warnings. See https://github.com/EspressoSystems/espresso-sequencer/issues/979
-sol-test:
-    cargo build --profile test --bin diff-test
-    forge test
+sol-test *args:
+    export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target} &&\
+    cargo build --release --bin diff-test &&\
+    env PATH="${CARGO_TARGET_DIR}/release:$PATH" forge test {{ args }}
 
 # Deploys the light client contract on Sepolia and call it for profiling purposes.
 NUM_INIT_VALIDATORS := "5"
@@ -193,3 +212,16 @@ download-srs:
 dev-download-srs:
     @echo "Check existence or download SRS for dev/test"
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
+    2>&1 | tee log.txt
+
+gen-go-bindings:
+	abigen --abi contracts/artifacts/abi/LightClient.json --pkg lightclient --out sdks/go/light-client/lightclient.go
+	abigen --abi contracts/artifacts/abi/LightClientMock.json --pkg lightclientmock --out sdks/go/light-client-mock/lightclient.go
+
+build-go-crypto-helper *args:
+    ./scripts/build-go-crypto-helper {{args}}
+
+test-go:
+    #!/usr/bin/env bash
+    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
+    cd sdks/go && go test -v ./...

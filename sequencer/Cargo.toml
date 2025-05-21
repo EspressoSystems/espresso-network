@@ -6,20 +6,21 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["fee"]
+default = ["fee", "pos"]
 testing = [
     "hotshot-testing",
-    "marketplace-builder-core",
     "espresso-types/testing",
     "sequencer-utils/testing",
-    "hotshot-query-service/testing"
+    "hotshot-query-service/testing",
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
-sqlite-unbundled = ["hotshot-query-service/sqlite-unbundled", "sqlx/sqlite-unbundled"]
+sqlite-unbundled = [
+    "hotshot-query-service/sqlite-unbundled",
+    "sqlx/sqlite-unbundled",
+]
 fee = []
 pos = []
-marketplace = []
 
 [[bin]]
 name = "espresso-dev-node"
@@ -36,7 +37,7 @@ rand = "0.8.5"
 reqwest = { workspace = true }
 
 # Enable "testing" feature when running tests
-sequencer = { path = ".", features = [ "testing" ] }
+sequencer = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 
 [build-dependencies]
@@ -44,6 +45,8 @@ anyhow = { workspace = true }
 vergen = { workspace = true }
 
 [dependencies]
+
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true, features = ["derive"] }
@@ -52,38 +55,38 @@ async-lock = { workspace = true }
 async-once-cell = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
+byteorder = "1"
 
 # CDN imports
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = ["global-permits"] }
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = [
+    "global-permits",
+] }
 cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-marshal" }
-
 clap = { workspace = true }
 client = { path = "../client" }
 committable = "0.2"
-contract-bindings-ethers = { path = "../contract-bindings-ethers" }
 csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = "../types" }
-ethers = { workspace = true }
-ethers-conv = { workspace = true }
 futures = { workspace = true }
 
 hotshot = { workspace = true }
+hotshot-builder-core-refactored = { path = "../hotshot-builder-core-refactored" }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
-hotshot-stake-table = { workspace = true }
 hotshot-state-prover = { workspace = true }
-
 # Dependencies for feature `testing`
 hotshot-testing = { workspace = true, optional = true }
-
 hotshot-types = { workspace = true }
+
 include_dir = "0.7"
+indexmap = { workspace = true }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
 jf-merkle-tree = { workspace = true }
@@ -92,8 +95,6 @@ jf-rescue = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-vid = { workspace = true }
 libp2p = { workspace = true }
-marketplace-builder-core = { workspace = true, optional = true }
-marketplace-solver = { path = "../marketplace-solver" }
 num_enum = "0.7"
 parking_lot = "0.12"
 portpicker = { workspace = true }
@@ -101,17 +102,20 @@ priority-queue = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
+request-response = { path = "../request-response" }
+semver = { workspace = true }
 sequencer-utils = { path = "../utils" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 snafu = "0.8"
 sqlx = { workspace = true, features = [
-	"bit-vec",
-	"postgres",
-	"runtime-tokio",
-	"tls-native-tls",
+    "bit-vec",
+    "postgres",
+    "runtime-tokio",
+    "tls-native-tls",
 ] }
+staking-cli = { workspace = true }
 static_assertions = "1"
 strum = { workspace = true }
 surf-disco = { workspace = true }
@@ -119,8 +123,8 @@ tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
-todo_by = "0.3"
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

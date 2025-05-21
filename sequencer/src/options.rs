@@ -1,8 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
 use core::fmt::Display;
-use jf_signature::{bls_over_bn254, schnorr};
-use sequencer_utils::logging;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
@@ -11,14 +9,16 @@ use std::{
     path::PathBuf,
     time::Duration,
 };
-use tagged_base64::TaggedBase64;
 
 use anyhow::{bail, Context};
 use clap::{error::ErrorKind, Args, FromArgMatches, Parser};
 use derivative::Derivative;
 use espresso_types::{parse_duration, BackoffParams, L1ClientOptions};
 use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+use jf_signature::{bls_over_bn254, schnorr};
 use libp2p::Multiaddr;
+use sequencer_utils::logging;
+use tagged_base64::TaggedBase64;
 use url::Url;
 
 use crate::{api, persistence, proposal_fetcher::ProposalFetcherConfig};
@@ -248,37 +248,6 @@ pub struct Options {
     #[derivative(Debug(format_with = "Display::fmt"))]
     pub state_relay_server_url: Url,
 
-    /// URL of the Auction Results Solver
-    #[clap(
-        long,
-        env = "ESPRESSO_AUCTION_RESULTS_SOLVER_URL",
-        default_value = "http://localhost:25000"
-    )]
-    #[derivative(Debug(format_with = "Display::fmt"))]
-    pub auction_results_solver_url: Url,
-    #[clap(
-        long,
-        env = "ESPRESSO_MARKETPLACE_SOLVER_PATH",
-        default_value = "marketplace-solver/"
-    )]
-    /// API path of marketplace-solver
-    pub marketplace_solver_path: String,
-    #[clap(
-        long,
-        env = "ESPRESSO_AUCTION_RESULTS_PATH",
-        default_value = "auction_results/"
-    )]
-    /// API path of marketplace-solver auction results
-    pub auction_results_path: String,
-    /// URL of generic builder
-    #[clap(
-        long,
-        env = "ESPRESSO_FALLBACK_BUILDER_URL",
-        default_value = "http://localhost:31004"
-    )]
-    #[derivative(Debug(format_with = "Display::fmt"))]
-    pub fallback_builder_url: Url,
-
     /// Path to TOML file containing genesis state.
     #[clap(
         long,
@@ -472,10 +441,10 @@ fn fmt_opt_urls(
             write!(fmt, "Some(")?;
             fmt_urls(urls, fmt)?;
             write!(fmt, ")")?;
-        }
+        },
         None => {
             write!(fmt, "None")?;
-        }
+        },
     }
     Ok(())
 }
@@ -536,13 +505,13 @@ impl ModuleArgs {
             match module {
                 SequencerModule::Storage(m) => {
                     curr = m.add(&mut modules.storage_fs, &mut provided)?
-                }
+                },
                 SequencerModule::StorageFs(m) => {
                     curr = m.add(&mut modules.storage_fs, &mut provided)?
-                }
+                },
                 SequencerModule::StorageSql(m) => {
                     curr = m.add(&mut modules.storage_sql, &mut provided)?
-                }
+                },
                 SequencerModule::Http(m) => curr = m.add(&mut modules.http, &mut provided)?,
                 SequencerModule::Query(m) => curr = m.add(&mut modules.query, &mut provided)?,
                 SequencerModule::Submit(m) => curr = m.add(&mut modules.submit, &mut provided)?,
@@ -551,10 +520,10 @@ impl ModuleArgs {
                 SequencerModule::Config(m) => curr = m.add(&mut modules.config, &mut provided)?,
                 SequencerModule::HotshotEvents(m) => {
                     curr = m.add(&mut modules.hotshot_events, &mut provided)?
-                }
+                },
                 SequencerModule::Explorer(m) => {
                     curr = m.add(&mut modules.explorer, &mut provided)?
-                }
+                },
             }
         }
 

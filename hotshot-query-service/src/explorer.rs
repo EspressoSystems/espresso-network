@@ -17,9 +17,7 @@ pub(crate) mod monetary_value;
 pub(crate) mod query_data;
 pub(crate) mod traits;
 
-use self::errors::InvalidLimit;
-use crate::availability::{QueryableHeader, QueryablePayload};
-use crate::{api::load_api, Header, Payload, Transaction};
+use std::{fmt::Display, num::NonZeroUsize, path::Path};
 
 pub use currency::*;
 pub use data_source::*;
@@ -28,13 +26,16 @@ use hotshot_types::traits::node_implementation::NodeType;
 pub use monetary_value::*;
 pub use query_data::*;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use std::num::NonZeroUsize;
-use std::path::Path;
-use tide_disco::StatusCode;
-use tide_disco::{api::ApiError, method::ReadState, Api};
+use tide_disco::{api::ApiError, method::ReadState, Api, StatusCode};
 pub use traits::*;
 use vbs::version::StaticVersionType;
+
+use self::errors::InvalidLimit;
+use crate::{
+    api::load_api,
+    availability::{QueryableHeader, QueryablePayload},
+    Header, Payload, Transaction,
+};
 
 /// [Error] is an enum that represents the various errors that can be returned
 /// from the Explorer API.
@@ -237,6 +238,7 @@ fn validate_limit(
 /// defined in the `explorer.toml` file.
 pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
     _: Ver,
+    api_ver: semver::Version,
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
@@ -251,7 +253,7 @@ where
         None,
     )?;
 
-    api.with_version("0.0.1".parse().unwrap())
+    api.with_version(api_ver)
         .get("get_block_detail", move |req, state| {
             async move {
                 let target = match (
@@ -308,7 +310,7 @@ where
                         ) {
                             (Ok(Some(height)), Ok(Some(offset)), _) => {
                                 TransactionIdentifier::HeightAndOffset(height, offset)
-                            }
+                            },
                             (_, _, Ok(Some(hash))) => TransactionIdentifier::Hash(hash),
                             _ => TransactionIdentifier::Latest,
                         },
@@ -341,7 +343,7 @@ where
                 ) {
                     (Ok(Some(height)), Ok(Some(offset)), _) => {
                         TransactionIdentifier::HeightAndOffset(height, offset)
-                    }
+                    },
                     (_, _, Ok(Some(hash))) => TransactionIdentifier::Hash(hash),
                     _ => TransactionIdentifier::Latest,
                 };
@@ -393,21 +395,23 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::{cmp::min, time::Duration};
+
+    use futures::StreamExt;
+    use portpicker::pick_unused_port;
+    use surf_disco::Client;
+    use tide_disco::App;
+
     use super::*;
     use crate::{
         availability,
         testing::{
             consensus::{MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockTypes},
+            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
             setup_test,
         },
         ApiState, Error,
     };
-    use futures::StreamExt;
-    use portpicker::pick_unused_port;
-    use std::{cmp::min, time::Duration};
-    use surf_disco::Client;
-    use tide_disco::App;
 
     async fn validate(client: &Client<Error, MockBase>) {
         let explorer_summary_response: ExplorerSummaryResponse<MockTypes> =
@@ -862,14 +866,17 @@ mod test {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
         network.start().await;
 
         // Start the web server.
         let port = pick_unused_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module("explorer", define_api(MockBase::instance()).unwrap())
-            .unwrap();
+        app.register_module(
+            "explorer",
+            define_api(MockBase::instance(), "0.0.1".parse().unwrap()).unwrap(),
+        )
+        .unwrap();
         app.register_module(
             "availability",
             availability::define_api(
@@ -878,6 +885,7 @@ mod test {
                     ..Default::default()
                 },
                 MockBase::instance(),
+                "0.0.1".parse().unwrap(),
             )
             .unwrap(),
         )

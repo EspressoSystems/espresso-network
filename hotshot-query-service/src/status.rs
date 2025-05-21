@@ -23,16 +23,16 @@
 //! * snapshots of the state right now, with no way to query historical snapshots
 //! * summary statistics
 
-use crate::api::load_api;
+use std::{borrow::Cow, fmt::Display, path::PathBuf};
+
 use derive_more::From;
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use std::borrow::Cow;
-use std::fmt::Display;
-use std::path::PathBuf;
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
+
+use crate::api::load_api;
 
 pub(crate) mod data_source;
 
@@ -73,6 +73,7 @@ fn internal<M: Display>(msg: M) -> Error {
 pub fn define_api<State, Ver: StaticVersionType + 'static>(
     options: &Options,
     _: Ver,
+    api_ver: semver::Version,
 ) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
@@ -83,7 +84,7 @@ where
         include_str!("../api/status.toml"),
         options.extensions.clone(),
     )?;
-    api.with_version("0.0.1".parse().unwrap())
+    api.with_version(api_ver)
         .get("block_height", |_, state| {
             async { state.block_height().await.map_err(internal) }.boxed()
         })?
@@ -107,41 +108,47 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::{str::FromStr, time::Duration};
+
+    use async_lock::RwLock;
+    use futures::FutureExt;
+    use portpicker::pick_unused_port;
+    use reqwest::redirect::Policy;
+    use surf_disco::Client;
+    use tempfile::TempDir;
+    use tide_disco::{App, Url};
+    use toml::toml;
+
     use super::*;
     use crate::{
         data_source::ExtensibleDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::MockBase,
+            mocks::{MockBase, MockVersions},
             setup_test, sleep,
         },
         ApiState, Error,
     };
-    use async_lock::RwLock;
-    use futures::FutureExt;
-    use portpicker::pick_unused_port;
-    use reqwest::redirect::Policy;
-    use std::str::FromStr;
-    use std::time::Duration;
-    use surf_disco::Client;
-    use tempfile::TempDir;
-    use tide_disco::{App, Url};
-    use toml::toml;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_api() {
         setup_test();
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
 
         // Start the web server.
         let port = pick_unused_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "status",
-            define_api(&Default::default(), MockBase::instance()).unwrap(),
+            define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "0.0.1".parse().unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap();
         network.spawn(
@@ -230,6 +237,7 @@ mod test {
                 ..Default::default()
             },
             MockBase::instance(),
+            "0.0.1".parse().unwrap(),
         )
         .unwrap();
         api.get("get_ext", |_, state| {

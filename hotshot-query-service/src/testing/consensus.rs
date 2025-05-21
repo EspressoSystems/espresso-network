@@ -10,16 +10,9 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes, MockVersions};
-use crate::{
-    availability::{AvailabilityDataSource, UpdateAvailabilityData},
-    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource},
-    fetching::provider::NoFetching,
-    node::NodeDataSource,
-    status::{StatusDataSource, UpdateStatusData},
-    task::BackgroundTask,
-    SignatureKey,
-};
+use std::{fmt::Display, num::NonZeroUsize, sync::Arc, time::Duration};
+
+use alloy::primitives::U256;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{
@@ -29,24 +22,25 @@ use futures::{
 use hotshot::{
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{Event, SystemContextHandle},
-    HotShotInitializer, MarketplaceConfig, SystemContext,
+    HotShotInitializer, SystemContext,
 };
-use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider, state_types::TestInstanceState,
-    storage_types::TestStorage,
-};
+use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
+    data::ViewNumber,
+    drb::INITIAL_DRB_RESULT,
+    epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
-    traits::{election::Membership, network::Topic, signature_key::SignatureKey as _},
+    traits::{
+        election::Membership,
+        network::Topic,
+        node_implementation::{ConsensusTime, Versions},
+        signature_key::SignatureKey as _,
+    },
     HotShotConfig, PeerConfig,
 };
-use std::num::NonZeroUsize;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{fmt::Display, str::FromStr};
 use tokio::{
     runtime::Handle,
     task::{block_in_place, yield_now},
@@ -54,15 +48,26 @@ use tokio::{
 use tracing::{info_span, Instrument};
 use url::Url;
 
-struct MockNode<D: DataSourceLifeCycle> {
-    hotshot: SystemContextHandle<MockTypes, MockNodeImpl, MockVersions>,
+use super::mocks::{MockMembership, MockNodeImpl, MockTransaction, MockTypes};
+use crate::{
+    availability::{AvailabilityDataSource, UpdateAvailabilityData},
+    data_source::{FileSystemDataSource, SqlDataSource, VersionedDataSource},
+    fetching::provider::NoFetching,
+    node::NodeDataSource,
+    status::{StatusDataSource, UpdateStatusData},
+    task::BackgroundTask,
+    SignatureKey,
+};
+
+struct MockNode<D: DataSourceLifeCycle, V: Versions> {
+    hotshot: SystemContextHandle<MockTypes, MockNodeImpl, V>,
     data_source: D,
     storage: D::Storage,
 }
 
-pub struct MockNetwork<D: DataSourceLifeCycle> {
+pub struct MockNetwork<D: DataSourceLifeCycle, V: Versions> {
     tasks: Vec<BackgroundTask>,
-    nodes: Vec<MockNode<D>>,
+    nodes: Vec<MockNode<D, V>>,
     pub_keys: Vec<BLSPubKey>,
 }
 
@@ -72,8 +77,9 @@ pub type MockDataSource = FileSystemDataSource<MockTypes, NoFetching>;
 pub type MockSqlDataSource = SqlDataSource<MockTypes, NoFetching>;
 
 pub const NUM_NODES: usize = 2;
+const EPOCH_HEIGHT: u64 = 10;
 
-impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
+impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
     pub async fn init() -> Self {
         Self::init_with_config(|_| {}, false).await
     }
@@ -83,7 +89,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
     }
 
     pub async fn init_with_config(
-        update_config: impl FnOnce(&mut HotShotConfig<BLSPubKey>),
+        update_config: impl FnOnce(&mut HotShotConfig<MockTypes>),
         leaf_only: bool,
     ) -> Self {
         let (pub_keys, priv_keys): (Vec<_>, Vec<_>) = (0..NUM_NODES)
@@ -97,7 +103,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
         let stake = 1u64;
         let known_nodes_with_stake = (0..num_staked_nodes.into())
             .map(|id| PeerConfig {
-                stake_table_entry: pub_keys[id].stake_table_entry(stake),
+                stake_table_entry: pub_keys[id].stake_table_entry(U256::from(stake)),
                 state_ver_key: state_key_pairs[id].ver_key(),
             })
             .collect::<Vec<_>>();
@@ -148,8 +154,9 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
             stop_proposing_time: 0,
             start_voting_time: 0,
             stop_voting_time: 0,
-            epoch_height: 0,
+            epoch_height: EPOCH_HEIGHT,
             epoch_start_block: 0,
+            stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
         };
         update_config(&mut config);
 
@@ -163,6 +170,10 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
 
                     let pub_keys = pub_keys.clone();
                     let master_map = master_map.clone();
+                    let state_priv_keys = state_key_pairs
+                        .iter()
+                        .map(|kp| kp.sign_key())
+                        .collect::<Vec<_>>();
 
                     let span = info_span!("initialize node", node_id);
                     async move {
@@ -181,15 +192,25 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                         ));
 
                         let hs_storage: TestStorage<MockTypes> = TestStorage::default();
+                        membership
+                            .write()
+                            .await
+                            .set_first_epoch(ViewNumber::new(0), INITIAL_DRB_RESULT);
+                        let memberships = EpochMembershipCoordinator::new(
+                            membership,
+                            config.epoch_height,
+                            &hs_storage.clone(),
+                        );
 
                         let hotshot = SystemContext::init(
                             pub_keys[node_id],
                             priv_key,
+                            state_priv_keys[node_id].clone(),
                             node_id as u64,
                             config,
-                            membership,
+                            memberships,
                             network,
-                            HotShotInitializer::from_genesis::<MockVersions>(
+                            HotShotInitializer::from_genesis::<V>(
                                 TestInstanceState::default(),
                                 0,
                                 0,
@@ -199,12 +220,6 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                             .unwrap(),
                             ConsensusMetricsValue::new(&*data_source.populate_metrics()),
                             hs_storage,
-                            MarketplaceConfig {
-                                auction_results_provider: Arc::new(
-                                    TestAuctionResultsProvider::default(),
-                                ),
-                                fallback_builder_url: Url::from_str("https://some.url").unwrap(),
-                            },
                         )
                         .await
                         .unwrap()
@@ -235,8 +250,8 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
     }
 }
 
-impl<D: DataSourceLifeCycle> MockNetwork<D> {
-    pub fn handle(&self) -> &SystemContextHandle<MockTypes, MockNodeImpl, MockVersions> {
+impl<D: DataSourceLifeCycle, V: Versions> MockNetwork<D, V> {
+    pub fn handle(&self) -> &SystemContextHandle<MockTypes, MockNodeImpl, V> {
         &self.nodes[0].hotshot
     }
 
@@ -277,9 +292,13 @@ impl<D: DataSourceLifeCycle> MockNetwork<D> {
             node.hotshot.shut_down().await;
         }
     }
+
+    pub fn epoch_height(&self) -> u64 {
+        EPOCH_HEIGHT
+    }
 }
 
-impl<D: DataSourceLifeCycle> MockNetwork<D> {
+impl<D: DataSourceLifeCycle, V: Versions> MockNetwork<D, V> {
     pub async fn start(&mut self) {
         // Spawn the update tasks.
         for (i, node) in self.nodes.iter_mut().enumerate() {
@@ -308,7 +327,7 @@ impl<D: DataSourceLifeCycle> MockNetwork<D> {
     }
 }
 
-impl<D: DataSourceLifeCycle> Drop for MockNetwork<D> {
+impl<D: DataSourceLifeCycle, V: Versions> Drop for MockNetwork<D, V> {
     fn drop(&mut self) {
         if let Ok(handle) = Handle::try_current() {
             block_in_place(move || handle.block_on(self.shut_down_impl()));
@@ -333,7 +352,7 @@ pub trait DataSourceLifeCycle: Clone + Send + Sync + Sized + 'static {
     }
 
     /// Setup runs after setting up the network but before starting a test.
-    async fn setup(_network: &mut MockNetwork<Self>) {}
+    async fn setup<V: Versions>(_network: &mut MockNetwork<Self, V>) {}
 }
 
 pub trait TestableDataSource:

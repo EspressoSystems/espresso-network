@@ -12,8 +12,13 @@
 
 #![cfg(feature = "sql-data-source")]
 
+pub use anyhow::Error;
+use hotshot_types::traits::node_implementation::NodeType;
+pub use refinery::Migration;
+pub use sql::Transaction;
+
 use super::{
-    fetching::{self},
+    fetching,
     storage::sql::{self, SqlStorage},
     AvailabilityProvider, FetchingDataSource,
 };
@@ -22,11 +27,6 @@ use crate::{
     availability::{QueryableHeader, QueryablePayload},
     Header, Payload,
 };
-pub use anyhow::Error;
-use hotshot_types::traits::node_implementation::NodeType;
-pub use refinery::Migration;
-
-pub use sql::Transaction;
 
 pub type Builder<Types, Provider> = fetching::Builder<Types, SqlStorage, Provider>;
 
@@ -318,15 +318,15 @@ where
 // These tests run the `postgres` Docker image, which doesn't work on Windows.
 #[cfg(all(any(test, feature = "testing"), not(target_os = "windows")))]
 pub mod testing {
+    use async_trait::async_trait;
+    use hotshot::types::Event;
+    pub use sql::testing::TmpDb;
+
     use super::*;
     use crate::{
         data_source::UpdateDataSource,
         testing::{consensus::DataSourceLifeCycle, mocks::MockTypes},
     };
-    use async_trait::async_trait;
-    use hotshot::types::Event;
-
-    pub use sql::testing::TmpDb;
 
     #[async_trait]
     impl<P: AvailabilityProvider<MockTypes> + Default> DataSourceLifeCycle
@@ -372,17 +372,20 @@ pub mod testing {
 #[cfg(all(test, not(target_os = "windows")))]
 mod generic_test {
     use super::SqlDataSource;
-    use crate::{fetching::provider::NoFetching, testing::mocks::MockTypes};
-
     // For some reason this is the only way to import the macro defined in another module of this
     // crate.
     use crate::*;
+    use crate::{fetching::provider::NoFetching, testing::mocks::MockTypes};
 
     instantiate_data_source_tests!(SqlDataSource<MockTypes, NoFetching>);
 }
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
+    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
+    use hotshot_types::{data::VidShare, vid::advz::advz_scheme};
+    use jf_vid::VidScheme;
+
     use super::*;
     use crate::{
         availability::{
@@ -396,9 +399,6 @@ mod test {
         fetching::provider::NoFetching,
         testing::{consensus::DataSourceLifeCycle, mocks::MockTypes, setup_test},
     };
-    use hotshot_example_types::state_types::{TestInstanceState, TestValidatedState};
-    use hotshot_types::{data::VidShare, vid::advz::advz_scheme};
-    use jf_vid::VidScheme;
 
     type D = SqlDataSource<MockTypes, NoFetching>;
 
@@ -422,8 +422,9 @@ mod test {
             &TestInstanceState::default(),
         )
         .await;
-        let common = VidCommonQueryData::new(leaf.header().clone(), Some(disperse.common));
-        ds.append(BlockInfo::new(leaf, None, Some(common.clone()), None))
+        let common =
+            VidCommonQueryData::new(leaf.header().clone(), crate::VidCommon::V0(disperse.common));
+        ds.append(BlockInfo::new(leaf, None, Some(common.clone()), None, None))
             .await
             .unwrap();
 

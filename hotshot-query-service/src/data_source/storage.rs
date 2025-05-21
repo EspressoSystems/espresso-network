@@ -56,11 +56,19 @@
 //! [`AvailabilityDataSource`](crate::availability::AvailabilityDataSource) in fallibility.
 //!
 
+use std::ops::RangeBounds;
+
+use async_trait::async_trait;
+use futures::future::Future;
+use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
+use jf_merkle_tree::prelude::MerkleProof;
+use tagged_base64::TaggedBase64;
+
 use crate::{
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, TransactionQueryData,
-        VidCommonMetadata, VidCommonQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        TransactionQueryData, VidCommonMetadata, VidCommonQueryData,
     },
     explorer::{
         query_data::{
@@ -74,14 +82,8 @@ use crate::{
     },
     merklized_state::{MerklizedState, Snapshot},
     node::{SyncStatus, TimeWindowQueryData, WindowStart},
-    Header, Payload, QueryResult, Transaction, VidShare,
+    Header, Payload, QueryResult, Transaction,
 };
-use async_trait::async_trait;
-use futures::future::Future;
-use hotshot_types::traits::node_implementation::NodeType;
-use jf_merkle_tree::prelude::MerkleProof;
-use std::ops::RangeBounds;
-use tagged_base64::TaggedBase64;
 
 pub mod fail_storage;
 pub mod fs;
@@ -191,6 +193,8 @@ where
 
     /// Get the first leaf which is available in the database with height >= `from`.
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>>;
 }
 
 pub trait UpdateAvailabilityStorage<Types>
@@ -209,6 +213,10 @@ where
         &mut self,
         common: VidCommonQueryData<Types>,
         share: Option<VidShare>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_state_cert(
+        &mut self,
+        state_cert: StateCertQueryData<Types>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 

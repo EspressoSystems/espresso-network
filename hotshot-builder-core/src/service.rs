@@ -1,3 +1,17 @@
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    num::NonZeroUsize,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+pub use async_broadcast::{broadcast, RecvError, TryRecvError};
+use async_broadcast::{Sender as BroadcastSender, TrySendError};
+use async_lock::RwLock;
+use async_trait::async_trait;
+use committable::{Commitment, Committable};
+use futures::{future::BoxFuture, stream::StreamExt, Stream};
 use hotshot::types::Event;
 use hotshot_builder_api::{
     v0_1::{
@@ -8,8 +22,7 @@ use hotshot_builder_api::{
     v0_2::builder::TransactionStatus,
 };
 use hotshot_types::{
-    data::VidCommitment,
-    data::{DaProposal2, Leaf2, QuorumProposalWrapper},
+    data::{DaProposal2, Leaf2, QuorumProposalWrapper, VidCommitment},
     event::EventType,
     message::Proposal,
     traits::{
@@ -20,32 +33,19 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use lru::LruCache;
-use vbs::version::StaticVersionType;
-
-use crate::builder_state::{
-    BuildBlockInfo, DaProposalMessage, DecideMessage, QuorumProposalMessage, TransactionSource,
-    TriggerStatus,
-};
-use crate::builder_state::{MessageType, RequestMessage, ResponseMessage};
-pub use async_broadcast::{broadcast, RecvError, TryRecvError};
-use async_broadcast::{Sender as BroadcastSender, TrySendError};
-use async_lock::RwLock;
-use async_trait::async_trait;
-use committable::{Commitment, Committable};
-use futures::stream::StreamExt;
-use futures::{future::BoxFuture, Stream};
 use marketplace_builder_shared::block::{BlockId, BuilderStateId, ParentBlockReferences};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::num::NonZeroUsize;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{fmt::Display, time::Instant};
 use tagged_base64::TaggedBase64;
 use tide_disco::method::ReadState;
 use tokio::{
     sync::{mpsc::unbounded_channel, oneshot},
     time::{sleep, timeout},
+};
+use vbs::version::StaticVersionType;
+
+use crate::builder_state::{
+    BuildBlockInfo, DaProposalMessage, DecideMessage, MessageType, QuorumProposalMessage,
+    RequestMessage, ResponseMessage, TransactionSource, TriggerStatus,
 };
 
 // It holds all the necessary information for a block
@@ -409,19 +409,19 @@ impl<Types: NodeType> GlobalState<Types> {
             match old_status {
                 Some(TransactionStatus::Rejected { reason }) => {
                     tracing::debug!("Changing the status of a rejected transaction to status {:?}! The reason it is previously rejected is {:?}", txn_status, reason);
-                }
+                },
                 Some(TransactionStatus::Sequenced { leaf }) => {
                     let e = format!("Changing the status of a sequenced transaction to status {:?} is not allowed! The transaction is sequenced in leaf {:?}", txn_status, leaf);
                     tracing::error!(e);
                     return Err(BuildError::Error(e));
-                }
+                },
                 _ => {
                     tracing::debug!(
                         "change status of transaction {txn_hash} from {:?} to {:?}",
                         old_status,
                         txn_status
                     );
-                }
+                },
             }
         } else {
             tracing::debug!(
@@ -540,23 +540,23 @@ impl<Types: NodeType> From<AvailableBlocksError<Types>> for BuildError {
         match error {
             AvailableBlocksError::SignatureValidationFailed => {
                 BuildError::Error("Signature validation failed in get_available_blocks".to_string())
-            }
+            },
             AvailableBlocksError::RequestForAvailableViewThatHasAlreadyBeenDecided => {
                 BuildError::Error(
                     "Request for available blocks for a view that has already been decided."
                         .to_string(),
                 )
-            }
+            },
             AvailableBlocksError::SigningBlockFailed(e) => {
                 BuildError::Error(format!("Signing over block info failed: {:?}", e))
-            }
+            },
             AvailableBlocksError::GetChannelForMatchingBuilderError(e) => e.into(),
             AvailableBlocksError::NoBlocksAvailable => {
                 BuildError::Error("No blocks available".to_string())
-            }
+            },
             AvailableBlocksError::ChannelUnexpectedlyClosed => {
                 BuildError::Error("Channel unexpectedly closed".to_string())
-            }
+            },
         }
     }
 }
@@ -580,13 +580,13 @@ impl<Types: NodeType> From<ClaimBlockError<Types>> for BuildError {
         match error {
             ClaimBlockError::SignatureValidationFailed => {
                 BuildError::Error("Signature validation failed in claim block".to_string())
-            }
+            },
             ClaimBlockError::SigningCommitmentFailed(e) => {
                 BuildError::Error(format!("Signing over builder commitment failed: {:?}", e))
-            }
+            },
             ClaimBlockError::BlockDataNotFound => {
                 BuildError::Error("Block data not found".to_string())
-            }
+            },
         }
     }
 }
@@ -608,10 +608,10 @@ impl<Types: NodeType> From<ClaimBlockHeaderInputError<Types>> for BuildError {
             ),
             ClaimBlockHeaderInputError::BlockHeaderNotFound => {
                 BuildError::Error("Block header not found".to_string())
-            }
+            },
             ClaimBlockHeaderInputError::FailedToSignFeeInfo(e) => {
                 BuildError::Error(format!("Failed to sign fee info: {:?}", e))
-            }
+            },
         }
     }
 }
@@ -717,12 +717,12 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                 .await
             {
                 tracing::warn!(
-                    "Error {e} sending get_available_blocks request for parent {state_id}",
+                    "Error {e} sending get_available_blocks request for parent {state_id}"
                 );
             }
         }
 
-        tracing::debug!("Waiting for response for get_available_blocks with parent {state_id}",);
+        tracing::debug!("Waiting for response for get_available_blocks with parent {state_id}");
 
         let response_received = loop {
             match timeout(check_duration, response_receiver.recv()).await {
@@ -737,13 +737,13 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                             .builder_state_to_last_built_block
                             .get(&state_id)
                         {
-                            tracing::info!("Returning last built block for parent {state_id}",);
+                            tracing::info!("Returning last built block for parent {state_id}");
                             break Ok(last_built_block.clone());
                         }
                         break Err(AvailableBlocksError::NoBlocksAvailable);
                     }
                     continue;
-                }
+                },
                 Ok(recv_attempt) => {
                     if recv_attempt.is_none() {
                         tracing::error!(
@@ -752,7 +752,7 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                     }
                     break recv_attempt
                         .ok_or_else(|| AvailableBlocksError::ChannelUnexpectedlyClosed);
-                }
+                },
             }
         };
 
@@ -783,13 +783,13 @@ impl<Types: NodeType> ProxyGlobalState<Types> {
                     response.builder_hash
                 );
                 Ok(vec![initial_block_info])
-            }
+            },
 
             // We failed to get available blocks
             Err(e) => {
                 tracing::debug!("Failed to get available blocks for parent {state_id}",);
                 Err(e)
-            }
+            },
         }
     }
 
@@ -1111,7 +1111,7 @@ pub async fn run_non_permissioned_standalone_builder_service<
         match event.event {
             EventType::Error { error } => {
                 tracing::error!("Error event in HotShot: {:?}", error);
-            }
+            },
             // tx event
             EventType::Transactions { transactions } => {
                 let max_block_size = {
@@ -1151,7 +1151,7 @@ pub async fn run_non_permissioned_standalone_builder_service<
                             .await?;
                     }
                 }
-            }
+            },
             // decide event
             EventType::Decide {
                 block_size: _,
@@ -1160,19 +1160,19 @@ pub async fn run_non_permissioned_standalone_builder_service<
             } => {
                 let latest_decide_view_num = leaf_chain[0].leaf.view_number();
                 handle_decide_event(&decide_sender, latest_decide_view_num).await;
-            }
+            },
             // DA proposal event
             EventType::DaProposal { proposal, sender } => {
                 handle_da_event(&da_sender, Arc::new(proposal), sender).await;
-            }
+            },
             // QC proposal event
             EventType::QuorumProposal { proposal, sender } => {
                 // get the leader for current view
                 handle_quorum_event(&quorum_sender, Arc::new(proposal), sender).await;
-            }
+            },
             _ => {
                 tracing::debug!("Unhandled event from Builder");
-            }
+            },
         }
     }
 }
@@ -1210,7 +1210,7 @@ async fn handle_da_event<Types: NodeType>(
 /// via [`HandleDaEventError`]. They are as follows:
 /// - [`HandleDaEventError::SignatureValidationFailed`]: The signature validation failed
 /// - [`HandleDaEventError::BroadcastFailed`]: The broadcast failed as no receiver
-///    is in place to receive the message
+///   is in place to receive the message
 ///
 /// This function is the implementation for [`handle_da_event`].
 async fn handle_da_event_implementation<Types: NodeType>(
@@ -1533,33 +1533,34 @@ mod test {
     use std::{sync::Arc, time::Duration};
 
     use async_lock::RwLock;
-    use committable::Commitment;
-    use committable::Committable;
+    use committable::{Commitment, Committable};
     use futures::StreamExt;
     use hotshot::{
         traits::BlockPayload,
         types::{BLSPubKey, SignatureKey},
     };
-    use hotshot_builder_api::v0_1::data_source::AcceptsTxnSubmits;
-    use hotshot_builder_api::v0_2::block_info::AvailableBlockInfo;
-    use hotshot_builder_api::v0_2::builder::TransactionStatus;
+    use hotshot_builder_api::{
+        v0_1::data_source::AcceptsTxnSubmits,
+        v0_2::{block_info::AvailableBlockInfo, builder::TransactionStatus},
+    };
     use hotshot_example_types::{
         block_types::{TestBlockPayload, TestMetadata, TestTransaction},
         node_types::{TestTypes, TestVersions},
         state_types::{TestInstanceState, TestValidatedState},
     };
-    use hotshot_types::data::DaProposal2;
-    use hotshot_types::data::EpochNumber;
-    use hotshot_types::data::Leaf2;
-    use hotshot_types::data::{QuorumProposal2, QuorumProposalWrapper};
-    use hotshot_types::traits::block_contents::Transaction;
-    use hotshot_types::traits::node_implementation::Versions;
     use hotshot_types::{
-        data::{vid_commitment, Leaf, ViewNumber},
+        data::{
+            vid_commitment, DaProposal2, EpochNumber, Leaf, Leaf2, QuorumProposal2,
+            QuorumProposalWrapper, ViewNumber,
+        },
         message::Proposal,
-        simple_certificate::QuorumCertificate,
-        traits::{node_implementation::ConsensusTime, signature_key::BuilderSignatureKey},
-        utils::BuilderCommitment,
+        simple_certificate::QuorumCertificate2,
+        traits::{
+            block_contents::Transaction,
+            node_implementation::{ConsensusTime, Versions},
+            signature_key::BuilderSignatureKey,
+        },
+        utils::{BuilderCommitment, EpochTransitionIndicator},
     };
     use marketplace_builder_shared::{
         block::{BlockId, BuilderStateId, ParentBlockReferences},
@@ -1575,6 +1576,11 @@ mod test {
     };
     use vbs::version::StaticVersionType;
 
+    use super::{
+        handle_da_event_implementation, handle_quorum_event_implementation, AvailableBlocksError,
+        BlockInfo, ClaimBlockError, ClaimBlockHeaderInputError, GlobalState, HandleDaEventError,
+        HandleQuorumEventError, HandleReceivedTxns, ProxyGlobalState,
+    };
     use crate::{
         builder_state::{
             BuildBlockInfo, MessageType, RequestMessage, ResponseMessage, TransactionSource,
@@ -1585,12 +1591,6 @@ mod test {
             process_available_blocks_round, progress_round_with_available_block_info,
             progress_round_without_available_block_info, setup_builder_for_test,
         },
-    };
-
-    use super::{
-        handle_da_event_implementation, handle_quorum_event_implementation, AvailableBlocksError,
-        BlockInfo, ClaimBlockError, ClaimBlockHeaderInputError, GlobalState, HandleDaEventError,
-        HandleQuorumEventError, HandleReceivedTxns, ProxyGlobalState,
     };
 
     /// A const number on `max_tx_len` to be used consistently spanning all the tests
@@ -2141,10 +2141,10 @@ mod test {
             match vid_trigger_receiver.await {
                 Ok(TriggerStatus::Start) => {
                     // This is expected
-                }
+                },
                 _ => {
                     panic!("did not receive TriggerStatus::Start from vid_trigger_receiver as expected");
-                }
+                },
             }
         }
 
@@ -2366,10 +2366,10 @@ mod test {
             match vid_trigger_receiver_2.await {
                 Ok(TriggerStatus::Start) => {
                     // This is expected
-                }
+                },
                 _ => {
                     panic!("did not receive TriggerStatus::Start from vid_trigger_receiver as expected");
-                }
+                },
             }
 
             assert!(
@@ -2960,13 +2960,13 @@ mod test {
             Err(AvailableBlocksError::NoBlocksAvailable) => {
                 // This is what we expect.
                 // This message *should* indicate that no blocks were available.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
         }
     }
 
@@ -3032,13 +3032,13 @@ mod test {
                 // This is what we expect.
                 // This message *should* indicate that the signature passed
                 // did not match the given public key.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
         }
     }
 
@@ -3103,13 +3103,13 @@ mod test {
                 // This is what we expect.
                 // This message *should* indicate that the signature passed
                 // did not match the given public key.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
         }
     }
 
@@ -3172,13 +3172,13 @@ mod test {
             Err(AvailableBlocksError::GetChannelForMatchingBuilderError(_)) => {
                 // This is what we expect.
                 // This message *should* indicate that the response channel was closed.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
         }
     }
 
@@ -3285,17 +3285,17 @@ mod test {
         let response_channel = match response_receiver.next().await {
             None => {
                 panic!("Expected a request for available blocks, but didn't get one");
-            }
+            },
             Some(MessageType::RequestMessage(req_msg)) => {
                 assert_eq!(req_msg.state_id, expected_builder_state_id);
                 req_msg.response_channel
-            }
+            },
             Some(message) => {
                 panic!(
                     "Expected a request for available blocks, but got a different message: {:?}",
                     message
                 );
-            }
+            },
         };
 
         // We want to send a ResponseMessage to the channel
@@ -3316,7 +3316,7 @@ mod test {
         match result {
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(result) => {
                 assert_eq!(
                     result,
@@ -3336,7 +3336,7 @@ mod test {
                     }],
                     "get_available_blocks response matches expectation"
                 );
-            }
+            },
         }
     }
 
@@ -3431,17 +3431,17 @@ mod test {
         let response_channel = match response_receiver.next().await {
             None => {
                 panic!("Expected a request for available blocks, but didn't get one");
-            }
+            },
             Some(MessageType::RequestMessage(req_msg)) => {
                 assert_eq!(req_msg.state_id, expected_builder_state_id);
                 req_msg.response_channel
-            }
+            },
             Some(message) => {
                 panic!(
                     "Expected a request for available blocks, but got a different message: {:?}",
                     message
                 );
-            }
+            },
         };
 
         // We want to send a ResponseMessage to the channel
@@ -3462,7 +3462,7 @@ mod test {
         match result {
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(result) => {
                 assert_eq!(
                     result,
@@ -3482,7 +3482,7 @@ mod test {
                     }],
                     "get_available_blocks response matches expectation"
                 );
-            }
+            },
         }
     }
 
@@ -3539,13 +3539,13 @@ mod test {
                 // This is what we expect.
                 // This message *should* indicate that the signature passed
                 // did not match the given public key.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
         }
     }
 
@@ -3600,13 +3600,13 @@ mod test {
                 // This is what we expect.
                 // This message *should* indicate that the signature passed
                 // did not match the given public key.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
         }
     }
 
@@ -3687,10 +3687,10 @@ mod test {
         match vid_trigger_receiver.await {
             Ok(TriggerStatus::Start) => {
                 // This is what we expect.
-            }
+            },
             _ => {
                 panic!("Expected a TriggerStatus::Start event");
-            }
+            },
         }
 
         let result = claim_block_join_handle.await;
@@ -3698,10 +3698,10 @@ mod test {
         match result {
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 // This is expected
-            }
+            },
         }
     }
 
@@ -3759,13 +3759,13 @@ mod test {
                 // This is what we expect.
                 // This message *should* indicate that the signature passed
                 // did not match the given public key.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
         }
     }
 
@@ -3820,13 +3820,13 @@ mod test {
                 // This is what we expect.
                 // This message *should* indicate that the signature passed
                 // did not match the given public key.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
         }
     }
 
@@ -3887,10 +3887,10 @@ mod test {
         match result {
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
             Ok(_) => {
                 // This is expected.
-            }
+            },
         }
     }
 
@@ -3921,6 +3921,7 @@ mod test {
             }, // arbitrary
             view_number,
             epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let encoded_txns_hash = Sha256::digest(&da_proposal.encoded_transactions);
@@ -3943,13 +3944,13 @@ mod test {
         match result {
             Err(HandleDaEventError::SignatureValidationFailed) => {
                 // This is expected.
-            }
+            },
             Ok(_) => {
                 panic!("expected an error, but received a successful attempt instead")
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
         }
     }
 
@@ -3979,6 +3980,7 @@ mod test {
             }, // arbitrary
             view_number,
             epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let encoded_txns_hash = Sha256::digest(&da_proposal.encoded_transactions);
@@ -4001,13 +4003,13 @@ mod test {
         match result {
             Err(HandleDaEventError::BroadcastFailed(_)) => {
                 // This error is expected
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
         }
     }
 
@@ -4028,6 +4030,7 @@ mod test {
             }, // arbitrary
             view_number,
             epoch,
+            epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
         };
 
         let encoded_txns_hash = Sha256::digest(&da_proposal.encoded_transactions);
@@ -4050,20 +4053,20 @@ mod test {
         match result {
             Ok(_) => {
                 // This is expected.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
         }
 
         let mut da_channel_receiver = da_channel_receiver;
         match da_channel_receiver.next().await {
             Some(MessageType::DaProposalMessage(da_proposal_message)) => {
                 assert_eq!(da_proposal_message.proposal, signed_da_proposal);
-            }
+            },
             _ => {
                 panic!("Expected a DaProposalMessage, but got something else");
-            }
+            },
         }
     }
 
@@ -4099,17 +4102,17 @@ mod test {
                 proposal: QuorumProposal2::<TestTypes> {
                     block_header: leaf.block_header().clone(),
                     view_number,
-                    justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                    justify_qc: QuorumCertificate2::genesis::<TestVersions>(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
                     )
-                    .await
-                    .to_qc2(),
+                    .await,
                     upgrade_certificate: None,
                     view_change_evidence: None,
                     next_epoch_justify_qc: None,
                     next_drb_result: None,
                     epoch: None,
+                    state_cert: None,
                 },
             }
         };
@@ -4135,13 +4138,13 @@ mod test {
         match result {
             Err(HandleQuorumEventError::SignatureValidationFailed) => {
                 // This is expected.
-            }
+            },
             Ok(_) => {
                 panic!("expected an error, but received a successful attempt instead");
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
         }
     }
 
@@ -4175,17 +4178,17 @@ mod test {
                 proposal: QuorumProposal2::<TestTypes> {
                     block_header: leaf.block_header().clone(),
                     view_number,
-                    justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                    justify_qc: QuorumCertificate2::genesis::<TestVersions>(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
                     )
-                    .await
-                    .to_qc2(),
+                    .await,
                     upgrade_certificate: None,
                     view_change_evidence: None,
                     next_epoch_justify_qc: None,
                     next_drb_result: None,
                     epoch: None,
+                    state_cert: None,
                 },
             }
         };
@@ -4211,13 +4214,13 @@ mod test {
         match result {
             Err(HandleQuorumEventError::BroadcastFailed(_)) => {
                 // This is expected.
-            }
+            },
             Ok(_) => {
                 panic!("Expected an error, but got a result");
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
         }
     }
 
@@ -4242,17 +4245,17 @@ mod test {
                 proposal: QuorumProposal2::<TestTypes> {
                     block_header: leaf.block_header().clone(),
                     view_number,
-                    justify_qc: QuorumCertificate::genesis::<TestVersions>(
+                    justify_qc: QuorumCertificate2::genesis::<TestVersions>(
                         &TestValidatedState::default(),
                         &TestInstanceState::default(),
                     )
-                    .await
-                    .to_qc2(),
+                    .await,
                     upgrade_certificate: None,
                     view_change_evidence: None,
                     next_epoch_justify_qc: None,
                     next_drb_result: None,
                     epoch: None,
+                    state_cert: None,
                 },
             }
         };
@@ -4278,20 +4281,20 @@ mod test {
         match result {
             Ok(_) => {
                 // This is expected.
-            }
+            },
             Err(err) => {
                 panic!("Unexpected error: {:?}", err);
-            }
+            },
         }
 
         let mut quorum_channel_receiver = quorum_channel_receiver;
         match quorum_channel_receiver.next().await {
             Some(MessageType::QuorumProposalMessage(da_proposal_message)) => {
                 assert_eq!(da_proposal_message.proposal, signed_quorum_proposal);
-            }
+            },
             _ => {
                 panic!("Expected a QuorumProposalMessage, but got something else");
-            }
+            },
         }
     }
 
@@ -4326,16 +4329,16 @@ mod test {
             match handle_received_txns_iter.next() {
                 Some(Err(HandleReceivedTxnsError::TooManyTransactions)) => {
                     // This is expected,
-                }
+                },
                 Some(Err(err)) => {
                     panic!("Unexpected error: {:?}", err);
-                }
+                },
                 Some(Ok(_)) => {
                     panic!("Expected an error, but got a result");
-                }
+                },
                 None => {
                     panic!("Expected an error, but got a result");
-                }
+                },
             }
         }
 
@@ -4379,16 +4382,16 @@ mod test {
                     // This is expected,
                     assert!(estimated_length >= 256);
                     assert_eq!(max_txn_len, TEST_MAX_TX_LEN);
-                }
+                },
                 Some(Err(err)) => {
                     panic!("Unexpected error: {:?}", err);
-                }
+                },
                 Some(Ok(_)) => {
                     panic!("Expected an error, but got a result");
-                }
+                },
                 None => {
                     panic!("Expected an error, but got a result");
-                }
+                },
             }
         }
 
@@ -4434,21 +4437,21 @@ mod test {
                     match err {
                         async_broadcast::TrySendError::Closed(_) => {
                             // This is expected.
-                        }
+                        },
                         _ => {
                             panic!("Unexpected error: {:?}", err);
-                        }
+                        },
                     }
-                }
+                },
                 Some(Err(err)) => {
                     panic!("Unexpected error: {:?}", err);
-                }
+                },
                 Some(Ok(_)) => {
                     panic!("Expected an error, but got a result");
-                }
+                },
                 None => {
                     panic!("Expected an error, but got a result");
-                }
+                },
             }
         }
     }
@@ -4476,10 +4479,10 @@ mod test {
             match iteration {
                 Ok(_) => {
                     // This is expected.
-                }
+                },
                 Err(err) => {
                     panic!("Unexpected error: {:?}", err);
-                }
+                },
             }
         }
 
@@ -4488,10 +4491,10 @@ mod test {
             match tx_receiver.next().await {
                 Some(received_txn) => {
                     assert_eq!(received_txn.tx, tx);
-                }
+                },
                 _ => {
                     panic!("Expected a TransactionMessage, but got something else");
-                }
+                },
             }
         }
     }
@@ -4556,10 +4559,10 @@ mod test {
             match proxy_global_state.txn_status(tx.commit()).await {
                 Ok(txn_status) => {
                     assert_eq!(txn_status, TransactionStatus::Pending);
-                }
+                },
                 e => {
                     panic!("transaction status should be Pending instead of {:?}", e);
-                }
+                },
             }
         }
 
@@ -4597,10 +4600,10 @@ mod test {
             match proxy_global_state.txn_status(tx.commit()).await {
                 Ok(txn_status) => {
                     assert_eq!(txn_status, TransactionStatus::Pending);
-                }
+                },
                 e => {
                     panic!("transaction status should be Pending instead of {:?}", e);
-                }
+                },
             }
         }
 
@@ -4627,13 +4630,13 @@ mod test {
                     } else {
                         assert_eq!(txn_status, TransactionStatus::Pending);
                     }
-                }
+                },
                 e => {
                     panic!(
                         "transaction status should be a valid status instead of {:?}",
                         e
                     );
-                }
+                },
             }
         }
 
@@ -4647,22 +4650,22 @@ mod test {
                 {
                     Err(err) => {
                         panic!("Expected a result, but got a error {:?}", err);
-                    }
+                    },
                     _ => {
                         // This is expected
-                    }
+                    },
                 }
 
                 match write_guard.txn_status(tx.commit()).await {
                     Ok(txn_status) => {
                         assert_eq!(txn_status, TransactionStatus::Pending);
-                    }
+                    },
                     e => {
                         panic!(
                             "transaction status should be a valid status instead of {:?}",
                             e
                         );
-                    }
+                    },
                 }
             }
         }
@@ -4685,10 +4688,10 @@ mod test {
             {
                 Err(_err) => {
                     // This is expected
-                }
+                },
                 _ => {
                     panic!("Expected an error, but got a result");
-                }
+                },
             }
         }
 
@@ -4698,10 +4701,10 @@ mod test {
             match proxy_global_state.txn_status(unknown_tx.commit()).await {
                 Ok(txn_status) => {
                     assert_eq!(txn_status, TransactionStatus::Unknown);
-                }
+                },
                 e => {
                     panic!("transaction status should be Unknown instead of {:?}", e);
-                }
+                },
             }
         }
     }

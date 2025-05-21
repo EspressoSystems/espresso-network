@@ -1,10 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use super::basic_test::{BuilderState, MessageType};
-use crate::{
-    builder_state::{DaProposalMessage, QuorumProposalMessage, ALLOW_EMPTY_BLOCK_PERIOD},
-    service::{GlobalState, ProxyGlobalState, ReceivedTransaction},
-};
 use async_broadcast::{broadcast, Sender};
 use async_lock::RwLock;
 use committable::Commitment;
@@ -12,9 +7,10 @@ use hotshot::{
     traits::BlockPayload,
     types::{BLSPubKey, SignatureKey},
 };
-use hotshot_builder_api::{
-    v0_1::{block_info::AvailableBlockInfo, data_source::BuilderDataSource},
-    v0_1::{builder::BuildError, data_source::AcceptsTxnSubmits},
+use hotshot_builder_api::v0_1::{
+    block_info::AvailableBlockInfo,
+    builder::BuildError,
+    data_source::{AcceptsTxnSubmits, BuilderDataSource},
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
@@ -24,26 +20,30 @@ use hotshot_example_types::{
 use hotshot_types::{
     data::{vid_commitment, DaProposal2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
-    simple_certificate::QuorumCertificate,
+    simple_certificate::QuorumCertificate2,
     traits::{
         block_contents::BlockHeader,
         node_implementation::{ConsensusTime, Versions},
         EncodeBytes,
     },
-    utils::BuilderCommitment,
-};
-use marketplace_builder_shared::testing::constants::{
-    TEST_CHANNEL_BUFFER_SIZE, TEST_MAX_TX_NUM, TEST_NUM_CONSENSUS_RETRIES,
-    TEST_NUM_NODES_IN_VID_COMPUTATION,
+    utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use marketplace_builder_shared::{
-    block::BuilderStateId, testing::constants::TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD,
-};
-use marketplace_builder_shared::{
-    block::ParentBlockReferences, testing::constants::TEST_PROTOCOL_MAX_BLOCK_SIZE,
+    block::{BuilderStateId, ParentBlockReferences},
+    testing::constants::{
+        TEST_CHANNEL_BUFFER_SIZE, TEST_MAX_BLOCK_SIZE_INCREMENT_PERIOD, TEST_MAX_TX_NUM,
+        TEST_NUM_CONSENSUS_RETRIES, TEST_NUM_NODES_IN_VID_COMPUTATION,
+        TEST_PROTOCOL_MAX_BLOCK_SIZE,
+    },
 };
 use sha2::{Digest, Sha256};
 use vbs::version::StaticVersionType;
+
+use super::basic_test::{BuilderState, MessageType};
+use crate::{
+    builder_state::{DaProposalMessage, QuorumProposalMessage, ALLOW_EMPTY_BLOCK_PERIOD},
+    service::{GlobalState, ProxyGlobalState, ReceivedTransaction},
+};
 
 type TestSetup = (
     ProxyGlobalState<TestTypes>,
@@ -289,6 +289,7 @@ async fn progress_round_with_transactions(
                         metadata,
                         view_number: next_view,
                         epoch: None, // TODO
+                        epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
                     },
                     signature: da_signature,
                     _pd: Default::default(),
@@ -332,17 +333,17 @@ async fn progress_round_with_transactions(
             proposal: QuorumProposal2::<TestTypes> {
                 block_header,
                 view_number: next_view,
-                justify_qc: QuorumCertificate::<TestTypes>::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate2::<TestTypes>::genesis::<TestVersions>(
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
                 )
-                .await
-                .to_qc2(),
+                .await,
                 upgrade_certificate: None,
                 view_change_evidence: None,
                 next_epoch_justify_qc: None,
                 next_drb_result: None,
                 epoch: None,
+                state_cert: None,
             },
         };
 

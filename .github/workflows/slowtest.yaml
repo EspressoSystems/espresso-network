@@ -21,6 +21,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_LOG: info,libp2p=off,node=error
+  NEXTEST_PROFILE: slow
 
 jobs:
   slow-tests-sqlite:
@@ -30,65 +31,50 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
+      - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
+      - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Configure Environment
-        run: PATH="$PWD/target/release:$PATH"
-
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          cache-all-crates: true
+          prefix-key: v1-rust
+          shared-key: slow-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build
-        run: |
-          cargo build --locked --bin diff-test --release
-          cargo nextest run --locked --release --workspace --features embedded-db --no-run
-        timeout-minutes: 90
+      - name: Build slow test
+        run: just nextest --features embedded-db --no-run
 
-      - name: Slow Test
-        env:
-          NEXTEST_PROFILE: slow
-        run: cargo nextest run --locked --release --workspace --features embedded-db --verbose --no-fail-fast --nocapture
+      - name: Run slow test
+        run: just nextest --features embedded-db --no-fail-fast
         timeout-minutes: 40
+
   slow-tests-postgres:
     runs-on: ubuntu-latest
     steps:
-      - name: Fix submodule permissions check
-        run: |
-          git config --global --add safe.directory '*'
-
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: nightly
 
+      - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
+      - uses: rui314/setup-mold@v1
 
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Configure Environment
-        run: PATH="$PWD/target/release:$PATH"
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          cache-all-crates: true
+          prefix-key: v1-rust
+          shared-key: slow-test
+          save-if: false
 
-      - name: Build
-        run: |
-          cargo build --locked --bin diff-test --release
-          cargo nextest run --locked --release --workspace --no-run
-        timeout-minutes: 90
+      - name: Build slow test
+        run: just nextest --no-run
 
-      - name: Slow Test
-        env:
-          NEXTEST_PROFILE: slow
-        run: cargo nextest run --locked --release --workspace --verbose --no-fail-fast --nocapture
+      - name: Run slow test
+        run: just nextest --no-fail-fast
         timeout-minutes: 40

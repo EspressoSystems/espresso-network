@@ -1,28 +1,32 @@
 //! Mock implementation of persistence, for testing.
-#![cfg(any(test, feature = "testing"))]
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
-    Leaf, Leaf2, NetworkConfig,
+    v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
+    Leaf2, NetworkConfig,
 };
-use hotshot_query_service::VidCommitment;
+use hotshot::{types::BLSPubKey, InitializerEpochInfo};
 use hotshot_types::{
-    consensus::CommitmentMap,
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
-        DaProposal, EpochNumber, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
+        VidDisperseShare,
     },
+    drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
-    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
-    utils::View,
+    simple_certificate::{
+        LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate2,
+        UpgradeCertificate,
+    },
 };
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use indexmap::IndexMap;
 
-use crate::{SeqTypes, ViewNumber};
+use crate::{NodeType, SeqTypes, ViewNumber};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Options;
@@ -90,23 +94,17 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn load_undecided_state(
-        &self,
-    ) -> anyhow::Result<Option<(CommitmentMap<Leaf2>, BTreeMap<ViewNumber, View<SeqTypes>>)>> {
-        Ok(None)
-    }
-
     async fn load_da_proposal(
         &self,
         _view: ViewNumber,
-    ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal<SeqTypes>>>> {
+    ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal2<SeqTypes>>>> {
         Ok(None)
     }
 
     async fn load_vid_share(
         &self,
         _view: ViewNumber,
-    ) -> anyhow::Result<Option<Proposal<SeqTypes, ADVZDisperseShare<SeqTypes>>>> {
+    ) -> anyhow::Result<Option<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>> {
         Ok(None)
     }
 
@@ -155,14 +153,7 @@ impl SequencerPersistence for NoStorage {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn update_undecided_state(
-        &self,
-        _leaves: CommitmentMap<Leaf2>,
-        _state: BTreeMap<ViewNumber, View<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn append_quorum_proposal(
+    async fn append_quorum_proposal2(
         &self,
         _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()> {
@@ -171,16 +162,6 @@ impl SequencerPersistence for NoStorage {
     async fn store_upgrade_certificate(
         &self,
         _decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_consensus(
-        &self,
-        _: fn(Leaf) -> Leaf2,
-        _: fn(
-            Proposal<SeqTypes, QuorumProposal<SeqTypes>>,
-        ) -> Proposal<SeqTypes, QuorumProposal2<SeqTypes>>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -196,5 +177,115 @@ impl SequencerPersistence for NoStorage {
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
         Ok(None)
+    }
+
+    async fn append_da2(
+        &self,
+        _proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+        _vid_commit: VidCommitment,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn append_proposal2(
+        &self,
+        _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn store_drb_result(
+        &self,
+        _epoch: EpochNumber,
+        _drb_result: DrbResult,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn store_drb_input(&self, _drb_input: DrbInput) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn load_drb_input(&self, _epoch: u64) -> anyhow::Result<DrbInput> {
+        bail!("Cannot load from NoStorage")
+    }
+
+    async fn add_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: <SeqTypes as NodeType>::BlockHeader,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
+        Ok(Vec::new())
+    }
+
+    async fn add_state_cert(
+        &self,
+        _state_cert: LightClientStateUpdateCertificate<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn load_state_cert(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificate<SeqTypes>>> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl MembershipPersistence for NoStorage {
+    async fn load_stake(
+        &self,
+        _epoch: EpochNumber,
+    ) -> anyhow::Result<Option<IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>>> {
+        Ok(None)
+    }
+
+    async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
+    }
+
+    async fn store_stake(
+        &self,
+        _epoch: EpochNumber,
+        _stake: IndexMap<alloy::primitives::Address, Validator<BLSPubKey>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn store_events(
+        &self,
+        _l1: u64,
+        _events: Vec<(EventKey, StakeTableEvent)>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn load_events(
+        &self,
+        _l1_block: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
+        Ok((None, Vec::new()))
     }
 }

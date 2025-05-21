@@ -7,7 +7,7 @@ use futures::{
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot_types::{
-    event::{Event, EventType},
+    event::{Event, EventType, LegacyEvent},
     traits::node_implementation::NodeType,
     PeerConfig,
 };
@@ -21,13 +21,19 @@ where
     Types: NodeType,
 {
     type EventStream: Stream<Item = Arc<Event<Types>>> + Unpin + Send + 'static;
+    type LegacyEventStream: Stream<Item = Arc<LegacyEvent<Types>>> + Unpin + Send + 'static;
     async fn get_event_stream(&self, filter: Option<EventFilterSet<Types>>) -> Self::EventStream;
+    async fn get_legacy_event_stream(
+        &self,
+        filter: Option<EventFilterSet<Types>>,
+    ) -> Self::LegacyEventStream;
     async fn get_startup_info(&self) -> StartupInfo<Types>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound = "Types::SignatureKey: for<'a> Deserialize<'a>")]
 pub struct StartupInfo<Types: NodeType> {
-    pub known_node_with_stake: Vec<PeerConfig<Types::SignatureKey>>,
+    pub known_node_with_stake: Vec<PeerConfig<Types>>,
     pub non_staked_node_count: usize,
 }
 
@@ -46,12 +52,12 @@ pub struct EventsStreamer<Types: NodeType> {
     subscriber_send_channel: BroadcastSender<Arc<Event<Types>>>,
 
     // required for sending startup info
-    known_nodes_with_stake: Vec<PeerConfig<Types::SignatureKey>>,
+    known_nodes_with_stake: Vec<PeerConfig<Types>>,
     non_staked_node_count: usize,
 }
 
 impl<Types: NodeType> EventsStreamer<Types> {
-    pub fn known_node_with_stake(&self) -> Vec<PeerConfig<Types::SignatureKey>> {
+    pub fn known_node_with_stake(&self) -> Vec<PeerConfig<Types>> {
         self.known_nodes_with_stake.clone()
     }
 
@@ -99,7 +105,7 @@ impl<Types: NodeType> EventFilterSet<Types> {
             EventType::Decide { .. } => filter.contains(&EventFilter::Decide),
             EventType::ReplicaViewTimeout { .. } => {
                 filter.contains(&EventFilter::ReplicaViewTimeout)
-            }
+            },
             EventType::ViewFinished { .. } => filter.contains(&EventFilter::ViewFinished),
             EventType::ViewTimeout { .. } => filter.contains(&EventFilter::ViewTimeout),
             EventType::Transactions { .. } => filter.contains(&EventFilter::Transactions),
@@ -130,6 +136,7 @@ pub enum EventFilter<Types: NodeType> {
 #[async_trait]
 impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
     type EventStream = BoxStream<'static, Arc<Event<Types>>>;
+    type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<Types>>>;
 
     async fn get_event_stream(&self, filter: Option<EventFilterSet<Types>>) -> Self::EventStream {
         let receiver = self.inactive_to_subscribe_clone_recv.activate_cloned();
@@ -145,6 +152,30 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
         }
     }
 
+    async fn get_legacy_event_stream(
+        &self,
+        filter: Option<EventFilterSet<Types>>,
+    ) -> Self::LegacyEventStream {
+        let receiver = self.inactive_to_subscribe_clone_recv.activate_cloned();
+
+        if let Some(filter) = filter {
+            receiver
+                .filter(move |event| {
+                    futures::future::ready(filter.should_broadcast(&event.as_ref().event))
+                })
+                .filter_map(|a| {
+                    futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
+                })
+                .boxed()
+        } else {
+            receiver
+                .filter_map(|a| {
+                    futures::future::ready(Event::to_legacy(a.as_ref().clone()).ok().map(Arc::new))
+                })
+                .boxed()
+        }
+    }
+
     async fn get_startup_info(&self) -> StartupInfo<Types> {
         StartupInfo {
             known_node_with_stake: self.known_node_with_stake(),
@@ -155,7 +186,7 @@ impl<Types: NodeType> EventsSource<Types> for EventsStreamer<Types> {
 
 impl<Types: NodeType> EventsStreamer<Types> {
     pub fn new(
-        known_nodes_with_stake: Vec<PeerConfig<Types::SignatureKey>>,
+        known_nodes_with_stake: Vec<PeerConfig<Types>>,
         non_staked_node_count: usize,
     ) -> Self {
         let (mut subscriber_send_channel, to_subscribe_clone_recv) =
@@ -165,6 +196,7 @@ impl<Types: NodeType> EventsStreamer<Types> {
         // set the await active to false to not block the sender
         subscriber_send_channel.set_await_active(false);
         let inactive_to_subscribe_clone_recv = to_subscribe_clone_recv.deactivate();
+
         EventsStreamer {
             subscriber_send_channel,
             inactive_to_subscribe_clone_recv,

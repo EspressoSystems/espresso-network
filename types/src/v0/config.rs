@@ -1,15 +1,16 @@
 use std::{num::NonZeroUsize, time::Duration};
 
-use anyhow::Context;
-use vec1::Vec1;
-
-use crate::PubKey;
-use hotshot_types::network::{
-    BuilderType, CombinedNetworkConfig, Libp2pConfig, RandomBuilderConfig,
+use hotshot_types::{
+    network::{
+        BuilderType, CombinedNetworkConfig, Libp2pConfig, NetworkConfig, RandomBuilderConfig,
+    },
+    HotShotConfig, PeerConfig, ValidatorConfig,
 };
-use hotshot_types::{network::NetworkConfig, HotShotConfig, PeerConfig, ValidatorConfig};
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
+use vec1::Vec1;
+
+use crate::{PubKey, SeqTypes};
 
 /// This struct defines the public Hotshot validator configuration.
 /// Private key and state key pairs are excluded for security reasons.
@@ -23,21 +24,20 @@ pub struct PublicValidatorConfig {
     state_key_pair: String,
 }
 
-impl From<ValidatorConfig<PubKey>> for PublicValidatorConfig {
-    fn from(v: ValidatorConfig<PubKey>) -> Self {
-        let ValidatorConfig::<PubKey> {
+impl From<ValidatorConfig<SeqTypes>> for PublicValidatorConfig {
+    fn from(v: ValidatorConfig<SeqTypes>) -> Self {
+        let ValidatorConfig::<SeqTypes> {
             public_key,
             private_key: _,
             stake_value,
-            state_key_pair,
+            state_public_key,
+            state_private_key: _,
             is_da,
         } = v;
 
-        let state_public_key = state_key_pair.ver_key();
-
         Self {
             public_key,
-            stake_value,
+            stake_value: stake_value.to::<u64>(),
             is_da,
             state_public_key: state_public_key.to_string(),
             private_key: "*****".into(),
@@ -53,8 +53,8 @@ impl From<ValidatorConfig<PubKey>> for PublicValidatorConfig {
 pub struct PublicHotShotConfig {
     start_threshold: (u64, u64),
     num_nodes_with_stake: NonZeroUsize,
-    known_nodes_with_stake: Vec<PeerConfig<PubKey>>,
-    known_da_nodes: Vec<PeerConfig<PubKey>>,
+    known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
+    known_da_nodes: Vec<PeerConfig<SeqTypes>>,
     da_staked_committee_size: usize,
     fixed_leader_for_gpuvid: usize,
     next_view_timeout: u64,
@@ -73,14 +73,20 @@ pub struct PublicHotShotConfig {
     stop_voting_time: u64,
     epoch_height: u64,
     epoch_start_block: u64,
+    #[serde(default = "default_stake_table_capacity")]
+    stake_table_capacity: usize,
 }
 
-impl From<HotShotConfig<PubKey>> for PublicHotShotConfig {
-    fn from(v: HotShotConfig<PubKey>) -> Self {
+fn default_stake_table_capacity() -> usize {
+    hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY
+}
+
+impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
+    fn from(v: HotShotConfig<SeqTypes>) -> Self {
         // Destructure all fields from HotShotConfig to return an error
         // if new fields are added to HotShotConfig. This makes sure that we handle
         // all fields appropriately and do not miss any updates.
-        let HotShotConfig::<PubKey> {
+        let HotShotConfig::<SeqTypes> {
             start_threshold,
             num_nodes_with_stake,
             known_nodes_with_stake,
@@ -103,6 +109,7 @@ impl From<HotShotConfig<PubKey>> for PublicHotShotConfig {
             stop_voting_time,
             epoch_height,
             epoch_start_block,
+            stake_table_capacity,
         } = v;
 
         Self {
@@ -128,12 +135,13 @@ impl From<HotShotConfig<PubKey>> for PublicHotShotConfig {
             stop_voting_time,
             epoch_height,
             epoch_start_block,
+            stake_table_capacity,
         }
     }
 }
 
 impl PublicHotShotConfig {
-    pub fn into_hotshot_config(self) -> HotShotConfig<PubKey> {
+    pub fn into_hotshot_config(self) -> HotShotConfig<SeqTypes> {
         HotShotConfig {
             start_threshold: self.start_threshold,
             num_nodes_with_stake: self.num_nodes_with_stake,
@@ -157,15 +165,22 @@ impl PublicHotShotConfig {
             stop_voting_time: self.stop_voting_time,
             epoch_height: self.epoch_height,
             epoch_start_block: self.epoch_start_block,
+            stake_table_capacity: self.stake_table_capacity,
         }
     }
 
-    pub fn known_nodes_with_stake(&self) -> Vec<PeerConfig<PubKey>> {
+    pub fn known_nodes_with_stake(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.known_nodes_with_stake.clone()
     }
 
-    pub fn known_da_nodes(&self) -> Vec<PeerConfig<PubKey>> {
+    pub fn known_da_nodes(&self) -> Vec<PeerConfig<SeqTypes>> {
         self.known_da_nodes.clone()
+    }
+    pub fn blocks_per_epoch(&self) -> u64 {
+        self.epoch_height
+    }
+    pub fn epoch_start_block(&self) -> u64 {
+        self.epoch_start_block
     }
 }
 
@@ -193,8 +208,8 @@ pub struct PublicNetworkConfig {
     random_builder: Option<RandomBuilderConfig>,
 }
 
-impl From<NetworkConfig<PubKey>> for PublicNetworkConfig {
-    fn from(cfg: NetworkConfig<PubKey>) -> Self {
+impl From<NetworkConfig<SeqTypes>> for PublicNetworkConfig {
+    fn from(cfg: NetworkConfig<SeqTypes>) -> Self {
         Self {
             rounds: cfg.rounds,
             indexed_da: cfg.indexed_da,
@@ -223,17 +238,14 @@ impl From<NetworkConfig<PubKey>> for PublicNetworkConfig {
 impl PublicNetworkConfig {
     pub fn into_network_config(
         self,
-        my_own_validator_config: ValidatorConfig<PubKey>,
-    ) -> anyhow::Result<NetworkConfig<PubKey>> {
+        my_own_validator_config: ValidatorConfig<SeqTypes>,
+    ) -> anyhow::Result<NetworkConfig<SeqTypes>> {
         let node_index = self
             .config
             .known_nodes_with_stake
             .iter()
             .position(|peer| peer.stake_table_entry.stake_key == my_own_validator_config.public_key)
-            .context(format!(
-                "the node {} is not in the stake table",
-                my_own_validator_config.public_key
-            ))? as u64;
+            .unwrap_or(0) as u64;
 
         Ok(NetworkConfig {
             rounds: self.rounds,
@@ -262,5 +274,85 @@ impl PublicNetworkConfig {
 
     pub fn hotshot_config(&self) -> PublicHotShotConfig {
         self.config.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PublicNetworkConfig;
+
+    #[test]
+    fn test_deserialize_from_old_config() {
+        // pulled from decaf node
+        let json_str = r#"
+        {
+  "rounds": 100,
+  "indexed_da": false,
+  "transactions_per_round": 10,
+  "manual_start_password": "*****",
+  "num_bootrap": 5,
+  "next_view_timeout": 10,
+  "view_sync_timeout": {
+    "secs": 2,
+    "nanos": 0
+  },
+  "builder_timeout": {
+    "secs": 10,
+    "nanos": 0
+  },
+  "data_request_delay": {
+    "secs": 2,
+    "nanos": 500000000
+  },
+  "node_index": 1,
+  "seed": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  "transaction_size": 100,
+  "key_type_name": "jf_signature::bls_over_bn254::VerKey",
+  "libp2p_config": {
+    "bootstrap_nodes": []
+  },
+  "config": {
+    "start_threshold": [100, 100],
+    "num_nodes_with_stake": 100,
+    "known_nodes_with_stake": [],
+    "known_da_nodes": [],
+    "da_staked_committee_size": 100,
+    "fixed_leader_for_gpuvid": 1,
+    "next_view_timeout": 12000,
+    "view_sync_timeout": {
+      "secs": 1,
+      "nanos": 0
+    },
+    "num_bootstrap": 5,
+    "builder_timeout": {
+      "secs": 8,
+      "nanos": 0
+    },
+    "data_request_delay": {
+      "secs": 5,
+      "nanos": 0
+    },
+    "builder_urls": [
+      "https://builder.decaf.testnet.espresso.network/"
+    ],
+    "start_proposing_view": 0,
+    "stop_proposing_view": 0,
+    "start_voting_view": 0,
+    "stop_voting_view": 0,
+    "start_proposing_time": 0,
+    "stop_proposing_time": 0,
+    "start_voting_time": 0,
+    "stop_voting_time": 0,
+    "epoch_height": 3000,
+    "epoch_start_block": 3160636
+  },
+  "cdn_marshal_address": null,
+  "combined_network_config": null,
+  "commit_sha": "",
+  "builder": "Simple",
+  "random_builder": null
+}
+        "#;
+        let _public_config: PublicNetworkConfig = serde_json::from_str(json_str).unwrap();
     }
 }

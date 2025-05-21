@@ -1,4 +1,3 @@
-use super::{queries::DecodeError, Db};
 use async_trait::async_trait;
 use derive_more::From;
 use futures::stream::StreamExt;
@@ -8,6 +7,8 @@ use refinery_core::{
 };
 use sqlx::{pool::PoolConnection, Acquire, Executor, Row};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+
+use super::{queries::DecodeError, Db};
 
 /// Run migrations using a sqlx connection.
 ///

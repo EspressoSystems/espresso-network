@@ -1,11 +1,13 @@
-use std::{collections::VecDeque, num::NonZeroUsize, time::Duration};
+use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_broadcast::broadcast;
-use async_lock::RwLock;
+use async_lock::{Mutex, RwLock};
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_99::ChainConfig, FeeAmount, NodeState, Payload, SeqTypes,
-    ValidatedState,
+    eth_signature_key::EthKeyPair,
+    v0_1::NoStorage,
+    v0_3::{ChainConfig, StakeTableFetcher},
+    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_builder_core::{
@@ -17,15 +19,14 @@ use hotshot_builder_core::{
 };
 use hotshot_types::{
     data::{fake_commitment, vid_commitment, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     traits::{
         block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics,
         node_implementation::Versions, EncodeBytes,
     },
 };
-use marketplace_builder_shared::block::ParentBlockReferences;
-use marketplace_builder_shared::utils::EventServiceStream;
+use marketplace_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
-use std::sync::Arc;
 use tide_disco::Url;
 use tokio::spawn;
 use vbs::version::StaticVersionType;
@@ -49,16 +50,36 @@ pub fn build_instance_state<V: Versions>(
         .connect(l1_params.urls)
         .expect("failed to create L1 client");
 
+    let peers = Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
+        state_peers,
+        Default::default(),
+        &NoMetrics,
+    ));
+
+    let fetcher = StakeTableFetcher::new(
+        peers.clone(),
+        Arc::new(Mutex::new(NoStorage)),
+        l1_client.clone(),
+        chain_config,
+    );
+
+    let coordinator = EpochMembershipCoordinator::new(
+        Arc::new(RwLock::new(EpochCommittees::new_stake(
+            vec![],
+            vec![],
+            fetcher,
+        ))),
+        100,
+        &Arc::new(sequencer::persistence::no_storage::NoStorage),
+    );
+
     NodeState::new(
         u64::MAX, // dummy node ID, only used for debugging
         chain_config,
         l1_client,
-        Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
-            state_peers,
-            Default::default(),
-            &NoMetrics,
-        )),
-        V::Base::VERSION,
+        peers,
+        V::Base::version(),
+        coordinator,
     )
 }
 
@@ -220,7 +241,6 @@ impl BuilderConfig {
 #[cfg(test)]
 mod test {
     use espresso_types::MockSequencerVersions;
-    use ethers::utils::Anvil;
     use futures::StreamExt;
     use portpicker::pick_unused_port;
     use sequencer::{
@@ -229,7 +249,7 @@ mod test {
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
             Options,
         },
-        persistence::{self},
+        persistence,
         testing::TestConfigBuilder,
     };
     use sequencer_utils::test_utils::setup_test;
@@ -254,10 +274,7 @@ mod test {
         let builder_port = pick_unused_port().expect("No ports free");
         let builder_api_url: Url = format!("http://localhost:{builder_port}").parse().unwrap();
 
-        // Set up and start the network
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint().parse().unwrap();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
 
         let tmpdir = TempDir::new().unwrap();
 

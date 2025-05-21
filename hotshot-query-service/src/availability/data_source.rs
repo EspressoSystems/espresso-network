@@ -10,15 +10,11 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use super::{
-    fetch::Fetch,
-    query_data::{
-        BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonMetadata,
-        VidCommonQueryData,
-    },
+use std::{
+    cmp::Ordering,
+    ops::{Bound, RangeBounds},
 };
-use crate::{types::HeightIndexed, Header, Payload, VidCommitment, VidShare};
+
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::{Display, From};
@@ -26,11 +22,21 @@ use futures::{
     future::Future,
     stream::{BoxStream, StreamExt},
 };
-use hotshot_types::traits::node_implementation::NodeType;
-use std::{
-    cmp::Ordering,
-    ops::{Bound, RangeBounds},
+use hotshot_types::{
+    data::{VidCommitment, VidShare},
+    traits::node_implementation::NodeType,
 };
+
+use super::{
+    fetch::Fetch,
+    query_data::{
+        BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
+        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonMetadata,
+        VidCommonQueryData,
+    },
+    StateCertQueryData,
+};
+use crate::{types::HeightIndexed, Header, Payload};
 
 #[derive(Derivative, From, Display)]
 #[derivative(Ord = "feature_allow_slow_enum")]
@@ -228,6 +234,8 @@ where
         hash: TransactionHash<Types>,
     ) -> Fetch<TransactionQueryData<Types>>;
 
+    async fn get_state_cert(&self, epoch: u64) -> Fetch<StateCertQueryData<Types>>;
+
     async fn subscribe_blocks(&self, from: usize) -> BoxStream<'static, BlockQueryData<Types>> {
         self.get_block_range(from..)
             .await
@@ -301,11 +309,12 @@ pub struct BlockInfo<Types: NodeType> {
     pub block: Option<BlockQueryData<Types>>,
     pub vid_common: Option<VidCommonQueryData<Types>>,
     pub vid_share: Option<VidShare>,
+    pub state_cert: Option<StateCertQueryData<Types>>,
 }
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for BlockInfo<Types> {
     fn from(leaf: LeafQueryData<Types>) -> Self {
-        Self::new(leaf, None, None, None)
+        Self::new(leaf, None, None, None, None)
     }
 }
 
@@ -321,12 +330,14 @@ impl<Types: NodeType> BlockInfo<Types> {
         block: Option<BlockQueryData<Types>>,
         vid_common: Option<VidCommonQueryData<Types>>,
         vid_share: Option<VidShare>,
+        state_cert: Option<StateCertQueryData<Types>>,
     ) -> Self {
         Self {
             leaf,
             block,
             vid_common,
             vid_share,
+            state_cert,
         }
     }
 }

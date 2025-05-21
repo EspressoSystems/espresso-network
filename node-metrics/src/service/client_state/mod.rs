@@ -1,20 +1,21 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use async_lock::{RwLock, RwLockWriteGuard};
+use bitvec::vec::BitVec;
+use espresso_types::SeqTypes;
+use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
+use tokio::{spawn, task::JoinHandle};
+
 use super::{
     client_id::ClientId,
     client_message::{ClientMessage, InternalClientMessage},
     data_state::{DataState, NodeIdentity},
     server_message::ServerMessage,
 };
-use bitvec::vec::BitVec;
-use espresso_types::SeqTypes;
-use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
-use hotshot_query_service::explorer::{BlockDetail, ExplorerHistograms};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-use tokio::{spawn, task::JoinHandle};
-
-use async_lock::{RwLock, RwLockWriteGuard};
 
 /// ClientState represents the service state of the connected clients.
 /// It maintains and represents the connected clients, and their subscriptions.
@@ -112,7 +113,7 @@ impl std::fmt::Display for HandleConnectedError {
         match self {
             HandleConnectedError::ClientSendError(err) => {
                 write!(f, "handle connected error: client send error: {}", err)
-            }
+            },
         }
     }
 }
@@ -235,7 +236,7 @@ impl std::fmt::Display for HandleRequestBlocksSnapshotsError {
                     "handle request blocks snapshot error: client send error:: {}",
                     err
                 )
-            }
+            },
         }
     }
 }
@@ -306,7 +307,7 @@ impl std::fmt::Display for HandleRequestNodeIdentitySnapshotError {
                     "handle request node identity snapshot error: client send error: {}",
                     err
                 )
-            }
+            },
         }
     }
 }
@@ -374,7 +375,7 @@ impl std::fmt::Display for HandleRequestHistogramSnapshotError {
                     "handle request histogram snapshot error: client send error: {}",
                     err
                 )
-            }
+            },
         }
     }
 }
@@ -461,7 +462,7 @@ impl std::fmt::Display for HandleRequestVotersSnapshotError {
                     "handle request voters snapshot error: client send error: {}",
                     err
                 )
-            }
+            },
         }
     }
 }
@@ -557,27 +558,27 @@ impl std::fmt::Display for ProcessClientMessageError {
         match self {
             ProcessClientMessageError::Connected(err) => {
                 write!(f, "process client message error: connected: {}", err)
-            }
+            },
             ProcessClientMessageError::BlocksSnapshot(err) => {
                 write!(f, "process client message error: blocks snapshot: {}", err)
-            }
+            },
             ProcessClientMessageError::NodeIdentitySnapshot(err) => {
                 write!(
                     f,
                     "process client message error: node identity snapshot: {}",
                     err
                 )
-            }
+            },
             ProcessClientMessageError::HistogramSnapshot(err) => {
                 write!(
                     f,
                     "process client message error: histogram snapshot: {}",
                     err
                 )
-            }
+            },
             ProcessClientMessageError::VotersSnapshot(err) => {
                 write!(f, "process client message error: voters snapshot: {}", err)
-            }
+            },
         }
     }
 }
@@ -615,27 +616,27 @@ where
         InternalClientMessage::Connected(sender) => {
             handle_client_message_connected(sender, client_thread_state).await?;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Disconnected(client_id) => {
             handle_client_message_disconnected(client_id, client_thread_state).await;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::SubscribeLatestBlock) => {
             handle_client_message_subscribe_latest_block(client_id, client_thread_state).await;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::SubscribeNodeIdentity) => {
             handle_client_message_subscribe_node_identity(client_id, client_thread_state).await;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::SubscribeVoters) => {
             handle_client_message_subscribe_voters(client_id, client_thread_state).await;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestBlocksSnapshot) => {
             handle_client_message_request_blocks_snapshot(
@@ -645,7 +646,7 @@ where
             )
             .await?;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestNodeIdentitySnapshot) => {
             handle_client_message_request_node_identity_snapshot(
@@ -655,7 +656,7 @@ where
             )
             .await?;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestHistogramSnapshot) => {
             handle_client_message_request_histogram_snapshot(
@@ -665,7 +666,7 @@ where
             )
             .await?;
             Ok(())
-        }
+        },
 
         InternalClientMessage::Request(client_id, ClientMessage::RequestVotersSnapshot) => {
             handle_client_message_request_voters_snapshot(
@@ -675,22 +676,7 @@ where
             )
             .await?;
             Ok(())
-        }
-    }
-}
-
-/// [clone_block_detail] is a utility function that clones a [BlockDetail]
-/// instance.
-pub fn clone_block_detail(input: &BlockDetail<SeqTypes>) -> BlockDetail<SeqTypes> {
-    BlockDetail {
-        hash: input.hash,
-        proposer_id: input.proposer_id.clone(),
-        height: input.height,
-        size: input.size,
-        time: input.time,
-        num_transactions: input.num_transactions,
-        fee_recipient: input.fee_recipient.clone(),
-        block_reward: input.block_reward.clone(),
+        },
     }
 }
 
@@ -949,11 +935,12 @@ impl InternalClientMessageProcessingTask {
                 process_client_message(message, data_state.clone(), client_thread_state.clone())
                     .await
             {
+                // We log this error, but we ignore it so that other connections
+                // are not affected by a single client.
                 tracing::info!(
                     "internal client message processing encountered an error: {}",
                     err,
                 );
-                return;
             }
         }
     }
@@ -1180,33 +1167,44 @@ impl Drop for ProcessDistributeVotersHandlingTask {
 
 #[cfg(test)]
 pub mod tests {
-    use super::{ClientThreadState, InternalClientMessageProcessingTask};
-    use crate::service::{
-        client_id::ClientId,
-        client_message::{ClientMessage, InternalClientMessage},
-        client_state::{
-            ProcessDistributeBlockDetailHandlingTask, ProcessDistributeNodeIdentityHandlingTask,
-            ProcessDistributeVotersHandlingTask,
-        },
-        data_state::{
-            create_block_detail_from_leaf, DataState, LocationDetails, NodeIdentity,
-            ProcessLeafStreamTask,
-        },
-        server_message::ServerMessage,
-    };
+    use std::{sync::Arc, time::Duration};
+
     use async_lock::RwLock;
     use bitvec::vec::BitVec;
-    use espresso_types::{Leaf, NodeState, ValidatedState};
+    use espresso_types::{NodeState, ValidatedState};
     use futures::{
         channel::mpsc::{self, Sender},
         SinkExt, StreamExt,
     };
-    use hotshot_query_service::testing::mocks::MockVersions;
-    use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
-    use std::{sync::Arc, time::Duration};
+    use hotshot_example_types::node_types::TestVersions;
+    use hotshot_query_service::{
+        availability::{BlockQueryData, Leaf1QueryData},
+        testing::mocks::MockVersions,
+    };
+    use hotshot_types::{
+        data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
+    };
     use tokio::{
         spawn,
         time::{sleep, timeout},
+    };
+
+    use super::{ClientThreadState, InternalClientMessageProcessingTask};
+    use crate::{
+        api::node_validator::v0::PublicHotShotConfig,
+        service::{
+            client_id::ClientId,
+            client_message::{ClientMessage, InternalClientMessage},
+            client_state::{
+                ProcessDistributeBlockDetailHandlingTask,
+                ProcessDistributeNodeIdentityHandlingTask, ProcessDistributeVotersHandlingTask,
+            },
+            data_state::{
+                create_block_detail_from_block, DataState, LocationDetails, NodeIdentity,
+                ProcessLeafAndBlockPairStreamTask,
+            },
+            server_message::ServerMessage,
+        },
     };
 
     pub fn create_test_client_thread_state() -> ClientThreadState<Sender<ServerMessage>> {
@@ -1370,17 +1368,15 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[cfg(feature = "testing")]
     async fn test_process_client_handling_stream_request_latest_blocks_snapshot() {
-        use hotshot_query_service::testing::mocks::MockVersions;
-
-        use super::clone_block_detail;
-        use crate::service::data_state::create_block_detail_from_leaf;
+        use crate::service::data_state::create_block_detail_from_block;
 
         let (_, _, _, mut data_state) = create_test_data_state();
         let client_thread_state = Arc::new(RwLock::new(create_test_client_thread_state()));
-        let leaf_1 =
-            Leaf::genesis::<MockVersions>(&ValidatedState::default(), &NodeState::mock()).await;
-        let block_1 = create_block_detail_from_leaf(&leaf_1);
-        data_state.add_latest_block(clone_block_detail(&block_1));
+        let validated_state = ValidatedState::default();
+        let instance_state = NodeState::mock();
+        let block_1 =
+            BlockQueryData::genesis::<MockVersions>(&validated_state, &instance_state).await;
+        data_state.add_latest_block(create_block_detail_from_block(&block_1));
 
         let data_state = Arc::new(RwLock::new(data_state));
 
@@ -1434,7 +1430,9 @@ pub mod tests {
 
         assert_eq!(
             server_message_receiver_1.next().await,
-            Some(ServerMessage::BlocksSnapshot(Arc::new(vec![block_1]))),
+            Some(ServerMessage::BlocksSnapshot(Arc::new(vec![
+                create_block_detail_from_block(&block_1)
+            ]))),
         );
 
         if let Some(process_internal_client_message_handle) =
@@ -1543,9 +1541,15 @@ pub mod tests {
         let mut process_distribute_voters_handle =
             ProcessDistributeVotersHandlingTask::new(client_thread_state, voters_receiver);
 
-        let mut process_leaf_stream_handle = ProcessLeafStreamTask::new(
+        let mut process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
             leaf_receiver,
             data_state,
+            surf_disco::client::Client::new("http://localhost/".parse().unwrap()),
+            PublicHotShotConfig {
+                epoch_height: None,
+                epoch_start_block: None,
+                known_nodes_with_stake: vec![],
+            },
             block_detail_sender,
             voters_sender,
         );
@@ -1618,12 +1622,25 @@ pub mod tests {
         // No response expected from the client messages at the moment.
 
         // send a new leaf
+        let validated_state = ValidatedState::default();
+        let instance_state = NodeState::mock();
+
         let leaf =
-            Leaf::genesis::<MockVersions>(&ValidatedState::default(), &NodeState::mock()).await;
-        let expected_block = create_block_detail_from_leaf(&leaf);
+            Leaf2::genesis::<TestVersions>(&ValidatedState::default(), &NodeState::mock()).await;
+        let block_query_data =
+            BlockQueryData::genesis::<MockVersions>(&validated_state, &instance_state).await;
+        let expected_block = create_block_detail_from_block(&block_query_data);
         let arc_expected_block = Arc::new(expected_block);
 
-        assert_eq!(leaf_sender.send(leaf).await, Ok(()));
+        assert_eq!(
+            leaf_sender
+                .send((
+                    Leaf1QueryData::new(leaf.clone().to_leaf_unsafe(), leaf.justify_qc().to_qc()),
+                    block_query_data.clone()
+                ))
+                .await,
+            Ok(())
+        );
 
         // We should receive the Block Detail on each subscribed client
         assert_eq!(

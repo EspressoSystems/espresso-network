@@ -1,7 +1,8 @@
+use alloy::{hex::ToHexExt, sol_types::SolValue};
 use clap::Parser;
-use ethers::abi::AbiEncode;
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
-use hotshot_state_prover::service::light_client_genesis;
+use espresso_contract_deployer::network_config::light_client_genesis;
+use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
+use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use url::Url;
 
 #[derive(Parser)]
@@ -19,8 +20,9 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let pi = light_client_genesis(&args.orchestrator_url, STAKE_TABLE_CAPACITY)
-        .await
-        .unwrap();
-    println!("{}", pi.encode_hex());
+    let pi: (LightClientStateSol, StakeTableStateSol) =
+        light_client_genesis(&args.orchestrator_url, DEFAULT_STAKE_TABLE_CAPACITY)
+            .await
+            .unwrap();
+    println!("{}", pi.abi_encode_params().encode_hex());
 }

@@ -1,0 +1,7 @@
+CREATE UNIQUE INDEX IF NOT EXISTS leaf2_height_idx ON leaf2 (height);
+
+ALTER TABLE leaf2 DROP CONSTRAINT leaf2_pk;
+
+ALTER TABLE leaf2 ADD CONSTRAINT leaf2_pk PRIMARY KEY USING INDEX leaf2_height_idx;
+
+ALTER TABLE leaf2 DROP COLUMN view;

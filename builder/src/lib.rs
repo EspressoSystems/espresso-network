@@ -40,13 +40,22 @@ pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
 
 #[cfg(test)]
 pub mod testing {
+    use std::{
+        num::NonZeroUsize,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+
+    use alloy::{
+        node_bindings::{Anvil, AnvilInstance},
+        primitives::U256,
+    };
     use async_lock::RwLock;
     use committable::Committable;
     use espresso_types::{
-        traits::SequencerPersistence, v0_99::ChainConfig, Event, FeeAccount, NamespaceId,
-        NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+        traits::SequencerPersistence, v0_3::ChainConfig, Event, FeeAccount, NamespaceId, NodeState,
+        PrivKey, PubKey, Transaction, ValidatedState,
     };
-    use ethers::utils::{Anvil, AnvilInstance};
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
         traits::BlockPayload,
@@ -75,21 +84,15 @@ pub mod testing {
         HotShotConfig, PeerConfig, ValidatorConfig,
     };
     use sequencer::{context::Consensus, network, SequencerApiVersion};
-    use std::{
-        num::NonZeroUsize,
-        sync::Arc,
-        time::{Duration, Instant},
-    };
     use surf_disco::Client;
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
-    use jf_signature::bls_over_bn254::VerKey;
 
     #[derive(Clone)]
     pub struct HotShotTestConfig {
-        pub config: HotShotConfig<PubKey>,
+        pub config: HotShotConfig<SeqTypes>,
         priv_keys_staking_nodes: Vec<BLSPrivKey>,
         priv_keys_non_staking_nodes: Vec<BLSPrivKey>,
         staking_nodes_state_key_pairs: Vec<StateKeyPair>,
@@ -114,7 +117,7 @@ pub mod testing {
 
             let builder_url = hotshot_builder_url();
 
-            let config: HotShotConfig<PubKey> = HotShotConfig {
+            let config: HotShotConfig<SeqTypes> = HotShotConfig {
                 num_nodes_with_stake: NonZeroUsize::new(num_nodes_with_stake).unwrap(),
                 known_da_nodes: known_nodes_with_stake.clone(),
                 known_nodes_with_stake: known_nodes_with_stake.clone(),
@@ -140,6 +143,7 @@ pub mod testing {
                 stop_voting_time: 0,
                 epoch_height: 0,
                 epoch_start_block: 0,
+                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             };
 
             Self {
@@ -156,7 +160,11 @@ pub mod testing {
     pub fn generate_stake_table_entries(
         num_nodes: u64,
         stake_value: u64,
-    ) -> (Vec<BLSPrivKey>, Vec<StateKeyPair>, Vec<PeerConfig<PubKey>>) {
+    ) -> (
+        Vec<BLSPrivKey>,
+        Vec<StateKeyPair>,
+        Vec<PeerConfig<SeqTypes>>,
+    ) {
         // Generate keys for the nodes.
         let priv_keys = (0..num_nodes)
             .map(|_| PrivKey::generate(&mut rand::thread_rng()))
@@ -172,8 +180,8 @@ pub mod testing {
         let nodes_with_stake = pub_keys
             .iter()
             .zip(&state_key_pairs)
-            .map(|(pub_key, state_key_pair)| PeerConfig::<PubKey> {
-                stake_table_entry: pub_key.stake_table_entry(stake_value),
+            .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
+                stake_table_entry: pub_key.stake_table_entry(U256::from(stake_value)),
                 state_ver_key: state_key_pair.ver_key(),
             })
             .collect::<Vec<_>>();
@@ -200,11 +208,7 @@ pub mod testing {
         pub fn get_anvil(&self) -> Arc<AnvilInstance> {
             self.anvil.clone()
         }
-        pub fn get_validator_config(
-            &self,
-            i: usize,
-            is_staked: bool,
-        ) -> ValidatorConfig<hotshot_state_prover::QCVerKey> {
+        pub fn get_validator_config(&self, i: usize, is_staked: bool) -> ValidatorConfig<SeqTypes> {
             if is_staked {
                 ValidatorConfig {
                     public_key: self.config.known_nodes_with_stake[i]
@@ -213,9 +217,9 @@ pub mod testing {
                     private_key: self.priv_keys_staking_nodes[i].clone(),
                     stake_value: self.config.known_nodes_with_stake[i]
                         .stake_table_entry
-                        .stake_amount
-                        .as_u64(),
-                    state_key_pair: self.staking_nodes_state_key_pairs[i].clone(),
+                        .stake_amount,
+                    state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
+                    state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
                 }
             } else {
@@ -224,8 +228,9 @@ pub mod testing {
                         .stake_table_entry
                         .stake_key,
                     private_key: self.priv_keys_non_staking_nodes[i].clone(),
-                    stake_value: 0,
-                    state_key_pair: self.non_staking_nodes_state_key_pairs[i].clone(),
+                    stake_value: U256::from(0),
+                    state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
+                    state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
                 }
             }
@@ -249,24 +254,39 @@ pub mod testing {
             source: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         ) {
             // Start the web server.
-            let hotshot_events_api = hotshot_events_service::events::define_api::<
+            let hotshot_events_api_v0 = hotshot_events_service::events::define_api::<
                 Arc<RwLock<EventsStreamer<SeqTypes>>>,
                 SeqTypes,
                 StaticVersion<0, 1>,
-            >(&EventStreamingApiOptions::default())
-            .expect("Failed to define hotshot eventsAPI");
+            >(
+                &EventStreamingApiOptions::default(),
+                "0.0.1".parse().unwrap(),
+            )
+            .expect("Failed to define hotshot events API v0");
+
+            let hotshot_events_api_v1 = hotshot_events_service::events::define_api::<
+                Arc<RwLock<EventsStreamer<SeqTypes>>>,
+                SeqTypes,
+                StaticVersion<0, 1>,
+            >(
+                &EventStreamingApiOptions::default(),
+                "1.0.0".parse().unwrap(),
+            )
+            .expect("Failed to define hotshot events API v1");
 
             let mut app = App::<_, EventStreamApiError>::with_state(source);
 
-            app.register_module("hotshot-events", hotshot_events_api)
-                .expect("Failed to register hotshot events API");
+            app.register_module("hotshot-events", hotshot_events_api_v0)
+                .expect("Failed to register hotshot events API v0")
+                .register_module("hotshot-events", hotshot_events_api_v1)
+                .expect("Failed to register hotshot events API v1");
 
             tokio::spawn(app.serve(url, SequencerApiVersion::instance()));
         }
         // enable hotshot event streaming
         pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence, V: Versions>(
             hotshot_events_api_url: Url,
-            known_nodes_with_stake: Vec<PeerConfig<VerKey>>,
+            known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
             num_non_staking_nodes: usize,
             hotshot_context_handle: Arc<Consensus<network::Memory, P, V>>,
         ) {
@@ -414,10 +434,10 @@ pub mod testing {
         {
             Ok(response) => {
                 tracing::info!("Received txn submitted response : {:?}", response);
-            }
+            },
             Err(e) => {
                 panic!("Error submitting private transaction {:?}", e);
-            }
+            },
         }
 
         let seed = [207_u8; 32];
@@ -514,10 +534,10 @@ pub mod testing {
             Ok(response) => {
                 tracing::info!("Received Builder Key : {:?}", response);
                 assert_eq!(response, builder_pub_key);
-            }
+            },
             Err(e) => {
                 panic!("Error getting builder key {:?}", e);
-            }
+            },
         }
     }
 }

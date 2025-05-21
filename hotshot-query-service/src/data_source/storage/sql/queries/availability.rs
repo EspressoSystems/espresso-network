@@ -12,27 +12,31 @@
 
 //! Availability storage implementation for a database query engine.
 
-use super::{
-    super::transaction::{query, Transaction, TransactionMode},
-    QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
-    VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
-};
-use crate::data_source::storage::sql::sqlx::Row;
-use crate::{
-    availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryableHeader,
-        QueryablePayload, TransactionHash, TransactionQueryData, VidCommonQueryData,
-    },
-    data_source::storage::{AvailabilityStorage, PayloadMetadata, VidCommonMetadata},
-    types::HeightIndexed,
-    ErrorSnafu, Header, MissingSnafu, Payload, QueryError, QueryResult,
-};
+use std::ops::RangeBounds;
+
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
 use hotshot_types::traits::node_implementation::NodeType;
 use snafu::OptionExt;
 use sqlx::FromRow;
-use std::ops::RangeBounds;
+
+use super::{
+    super::transaction::{query, Transaction, TransactionMode},
+    QueryBuilder, BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
+    STATE_CERT_COLUMNS, VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
+};
+use crate::{
+    availability::{
+        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryableHeader,
+        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
+        VidCommonQueryData,
+    },
+    data_source::storage::{
+        sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
+    },
+    types::HeightIndexed,
+    ErrorSnafu, Header, MissingSnafu, Payload, QueryError, QueryResult,
+};
 
 #[async_trait]
 impl<Mode, Types> AvailabilityStorage<Types> for Transaction<Mode>
@@ -50,7 +54,7 @@ where
         };
         let row = query
             .query(&format!(
-                "SELECT {LEAF_COLUMNS} FROM leaf WHERE {where_clause}"
+                "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE {where_clause} LIMIT 1"
             ))
             .fetch_one(self.as_mut())
             .await?;
@@ -134,7 +138,7 @@ where
         let sql = format!(
             "SELECT {VID_COMMON_COLUMNS}
               FROM header AS h
-              JOIN vid AS v ON h.height = v.height
+              JOIN vid2 AS v ON h.height = v.height
               WHERE {where_clause}
               ORDER BY h.height
               LIMIT 1"
@@ -155,7 +159,7 @@ where
         let sql = format!(
             "SELECT {VID_COMMON_METADATA_COLUMNS}
               FROM header AS h
-              JOIN vid AS v ON h.height = v.height
+              JOIN vid2 AS v ON h.height = v.height
               WHERE {where_clause}
               ORDER BY h.height ASC
               LIMIT 1"
@@ -174,7 +178,7 @@ where
     {
         let mut query = QueryBuilder::default();
         let where_clause = query.bounds_to_where_clause(range, "height")?;
-        let sql = format!("SELECT {LEAF_COLUMNS} FROM leaf {where_clause} ORDER BY height");
+        let sql = format!("SELECT {LEAF_COLUMNS} FROM leaf2 {where_clause} ORDER BY height ASC");
         Ok(query
             .query(&sql)
             .fetch(self.as_mut())
@@ -296,7 +300,7 @@ where
         let sql = format!(
             "SELECT {VID_COMMON_COLUMNS}
               FROM header AS h
-              JOIN vid AS v ON h.height = v.height
+              JOIN vid2 AS v ON h.height = v.height
               {where_clause}
               ORDER BY h.height"
         );
@@ -321,7 +325,7 @@ where
         let sql = format!(
             "SELECT {VID_COMMON_METADATA_COLUMNS}
               FROM header AS h
-              JOIN vid AS v ON h.height = v.height
+              JOIN vid2 AS v ON h.height = v.height
               {where_clause}
               ORDER BY h.height ASC"
         );
@@ -367,12 +371,22 @@ where
 
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
         let row = query(&format!(
-            "SELECT {LEAF_COLUMNS} FROM leaf WHERE height >= $1 ORDER BY height LIMIT 1"
+            "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE height >= $1 ORDER BY height ASC LIMIT 1"
         ))
         .bind(from as i64)
         .fetch_one(self.as_mut())
         .await?;
         let leaf = LeafQueryData::from_row(&row)?;
         Ok(leaf)
+    }
+
+    async fn get_state_cert(&mut self, epoch: u64) -> QueryResult<StateCertQueryData<Types>> {
+        let row = query(&format!(
+            "SELECT {STATE_CERT_COLUMNS} FROM finalized_state_cert WHERE epoch = $1 LIMIT 1"
+        ))
+        .bind(epoch as i64)
+        .fetch_one(self.as_mut())
+        .await?;
+        Ok(StateCertQueryData::from_row(&row)?)
     }
 }

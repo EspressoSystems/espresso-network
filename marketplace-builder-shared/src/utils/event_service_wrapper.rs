@@ -1,16 +1,12 @@
-use std::{future::Future, pin::Pin};
-
-use std::time::Duration;
+use std::{future::Future, pin::Pin, time::Duration};
 
 use anyhow::Context;
 use either::Either::{self, Left, Right};
-use futures::stream::unfold;
-use futures::{Stream, StreamExt};
+use futures::{stream::unfold, Stream, StreamExt};
 use hotshot::types::Event;
 use hotshot_events_service::events::Error as EventStreamError;
 use hotshot_types::traits::node_implementation::NodeType;
-use surf_disco::client::HealthStatus;
-use surf_disco::Client;
+use surf_disco::{client::HealthStatus, Client};
 use tokio::time::{sleep, timeout};
 use tracing::{error, warn};
 use url::Url;
@@ -58,7 +54,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                     Ok(_) => break,
                     Err(err) => {
                         tracing::debug!(?err, "Healthcheck failed, retrying");
-                    }
+                    },
                 }
                 sleep(Self::RETRY_PERIOD).await;
             }
@@ -90,18 +86,18 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                         match tokio::time::timeout(Self::MAX_WAIT_PERIOD, connection.next()).await {
                             Ok(Some(Ok(event))) => {
                                 return Some((event, this));
-                            }
+                            },
                             Ok(Some(Err(err))) => {
                                 warn!(?err, "Error in event stream");
                                 continue;
-                            }
+                            },
                             Ok(None) => {
                                 warn!("Event stream ended, attempting reconnection");
                                 let fut = Self::connect_inner(this.api_url.clone());
                                 let _ =
                                     std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
                                 continue;
-                            }
+                            },
                             Err(_) => {
                                 // Timeout occurred, reconnect
                                 warn!("Timeout waiting for next event; reconnecting");
@@ -109,21 +105,21 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                                 let _ =
                                     std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
                                 continue;
-                            }
+                            },
                         }
-                    }
+                    },
                     Right(reconnection) => match reconnection.await {
                         Ok(connection) => {
                             let _ = std::mem::replace(&mut this.connection, Left(connection));
                             continue;
-                        }
+                        },
                         Err(err) => {
                             error!(?err, "Error while reconnecting, will retry in a while");
                             sleep(Self::RETRY_PERIOD).await;
                             let fut = Self::connect_inner(this.api_url.clone());
                             let _ = std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
                             continue;
-                        }
+                        },
                     },
                 }
             }
@@ -151,7 +147,11 @@ mod tests {
         events_source::{EventFilterSet, EventsSource, StartupInfo},
     };
     use hotshot_example_types::node_types::TestTypes;
-    use hotshot_types::{data::ViewNumber, traits::node_implementation::ConsensusTime};
+    use hotshot_types::{
+        data::ViewNumber,
+        event::{LegacyEvent, LegacyEventType},
+        traits::node_implementation::ConsensusTime,
+    };
     use tide_disco::{method::ReadState, App};
     use tokio::{spawn, task::JoinHandle, time::timeout};
     use tracing::debug;
@@ -169,6 +169,8 @@ mod tests {
     #[async_trait]
     impl EventsSource<TestTypes> for MockEventsSource {
         type EventStream = futures::stream::Iter<std::vec::IntoIter<Arc<Event<TestTypes>>>>;
+        type LegacyEventStream =
+            futures::stream::Iter<std::vec::IntoIter<Arc<LegacyEvent<TestTypes>>>>;
 
         async fn get_event_stream(
             &self,
@@ -178,6 +180,19 @@ mod tests {
             let test_event = Arc::new(Event {
                 view_number: view,
                 event: EventType::ViewFinished { view_number: view },
+            });
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            stream::iter(vec![test_event])
+        }
+
+        async fn get_legacy_event_stream(
+            &self,
+            _filter: Option<EventFilterSet<TestTypes>>,
+        ) -> Self::LegacyEventStream {
+            let view = ViewNumber::new(self.counter.load(Ordering::SeqCst));
+            let test_event = Arc::new(LegacyEvent {
+                view_number: view,
+                event: LegacyEventType::ViewFinished { view_number: view },
             });
             self.counter.fetch_add(1, Ordering::SeqCst);
             stream::iter(vec![test_event])
@@ -207,7 +222,11 @@ mod tests {
         let source = MockEventsSource {
             counter: AtomicU64::new(0),
         };
-        let api = define_api::<MockEventsSource, _, MockVersion>(&Default::default()).unwrap();
+        let api = define_api::<MockEventsSource, _, MockVersion>(
+            &Default::default(),
+            "1.0.0".parse().unwrap(),
+        )
+        .unwrap();
 
         let mut app: App<MockEventsSource, hotshot_events_service::events::Error> =
             App::with_state(source);

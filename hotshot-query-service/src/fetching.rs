@@ -21,16 +21,16 @@
 //! implementations of [`Provider`] for various data availability sources.
 //!
 
-use async_lock::Mutex;
-use async_lock::Semaphore;
-use backoff::{backoff::Backoff, ExponentialBackoff};
-use derivative::Derivative;
 use std::{
     collections::{hash_map::Entry, BTreeSet, HashMap},
     fmt::Debug,
     sync::Arc,
     time::Duration,
 };
+
+use async_lock::{Mutex, Semaphore};
+use backoff::{backoff::Backoff, ExponentialBackoff};
+use derivative::Derivative;
 use tokio::{spawn, time::sleep};
 
 pub mod provider;
@@ -122,12 +122,12 @@ impl<T, C> Fetcher<T, C> {
                         e.get_mut().extend(callbacks);
                         tracing::info!(?req, callbacks = ?e.get(), "resource is already being fetched");
                         return;
-                    }
+                    },
                     Entry::Vacant(e) => {
                         // If the object is not being fetched, we will register our own callback and
                         // then fetch it ourselves.
                         e.insert(callbacks.into_iter().collect());
-                    }
+                    },
                 }
             }
 

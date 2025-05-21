@@ -35,11 +35,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Fs(opt) => {
             tracing::warn!("resetting file system storage {opt:?}");
             reset_storage(opt).await
-        }
+        },
         Command::Sql(opt) => {
             tracing::warn!("resetting SQL storage {opt:?}");
             reset_storage(*opt).await
-        }
+        },
     }
 }
 

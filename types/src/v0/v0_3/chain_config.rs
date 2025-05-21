@@ -1,6 +1,7 @@
 use crate::{v0_1, BlockSize, ChainId, FeeAccount, FeeAmount};
+use alloy::primitives::{Address, U256};
+use alloy_compat::ethers_serde;
 use committable::{Commitment, Committable};
-use ethers::types::{Address, U256};
 use itertools::Either;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,8 @@ pub struct ChainConfig {
     /// This is optional so that fees can easily be toggled on/off, with no need to deploy a
     /// contract when they are off. In a future release, after fees are switched on and thoroughly
     /// tested, this may be made mandatory.
+    #[serde(with = "ethers_serde::option_address")]
+    #[serde(default)]
     pub fee_contract: Option<Address>,
 
     /// Account that receives sequencing fees.
@@ -35,6 +38,8 @@ pub struct ChainConfig {
     /// This is optional so that stake can easily be toggled on/off, with no need to deploy a
     /// contract when they are off. In a future release, after PoS is switched on and thoroughly
     /// tested, this may be made mandatory.
+    #[serde(with = "ethers_serde::option_address")]
+    #[serde(default)]
     pub stake_table_contract: Option<Address>,
 }
 
@@ -74,13 +79,13 @@ impl Committable for ChainConfig {
 }
 
 impl ResolvableChainConfig {
-    pub fn _commit(&self) -> Commitment<ChainConfig> {
+    pub fn commit(&self) -> Commitment<ChainConfig> {
         match self.chain_config {
             Either::Left(config) => config.commit(),
             Either::Right(commitment) => commitment,
         }
     }
-    pub fn _resolve(self) -> Option<ChainConfig> {
+    pub fn resolve(self) -> Option<ChainConfig> {
         match self.chain_config {
             Either::Left(config) => Some(config),
             Either::Right(_) => None,
@@ -141,6 +146,8 @@ impl From<v0_1::ChainConfig> for ChainConfig {
     }
 }
 
+  
+
 impl From<ChainConfig> for v0_1::ChainConfig {
     fn from(chain_config: ChainConfig) -> v0_1::ChainConfig {
         let ChainConfig {
@@ -173,4 +180,35 @@ impl Default for ChainConfig {
             stake_table_contract: None,
         }
     }
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_upgrade_chain_config_v3_resolvable_chain_config_from_v1() {
+        let expectation: ResolvableChainConfig = ChainConfig::default().into();
+        let v1_resolvable: v0_1::ResolvableChainConfig = v0_1::ChainConfig::default().into();
+        let v3_resolvable: ResolvableChainConfig = ResolvableChainConfig::from(&v1_resolvable);
+        assert_eq!(expectation, v3_resolvable);
+        let expectation: ResolvableChainConfig = ChainConfig::default().commit().into();
+        let v1_resolvable: v0_1::ResolvableChainConfig =
+            v0_1::ChainConfig::default().commit().into();
+        let v3_resolvable: ResolvableChainConfig = ResolvableChainConfig::from(&v1_resolvable);
+        assert_eq!(expectation, v3_resolvable);
+    }
+
+     
+
+    #[test]
+    fn test_upgrade_chain_config_v1_chain_config_from_v3() {
+        let expectation = v0_1::ChainConfig::default();
+        let v3_chain_config = ChainConfig::default();
+        let v1_chain_config = v0_1::ChainConfig::from(v3_chain_config);
+        assert_eq!(expectation, v1_chain_config);
+    }
+
+    
 }

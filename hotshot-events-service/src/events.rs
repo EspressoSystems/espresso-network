@@ -1,10 +1,11 @@
+use std::path::PathBuf;
+
 use clap::Args;
 use derive_more::From;
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use hotshot_types::traits::node_implementation::NodeType;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use std::path::PathBuf;
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
 
@@ -80,7 +81,10 @@ impl tide_disco::error::Error for Error {
     }
 }
 
-pub fn define_api<State, Types, Ver>(options: &Options) -> Result<Api<State, Error, Ver>, ApiError>
+pub fn define_api<State, Types, Ver>(
+    options: &Options,
+    api_ver: semver::Version,
+) -> Result<Api<State, Error, Ver>, ApiError>
 where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + EventsSource<Types>,
@@ -92,8 +96,24 @@ where
         include_str!("../api/hotshot_events.toml"),
         options.extensions.clone(),
     )?;
-    api.with_version("0.1.0".parse().unwrap())
-        .stream("events", move |_, state| {
+
+    api.with_version(api_ver.clone());
+
+    if api_ver.major == 0 {
+        api.stream("events", move |_, state| {
+            async move {
+                tracing::info!("client subscribed to legacy events");
+                state
+                    .read(|state| {
+                        async move { Ok(state.get_legacy_event_stream(None).await.map(Ok)) }.boxed()
+                    })
+                    .await
+            }
+            .try_flatten_stream()
+            .boxed()
+        })?;
+    } else {
+        api.stream("events", move |_, state| {
             async move {
                 tracing::info!("client subscribed to events");
                 state
@@ -104,10 +124,12 @@ where
             }
             .try_flatten_stream()
             .boxed()
-        })?
-        .get("startup_info", |_, state| {
-            async move { Ok(state.get_startup_info().await) }.boxed()
         })?;
+    }
+
+    api.get("startup_info", |_, state| {
+        async move { Ok(state.get_startup_info().await) }.boxed()
+    })?;
 
     Ok(api)
 }

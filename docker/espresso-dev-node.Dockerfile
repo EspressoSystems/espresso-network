@@ -1,4 +1,4 @@
-FROM postgres
+FROM ubuntu:24.04
 
 ARG TARGETARCH
 
@@ -17,9 +17,6 @@ RUN chmod +x /bin/espresso-dev-node
 # Download the anvil binary
 RUN curl -L https://github.com/foundry-rs/foundry/releases/download/nightly/foundry_nightly_linux_${TARGETARCH}.tar.gz --output -| tar -xzvf - -C /bin/ anvil
 
-COPY scripts/launch-dev-node-with-postgres /bin/launch-dev-node-with-postgres
-RUN chmod +x /bin/launch-dev-node-with-postgres
-
 # When running as a Docker service, we always want a healthcheck endpoint, so set a default for the
 # port that the HTTP server will run on. This can be overridden in any given deployment environment.
 ENV ESPRESSO_SEQUENCER_API_PORT=8770
@@ -33,4 +30,4 @@ EXPOSE 8770
 EXPOSE 8771
 EXPOSE 8772
 
-CMD [ "/bin/launch-dev-node-with-postgres"]
+CMD [ "/bin/espresso-dev-node" ]

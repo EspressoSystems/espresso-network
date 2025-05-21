@@ -1,145 +1,266 @@
 pragma solidity ^0.8.0;
 
 import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { UUPSUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
-import { AbstractStakeTable } from "./interfaces/AbstractStakeTable.sol";
-import { LightClient } from "../src/LightClient.sol";
+import { LightClientV2 as LightClient } from "../src/LightClientV2.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { InitializedAt } from "./InitializedAt.sol";
 
 using EdOnBN254 for EdOnBN254.EdOnBN254Point;
 
-/// @title Implementation of the Stake Table interface
-contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
-    /// Error to notify restaking is not implemented yet.
-    error RestakingNotImplemented();
+/// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
+///
+/// @dev All functions are marked as virtual so that future upgrades can override them.
+contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpgradeable {
+    // === Events ===
 
-    /// Error raised when the registration is aborted because it happens after the user specified
-    /// deadline. The first field is the next registration epoch and the second is the last epoch
-    /// the user is willing to wait for the registration to happen.
-    error InvalidNextRegistrationEpoch(uint64, uint64);
+    /// @notice upgrade event when the proxy updates the implementation it's pointing to
 
-    /// Error raised when a user tries to register another set of keys from the same ethereum
-    /// account.
-    error NodeAlreadyRegistered();
+    // TODO: is this event useful, it currently emits the same data as the UUPSUpgradeable Upgraded
+    // event. Consider making it more useful or removing it.
+    event Upgrade(address implementation);
 
-    /// Error raised when a user tries to withdraw funds from a node that is not registered.
-    error NodeNotRegistered();
+    /// @notice A registration of a new validator.
+    ///
+    /// @notice Signals to the confirmation layer that a new validator is ready to receive
+    /// delegations in the stake table contract. The confirmation layer uses this event to keep
+    /// track of the validator's keys for the stake table.
+    ///
+    /// @notice The commission is in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000).
+    ///
+    /// @notice A validator registration is only valid if the BLS and Schnorr signature are valid.
+    /// The GCL must verify this and otherwise discard the validator registration when it processes
+    /// the event. The contract cannot verify the validity of the registration event and delegators
+    /// will be able to deposit as soon as this event is emitted. In the event that a delegator
+    /// delegates to an invalid validator the delegator can withdraw the delegation again in the
+    /// same way they can withdraw other delegations.
+    ///
+    /// @notice UIs should do their best to prevent invalid, or duplicate registrations.
+    ///
+    /// @notice The verification key of the BLS keypair used for consensus signing is a
+    /// `BN254.G2Point`.
+    ///
+    /// @notice The verification key of the state signing schnorr keypair is an
+    /// `EdOnBN254.EdOnBN254Point`.
+    event ValidatorRegistered(
+        address indexed account,
+        BN254.G2Point blsVk,
+        EdOnBN254.EdOnBN254Point schnorrVk,
+        uint16 commission
+    );
 
-    /// Error raised when a user tries to make a deposit or request an exit but does not control the
-    /// node public key.
-    error Unauthenticated();
+    /// @notice A validator initiated an exit from stake table
+    ///
+    /// @notice All funds delegated to this validator are marked for withdrawal. Users can no longer
+    /// delegate to this validator. Their previously delegated funds are automatically undelegated.
+    /// After `exitEscrowPeriod` elapsed, delegators can claim the funds delegated to the exited
+    /// validator via `claimValidatorExit`.
+    ///
+    /// @notice The GCL removes this validator and all its delegations from the active validator
+    /// set.
+    event ValidatorExit(address indexed validator);
 
-    /// Error raised when a user tries to deposit before the registration is complete.
-    error PrematureDeposit();
+    /// @notice A Delegator delegated funds to a validator.
+    ///
+    /// @notice The tokens are transferred to the stake table contract.
+    ///
+    /// @notice The GCL adjusts the weight for this validator and the delegators delegation
+    /// associated with it.
+    event Delegated(address indexed delegator, address indexed validator, uint256 amount);
 
-    /// Error raised when a user tries to exit before the registration is complete.
-    error PrematureExit();
+    /// @notice A delegator undelegation funds from a validator.
+    ///
+    /// @notice The tokens are marked to be unlocked for withdrawal.
+    ///
+    /// @notice The GCL needs to update the stake table and adjust the weight for this validator and
+    /// the delegators delegation associated with it.
+    event Undelegated(address indexed delegator, address indexed validator, uint256 amount);
 
-    /// Error raised when a user tries to deposit while an exit request is in progress.
-    error ExitRequestInProgress();
+    /// @notice A validator updates their signing keys.
+    ///
+    /// @notice Similarly to registration events, the correctness cannot be fully determined by the
+    /// contracts.
+    ///
+    /// @notice The confirmation layer needs to update the stake table with the new keys.
+    event ConsensusKeysUpdated(
+        address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
+    );
 
-    // Error raised when a user tries to withdraw funds before the exit escrow period is over.
+    /// @notice A delegator claims unlocked funds.
+    ///
+    /// @notice This event is not relevant for the GCL. The events that remove stake from the stake
+    /// table are `Undelegated` and `ValidatorExit`.
+    event Withdrawal(address indexed account, uint256 amount);
+
+    // === Errors ===
+
+    /// A user tries to register a validator with the same address
+    error ValidatorAlreadyRegistered();
+
+    //// A validator is not active.
+    error ValidatorInactive();
+
+    /// A validator has already exited.
+    error ValidatorAlreadyExited();
+
+    /// A validator has not exited yet.
+    error ValidatorNotExited();
+
+    // A user tries to withdraw funds before the exit escrow period is over.
     error PrematureWithdrawal();
 
-    // Error raised when this contract does not have the sufficient allowance on the stake ERC20
-    // token
+    // This contract does not have the sufficient allowance on the staking asset.
     error InsufficientAllowance(uint256, uint256);
 
-    // Error raised when the staker does not have the sufficient balance on the stake ERC20 token
+    // The delegator does not have the sufficient staking asset balance to delegate.
     error InsufficientBalance(uint256);
 
-    // Error raised when the staker does not have the sufficient stake balance to withdraw
-    error InsufficientStakeBalance(uint256);
+    // A delegator does not have the sufficient balance to withdraw.
+    error NothingToWithdraw();
 
-    // Error raised when the staker does not register with the correct stakeAmount
-    error InsufficientStakeAmount(uint256);
-
-    // Error raised when the staker does not provide a new schnorrVK
+    // A validator provides a zero SchnorrVK.
     error InvalidSchnorrVK();
 
-    // Error raised when the staker does not provide a new blsVK
-    error InvalidBlsVK();
+    /// The BLS key has been previously registered in the contract.
+    error BlsKeyAlreadyUsed();
 
-    // Error raised when zero point keys are provided
-    error NoKeyChange();
+    /// The commission value is invalid.
+    error InvalidCommission();
 
-    /// Error raised when the caller is not the owner
-    error Unauthorized();
+    /// Contract dependencies initialized with zero address.
+    error ZeroAddress();
 
-    /// Error raised when the light client address is invalid
-    error InvalidAddress();
+    /// An undelegation already exists for this validator and delegator.
+    error UndelegationAlreadyExists();
 
-    /// Error raised when the value is invalid
-    error InvalidValue();
+    /// A zero amount would lead to a no-op.
+    error ZeroAmount();
 
-    // Error raised when the hotShotBlocksPerEpoch is zero
-    error InvalidHotShotBlocksPerEpoch();
+    // === Structs ===
 
-    /// Mapping from a hash of a BLS key to a node struct defined in the abstract contract.
-    mapping(address account => Node node) public nodes;
+    /// @notice Represents an Espresso validator and tracks funds currently delegated to them.
+    ///
+    /// @notice The `delegatedAmount` excludes funds that are currently marked for withdrawal via
+    /// undelegation or validator exit.
+    struct Validator {
+        uint256 delegatedAmount;
+        ValidatorStatus status;
+    }
 
-    /// Total stake locked;
-    uint256 public totalStake;
+    /// @notice The status of a validator.
+    ///
+    /// By default a validator is in the `Unknown` state. This means it has never registered. Upon
+    /// registration the status will become `Active` and if the validator deregisters its status
+    /// becomes `Exited`.
+    enum ValidatorStatus {
+        Unknown,
+        Active,
+        Exited
+    }
 
-    /// Address of the native token contract.
-    address public tokenAddress;
+    /// @notice Tracks an undelegation from a validator.
+    struct Undelegation {
+        uint256 amount;
+        uint256 unlocksAt;
+    }
 
-    /// Reference to the light client contract.
+    // === Storage ===
+
+    /// @notice Reference to the light client contract.
+    ///
+    /// @dev Currently unused but will be used for slashing therefore already included in the
+    /// contract.
     LightClient public lightClient;
 
-    /// @notice the first available epoch for registration
-    uint64 public registrationEpoch;
-    /// @notice number of pending registrations in the `registrationEpoch` (not the
-    /// total pending queue size!)
-    uint64 public override numPendingRegistrationsInEpoch;
+    /// The staking token contract.
+    ERC20 public token;
 
-    /// @notice the first available epoch for exit
-    uint64 public exitEpoch;
-    /// @notice number of pending exits in the `exitEpoch` (not the total pending
-    /// queue size!)
-    uint64 public override numPendingExitsInEpoch;
+    /// @notice All validators the contract knows about.
+    mapping(address account => Validator validator) public validators;
 
-    /// @notice The number of validators that can register per epoch as well as
-    /// the number of validators that can exit per epoch.
-    uint64 public maxNumChurnPerEpoch;
+    /// BLS keys that have been seen by the contract
+    ///
+    /// @dev to simplify the reasoning about what keys and prevent some errors due to
+    /// misconfigurations of validators the contract currently marks keys as used and only allow
+    /// them to be used once. This for example prevents callers from accidentally registering the
+    /// same BLS key twice.
+    mapping(bytes32 blsKeyHash => bool used) public blsKeys;
 
-    /// @notice The number of hotshot blocks per epoch.
-    uint64 public hotShotBlocksPerEpoch;
+    /// Validators that have exited and the time at which delegators can claim their funds.
+    mapping(address validator => uint256 unlocksAt) public validatorExits;
 
-    address public admin;
+    /// Currently active delegation amounts.
+    mapping(address validator => mapping(address delegator => uint256 amount)) public delegations;
 
-    uint256 public minStakeAmount;
+    /// Delegations held in escrow that are to be unlocked at a later time.
+    //
+    // @dev these are stored indexed by validator so we can keep track of them for slashing later
+    mapping(address validator => mapping(address delegator => Undelegation)) public undelegations;
 
-    /// TODO change constructor to initialize function when we make the contract upgradeable
-    constructor(
+    /// The time (seconds) the contract will hold funds after undelegations are requested.
+    ///
+    /// Must allow ample time for node to exit active validator set and slashing
+    /// evidence to be submitted.
+    uint256 public exitEscrowPeriod;
+
+    /// @notice since the constructor initializes storage on this contract we disable it
+    /// @dev storage is on the proxy contract since it calls this contract via delegatecall
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(
         address _tokenAddress,
         address _lightClientAddress,
-        uint64 _maxNumChurnPerEpoch,
-        uint64 _hotShotBlocksPerEpoch,
-        uint256 _minStakeAmount,
-        address _initialOwner
-    ) Ownable(_initialOwner) InitializedAt() {
-        tokenAddress = _tokenAddress;
-        lightClient = LightClient(_lightClientAddress);
-        maxNumChurnPerEpoch = _maxNumChurnPerEpoch;
+        uint256 _exitEscrowPeriod,
+        address _timelock
+    ) public initializer {
+        __Ownable_init(_timelock);
+        __UUPSUpgradeable_init();
+        initializeAtBlock();
 
-        // A set of hardcoded stakers is defined for the first epoch.
-        registrationEpoch = 1;
-        numPendingRegistrationsInEpoch = 0;
+        initializeState(_tokenAddress, _lightClientAddress, _exitEscrowPeriod);
+    }
 
-        // It is not possible to exit during the first epoch.
-        exitEpoch = 1;
-        numPendingExitsInEpoch = 0;
-
-        if (_hotShotBlocksPerEpoch == 0) {
-            revert InvalidHotShotBlocksPerEpoch();
+    function initializeState(
+        address _tokenAddress,
+        address _lightClientAddress,
+        uint256 _exitEscrowPeriod
+    ) internal {
+        if (_tokenAddress == address(0)) {
+            revert ZeroAddress();
         }
-        hotShotBlocksPerEpoch = _hotShotBlocksPerEpoch;
-        minStakeAmount = _minStakeAmount;
-        admin = msg.sender;
+        if (_lightClientAddress == address(0)) {
+            revert ZeroAddress();
+        }
+        token = ERC20(_tokenAddress);
+        lightClient = LightClient(_lightClientAddress);
+        exitEscrowPeriod = _exitEscrowPeriod;
+    }
+
+    /// @notice Use this to get the implementation contract version
+    /// @return majorVersion The major version of the contract
+    /// @return minorVersion The minor version of the contract
+    /// @return patchVersion The patch version of the contract
+    function getVersion()
+        public
+        pure
+        virtual
+        returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
+    {
+        return (1, 0, 0);
+    }
+
+    /// @notice only the timelock can authorize an upgrade
+    function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
+        emit Upgrade(newImplementation);
     }
 
     /// @dev Computes a hash value of some G2 point.
@@ -149,396 +270,229 @@ contract StakeTable is AbstractStakeTable, Ownable, InitializedAt {
         return keccak256(abi.encode(blsVK.x0, blsVK.x1, blsVK.y0, blsVK.y1));
     }
 
-    /// @dev Compares two BLS keys for equality
-    /// @param a First BLS key
-    /// @param b Second BLS key
-    /// @return True if the keys are equal, false otherwise
-    function _isEqualBlsKey(BN254.G2Point memory a, BN254.G2Point memory b)
-        public
-        pure
-        returns (bool)
-    {
-        return BN254.BaseField.unwrap(a.x0) == BN254.BaseField.unwrap(b.x0)
-            && BN254.BaseField.unwrap(a.x1) == BN254.BaseField.unwrap(b.x1)
-            && BN254.BaseField.unwrap(a.y0) == BN254.BaseField.unwrap(b.y0)
-            && BN254.BaseField.unwrap(a.y1) == BN254.BaseField.unwrap(b.y1);
-    }
-
-    /// @dev Fetches the last hotshot block number from the light client contract to calculate the
-    /// epoch.
-    /// @return current epoch (computed from the last known hotshot block number)
-    function currentEpoch() public view virtual returns (uint64) {
-        // get the last hotshot block number from the light client contract since this contract
-        // gets the latest info from HotShot periodically
-        (, uint64 lastHotshotBlockNumber,) = lightClient.finalizedState();
-
-        uint64 epoch = lastHotshotBlockNumber / hotShotBlocksPerEpoch;
-
-        return epoch;
-    }
-
-    /// @notice Add a registration
-    function pushToRegistrationQueue() internal virtual override {
-        // Either we have a need for a new registration epoch and registrations queue for the
-        // current epoch is zero or we have a free slot in the current registration epoch so we
-        // append to the registration queue, `numPendingRegistrationsInEpoch`.
-        // if the current epoch is max uint64, the registration queue will not be updated and this
-        // function will revert
-
-        if (registrationEpoch < currentEpoch() + 1) {
-            // The registration epoch is outdated.
-            registrationEpoch = currentEpoch() + 1;
-            numPendingRegistrationsInEpoch = 0;
-        } else if (numPendingRegistrationsInEpoch >= maxNumChurnPerEpoch) {
-            // The queue for in the current registration epoch is full.
-            registrationEpoch += 1;
-            numPendingRegistrationsInEpoch = 0;
-        } else {
-            // We got a free slot in the current registration epoch.
-            numPendingRegistrationsInEpoch += 1;
+    function ensureValidatorActive(address validator) internal view {
+        ValidatorStatus status = validators[validator].status;
+        if (status == ValidatorStatus.Unknown) {
+            revert ValidatorInactive();
+        }
+        if (status == ValidatorStatus.Exited) {
+            revert ValidatorAlreadyExited();
         }
     }
 
-    /// @notice Add an exit
-    function pushToExitQueue() internal virtual override {
-        // Either we have a need for a new exit epoch and exits queue for the
-        // current epoch is zero or we have a free slot in the current exit epoch so we
-        // append to the exit queue, `numPendingExitsInEpoch`.
-        // if the current epoch is max uint64, the exit queue will not be updated and this function
-        // will revert
-
-        if (exitEpoch < currentEpoch() + 1) {
-            // The exit epoch is outdated.
-            exitEpoch = currentEpoch() + 1;
-            numPendingExitsInEpoch = 0;
-        } else if (numPendingExitsInEpoch >= maxNumChurnPerEpoch) {
-            // The queue for in the current exit epoch is full.
-            exitEpoch += 1;
-            numPendingExitsInEpoch = 0;
-        } else {
-            // We got a free slot in the current exit epoch.
-            numPendingExitsInEpoch += 1;
+    function ensureValidatorNotRegistered(address validator) internal view {
+        if (validators[validator].status != ValidatorStatus.Unknown) {
+            revert ValidatorAlreadyRegistered();
         }
     }
 
-    /// @notice Look up the balance of `account`
-    /// @param account account controlled by the user.
-    /// @return Current balance owned by the user.
-    function lookupStake(address account) external view virtual override returns (uint256) {
-        Node memory node = this.lookupNode(account);
-        return node.balance;
-    }
-
-    /// @notice Look up the full `Node` state associated with `account`
-    /// @return Node indexed by account
-    function lookupNode(address account) external view virtual override returns (Node memory) {
-        return nodes[account];
-    }
-
-    /// @notice Defines the exit escrow period for a node.
-    /// TODO discuss Alex, Jeb. How much do we want to specify this function? Also marked as public
-    /// for easier testing.
-    /// @dev To put this function into context let us consider the following workflow: requestExit
-    /// --> (queueing) --> Exited --> (escrow) --> Witdrawable. The first phase is about waiting in
-    /// queue due to rate-limiting on exit, the wait is dependent on the exit amount and currently
-    /// exit traffic. At the point of "Exited", the node is officially off duty, and stops
-    /// participating in consensus.
-    ///  The second phase is about slashable security, the wait is dependent only on amount, during
-    /// which period cryptographic evidence of misbehavior (e.g. double-voting) might still lead to
-    /// the forfeit of stakes. From the point of `Withdrawable` onwards, the staker can freely
-    /// withdraw.
-    /// @param node node which is assigned an exit escrow period.
-    /// @return Number of epochs post exit after which funds can be withdrawn.
-    /// TODO modify this according to the current spec
-    function exitEscrowPeriod(Node memory node) public pure returns (uint64) {
-        if (node.balance > 100) {
-            return 10;
-        } else {
-            return 5;
+    function ensureNewKey(BN254.G2Point memory blsVK) internal view {
+        if (blsKeys[_hashBlsKey(blsVK)]) {
+            revert BlsKeyAlreadyUsed();
         }
     }
 
-    /// @notice Register a validator in the stake table, transfer of tokens incurred!
+    // @dev We don't check the validity of the schnorr verifying key but providing a zero key is
+    // definitely a mistake by the caller, therefore we revert.
+    function ensureNonZeroSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK) internal pure {
+        EdOnBN254.EdOnBN254Point memory zeroSchnorrKey = EdOnBN254.EdOnBN254Point(0, 0);
+
+        if (schnorrVK.isEqual(zeroSchnorrKey)) {
+            revert InvalidSchnorrVK();
+        }
+    }
+
+    /// @notice Register a validator in the stake table
     ///
     /// @param blsVK The BLS verification key
     /// @param schnorrVK The Schnorr verification key (as the auxiliary info)
-    /// @param amount The amount to register
     /// @param blsSig The BLS signature that authenticates the ethereum account this function is
-    /// called from
-    /// @param validUntilEpoch The maximum epoch the sender is willing to wait to be included
-    /// (cannot be smaller than the current epoch)
+    ///        called from
+    /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
     ///
-    /// @dev The function will revert if the sender does not have the correct stake amount.
-    /// @dev The function will revert if the sender does not have the correct allowance.
-    /// @dev The function will revert if the sender does not have the correct balance.
-    /// @dev The function will revert if the sender does not have the correct BLS signature.
-    /// `blsSig` field is necessary to prevent "rogue public-key attack".
-    /// The signature is over the caller address of the function to ensure that each message is
-    /// unique.
-    /// @dev No validity check on `schnorrVK`, as it's assumed to be sender's responsibility,
-    /// the contract only treat it as auxiliary info submitted by `blsVK`.
-    /// @dev The function will revert if the sender does not have the correct registration epoch.
-    function register(
+    /// @notice The function will revert if
+    ///
+    ///      1) the validator is already registered
+    ///      2) the schnorr key is zero
+    ///      3) if the bls signature verification fails (this prevents rogue public-key attacks).
+    ///      4) the commission is > 100%
+    ///
+    /// @notice No validity check on `schnorrVK` due to gas cost of Rescue hash, UIs should perform
+    /// checks where possible and alert users.
+    function registerValidator(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
-        uint256 amount,
         BN254.G1Point memory blsSig,
-        uint64 validUntilEpoch
-    ) external virtual override {
-        if (amount < minStakeAmount) {
-            revert InsufficientStakeAmount(amount);
+        uint16 commission
+    ) external virtual {
+        address validator = msg.sender;
+
+        ensureValidatorNotRegistered(validator);
+        ensureNonZeroSchnorrKey(schnorrVK);
+        ensureNewKey(blsVK);
+
+        // Verify that the validator can sign for that blsVK. This prevents rogue public-key
+        // attacks.
+        bytes memory message = abi.encode(validator);
+        BLSSig.verifyBlsSig(message, blsSig, blsVK);
+
+        if (commission > 10000) {
+            revert InvalidCommission();
         }
 
-        Node memory node = nodes[msg.sender];
+        blsKeys[_hashBlsKey(blsVK)] = true;
+        validators[validator] = Validator({ status: ValidatorStatus.Active, delegatedAmount: 0 });
 
-        if (node.account != address(0x0)) {
-            revert NodeAlreadyRegistered();
+        emit ValidatorRegistered(validator, blsVK, schnorrVK, commission);
+    }
+
+    /// @notice Deregister a validator
+    function deregisterValidator() external virtual {
+        address validator = msg.sender;
+        ensureValidatorActive(validator);
+
+        validators[validator].status = ValidatorStatus.Exited;
+        validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+        validators[validator].delegatedAmount = 0;
+
+        emit ValidatorExit(validator);
+    }
+
+    /// @notice Delegate to a validator
+    /// @param validator The validator to delegate to
+    /// @param amount The amount to delegate
+    function delegate(address validator, uint256 amount) external virtual {
+        ensureValidatorActive(validator);
+        address delegator = msg.sender;
+
+        if (amount == 0) {
+            revert ZeroAmount();
         }
 
-        uint256 allowance = ERC20(tokenAddress).allowance(msg.sender, address(this));
+        uint256 allowance = token.allowance(delegator, address(this));
         if (allowance < amount) {
             revert InsufficientAllowance(allowance, amount);
         }
 
-        uint256 balance = ERC20(tokenAddress).balanceOf(msg.sender);
+        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
+
+        validators[validator].delegatedAmount += amount;
+        delegations[validator][delegator] += amount;
+
+        emit Delegated(delegator, validator, amount);
+    }
+
+    /// @notice Undelegate from a validator
+    /// @param validator The validator to undelegate from
+    /// @param amount The amount to undelegate
+    function undelegate(address validator, uint256 amount) external virtual {
+        ensureValidatorActive(validator);
+        address delegator = msg.sender;
+
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+
+        if (undelegations[validator][delegator].amount != 0) {
+            revert UndelegationAlreadyExists();
+        }
+
+        uint256 balance = delegations[validator][delegator];
         if (balance < amount) {
             revert InsufficientBalance(balance);
         }
 
-        if (
-            _isEqualBlsKey(
-                blsVK,
-                BN254.G2Point(
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0),
-                    BN254.BaseField.wrap(0)
-                )
-            )
-        ) {
-            revert InvalidBlsVK();
-        }
+        delegations[validator][delegator] -= amount;
+        undelegations[validator][delegator] =
+            Undelegation({ amount: amount, unlocksAt: block.timestamp + exitEscrowPeriod });
+        validators[validator].delegatedAmount -= amount;
 
-        // Verify that the validator can sign for that blsVK by ensuring that the message that has
-        // been signed is the sender's address
-        // This is to prevent "rogue public-key attack"
-        bytes memory message = abi.encode(msg.sender);
-        BLSSig.verifyBlsSig(message, blsSig, blsVK);
-
-        if (schnorrVK.isEqual(EdOnBN254.EdOnBN254Point(0, 0))) {
-            revert InvalidSchnorrVK();
-        }
-
-        // Find the earliest epoch at which this node can register. Usually, this will be
-        // currentEpoch() + 1 (the start of the next full epoch), but in periods of high churn the
-        // queue may fill up and it may be later. If the queue is so full that the wait time exceeds
-        // the caller's desired maximum wait, abort.
-        pushToRegistrationQueue();
-        if (registrationEpoch > validUntilEpoch) {
-            revert InvalidNextRegistrationEpoch(registrationEpoch, validUntilEpoch);
-        }
-
-        SafeTransferLib.safeTransferFrom(ERC20(tokenAddress), msg.sender, address(this), amount);
-
-        totalStake += amount;
-
-        node.account = msg.sender;
-        node.balance = amount;
-        node.blsVK = blsVK;
-        node.schnorrVK = schnorrVK;
-        node.registerEpoch = registrationEpoch;
-
-        nodes[msg.sender] = node;
-
-        emit Registered(msg.sender, registrationEpoch, amount);
+        emit Undelegated(delegator, validator, amount);
     }
 
-    /// @notice Deposit more stakes to registered keys
-    /// @dev TODO this implementation will be revisited later. See
-    /// https://github.com/EspressoSystems/espresso-sequencer/issues/806
-    /// @dev TODO modify this according to the current spec
-    /// @param amount The amount to deposit
-    /// @return (newBalance, effectiveEpoch) the new balance effective at a future epoch
-    function deposit(uint256 amount) external virtual override returns (uint256, uint64) {
-        Node memory node = nodes[msg.sender];
-
-        if (node.account == address(0)) {
-            revert NodeNotRegistered();
+    /// @notice Withdraw previously delegated funds after an undelegation.
+    /// @param validator The validator to withdraw from
+    function claimWithdrawal(address validator) external virtual {
+        address delegator = msg.sender;
+        // If entries are missing at any of the levels of the mapping this will return zero
+        uint256 amount = undelegations[validator][delegator].amount;
+        if (amount == 0) {
+            revert NothingToWithdraw();
         }
 
-        if (node.account != msg.sender) {
-            revert Unauthenticated();
-        }
-
-        // A node cannot deposit more tokens while it waiting to register.
-        uint64 _currentEpoch = currentEpoch();
-        if (_currentEpoch <= node.registerEpoch) {
-            revert PrematureDeposit();
-        }
-
-        // A node cannot deposit more tokens if an exit request is in progress.
-        if (node.exitEpoch != 0) {
-            revert ExitRequestInProgress();
-        }
-
-        nodes[msg.sender].balance += amount;
-        SafeTransferLib.safeTransferFrom(ERC20(tokenAddress), msg.sender, address(this), amount);
-
-        emit Deposit(msg.sender, uint256(amount));
-
-        uint64 effectiveEpoch = _currentEpoch + 1;
-
-        return (nodes[msg.sender].balance, effectiveEpoch);
-    }
-
-    /// @notice Request to exit from the stake table, not immediately withdrawable!
-    ///
-    /// @dev TODO modify this according to the current spec
-    function requestExit() external virtual override {
-        Node memory node = nodes[msg.sender];
-
-        if (node.account == address(0)) {
-            revert NodeNotRegistered();
-        }
-
-        if (node.account != msg.sender) {
-            revert Unauthenticated();
-        }
-
-        // Cannot request to exit if an exit request is already in progress.
-        if (node.exitEpoch != 0) {
-            revert ExitRequestInProgress();
-        }
-
-        // Cannot exit before becoming an active participant. Activation happens one epoch after the
-        // node's registration epoch, due to the consensus-imposed activation waiting period.
-        if (currentEpoch() < node.registerEpoch + 1) {
-            revert PrematureExit();
-        }
-
-        // Prepare the node to exit.
-        pushToExitQueue();
-        nodes[msg.sender].exitEpoch = exitEpoch;
-
-        emit Exit(msg.sender, exitEpoch);
-    }
-
-    /// @notice Withdraw from the staking pool. Transfers occur! Only successfully exited keys can
-    /// withdraw past their `exitEpoch`. Validators have to first call requestExit to be assigned an
-    /// exit epoch
-    /// @return The total amount withdrawn, equal to `Node.balance` associated with `blsVK`
-    /// TODO: add epoch logic so that we can ensure the node has first requested to exit and waiting
-    /// for the exit escrow period to be over
-    function withdrawFunds() external virtual override returns (uint256) {
-        Node memory node = nodes[msg.sender];
-
-        if (node.account == address(0)) {
-            revert NodeNotRegistered();
-        }
-
-        if (node.account != msg.sender) {
-            revert Unauthenticated();
-        }
-
-        uint256 balance = node.balance;
-        if (balance == 0) {
-            // then there's nothing to withdraw but revert so that they're aware that the withdrawal
-            // failed
-            revert InsufficientStakeBalance(0);
-        }
-
-        // Verify that the exit escrow period is over.
-        if (currentEpoch() < node.exitEpoch + exitEscrowPeriod(node)) {
+        if (block.timestamp < undelegations[validator][delegator].unlocksAt) {
             revert PrematureWithdrawal();
         }
-        totalStake -= balance;
 
-        // Delete the node from the stake table.
-        delete nodes[msg.sender];
+        // Mark funds as spent
+        delete undelegations[validator][delegator];
 
-        // Transfer the balance to the node's account.
-        SafeTransferLib.safeTransfer(ERC20(tokenAddress), node.account, balance);
+        SafeTransferLib.safeTransfer(token, delegator, amount);
 
-        return balance;
+        emit Withdrawal(delegator, amount);
+    }
+
+    /// @notice Withdraw previously delegated funds after a validator has exited
+    /// @param validator The validator to withdraw from
+    function claimValidatorExit(address validator) external virtual {
+        address delegator = msg.sender;
+        uint256 unlocksAt = validatorExits[validator];
+        if (unlocksAt == 0) {
+            revert ValidatorNotExited();
+        }
+
+        if (block.timestamp < unlocksAt) {
+            revert PrematureWithdrawal();
+        }
+
+        uint256 amount = delegations[validator][delegator];
+        if (amount == 0) {
+            revert NothingToWithdraw();
+        }
+
+        // Mark funds as spent
+        delegations[validator][delegator] = 0;
+
+        SafeTransferLib.safeTransfer(token, delegator, amount);
+
+        emit Withdrawal(delegator, amount);
     }
 
     /// @notice Update the consensus keys for a validator
     /// @dev This function is used to update the consensus keys for a validator
-    /// @dev This function can only be called by the validator itself when it's not in the exit
-    /// queue
+    /// @dev This function can only be called by the validator itself when it hasn't exited
+    ///      TODO: MA: is this a good idea? Why should key rotation be blocked for an exiting
+    ///      validator?
     /// @dev The validator will need to give up either its old BLS key and/or old Schnorr key
     /// @dev The validator will need to provide a BLS signature to prove that the account owns the
     /// new BLS key
     /// @param newBlsVK The new BLS verification key
     /// @param newSchnorrVK The new Schnorr verification key
     /// @param newBlsSig The BLS signature that the account owns the new BLS key
+    ///
+    /// TODO: MA: I think this function should be reworked. Is it fine to always force updating both
+    /// keys? If not we should probably rather have two functions for updating the keys. But this
+    /// would also mean two separate events, or storing the keys in the contract only for this
+    /// update function to remit the old keys, or throw errors if the keys are not changed. None of
+    /// that seems useful enough to warrant the extra complexity in the contract and GCL.
     function updateConsensusKeys(
         BN254.G2Point memory newBlsVK,
         EdOnBN254.EdOnBN254Point memory newSchnorrVK,
         BN254.G1Point memory newBlsSig
-    ) external virtual override {
-        Node memory node = nodes[msg.sender];
+    ) external virtual {
+        address validator = msg.sender;
 
-        if (node.account == address(0)) revert NodeNotRegistered();
+        ensureValidatorActive(validator);
+        ensureNonZeroSchnorrKey(newSchnorrVK);
+        ensureNewKey(newBlsVK);
 
-        // Verify that the node is not in the exit queue
-        if (node.exitEpoch != 0) revert ExitRequestInProgress();
-
-        if (_isEqualBlsKey(newBlsVK, node.blsVK) && newSchnorrVK.isEqual(node.schnorrVK)) {
-            revert NoKeyChange();
-        }
-
-        // Zero-point constants for verification
-        BN254.G2Point memory zeroBlsKey = BN254.G2Point(
-            BN254.BaseField.wrap(0),
-            BN254.BaseField.wrap(0),
-            BN254.BaseField.wrap(0),
-            BN254.BaseField.wrap(0)
-        );
-        EdOnBN254.EdOnBN254Point memory zeroSchnorrKey = EdOnBN254.EdOnBN254Point(0, 0);
-
-        if (_isEqualBlsKey(newBlsVK, zeroBlsKey)) revert InvalidBlsVK();
-
-        if (newSchnorrVK.isEqual(zeroSchnorrKey)) revert InvalidSchnorrVK();
-
-        // Verify that the validator can sign for that newBlsVK, otherwise it inner reverts with
-        // BLSSigVerificationFailed
-        bytes memory message = abi.encode(msg.sender);
+        // Verify that the validator can sign for that blsVK. This prevents rogue public-key
+        // attacks.
+        bytes memory message = abi.encode(validator);
         BLSSig.verifyBlsSig(message, newBlsSig, newBlsVK);
 
-        node.blsVK = newBlsVK;
+        blsKeys[_hashBlsKey(newBlsVK)] = true;
 
-        node.schnorrVK = newSchnorrVK;
-
-        nodes[msg.sender] = node;
-
-        emit UpdatedConsensusKeys(msg.sender, node.blsVK, node.schnorrVK);
-    }
-
-    /// @notice Update the min stake amount
-    /// @dev The min stake amount cannot be set to zero
-    /// @param _minStakeAmount The new min stake amount
-    function updateMinStakeAmount(uint256 _minStakeAmount) external onlyOwner {
-        if (_minStakeAmount == 0) revert InvalidValue();
-        minStakeAmount = _minStakeAmount;
-        emit MinStakeAmountUpdated(minStakeAmount);
-    }
-
-    /// @notice Update the max churn rate
-    /// @dev The max churn rate cannot be set to zero
-    /// @param _maxChurnRate The new max churn rate
-    function updateMaxChurnRate(uint64 _maxChurnRate) external onlyOwner {
-        if (_maxChurnRate == 0) revert InvalidValue();
-        maxNumChurnPerEpoch = _maxChurnRate;
-        emit MaxChurnRateUpdated(maxNumChurnPerEpoch);
-    }
-
-    /// @notice Update the light client address
-    /// @dev The light client address cannot be set to the zero address
-    /// @param _lightClientAddress The new light client address
-    function updateLightClientAddress(address _lightClientAddress) external onlyOwner {
-        if (_lightClientAddress == address(0)) revert InvalidAddress();
-        lightClient = LightClient(_lightClientAddress);
-        emit LightClientAddressUpdated(_lightClientAddress);
+        emit ConsensusKeysUpdated(validator, newBlsVK, newSchnorrVK);
     }
 }

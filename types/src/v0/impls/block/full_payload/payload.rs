@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 use committable::Committable;
 use hotshot_query_service::availability::QueryablePayload;
-use hotshot_types::data::ViewNumber;
 use hotshot_types::{
+    data::ViewNumber,
     traits::{BlockPayload, EncodeBytes},
     utils::BuilderCommitment,
     vid::advz::{ADVZCommon, ADVZScheme},
@@ -13,12 +13,11 @@ use jf_vid::VidScheme;
 use sha2::Digest;
 use thiserror::Error;
 
-use crate::Transaction;
 use crate::{
     v0::impls::{NodeState, ValidatedState},
-    v0_1::ChainConfig,
+    v0_3::ChainConfig,
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
-    NsTableBuilder, Payload, PayloadByteLen, SeqTypes, TxProof,
+    NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxProof,
 };
 
 #[derive(serde::Deserialize, serde::Serialize, Error, Debug, Eq, PartialEq)]
@@ -64,7 +63,7 @@ impl Payload {
         self.read_ns_payload(&ns_payload_range)
     }
 
-    pub(crate) fn byte_len(&self) -> PayloadByteLen {
+    pub fn byte_len(&self) -> PayloadByteLen {
         PayloadByteLen(self.raw_payload.len())
     }
 
@@ -149,7 +148,7 @@ impl BlockPayload<SeqTypes> for Payload {
             match validated_state_cf.resolve() {
                 Some(cf) => cf,
                 None => instance_state
-                    .peers
+                    .state_catchup
                     .as_ref()
                     .fetch_chain_config(validated_state_cf.commit())
                     .await
@@ -157,7 +156,7 @@ impl BlockPayload<SeqTypes> for Payload {
             }
         };
 
-        Self::from_transactions_sync(transactions, ChainConfig::from(chain_config))
+        Self::from_transactions_sync(transactions, chain_config)
     }
 
     // TODO avoid cloning the entire payload here?
@@ -281,13 +280,13 @@ impl PayloadByteLen {
                     ADVZScheme::get_payload_byte_len(common)
                 );
                 return false;
-            }
+            },
         };
 
         self.0 == expected
     }
 
-    pub(in crate::v0::impls::block::full_payload) fn as_usize(&self) -> usize {
+    pub fn as_usize(&self) -> usize {
         self.0
     }
 }

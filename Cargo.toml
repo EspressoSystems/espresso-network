@@ -8,54 +8,53 @@ edition = "2021"
 resolver = "2"
 
 members = [
+    "alloy-compat",
     "builder",
     "client",
-    "contract-bindings-alloy",
-    "contract-bindings-ethers",
     "contracts/rust/adapter",
+    "contracts/rust/deployer",
     "contracts/rust/diff-test",
     "contracts/rust/gen-vk-contract",
-    "ethers-conv",
-    "hotshot",
-    "hotshot-builder-api",
+    "crates/hotshot/builder-api",
+    "crates/hotshot/example-types",
+    "crates/hotshot/examples",
+    "crates/hotshot/hotshot",
+    "crates/hotshot/libp2p-networking",
+    "crates/hotshot/macros",
+    "crates/hotshot/orchestrator",
+    "crates/hotshot/task",
+    "crates/hotshot/task-impls",
+    "crates/hotshot/testing",
+    "crates/hotshot/types",
+    "crates/hotshot/utils",
     "hotshot-builder-core",
     "hotshot-builder-core-refactored",
     "hotshot-events-service",
-    "hotshot-example-types",
-    "hotshot-examples",
-    "hotshot-fakeapi",
-    "hotshot-libp2p-networking",
-    "hotshot-macros",
-    "hotshot-orchestrator",
     "hotshot-query-service",
-    "hotshot-stake-table",
     "hotshot-state-prover",
-    "hotshot-state-prover",
-    "hotshot-task",
-    "hotshot-task-impls",
-    "hotshot-testing",
-    "hotshot-types",
-    "hotshot-utils",
-    "marketplace-builder",
-    "marketplace-solver",
     "node-metrics",
     "request-response",
+    "sdks/crypto-helper",
     "sequencer",
+    "staking-cli",
     "tests",
     "types",
     "utils",
-    "vid"
+    "vid",
 ]
 
 exclude = ["sequencer-sqlite"]
 
 [workspace.dependencies]
-contract-bindings-alloy = { path = "./contract-bindings-alloy" }
-ethers-conv = { path = "./ethers-conv" }
-alloy = { version = "0.9", default-features = false, features = [
+# The --alloy-version in the justfile gen-bindings recipe should match the version here.
+# TODO: to update past 0.13 we need https://github.com/foundry-rs/foundry/issues/10321
+alloy = { version = "0.13", default-features = false, features = [
     "contract",
     "eips",
     "json-rpc",
+    "getrandom",
+    "network",
+    "node-bindings",
     "provider-ws",
     "providers",
     "reqwest",
@@ -64,9 +63,11 @@ alloy = { version = "0.9", default-features = false, features = [
     "rpc-types",
     "signer-local",
     "signer-mnemonic",
+    "signer-ledger",
     "signers",
     "sol-types",
     "transports",
+    "getrandom",
 ] }
 anyhow = "^1.0"
 ark-std = "0.4"
@@ -92,6 +93,7 @@ circular-buffer = "0.1.9"
 clap = { version = "4.4", features = ["derive", "env", "string"] }
 cld = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
+diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git", tag = "v0.2.0" }
 either = "1"
 hex = "0.4"
 sha2 = "0.10"
@@ -100,6 +102,7 @@ es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch
 dotenvy = "0.15"
 ethers = { version = "2.0", features = ["solc", "ws"] }
 futures = "0.3"
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 tokio = { version = "1", default-features = false, features = [
     "rt-multi-thread",
     "macros",
@@ -118,41 +121,38 @@ libp2p-swarm-derive = { version = "0.35" }
 typenum = "1"
 cbor4ii = { version = "1.0", features = ["serde1"] }
 serde_bytes = { version = "0.11" }
+semver = "1"
 num_cpus = "1"
 dashmap = "6"
 memoize = { version = "0.4", features = ["full"] }
 derive_builder = "0.20"
 parking_lot = { version = "0.12", features = ["send_guard"] }
-primitive-types = { version = "0.12.2", default-features = false, features = [
-    "serde",
-] }
+indexmap = { version = "2", features = ["serde"] }
 
 # Builder imports
-marketplace-builder-core = { path = "marketplace-builder-core" }
 marketplace-builder-shared = { path = "marketplace-builder-shared" }
 hotshot-builder-core = { path = "hotshot-builder-core" }
 
 # Hotshot imports
-hotshot = { path = "hotshot" }
-hotshot-builder-api = { path = "hotshot-builder-api" }
-hotshot-task-impls = { path = "hotshot-task-impls" }
-hotshot-macros = { path = "hotshot-macros" }
+hotshot = { path = "crates/hotshot/hotshot" }
+hotshot-builder-api = { path = "crates/hotshot/builder-api" }
+hotshot-task-impls = { path = "crates/hotshot/task-impls" }
+hotshot-macros = { path = "crates/hotshot/macros" }
 hotshot-events-service = { path = "hotshot-events-service" }
-hotshot-utils = { path = "hotshot-utils" }
-hotshot-orchestrator = { path = "hotshot-orchestrator" }
+hotshot-utils = { path = "crates/hotshot/utils" }
+hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
-hotshot-stake-table = { path = "hotshot-stake-table" }
 hotshot-state-prover = { version = "0.1.0", path = "hotshot-state-prover" }
-hotshot-task = { path = "hotshot-task" }
-hotshot-testing = { path = "hotshot-testing" }
-hotshot-types = { path = "hotshot-types" }
-hotshot-libp2p-networking = { path = "hotshot-libp2p-networking" }
+hotshot-task = { path = "crates/hotshot/task" }
+hotshot-testing = { path = "crates/hotshot/testing" }
+hotshot-types = { path = "crates/hotshot/types" }
+hotshot-libp2p-networking = { path = "crates/hotshot/libp2p-networking" }
 hotshot-contract-adapter = { path = "contracts/rust/adapter" }
 # Temporary, used to pull in the mock auction results provider
-hotshot-example-types = { path = "hotshot-example-types" }
+hotshot-example-types = { path = "crates/hotshot/example-types" }
 
 # VID import
-vid = { path = "vid", features = [ "parallel", "keccak256" ] }
+vid = { path = "vid", features = ["parallel", "keccak256"] }
 
 jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.5.1", features = [
     "test-apis",
@@ -199,7 +199,7 @@ strum = { version = "0.26", features = ["derive"] }
 surf-disco = "0.9"
 sqlx = "=0.8.3"
 tagged-base64 = "0.4"
-tide-disco = "0.9.3"
+tide-disco = "0.9.4"
 thiserror = "1.0.69"
 tracing = "0.1"
 bytesize = "1.3"
@@ -210,9 +210,10 @@ rand_distr = "0.4"
 reqwest = "0.12"
 serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "^1.0.113"
+staking-cli = { path = "./staking-cli" }
 tempfile = "3.10"
 toml = "0.8"
-url = "2.3"
+url = { version = "2.3", features = ["serde"] }
 vbs = "0.1"
 vec1 = { version = "1", features = ["serde"] }
 vergen = { version = "8.3", features = ["git", "gitcl"] }
@@ -228,6 +229,7 @@ rand = "0.8.5"
 time = "0.3"
 trait-set = "0.3.0"
 
+# NOTE: when making changes here also update sequencer-sqlite/Cargo.toml.
 [profile.dev]
 # Probably the least demanding setting in terms of compilation time and memory
 # that still provide tracebacks with line numbers.
@@ -241,11 +243,16 @@ inherits = "dev"
 strip = "none"
 debug = "full"
 
+# Don't optimize the binaries in the workspace. Compilation of dependencies can be cached
+# effectively on the CI because they rarely change, whereas the workspace code usually changes and
+# workspace compilation artifacts are therefore not cached. However, some of our tests don't work if
+# we don't have any optimizations in the workspace.
 [profile.test]
 opt-level = 1
-[profile.test.package.tests]
+
+[profile.test.package.sequencer]
 opt-level = 0
-[profile.test.package.client]
+[profile.test.package.hotshot-testing]
 opt-level = 0
 [profile.test.package.hotshot-state-prover]
 opt-level = 3

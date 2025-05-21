@@ -10,10 +10,11 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use super::errors::ExplorerAPIError;
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Serialize, Serializer};
 use std::fmt::Display;
+
+use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
+
+use super::errors::ExplorerAPIError;
 
 /// CurrencyMismatchError is an error that occurs when two different currencies
 /// are attempted to be combined in any way that would result in an invalid

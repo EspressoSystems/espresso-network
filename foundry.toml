@@ -22,6 +22,9 @@ extra_output = ["storageLayout"]
 fs_permissions = [{ access = "read-write", path = "./contracts/script/"}, { access = "read-write", path = "contracts/out"}]
 ignored_warnings_from = ['contracts/lib']
 
+# Without the optimizer we hit stack too deep errors.
+optimizer = true
+
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config
 
 [rpc_endpoints]

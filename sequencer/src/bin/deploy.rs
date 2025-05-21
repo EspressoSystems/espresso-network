@@ -1,17 +1,17 @@
-use std::{fs::File, io::stdout, path::PathBuf, time::Duration};
+use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 
+use alloy::primitives::{Address, U256};
 use clap::Parser;
-use espresso_types::parse_duration;
-use ethers::types::Address;
-use futures::FutureExt;
-use hotshot_stake_table::config::STAKE_TABLE_CAPACITY;
-use hotshot_state_prover::service::light_client_genesis;
-use sequencer_utils::{
-    deployer::{deploy, ContractGroup, Contracts, DeployedContracts},
-    logging,
-    stake_table::PermissionedStakeTableConfig,
+use espresso_contract_deployer::{
+    build_provider, builder::DeployerArgsBuilder, network_config::light_client_genesis, Contract,
+    Contracts, DeployedContracts,
 };
+use espresso_types::{config::PublicNetworkConfig, parse_duration};
+use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
+use sequencer_utils::logging;
+use tide_disco::error::ServerError;
 use url::Url;
+use vbs::version::StaticVersion;
 
 /// Deploy contracts needed to run the sequencer.
 ///
@@ -20,7 +20,7 @@ use url::Url;
 ///
 /// This script can also be used to do incremental deployments. The only contract addresses
 /// needed to configure the sequencer network are ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS,
-/// ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS and (soon) PERMISSIONED_STAKE_TABLE_ADDRESS.
+/// ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS and ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS.
 /// These contracts, however, have dependencies, and a full deployment involves several
 /// contracts. Some of these contracts, especially libraries may already have been deployed, or
 /// perhaps one of the top-level contracts has been deployed and we only need to deploy the other
@@ -92,9 +92,19 @@ struct Options {
     )]
     account_index: u32,
 
-    /// Only deploy the given groups of related contracts.
-    #[clap(long, value_delimiter = ',')]
-    only: Option<Vec<ContractGroup>>,
+    /// Option to deploy fee contracts
+    #[clap(long, default_value = "false")]
+    deploy_fee: bool,
+    /// Option to deploy LightClient V1 and proxy
+    #[clap(long, default_value = "false")]
+    deploy_light_client_v1: bool,
+    /// Option to upgrade to LightClient V2
+    #[clap(long, default_value = "false")]
+    upgrade_light_client_v2: bool,
+    #[clap(long, default_value = "false")]
+    deploy_esp_token: bool,
+    #[clap(long, default_value = "false")]
+    deploy_stake_table: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -105,15 +115,14 @@ struct Options {
     #[clap(flatten)]
     contracts: DeployedContracts,
 
-    /// If toggled, launch a mock prover contract with a smaller verification key.
+    /// If toggled, launch a mock LightClient contract with a smaller verification key for testing.
+    /// Applies to both V1 and V2 of LightClient.
     #[clap(short, long)]
-    pub use_mock_contract: bool,
+    pub use_mock: bool,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
-
-    /// Permissioned prover address for light client contract.
     ///
     /// If the light client contract is being deployed and this is set, the prover will be
     /// permissioned so that only this address can update the light client state. Otherwise, proving
@@ -123,20 +132,20 @@ struct Options {
     #[clap(long, env = "ESPRESSO_SEQUENCER_PERMISSIONED_PROVER")]
     permissioned_prover: Option<Address>,
 
-    /// A toml file with the initial stake table.
+    /// Exit escrow period for the stake table contract.
     ///
-    /// Schema:
+    /// This is the period for which stake table contract will retain funds after withdrawals have
+    /// been requested. It should be set to a value that is at least 3 hotshot epochs plus ample
+    /// time to allow for submission of slashing evidence. Initially it will probably be around one
+    /// week.
+    #[clap(long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD", value_parser = parse_duration)]
+    exit_escrow_period: Option<Duration>,
+
+    /// The address that the tokens will be minted to.
     ///
-    /// public_keys = [
-    ///   {
-    ///     stake_table_key = "BLS_VER_KEY~...",
-    ///     state_ver_key = "SCHNORR_VER_KEY~...",
-    ///     da = true,
-    ///     stake = 1, # this value is ignored, but needs to be set
-    ///   },
-    /// ]
-    #[clap(long, env = "ESPRESSO_SEQUENCER_INITIAL_PERMISSIONED_STAKE_TABLE_PATH")]
-    initial_stake_table_path: Option<PathBuf>,
+    /// If unset the tokens will be minted to the deployer account.
+    #[clap(long, env = "ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
+    initial_token_grant_recipient: Option<Address>,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -147,34 +156,85 @@ async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
     opt.logging.init();
 
-    let contracts = Contracts::from(opt.contracts);
+    let mut contracts = Contracts::from(opt.contracts);
 
-    let sequencer_url = opt.sequencer_url.clone();
+    let provider = build_provider(opt.mnemonic, opt.account_index, opt.rpc_url);
 
-    let genesis = light_client_genesis(&sequencer_url, opt.stake_table_capacity).boxed();
+    // First use builder to build constructor input arguments
+    let mut args_builder = DeployerArgsBuilder::default();
+    args_builder
+        .deployer(provider)
+        .mock_light_client(opt.use_mock);
+    if let Some(multisig) = opt.multisig_address {
+        args_builder.multisig(multisig);
+    }
+    if let Some(token_recipient) = opt.initial_token_grant_recipient {
+        args_builder.token_recipient(token_recipient);
+    }
 
-    let initial_stake_table = if let Some(path) = opt.initial_stake_table_path {
-        tracing::info!("Loading initial stake table from {:?}", path);
-        Some(PermissionedStakeTableConfig::from_toml_file(&path)?.into())
-    } else {
-        None
-    };
+    if opt.deploy_light_client_v1 {
+        let (genesis_state, genesis_stake) =
+            light_client_genesis(&opt.sequencer_url, opt.stake_table_capacity).await?;
+        args_builder
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake);
+        if let Some(prover) = opt.permissioned_prover {
+            args_builder.permissioned_prover(prover);
+        }
+    }
+    if opt.upgrade_light_client_v2 {
+        // fetch epoch length from HotShot config
+        // Request the configuration until it is successful
+        let (blocks_per_epoch, epoch_start_block) = loop {
+            match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                opt.sequencer_url.clone(),
+            )
+            .get::<PublicNetworkConfig>("config/hotshot")
+            .send()
+            .await
+            {
+                Ok(resp) => {
+                    let config = resp.hotshot_config();
+                    break (config.blocks_per_epoch(), config.epoch_start_block());
+                },
+                Err(e) => {
+                    tracing::error!("Failed to fetch the network config: {e}");
+                    sleep(Duration::from_secs(5));
+                },
+            }
+        };
+        args_builder
+            .blocks_per_epoch(blocks_per_epoch)
+            .epoch_start_block(epoch_start_block);
+    }
+    if opt.deploy_stake_table {
+        if let Some(escrow_period) = opt.exit_escrow_period {
+            args_builder.exit_escrow_period(U256::from(escrow_period.as_secs()));
+        }
+    }
 
-    let contracts = deploy(
-        opt.rpc_url,
-        opt.l1_polling_interval,
-        opt.mnemonic,
-        opt.account_index,
-        opt.multisig_address,
-        opt.use_mock_contract,
-        opt.only,
-        genesis,
-        opt.permissioned_prover,
-        contracts,
-        initial_stake_table,
-    )
-    .await?;
+    // then deploy specified contracts
+    let args = args_builder.build()?;
+    if opt.deploy_fee {
+        args.deploy(&mut contracts, Contract::FeeContractProxy)
+            .await?;
+    }
+    if opt.deploy_esp_token {
+        args.deploy(&mut contracts, Contract::EspTokenProxy).await?;
+    }
+    if opt.deploy_light_client_v1 {
+        args.deploy(&mut contracts, Contract::LightClientProxy)
+            .await?;
+    }
+    if opt.upgrade_light_client_v2 {
+        args.deploy(&mut contracts, Contract::LightClientV2).await?;
+    }
+    if opt.deploy_stake_table {
+        args.deploy(&mut contracts, Contract::StakeTableProxy)
+            .await?;
+    }
 
+    // finally print out or persist deployed addresses
     if let Some(out) = &opt.out {
         let file = File::options()
             .create(true)

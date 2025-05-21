@@ -1,0 +1,70 @@
+rounds = 100
+indexed_da = true
+transactions_per_round = 10
+transaction_size = 1000
+node_index = 0
+seed = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+cdn_marshal_address = "127.0.0.1:8999"
+public_keys = [
+    { stake_table_key = "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U", state_ver_key = "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE", stake = 1, da = true },
+
+    { stake_table_key = "BLS_VER_KEY~IBRoz_Q1EXvcm1pNZcmVlyYZU8hZ7qmy337ePAjEMhz8Hl2q8vWPFOd3BaLwgRS1UzAPW3z4E-XIgRDGcRBTAMZX9b_0lKYjlyTlNF2EZfNnKmvv-xJ0yurkfjiveeYEsD2l5d8q_rJJbH1iZdXy-yPEbwI0SIvQfwdlcaKw9po4", state_ver_key = "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY", stake = 1, da = true },
+
+    { stake_table_key = "BLS_VER_KEY~4zQnaCOFJ7m95OjxeNls0QOOwWbz4rfxaL3NwmN2zSdnf8t5Nw_dfmMHq05ee8jCegw6Bn5T8inmrnGGAsQJMMWLv77nd7FJziz2ViAbXg-XGGF7o4HyzELCmypDOIYF3X2UWferFE_n72ZX0iQkUhOvYZZ7cfXToXxRTtb_mwRR", state_ver_key = "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg", stake = 1, da = true},
+
+    { stake_table_key = "BLS_VER_KEY~rO2PIjyY30HGfapFcloFe3mNDKMIFi6JlOLkH5ZWBSYoRm5fE2-Rm6Lp3EvmAcB5r7KFJ0c1Uor308x78r04EY_sfjcsDCWt7RSJdL4cJoD_4fSTCv_bisO8k98hs_8BtqQt8BHlPeJohpUXvcfnK8suXJETiJ6Er97pfxRbzgAL", state_ver_key = "SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g", stake = 1, da = true },
+
+    { stake_table_key = "BLS_VER_KEY~r6b-Cwzp-b3czlt0MHmYPJIow5kMsXbrNmZsLSYg9RV49oCCO4WEeCRFR02x9bqLCa_sgNFMrIeNdEa11qNiBAohApYFIvrSa-zP5QGj3xbZaMOCrshxYit6E2TR-XsWvv6gjOrypmugjyTAth-iqQzTboSfmO9DD1-gjJIdCaD7", state_ver_key = "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw", stake = 1, da = true },
+
+    { stake_table_key = "BLS_VER_KEY~kEUEUJFBtCXl68fM_2roQw856wQlu1ZoDmPn8uu4bQgeZwyb5oz5_kMl-oAJ_OtbYV1serjWE--eXB_qYIpQLZka42-cML6WjCQjNl1hGSejtoBDkExNeUNcweFQBbEsaDiIy3-sgHTrfYpFd1icKeAVihLRn5_RtSU_RUu1TQqR", state_ver_key = "SCHNORR_VER_KEY~qKOggsQMNIIvmiIPM3smiGk40kYGXCVupsmgIrf3RgMmua683F3vUwzWcx0s7mxdzLXJwPAB06LD96cxip7JLJM", stake = 1, da = true },
+
+    { stake_table_key = "BLS_VER_KEY~96hAcdFZxQT8CEHcyV8j2ILJRsXagquENPkc9AwLSx3u6AE_uMupIKGbNJRiM99oFneK2vI5g1u61HidWeuTLRPM2537xAXeaO8e-wJYx4FaPKw_xTcLPrIm0OZT7SsLAMwFuqfMbDdKM71-RyrLwhff5517xXBKEk5Tg9iT9Qrr", state_ver_key = "SCHNORR_VER_KEY~y0nltwKyKSpwO3ki9Czu5asjAt5g1Ya3XmAywcerOSUg__FuZOcYq6tKxMsnsjE7ylpWLZv8R5W4-6WkP0DWI94", stake = 1, da = true },
+
+    { stake_table_key = "BLS_VER_KEY~-pVi7j6TEBeG7ABata4uWWDRM2SrY8wWotWsGnTpIhnOVYJI_lNWyig6VJUuFmBsMS8rLMU7nDxDm8SbObxyA-SLFcr_jCkZqsbx8GcVQrnBAfjNRWuPZP0xcTDMu2IkQqtc3L0OpzbMEgGRGE8Wj09pNqouzl-xhPoYjTmD06Bw", state_ver_key = "SCHNORR_VER_KEY~6rPZ_plXxp8Uoh-E8VPb37csDRLND66zAorA3crYOhf9ARJapk8151RRVXWHe5Q2uF_RmQQmOCAov6tIpJ4yHz0", stake = 1, da = true },
+
+    { stake_table_key = "BLS_VER_KEY~IUPSdnsNUHgNx_74ZhBPrICcDZ9Bp_DAt-6kFz8vSwJES2Vy1Ws8NJ1mxb9XGE1u13sw0FRe8kn5Ib3p2stbEtR_1Qgbuif6aoLrGaSUzy0MvwrO58u9kHZk3rXIuSAN7n4ok3-KKk2CmnBfx7fchFoqT56FXCd1EJ7XRrYj8wTh", state_ver_key = "SCHNORR_VER_KEY~qLqeTM1ZT1ecLEpzHwmlr-GeMUOest-kAm5nKOnKnB-W_TRj4IL77lnmamYvUdXR_ddQp24wQh2IlOIdp5jKEgw", stake = 1, da = true },
+
+    { stake_table_key = "BLS_VER_KEY~PAAQNgOYfj3GiVX7LxSlkXfOCDSnNKZDqPVYQ_jBMxKzOCn0PXbqQ62kKPenWOmCxiCE7X158s-VenBna6MjHJgf61eBAO-3-OyTP5NWVx49RTgHhQf2iMTKk2iqK2gjnjZimBU135YU4lQFtrG-ZgRezwqkC5vy8V-q46fschIG", state_ver_key = "SCHNORR_VER_KEY~APKGX39-mOmApq6jMdIEiuuyddJ_k8xFeIwU1Zs2zShH1rI--eZR180Us5vqNWmK3zAidScvVcW4bAsOMHB3LPg", stake = 1, da = true }
+]
+
+[config]
+num_nodes_with_stake = 10
+start_threshold = [8, 10]
+staked_da_nodes = 10
+fixed_leader_for_gpuvid = 1
+next_view_timeout = 30000
+num_bootstrap = 5
+epoch_height = 0
+epoch_start_block = 0
+stake_table_capacity = 200
+
+[random_builder]
+txn_in_block = 100
+blocks_per_second = 1
+txn_size = { start = 20, end = 100 }
+
+[combined_network_config.delay_duration]
+secs = 1
+nanos = 0
+
+[config.view_sync_timeout]
+secs = 2
+nanos = 0
+
+[config.data_request_delay]
+secs = 0
+nanos = 200_000_000
+
+[config.builder_timeout]
+secs = 10
+nanos = 0
+
+[config.upgrade]
+start_proposing_view = 1
+stop_proposing_view = 0
+start_voting_view = 1
+stop_voting_view = 0
+start_proposing_time = 1
+stop_proposing_time = 0
+start_voting_time = 1
+stop_voting_time = 0

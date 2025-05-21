@@ -21,17 +21,34 @@ env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
   DOCKER_PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+  ARTIFACT_PATHS: |
+    target/release/cdn-broker
+    target/release/cdn-marshal
+    target/release/cdn-whitelist
+    target/release/cli
+    target/release/deploy
+    target/release/espresso-bridge
+    target/release/espresso-dev-node
+    target/release/keygen
+    target/release/nasty-client
+    target/release/node-metrics
+    target/release/orchestrator
+    target/release/permissionless-builder
+    target/release/pub-key
+    target/release/reset-storage
+    target/release/sequencer
+    target/release/sequencer-sqlite
+    target/release/staking-cli
+    target/release/state-prover
+    target/release/state-relay-server
+    target/release/submit-transactions
+    target/release/utils
 
 jobs:
   build:
-    runs-on: buildjet-8vcpu-ubuntu-2204
+    runs-on: ubuntu-24.04-8core
     steps:
       - uses: rui314/setup-mold@v1
-
-      - name: Install just command runner
-        run: |
-          sudo snap install --edge --classic just
-          just --version
 
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -40,14 +57,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
-          cache-provider: buildjet
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-provider: github
 
       - name: Build
         # Build in release without `testing` feature, this should work without `hotshot_example` config.
         run: |
           cargo build --locked --release --workspace
-      
-      - name: Build sequencer-sqlite 
+
+      - name: Build sequencer-sqlite
         run: cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
 
       - name: Build Espresso Dev Node
@@ -59,30 +77,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: x86_64-unknown-linux-gnu-services
-          path: |
-            target/release/orchestrator
-            target/release/cdn-broker
-            target/release/cdn-marshal
-            target/release/cdn-whitelist
-            target/release/state-relay-server
-            target/release/state-prover
-            target/release/sequencer
-            target/release/cli
-            target/release/submit-transactions
-            target/release/reset-storage
-            target/release/utils
-            target/release/deploy
-            target/release/keygen
-            target/release/permissionless-builder
-            target/release/nasty-client
-            target/release/espresso-dev-node
-            target/release/pub-key
-            target/release/espresso-bridge
-            target/release/marketplace-solver
-            target/release/marketplace-builder
-            target/release/node-metrics
-            target/release/dev-rollup
-            target/release/sequencer-sqlite
+          path: ${{ env.ARTIFACT_PATHS }}
 
   build-arm:
     if: github.event_name != 'pull_request'
@@ -98,13 +93,14 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-provider: buildjet
 
       - name: Build
         run: |
           cargo build --locked --release --workspace
 
-      - name: Build sequencer-sqlite 
+      - name: Build sequencer-sqlite
         run: cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
 
       - name: Build Espresso Dev Node
@@ -116,54 +112,36 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aarch64-unknown-linux-gnu-services
-          path: |
-            target/release/orchestrator
-            target/release/cdn-broker
-            target/release/cdn-marshal
-            target/release/cdn-whitelist
-            target/release/state-relay-server
-            target/release/state-prover
-            target/release/sequencer
-            target/release/cli
-            target/release/submit-transactions
-            target/release/reset-storage
-            target/release/utils
-            target/release/deploy
-            target/release/keygen
-            target/release/permissionless-builder
-            target/release/nasty-client
-            target/release/espresso-dev-node
-            target/release/pub-key
-            target/release/espresso-bridge
-            target/release/marketplace-solver
-            target/release/marketplace-builder
-            target/release/node-metrics
-            target/release/dev-rollup
-            target/release/sequencer-sqlite
+          path: ${{ env.ARTIFACT_PATHS }}
 
   build-dockers:
     runs-on: ubuntu-latest
+    # This is non-deterministic, a limitation of GHA. We but we only need the
+    # tag like (:main) at the end which is the same for each matrix build.
+    outputs:
+      tags: ${{ steps.metadata.outputs.tags }}
+    strategy:
+      matrix:
+        service:
+          - bridge
+          - builder
+          - cdn-broker
+          - cdn-marshal
+          - cdn-whitelist
+          - deploy
+          - espresso-dev-node
+          - nasty-client
+          - node-validator
+          - orchestrator
+          - prover-service
+          - sequencer
+          - staking-cli
+          - state-relay-server
+          - submit-transactions
+
     needs: [build, build-arm]
     # if build_arm is skipped, run this job anyway
     if: ${{ !(failure() || cancelled()) }}
-    outputs:
-      sequencer-tag: ${{ steps.sequencer.outputs.tags }}
-      cdn-broker-tag: ${{ steps.cdn-broker.outputs.tags }}
-      cdn-marshal-tag: ${{ steps.cdn-marshal.outputs.tags }}
-      cdn-whitelist-tag: ${{ steps.cdn-whitelist.outputs.tags }}
-      state-relay-server-tag: ${{ steps.state-relay-server.outputs.tags }}
-      prover-service-tag: ${{ steps.prover-service.outputs.tags }}
-      orchestrator-tag: ${{ steps.orchestrator.outputs.tags }}
-      submit-transactions-tag: ${{ steps.submit-transactions.outputs.tags }}
-      deploy-tag: ${{ steps.deploy.outputs.tags }}
-      builder-tag: ${{ steps.builder.outputs.tags }}
-      nasty-client-tag: ${{ steps.nasty-client.outputs.tags }}
-      espresso-dev-node-tag: ${{ steps.espresso-dev-node.outputs.tags }}
-      bridge-tag: ${{ steps.bridge.outputs.tags }}
-      marketplace-solver-tag: ${{ steps.marketplace-solver.outputs.tags }}
-      marketplace-builder-tag: ${{ steps.marketplace-builder.outputs.tags }}
-      node-validator-tag: ${{ steps.node-validator.outputs.tags }}
-      dev-rollup-tag: ${{ steps.dev-rollup.outputs.tags }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -182,6 +160,7 @@ jobs:
           path: target/arm64/release
 
       - name: Setup QEMU
+        if: ${{ github.event_name != 'pull_request' }}
         uses: docker/setup-qemu-action@v3
         with:
           # Temporary fix (See https://github.com/docker/setup-qemu-action/issues/198)
@@ -191,337 +170,91 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Github Container Repo
-        uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate sequencer docker metadata
+      - name: Generate ${{ matrix.service }} docker metadata
         uses: docker/metadata-action@v5
-        id: sequencer
+        id: metadata
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/sequencer
+          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
 
-      - name: Generate cdn-broker docker metadata
-        uses: docker/metadata-action@v5
-        id: cdn-broker
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-broker
+      # There is no straightforward way to import a multiplatform image from a tar file with
+      # docker.
+      #   - On PRs: build only amd64 and upload as artifact to later run the demo test.
+      #   - On main: push to the registry and fetch from the registry to run the demo test.
 
-      - name: Generate cdn-marshal docker metadata
-        uses: docker/metadata-action@v5
-        id: cdn-marshal
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-marshal
-
-      - name: Generate cdn-whitelist docker metadata
-        uses: docker/metadata-action@v5
-        id: cdn-whitelist
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist
-
-      - name: Generate state-relay-server docker metadata
-        uses: docker/metadata-action@v5
-        id: state-relay-server
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/state-relay-server
-
-      - name: Generate prover-service docker metadata
-        uses: docker/metadata-action@v5
-        id: prover-service
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/prover-service
-
-      - name: Generate orchestrator docker metadata
-        uses: docker/metadata-action@v5
-        id: orchestrator
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/orchestrator
-
-      - name: Generate submit-transactions docker metadata
-        uses: docker/metadata-action@v5
-        id: submit-transactions
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/submit-transactions
-
-      - name: Generate deploy metadata
-        uses: docker/metadata-action@v5
-        id: deploy
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/deploy
-
-      - name: Generate builder metadata
-        uses: docker/metadata-action@v5
-        id: builder
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/builder
-
-      - name: Generate nasty-client metadata
-        uses: docker/metadata-action@v5
-        id: nasty-client
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/nasty-client
-
-      - name: Generate espresso-dev-node metadata
-        uses: docker/metadata-action@v5
-        id: espresso-dev-node
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/espresso-dev-node
-
-      - name: Generate bridge metadata
-        uses: docker/metadata-action@v5
-        id: bridge
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/bridge
-
-      - name: Generate marketplace-solver metadata
-        uses: docker/metadata-action@v5
-        id: marketplace-solver
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/marketplace-solver
-
-      - name: Generate marketplace-builder metadata
-        uses: docker/metadata-action@v5
-        id: marketplace-builder
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/marketplace-builder
-
-      - name: Generate node-validator metadata
-        uses: docker/metadata-action@v5
-        id: node-validator
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/node-validator
-
-      - name: Generate dev-rollup metadata
-        uses: docker/metadata-action@v5
-        id: dev-rollup
-        with:
-          images: ghcr.io/espressosystems/espresso-sequencer/dev-rollup
-
-      - name: Build and push sequencer docker
+      - name: Build and push ${{ matrix.service }} docker image (non-PR)
+        if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@v6
         with:
-          context: ./
-          file: ./docker/sequencer.Dockerfile
+          context: .
+          file: ./docker/${{ matrix.service }}.Dockerfile
           platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.sequencer.outputs.tags }}
-          labels: ${{ steps.sequencer.outputs.labels }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels  }}
+          outputs: type=registry
 
-      - name: Build and push cdn-broker docker
+      - name: Build and export ${{ matrix.service }} docker image (PR only)
+        if: ${{ github.event_name == 'pull_request' }}
         uses: docker/build-push-action@v6
         with:
-          context: ./
-          file: ./docker/cdn-broker.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.cdn-broker.outputs.tags }}
-          labels: ${{ steps.cdn-broker.outputs.labels }}
+          context: .
+          file: ./docker/${{ matrix.service }}.Dockerfile
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels  }}
+          outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
 
-      - name: Build and push cdn-marshal docker
-        uses: docker/build-push-action@v6
+      - name: Upload artifact (PR only)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
         with:
-          context: ./
-          file: ./docker/cdn-marshal.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.cdn-marshal.outputs.tags }}
-          labels: ${{ steps.cdn-marshal.outputs.labels }}
-
-      - name: Build and push cdn-whitelist docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/cdn-whitelist.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.cdn-whitelist.outputs.tags }}
-          labels: ${{ steps.cdn-whitelist.outputs.labels }}
-
-      - name: Build and push state-relay-server docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/state-relay-server.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.state-relay-server.outputs.tags }}
-          labels: ${{ steps.state-relay-server.outputs.labels }}
-
-      - name: Build and push prover-service docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/prover-service.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.prover-service.outputs.tags }}
-          labels: ${{ steps.prover-service.outputs.labels }}
-
-      - name: Build and push orchestrator docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/orchestrator.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.orchestrator.outputs.tags }}
-          labels: ${{ steps.orchestrator.outputs.labels }}
-
-      - name: Build and push submit-transactions docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/submit-transactions.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.submit-transactions.outputs.tags }}
-          labels: ${{ steps.submit-transactions.outputs.labels }}
-
-      - name: Build and push deploy docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/deploy.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.deploy.outputs.tags }}
-          labels: ${{ steps.deploy.outputs.labels }}
-
-      - name: Build and push builder docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/permissionless-builder.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.builder.outputs.tags }}
-          labels: ${{ steps.builder.outputs.labels }}
-
-      - name: Build and push nasty-client docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/nasty-client.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.nasty-client.outputs.tags }}
-          labels: ${{ steps.nasty-client.outputs.labels }}
-
-      - name: Build and push espresso-dev-node docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/espresso-dev-node.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.espresso-dev-node.outputs.tags }}
-          labels: ${{ steps.espresso-dev-node.outputs.labels }}
-      - name: Build and push bridge docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/espresso-bridge.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.bridge.outputs.tags }}
-          labels: ${{ steps.bridge.outputs.labels }}
-
-      - name: Build and push marketplace-solver docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/marketplace-solver.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.marketplace-solver.outputs.tags }}
-          labels: ${{ steps.marketplace-solver.outputs.labels }}
-
-      - name: Build and push marketplace-builder docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/marketplace-builder.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.marketplace-builder.outputs.tags }}
-          labels: ${{ steps.marketplace-builder.outputs.labels }}
-
-      - name: Build and push node-validator docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/node-validator.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.node-validator.outputs.tags }}
-          labels: ${{ steps.node-validator.outputs.labels }}
-
-      - name: Build and push dev-rollup docker
-        uses: docker/build-push-action@v6
-        with:
-          context: ./
-          file: ./docker/dev-rollup.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.dev-rollup.outputs.tags }}
-          labels: ${{ steps.dev-rollup.outputs.labels }}
+          name: ${{ matrix.service }}-docker-image
+          path: ${{ runner.temp }}/${{ matrix.service }}.tar
+          if-no-files-found: error
 
   test-demo:
-    if: ${{ github.event_name != 'pull_request' }}
+    # if build_arm is skipped, run this job anyway
+    if: ${{ !(failure() || cancelled()) }}
     runs-on: ubuntu-latest
     needs: [build-dockers]
     steps:
-      - name: Install just command runner
-        run: |
-          sudo snap install --edge --classic just
-          just --version
+      - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Pull docker images
+      - name: Download artifacts (PR only)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/docker-images
+          pattern: "*-docker-image"
+
+      - name: Load docker images (PR only)
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
-          docker pull ${{ needs.build-dockers.outputs.sequencer-tag }}
-          docker pull ${{ needs.build-dockers.outputs.cdn-broker-tag }}
-          docker pull ${{ needs.build-dockers.outputs.cdn-marshal-tag }}
-          docker pull ${{ needs.build-dockers.outputs.cdn-whitelist-tag }}
-          docker pull ${{ needs.build-dockers.outputs.state-relay-server-tag }}
-          docker pull ${{ needs.build-dockers.outputs.prover-service-tag }}
-          docker pull ${{ needs.build-dockers.outputs.orchestrator-tag }}
-          docker pull ${{ needs.build-dockers.outputs.submit-transactions-tag }}
-          docker pull ${{ needs.build-dockers.outputs.deploy-tag }}
-          docker pull ${{ needs.build-dockers.outputs.builder-tag }}
-          docker pull ${{ needs.build-dockers.outputs.nasty-client-tag }}
-          docker pull ${{ needs.build-dockers.outputs.bridge-tag }}
-          docker pull ${{ needs.build-dockers.outputs.marketplace-solver-tag }}
-          docker pull ${{ needs.build-dockers.outputs.marketplace-builder-tag }}
-          docker pull ${{ needs.build-dockers.outputs.node-validator-tag }}
-          docker pull ${{ needs.build-dockers.outputs.dev-rollup-tag }}
-          
-      - name: Tag new docker images
+          # load all *.tar files in the temp directory, the layout should
+          # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
+          for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
+            docker load --input $file
+          done
+
+      - name: Match the docker image tag built or pushed to the registry
         run: |
-          docker tag ${{ needs.build-dockers.outputs.sequencer-tag }} ghcr.io/espressosystems/espresso-sequencer/sequencer:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-broker-tag }} ghcr.io/espressosystems/espresso-sequencer/cdn-broker:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-marshal-tag }} ghcr.io/espressosystems/espresso-sequencer/cdn-marshal:main
-          docker tag ${{ needs.build-dockers.outputs.cdn-whitelist-tag }} ghcr.io/espressosystems/espresso-sequencer/cdn-whitelist:main
-          docker tag ${{ needs.build-dockers.outputs.state-relay-server-tag }} ghcr.io/espressosystems/espresso-sequencer/state-relay-server:main
-          docker tag ${{ needs.build-dockers.outputs.prover-service-tag }} ghcr.io/espressosystems/espresso-sequencer/prover-service:main
-          docker tag ${{ needs.build-dockers.outputs.orchestrator-tag }} ghcr.io/espressosystems/espresso-sequencer/orchestrator:main
-          docker tag ${{ needs.build-dockers.outputs.submit-transactions-tag }} ghcr.io/espressosystems/espresso-sequencer/submit-transactions:main
-          docker tag ${{ needs.build-dockers.outputs.deploy-tag }} ghcr.io/espressosystems/espresso-sequencer/deploy:main
-          docker tag ${{ needs.build-dockers.outputs.builder-tag }} ghcr.io/espressosystems/espresso-sequencer/builder:main
-          docker tag ${{ needs.build-dockers.outputs.nasty-client-tag }} ghcr.io/espressosystems/espresso-sequencer/nasty-client:main
-          docker tag ${{ needs.build-dockers.outputs.bridge-tag }} ghcr.io/espressosystems/espresso-sequencer/bridge:main
-          docker tag ${{ needs.build-dockers.outputs.marketplace-solver-tag }} ghcr.io/espressosystems/espresso-sequencer/marketplace-solver:main
-          docker tag ${{ needs.build-dockers.outputs.marketplace-builder-tag }} ghcr.io/espressosystems/espresso-sequencer/marketplace-builder:main
-          docker tag ${{ needs.build-dockers.outputs.node-validator-tag }} ghcr.io/espressosystems/espresso-sequencer/node-validator:main
-          docker tag ${{ needs.build-dockers.outputs.dev-rollup-tag }} ghcr.io/espressosystems/espresso-sequencer/dev-rollup:main
+          DOCKER_TAG=$(echo ${{ needs.build-dockers.outputs.tags }} | sed 's/.*://')
+          echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
+
+      - name: Pull remaining docker images
+        run: |
+          docker compose pull --policy missing
 
       - name: Test docker demo
         run: |
-          just demo &
+          just demo --pull never &
           set -o pipefail
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'

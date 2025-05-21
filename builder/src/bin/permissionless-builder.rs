@@ -2,10 +2,7 @@ use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
 
 use builder::non_permissioned::{build_instance_state, BuilderConfig};
 use clap::Parser;
-use espresso_types::{
-    eth_signature_key::EthKeyPair, parse_duration, FeeVersion, MarketplaceVersion,
-    SequencerVersions, V0_0,
-};
+use espresso_types::{eth_signature_key::EthKeyPair, parse_duration, SequencerVersions};
 use futures::future::pending;
 use hotshot::traits::ValidatedState;
 use hotshot_types::{
@@ -120,13 +117,27 @@ async fn main() -> anyhow::Result<()> {
     let upgrade = genesis.upgrade_version;
 
     match (base, upgrade) {
-        (FeeVersion::VERSION, MarketplaceVersion::VERSION) => {
-            run::<SequencerVersions<FeeVersion, MarketplaceVersion>>(genesis, opt).await
-        }
-        (FeeVersion::VERSION, _) => run::<SequencerVersions<FeeVersion, V0_0>>(genesis, opt).await,
-        (MarketplaceVersion::VERSION, _) => {
-            run::<SequencerVersions<MarketplaceVersion, V0_0>>(genesis, opt).await
-        }
+        #[cfg(all(feature = "fee", feature = "pos"))]
+        (espresso_types::FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
+                genesis, opt,
+            )
+            .await
+        },
+        #[cfg(feature = "pos")]
+        (espresso_types::EpochVersion::VERSION, _) => {
+            // Specifying V0_0 disables upgrades
+            run::<SequencerVersions<espresso_types::EpochVersion, espresso_types::V0_0>>(
+                genesis, opt,
+            )
+            .await
+        },
+        #[cfg(feature = "fee")]
+        (espresso_types::FeeVersion::VERSION, _) => {
+            // Specifying V0_0 disables upgrades
+            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::V0_0>>(genesis, opt)
+                .await
+        },
         _ => panic!(
             "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."
         ),
