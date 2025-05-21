@@ -57,7 +57,7 @@ jobs:
         with:
           shared-key: ${{ matrix.shared-key }}
           save-if: >
-            ${{ (matrix.binary == 'other') && (
+            ${{ matrix.save-cache && (
             github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
             || github.event_name == 'workflow_dispatch' ) }}
