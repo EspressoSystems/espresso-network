@@ -29,7 +29,22 @@ jobs:
     # runs-on: ubuntu-24.04-8core
     strategy:
       matrix:
-        binary: [sequencer, sequencer-sqlite, espresso-dev-node, other]
+        include:
+          - binary: sequencer
+            shared-key:  postgres
+            save-cache: false
+
+          - binary: other
+            shared-key:  postgres
+            save-cache: true
+
+          - binary: sequencer-sqlite
+            shared-key: embedded
+            save-cache: false
+
+          - binary: espresso-dev-node
+            shared-key: embedded
+            save-cache: true
 
     steps:
       - uses: rui314/setup-mold@v1
@@ -40,6 +55,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: ${{ matrix.shared-key }}
           save-if: >
             ${{ (matrix.binary == 'other') && (
             github.ref == 'refs/heads/main'
@@ -75,7 +91,22 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
     strategy:
       matrix:
-        binary: [sequencer, sequencer-sqlite, espresso-dev-node, other]
+        include:
+          - binary: sequencer
+            shared-key:  postgres
+            save-cache: false
+
+          - binary: other
+            shared-key:  postgres
+            save-cache: true
+
+          - binary: sequencer-sqlite
+            shared-key: embedded
+            save-cache: false
+
+          - binary: espresso-dev-node
+            shared-key: embedded
+            save-cache: true
 
     steps:
       - uses: rui314/setup-mold@v1
@@ -86,8 +117,9 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: ${{ matrix.shared-key }}
           save-if: >
-            ${{ (matrix.binary == 'other') && (
+            ${{ matrix.save-cache && (
             github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
             || github.event_name == 'workflow_dispatch' ) }}
