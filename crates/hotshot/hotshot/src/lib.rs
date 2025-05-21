@@ -397,6 +397,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             network,
             membership_coordinator,
             storage,
+            #[allow(unused)]
             metrics,
             external_event_stream,
             internal_event_stream,
