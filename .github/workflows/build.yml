@@ -23,14 +23,11 @@ env:
   DOCKER_PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
 
 jobs:
-  build-matrix:
-    name: Build ${{ matrix.binary }} on ${{ matrix.arch }}
-    # runs-on: ${{ matrix.arch == 'x86_64' && 'ubuntu-24.04-8core' || 'buildjet-8vcpu-ubuntu-2204-arm' }}
-    runs-on: ${{ matrix.arch == 'x86_64' && 'ubuntu-latest' || 'buildjet-8vcpu-ubuntu-2204-arm' }}
-    if: ${{ matrix.arch == 'x86_64' || github.event_name != 'pull_request' }}
+  build-x86:
+    name: Build ${{ matrix.binary }}
+    runs-on: 'ubuntu-latest'
     strategy:
       matrix:
-        arch: [x86_64, aarch64]
         binary: [sequencer, sequencer-sqlite, espresso-dev-node, other]
 
     steps:
@@ -45,7 +42,7 @@ jobs:
           prefix-key: v1-rust
           shared-key: build
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-provider: ${{ matrix.arch == 'x86_64' && 'github' || 'buildjet' }}
+          cache-provider: github
 
       - name: Build ${{ matrix.binary }}
         run: |
@@ -70,7 +67,56 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.arch }}-${{ matrix.binary }}
+          name: x86-${{ matrix.binary }}
+          path: |
+            target/release/${{ matrix.binary == 'other' && '*' || matrix.binary }}
+
+  build-arm:
+    name: Build ${{ matrix.binary }}
+    runs-on: buildjet-8vcpu-ubuntu-2204-arm
+    if: ${{ github.event_name != 'pull_request' }}
+    strategy:
+      matrix:
+        binary: [sequencer, sequencer-sqlite, espresso-dev-node, other]
+
+    steps:
+      - uses: rui314/setup-mold@v1
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          shared-key: build
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-provider: buildjet
+
+      - name: Build ${{ matrix.binary }}
+        run: |
+          case "${{ matrix.binary }}" in
+            "sequencer")
+              cargo build --locked --release --bin sequencer
+              ;;
+            "sequencer-sqlite")
+              cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml
+              ;;
+            "espresso-dev-node")
+              cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
+              ;;
+            "other")
+              cargo build --locked --release --workspace \
+                --exclude sequencer \
+                --exclude espresso-dev-node \
+                --exclude sequencer-sqlite
+              ;;
+          esac
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm-${{ matrix.binary }}
           path: |
             target/release/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
@@ -99,7 +145,7 @@ jobs:
           - state-relay-server
           - submit-transactions
 
-    needs: [build, build-arm]
+    needs: [build-x86, build-arm]
     # if build_arm is skipped, run this job anyway
     if: ${{ !(failure() || cancelled()) }}
     steps:
@@ -109,7 +155,7 @@ jobs:
       - name: Download executables AMD
         uses: actions/download-artifact@v4
         with:
-          pattern: x86_64-*
+          pattern: x86-*
           path: target/amd64/release
           merge_multiple: true
 
@@ -117,7 +163,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/download-artifact@v4
         with:
-          pattern: aarch64-*
+          pattern: arm-*
           path: target/arm64/release
           merge_multiple: true
 
