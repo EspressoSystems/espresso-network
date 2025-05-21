@@ -25,7 +25,8 @@ env:
 jobs:
   build-x86:
     name: Build ${{ matrix.binary }}
-    runs-on: 'ubuntu-latest'
+    # runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-8core
     strategy:
       matrix:
         binary: [sequencer, sequencer-sqlite, espresso-dev-node, other]

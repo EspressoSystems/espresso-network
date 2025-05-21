@@ -23,7 +23,7 @@ case "$1" in
         | grep -v '^sequencer$\|espresso-dev-node' \
         | xargs -I{} echo --bin {} \
         | tr '\n' ' ')"
-        echo "Building rest binaries: $BINS"
+        echo "Building other binaries: $BINS"
         cargo build --locked --release $BINS
         ;;
     *)
