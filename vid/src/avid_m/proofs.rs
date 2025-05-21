@@ -84,6 +84,9 @@ impl AvidMScheme {
                     break;
                 }
             }
+            if raw_shares.len() >= param.recovery_threshold {
+                break;
+            }
         }
         if raw_shares.len() < param.recovery_threshold {
             return Err(VidError::InsufficientShares);
@@ -103,16 +106,17 @@ impl AvidMBadEncodingProof {
         param: &AvidMParam,
         commit: &AvidMCommit,
     ) -> VidResult<VerificationResult> {
-        // First check that all shares are valid.
-        if self.raw_shares.len() < param.recovery_threshold {
-            return Err(VidError::InsufficientShares);
+        // A bad encoding proof should have exactly `recovery_threshold` raw shares
+        if self.raw_shares.len() != param.recovery_threshold {
+            return Err(VidError::InvalidParam);
         }
-        if self.raw_shares.len() > param.total_weights {
-            return Err(VidError::InvalidShare);
+        if self.recovered_poly.len() > param.recovery_threshold {
+            // recovered polynomial should be of low degree
+            return Err(VidError::InvalidParam);
         }
         let (mt, raw_shares) = AvidMScheme::raw_encode(param, &self.recovered_poly)?;
         if mt.commitment() == commit.commit {
-            return Err(VidError::InvalidParam);
+            return Ok(Err(()));
         }
         let mut visited_indices = HashSet::new();
         for (index, proof) in self.raw_shares.iter() {
@@ -201,7 +205,6 @@ impl NsAvidMScheme {
                     | Err(VidError::InvalidShare)
                     | Err(VidError::IndexOutOfBound)
                     | Err(VidError::InsufficientShares)
-                    | Err(VidError::InvalidParam)
             ) {
                 return result;
             }
@@ -227,7 +230,7 @@ impl NsAvidMBadEncodingProof {
         {
             return Ok(Err(()));
         }
-        self.ns_proof.verify(param, commit)
+        self.ns_proof.verify(param, &self.ns_commit)
     }
 }
 
@@ -246,6 +249,7 @@ pub struct NsProof {
 
 impl NsAvidMScheme {
     /// Generate a proof of inclusion for a namespace payload.
+    /// WARN: for the current implementation, no proof can be generated if any namespace is malformed.
     pub fn namespace_proof(
         param: &AvidMParam,
         payload: &[u8],
@@ -291,12 +295,16 @@ impl NsAvidMScheme {
 #[cfg(test)]
 mod tests {
     use ark_poly::EvaluationDomain;
-    use rand::seq::SliceRandom;
+    use jf_merkle_tree::MerkleTreeScheme;
+    use rand::{seq::SliceRandom, Rng};
 
     use crate::{
         avid_m::{
-            config::AvidMConfig, namespaced::NsAvidMScheme, proofs::AvidMBadEncodingProof,
-            radix2_domain, AvidMScheme, Config, MerkleTree, F,
+            config::AvidMConfig,
+            namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
+            proofs::AvidMBadEncodingProof,
+            radix2_domain, AvidMCommit, AvidMScheme, AvidMShare, Config, MerkleTree, RawAvidMShare,
+            F,
         },
         utils::bytes_to_field,
         VidScheme,
@@ -403,5 +411,101 @@ mod tests {
                 .unwrap()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_ns_proof_of_incorrect_encoding() {
+        let mut rng = jf_utils::test_rng();
+        let param = AvidMScheme::setup(5usize, 10usize).unwrap();
+        let mut payload = [1u8; 100];
+        rng.fill(&mut payload[..]);
+        let distribution = [1u32; 10];
+        let ns_table = [(0..10), (10..21), (21..33), (33..48), (48..100)];
+        let domain = radix2_domain::<F>(param.total_weights).unwrap();
+
+        // Manually distribute the payload, with second namespace being malicious
+        let mut ns_commits = vec![];
+        let mut disperses = vec![];
+        let mut ns_lens = vec![];
+        for ns_range in ns_table.iter() {
+            ns_lens.push(ns_range.len());
+            if ns_range.start == 10 {
+                // second namespace is malicious, commit to a high-degree polynomial
+                let high_degree_polynomial = vec![F::from(1u64); 10];
+                let mal_payload: Vec<_> = domain
+                    .fft(&high_degree_polynomial)
+                    .into_iter()
+                    .take(param.total_weights)
+                    .map(|v| vec![v])
+                    .collect();
+                let bad_mt = MerkleTree::from_elems(
+                    None,
+                    mal_payload
+                        .iter()
+                        .map(|v| Config::raw_share_digest(v).unwrap()),
+                )
+                .unwrap();
+                ns_commits.push(bad_mt.commitment());
+                let shares: Vec<_> = mal_payload
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, v)| AvidMShare {
+                        index: i as u32,
+                        payload_byte_len: ns_range.len(),
+                        content: RawAvidMShare {
+                            range: (i..i + 1),
+                            payload: vec![v],
+                            mt_proofs: vec![bad_mt.lookup(i as u64).expect_ok().unwrap().1],
+                        },
+                    })
+                    .collect();
+                disperses.push(shares);
+            } else {
+                let (commit, shares) =
+                    AvidMScheme::disperse(&param, &distribution, &payload[ns_range.clone()])
+                        .unwrap();
+                ns_commits.push(commit.commit);
+                disperses.push(shares);
+            }
+        }
+        let commit = NsAvidMCommit {
+            commit: MerkleTree::from_elems(None, &ns_commits)
+                .unwrap()
+                .commitment(),
+        };
+        let ns_commits: Vec<_> = ns_commits
+            .into_iter()
+            .map(|comm| AvidMCommit { commit: comm })
+            .collect();
+        let mut shares = vec![NsAvidMShare::default(); disperses[0].len()];
+        shares.iter_mut().for_each(|share| {
+            share.index = disperses[0][0].index;
+            share.ns_commits = ns_commits.clone();
+            share.ns_lens = ns_lens.clone();
+        });
+        disperses.into_iter().for_each(|ns_disperse| {
+            shares
+                .iter_mut()
+                .zip(ns_disperse)
+                .for_each(|(share, ns_share)| share.content.push(ns_share.content))
+        });
+
+        // generate bad encoding proof for the second namespace
+        let proof =
+            NsAvidMScheme::proof_of_incorrect_encoding_for_namespace(&param, 1, &commit, &shares)
+                .unwrap();
+        assert!(proof.verify(&param, &commit).unwrap().is_ok());
+
+        // Good namespaces
+        for ns_index in [0, 2, 3, 4] {
+            assert!(NsAvidMScheme::proof_of_incorrect_encoding_for_namespace(
+                &param, ns_index, &commit, &shares
+            )
+            .is_err());
+        }
+
+        let proof = NsAvidMScheme::proof_of_incorrect_encoding(&param, &commit, &shares).unwrap();
+        assert_eq!(proof.ns_index, 1);
+        assert!(proof.verify(&param, &commit).unwrap().is_ok());
     }
 }
