@@ -871,6 +871,7 @@ pub async fn call_upgrade_proxy_script(
         .stderr(Stdio::piped())
         .output();
 
+    println!("output: {:?}", output);
     let output = output.unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
