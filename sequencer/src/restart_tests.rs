@@ -8,6 +8,7 @@ use std::{
 
 use alloy::node_bindings::{Anvil, AnvilInstance};
 use anyhow::bail;
+use async_broadcast::Receiver;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
@@ -243,6 +244,7 @@ struct NodeInitializer<S: TestableSequencerDataSource> {
             MockSequencerVersions,
         >,
     >,
+    stream: Receiver<Event<SeqTypes>>,
     node_id: u64,
 }
 
@@ -371,8 +373,12 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             MockSequencerVersions,
         >,
     ) -> NodeInitializer<S> {
+        let consensus = context.consensus();
+        let handle = consensus.read().await;
+        let stream = handle.event_stream_known_impl();
         NodeInitializer {
-            hotshot_context: context.consensus().read().await.hotshot.clone(),
+            stream,
+            hotshot_context: handle.hotshot.clone(),
             node_id: context.node_id(),
         }
     }
@@ -427,7 +433,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             };
 
             // Check if we have a stored config for soft-restart.
-            if let Some(initializer) = self.initializer.take() {
+            if let Some(initializer) = &self.initializer {
                 tracing::error!("restoring hotshot");
                 let node_id = initializer.node_id;
 
