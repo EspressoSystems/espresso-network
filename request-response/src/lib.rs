@@ -392,6 +392,11 @@ impl<
                     })?,
             );
 
+            // Create a place to put the handle for the batched sending task. We need this because
+            // otherwise it gets dropped when the closure goes out of scope, instead of when the function
+            // gets cancelled or returns
+            let mut _batched_sending_task = None;
+
             // Match on the type of request
             if request_type == RequestType::Broadcast {
                 trace!("Sending request {:?} to all participants", request_message,);
@@ -426,7 +431,7 @@ impl<
 
                 // Spawn a task that sends out requests to the network
                 let self_clone = Arc::clone(self);
-                let _handle = AbortOnDropHandle::new(spawn(async move {
+                let batched_sending_handle = AbortOnDropHandle::new(spawn(async move {
                     // Create a bounded queue for the outgoing requests. We use this to make sure
                     // we have less than [`config.request_batch_size`] requests in flight at any time.
                     //
@@ -473,6 +478,9 @@ impl<
                         }
                     }
                 }));
+
+                // Store the handle so it doesn't get dropped
+                _batched_sending_task = Some(batched_sending_handle);
             }
 
             // Wait for a response on the channel
