@@ -12,9 +12,7 @@ use std::{
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
 use futures::{stream::FuturesUnordered, StreamExt};
-use hotshot_builder_api::{
-    v0_1::block_info::AvailableBlockInfo, v0_2::block_info::AvailableBlockHeaderInputV2,
-};
+use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -618,10 +616,9 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
             let response = {
                 let client = &self.builder_clients[builder_idx];
 
-                let (block, header_input, legacy_header_input) = futures::join! {
+                let (block, either_header_input) = futures::join! {
                     client.claim_block(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
-                    client.claim_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
-                    client.claim_legacy_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
+                    client.claim_either_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
                 };
 
                 let block_data = match block {
@@ -632,59 +629,19 @@ impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
                     },
                 };
 
-                let header_input = match (header_input, legacy_header_input) {
-                    (Ok(header_input), Ok(legacy_header_input)) => {
-                        // verify the message signature and the fee_signature
-                        if header_input
-                            .validate_signature(block_info.offered_fee, &block_data.metadata)
-                        {
-                            header_input
-                        } else if legacy_header_input
-                            .validate_signature(block_info.offered_fee, &block_data.metadata)
-                        {
-                            AvailableBlockHeaderInputV2 {
-                                fee_signature: legacy_header_input.fee_signature,
-                                sender: legacy_header_input.sender,
-                            }
-                        } else {
-                            tracing::warn!(
-                              "Failed to verify available new or legacy block header input data response message signature"
-                            );
-                            continue;
-                        }
-                    },
-                    (Ok(header_input), _) => {
-                        // verify the message signature and the fee_signature
-                        if !header_input
-                            .validate_signature(block_info.offered_fee, &block_data.metadata)
-                        {
-                            tracing::warn!(
-                              "Failed to verify available new block header input data response message signature"
-                            );
-                            continue;
-                        }
+                let Ok(either_header_input) = either_header_input
+                    .inspect_err(|err| tracing::warn!(%err, "Error claiming header input"))
+                else {
+                    continue;
+                };
 
-                        header_input
-                    },
-                    (Err(_), Ok(legacy_header_input)) => {
-                        // verify the message signature and the fee_signature
-                        if !legacy_header_input
-                            .validate_signature(block_info.offered_fee, &block_data.metadata)
-                        {
-                            tracing::warn!(
-                              "Failed to verify available legacy block header input data response message signature"
-                            );
-                            continue;
-                        }
-                        AvailableBlockHeaderInputV2 {
-                            fee_signature: legacy_header_input.fee_signature,
-                            sender: legacy_header_input.sender,
-                        }
-                    },
-                    (Err(err1), Err(err2)) => {
-                        tracing::warn!(%err1, %err2, "Error claiming header input");
-                        continue;
-                    },
+                let Some(header_input) = either_header_input
+                    .validate_signature_and_get_input(block_info.offered_fee, &block_data.metadata)
+                else {
+                    tracing::warn!(
+                        "Failed to verify available new or legacy block header input data response message signature"
+                      );
+                    continue;
                 };
 
                 // verify the signature over the message
