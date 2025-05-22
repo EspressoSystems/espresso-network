@@ -344,7 +344,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         let avidm_param =
             init_avidm_param(total_weight).with_context(|| "failed to initialize avidm param")?;
 
-        // Create payload hash for verification
+        // Get the payload hash for verification
         let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
             bail!("V0 share verification not supported yet");
         };
@@ -352,8 +352,7 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
         // Create a random request id
         let request_id = rand::thread_rng().gen();
 
-        // Request and verify the shares from all other nodes, timing out after 40 seconds
-        // TODO: Configure the timeout
+        // Request and verify the shares from all other nodes, timing out after `duration` seconds
         let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let received_shares_clone = received_shares.clone();
         let request_result: anyhow::Result<_, _> = timeout(

@@ -394,6 +394,8 @@ impl<
 
             // Match on the type of request
             if request_type == RequestType::Broadcast {
+                trace!("Sending request {:?} to all participants", request_message,);
+
                 // If the message is a broadcast request, just send it to all participants
                 self.sender
                     .send_broadcast_message(&message)
@@ -442,11 +444,18 @@ impl<
                             for recipient in recipient_batch {
                                 // Clone ourselves, the message, and the recipient so they can be moved
                                 let self_clone = Arc::clone(&self_clone);
+                                let request_message_clone = request_message.clone();
                                 let recipient_clone = recipient.clone();
                                 let message_clone = Arc::clone(&message);
 
                                 // Spawn the task that sends the request to the participant
                                 let individual_sending_task = spawn(async move {
+                                    trace!(
+                                        "Sending request {:?} to {:?}",
+                                        request_message_clone,
+                                        recipient_clone
+                                    );
+
                                     let _ = self_clone
                                         .sender
                                         .send_direct_message(&message_clone, recipient_clone)
@@ -611,7 +620,7 @@ impl<
             .and_then(|result| result);
 
             if let Err(e) = result {
-                println!("Failed to send response to requester: {e:#}");
+                debug!("Failed to send response to requester: {e:#}");
             }
         });
     }
