@@ -1,9 +1,14 @@
+use alloy::sol_types::SolValue;
 use ark_bn254::G2Affine;
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use hotshot_types::{light_client::StateVerKey, signature_key::BLSPubKey};
+use hotshot_types::{
+    light_client::StateVerKey,
+    signature_key::{BLSPubKey, BLSSignature},
+    traits::signature_key::SignatureKey,
+};
 
-use crate::sol_types::*;
+use crate::sol_types::{StakeTableV2::ConsensusKeysUpdatedV2, *};
 
 impl From<G2PointSol> for BLSPubKey {
     fn from(value: G2PointSol) -> Self {
@@ -21,6 +26,48 @@ impl From<EdOnBN254PointSol> for StateVerKey {
     fn from(value: EdOnBN254PointSol) -> Self {
         let point: ark_ed_on_bn254::EdwardsAffine = value.into();
         Self::from(point)
+    }
+}
+
+/// Stake-table related error from the contract
+#[derive(Debug, thiserror::Error)]
+pub enum StakeTableSolError {
+    #[error("v1 err: {0:?}")]
+    V1(StakeTable::StakeTableErrors),
+    #[error("v2 err: {0:?}")]
+    V2(StakeTableV2::StakeTableV2Errors),
+    #[error("BLS signature invalid")]
+    InvalidBlsSignature,
+    #[error("Schnorr signature invalid")]
+    InvalidSchnorrSignature,
+}
+impl ConsensusKeysUpdatedV2 {
+    /// by checking the `blsSig` is indeed produced by the `blsVK` field,
+    /// we authenticate the claimed consensus key
+    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+        // TODO(alex): simplify this once jellyfish has `VerKey::from_affine()`
+        let bls_vk = {
+            let bls_vk_inner: ark_bn254::G2Affine = self.blsVK.clone().into();
+            let bls_vk_inner = bls_vk_inner.into_group();
+
+            // the two unwrap are safe since it's BLSPubKey is just a wrapper around G2Projective
+            let mut ser_bytes: Vec<u8> = Vec::new();
+            bls_vk_inner.serialize_uncompressed(&mut ser_bytes).unwrap();
+            BLSPubKey::deserialize_uncompressed(&ser_bytes[..]).unwrap()
+        };
+        let msg = self.account.abi_encode();
+        let sig = {
+            let sigma_sol: G1PointSol = self.blsSig.clone().into();
+            let sigma_affine: ark_bn254::G1Affine = sigma_sol.into();
+            BLSSignature {
+                sigma: sigma_affine.into_group(),
+            }
+        };
+        if !bls_vk.validate(&sig, &msg) {
+            return Err(StakeTableSolError::InvalidBlsSignature);
+        }
+
+        Ok(())
     }
 }
 

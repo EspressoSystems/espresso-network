@@ -180,6 +180,12 @@ impl From<G1PointSol> for staketablev2::BN254::G1Point {
     }
 }
 
+impl From<staketablev2::BN254::G1Point> for G1PointSol {
+    fn from(v: staketablev2::BN254::G1Point) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::{

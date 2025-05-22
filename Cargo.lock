@@ -4987,6 +4987,7 @@ dependencies = [
  "num-traits",
  "rand 0.8.5",
  "serde",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
