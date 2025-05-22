@@ -482,12 +482,12 @@ where
     let state_catchup_providers = ParallelStateCatchup::new(&[]);
 
     // Add the state peers to the list
-    let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
+    /* let state_peers = StatePeers::<SequencerApiVersion>::from_urls(
         network_params.state_peers,
         network_params.catchup_backoff,
         metrics,
     );
-    state_catchup_providers.add_provider(Arc::new(state_peers));
+    state_catchup_providers.add_provider(Arc::new(state_peers)); */
 
     // Add the local (persistence) catchup provider to the list (if we can)
     match persistence
