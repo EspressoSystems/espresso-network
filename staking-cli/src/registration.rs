@@ -66,7 +66,7 @@ pub async fn register_validator(
             stake_table
                 .registerValidator_0(
                     bls_vk,
-                    schnorr_vk.into(),
+                    schnorr_vk,
                     bls_sig.into(),
                     schnorr_sig,
                     commission.to_evm(),

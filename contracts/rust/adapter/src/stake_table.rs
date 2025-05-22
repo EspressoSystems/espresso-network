@@ -88,8 +88,7 @@ fn authenticate_stake_table_validator_event(
     };
     let msg = account.abi_encode();
     let sig = {
-        let sigma_sol: G1PointSol = bls_sig.clone().into();
-        let sigma_affine: ark_bn254::G1Affine = sigma_sol.into();
+        let sigma_affine: ark_bn254::G1Affine = bls_sig.clone().into();
         BLSSignature {
             sigma: sigma_affine.into_group(),
         }
