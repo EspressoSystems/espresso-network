@@ -654,8 +654,6 @@ async fn upgrade_stake_table_v2(
 
     assert!(is_contract(&provider, v2_addr).await?);
 
-    // prepare init calldata
-    let v2_contract = StakeTableV2::new(v2_addr, &provider);
     // invoke upgrade on proxy
     // TODO: MA check if really nothing to initialize and if that's done correctly.
     let receipt = proxy
@@ -669,9 +667,9 @@ async fn upgrade_stake_table_v2(
         // post deploy verification checks
         let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
         assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
-        tracing::info!(%v2_addr, "StakeTable successfully upgraded to: ")
+        tracing::info!(%v2_addr, "StakeTable successfully upgraded to")
     } else {
-        tracing::error!("StakeTable upgrade failed: {:?}", receipt);
+        anyhow::bail!("StakeTable upgrade failed: {:?}", receipt);
     }
 
     Ok(receipt)
@@ -820,11 +818,13 @@ pub async fn deploy_timelock(
 #[cfg(test)]
 mod tests {
     use alloy::{primitives::utils::parse_units, providers::ProviderBuilder, sol_types::SolValue};
+    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
 
     #[tokio::test]
     async fn test_is_contract() -> Result<(), anyhow::Error> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
 
         // test with zero address returns false
@@ -845,6 +845,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_proxy_contract() -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let deployer = provider.get_accounts().await?[0];
 
@@ -859,6 +860,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_deploy_light_client() -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -876,6 +878,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_deploy_mock_light_client_proxy() -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -925,6 +928,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_deploy_light_client_proxy() -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -977,6 +981,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_deploy_fee_contract_proxy() -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let admin = provider.get_accounts().await?[0];
@@ -1009,6 +1014,7 @@ mod tests {
     }
 
     async fn test_upgrade_light_client_to_v2_helper(is_mock: bool) -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
@@ -1090,16 +1096,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_upgrade_light_client_to_v2() -> Result<()> {
+        setup_test();
         test_upgrade_light_client_to_v2_helper(false).await
     }
 
     #[tokio::test]
     async fn test_upgrade_mock_light_client_v2() -> Result<()> {
+        setup_test();
         test_upgrade_light_client_to_v2_helper(true).await
     }
 
     #[tokio::test]
     async fn test_deploy_token_proxy() -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1121,6 +1130,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_deploy_stake_table_proxy() -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 
@@ -1158,7 +1168,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_upgrade_stake_table_v2() -> Result<()> {
+        setup_test();
+        setup_test();
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+
+        // deploy token
+        let init_recipient = provider.get_accounts().await?[0];
+        let token_owner = Address::random();
+        let token_addr =
+            deploy_token_proxy(&provider, &mut contracts, token_owner, init_recipient).await?;
+
+        // deploy light client
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+
+        // deploy stake table
+        let exit_escrow_period = U256::from(1000);
+        let owner = init_recipient;
+        let stake_table_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+        let stake_table = StakeTable::new(stake_table_addr, &provider);
+
+        // upgrade to v2
+        upgrade_stake_table_v2(&provider, &mut contracts).await?;
+
+        assert_eq!(stake_table.owner().call().await?._0, owner);
+        assert_eq!(stake_table.token().call().await?._0, token_addr);
+        assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_deploy_timelock() -> Result<()> {
+        setup_test();
         let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
 

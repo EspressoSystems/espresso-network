@@ -3666,6 +3666,7 @@ dependencies = [
  "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-types",
+ "sequencer-utils",
  "surf-disco",
  "tide-disco",
  "tokio",

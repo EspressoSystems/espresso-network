@@ -154,6 +154,22 @@ impl DeployerArgs {
                     crate::transfer_ownership(provider, target, addr, multisig).await?;
                 }
             },
+            Contract::StakeTableV2 => {
+                crate::upgrade_stake_table_v2(provider, contracts).await?;
+
+                if let Some(multisig) = self.multisig {
+                    let stake_table_proxy = contracts
+                        .address(Contract::StakeTableProxy)
+                        .expect("fail to get StakeTableProxy address");
+                    crate::transfer_ownership(
+                        provider,
+                        Contract::StakeTableProxy,
+                        stake_table_proxy,
+                        multisig,
+                    )
+                    .await?;
+                }
+            },
             _ => {
                 panic!("Deploying {} not supported.", target);
             },
@@ -168,6 +184,7 @@ impl DeployerArgs {
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
+        self.deploy(contracts, Contract::StakeTableV2).await?;
         Ok(())
     }
 }

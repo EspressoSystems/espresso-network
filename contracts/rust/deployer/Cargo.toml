@@ -14,6 +14,7 @@ derive_more = { workspace = true }
 espresso-types = { path = "../../../types" }
 hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
+sequencer-utils = { version = "0.1.0", path = "../../../utils" }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
