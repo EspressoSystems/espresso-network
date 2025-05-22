@@ -27,6 +27,16 @@ jobs:
   slow-tests-sqlite:
     runs-on: ubuntu-latest
     steps:
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: true
+
       # These tests need the `anvil` binary provided by foundry
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -40,6 +50,7 @@ jobs:
 
       # NOTE: no rust cache, these tests are very slow anyway
 
+
       - name: Build slow test
         run: just nextest --features embedded-db --no-run
 
@@ -50,6 +61,16 @@ jobs:
   slow-tests-postgres:
     runs-on: ubuntu-latest
     steps:
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: true
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
