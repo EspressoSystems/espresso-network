@@ -96,8 +96,10 @@ pub type EventKey = (u64, u64);
 #[derive(Clone, derive_more::From, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StakeTableEvent {
     Register(ValidatorRegistered),
+    RegisterV2(ValidatorRegisteredV2),
     Deregister(ValidatorExit),
     Delegate(Delegated),
     Undelegate(Undelegated),
     KeyUpdate(ConsensusKeysUpdated),
+    KeyUpdateV2(ConsensusKeysUpdatedV2),
 }

@@ -53,10 +53,12 @@ type Epoch = <SeqTypes as NodeType>::Epoch;
 #[derive(Clone, PartialEq)]
 pub struct StakeTableEvents {
     registrations: Vec<(ValidatorRegistered, Log)>,
+    registrations_v2: Vec<(ValidatorRegisteredV2, Log)>,
     deregistrations: Vec<(ValidatorExit, Log)>,
     delegated: Vec<(Delegated, Log)>,
     undelegated: Vec<(Undelegated, Log)>,
     keys: Vec<(ConsensusKeysUpdated, Log)>,
+    keys_v2: Vec<(ConsensusKeysUpdatedV2, Log)>,
 }
 
 impl StakeTableEvents {
@@ -64,13 +66,24 @@ impl StakeTableEvents {
         let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
         let Self {
             registrations,
+            registrations_v2,
             deregistrations,
             delegated,
             undelegated,
             keys,
+            keys_v2,
         } = self;
 
         for (registration, log) in registrations {
+            events.push((
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                registration.into(),
+            ));
+        }
+        for (registration, log) in registrations_v2 {
             events.push((
                 (
                     log.block_number.context("block number")?,
@@ -116,6 +129,15 @@ impl StakeTableEvents {
                 update.into(),
             ));
         }
+        for (update, log) in keys_v2 {
+            events.push((
+                (
+                    log.block_number.context("block number")?,
+                    log.log_index.context("log index")?,
+                ),
+                update.into(),
+            ));
+        }
 
         events.sort_by_key(|(key, _)| *key);
         Ok(events)
@@ -123,6 +145,8 @@ impl StakeTableEvents {
 }
 
 /// Extract all validators from L1 stake table events.
+// TODO: MA we should reject ValidatorRegistered and ConsensusKeysUpdated events
+// after the stake table contract has been updated to V2.
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     events: I,
 ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
@@ -141,6 +165,50 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 // TODO(abdul): BLS and Schnorr signature keys verification
                 let stake_table_key: BLSPubKey = blsVk.clone().into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.clone().into();
+                // TODO(MA): The stake table contract currently enforces that each bls key is only used once. We will
+                // move this check to the confirmation layer and remove it from the contract. Once we have the signature
+                // check in this functions we can skip if a BLS key, or Schnorr key was previously used.
+                if bls_keys.contains(&stake_table_key) {
+                    bail!("bls key {} already used", stake_table_key.to_string());
+                };
+
+                // The contract does *not* enforce that each schnorr key is only used once.
+                if schnorr_keys.contains(&state_ver_key) {
+                    tracing::warn!("schnorr key {} already used", state_ver_key.to_string());
+                };
+
+                bls_keys.insert(stake_table_key);
+                schnorr_keys.insert(state_ver_key.clone());
+
+                match validators.entry(account) {
+                    indexmap::map::Entry::Occupied(_occupied_entry) => {
+                        bail!("validator {:#x} already registered", *account)
+                    },
+                    indexmap::map::Entry::Vacant(vacant_entry) => vacant_entry.insert(Validator {
+                        account,
+                        stake_table_key,
+                        state_ver_key,
+                        stake: U256::from(0_u64),
+                        commission,
+                        delegators: HashMap::default(),
+                    }),
+                };
+            },
+            StakeTableEvent::RegisterV2(event) => {
+                if let Err(e) = event.authenticate() {
+                    tracing::warn!("Failed to authenticate event with error {e:#}");
+                    continue;
+                }
+                let ValidatorRegisteredV2 {
+                    account,
+                    blsVK,
+                    schnorrVK,
+                    commission,
+                    ..
+                } = event;
+
+                let stake_table_key: BLSPubKey = blsVK.clone().into();
+                let state_ver_key: SchnorrPubKey = schnorrVK.clone().into();
                 // TODO(MA): The stake table contract currently enforces that each bls key is only used once. We will
                 // move this check to the confirmation layer and remove it from the contract. Once we have the signature
                 // check in this functions we can skip if a BLS key, or Schnorr key was previously used.
@@ -242,6 +310,26 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 validator.stake_table_key = bls;
                 validator.state_ver_key = state_ver_key;
             },
+            StakeTableEvent::KeyUpdateV2(update) => {
+                if let Err(e) = update.authenticate() {
+                    tracing::warn!("Failed to authenticate event with error {e:#}");
+                    continue;
+                }
+                let ConsensusKeysUpdatedV2 {
+                    account,
+                    blsVK,
+                    schnorrVK,
+                    ..
+                } = update;
+                let validator = validators
+                    .get_mut(&account)
+                    .with_context(|| "validator {account:#x} not found")?;
+                let bls = blsVK.into();
+                let state_ver_key = schnorrVK.into();
+
+                validator.stake_table_key = bls;
+                validator.state_ver_key = state_ver_key;
+            },
         }
     }
 
@@ -319,10 +407,12 @@ impl std::fmt::Debug for StakeTableEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StakeTableEvent::Register(event) => write!(f, "Register({:?})", event.account),
+            StakeTableEvent::RegisterV2(event) => write!(f, "RegisterV2({:?})", event.account),
             StakeTableEvent::Deregister(event) => write!(f, "Deregister({:?})", event.validator),
             StakeTableEvent::Delegate(event) => write!(f, "Delegate({:?})", event.delegator),
             StakeTableEvent::Undelegate(event) => write!(f, "Undelegate({:?})", event.delegator),
             StakeTableEvent::KeyUpdate(event) => write!(f, "KeyUpdate({:?})", event.account),
+            StakeTableEvent::KeyUpdateV2(event) => write!(f, "KeyUpdateV2({:?})", event.account),
         }
     }
 }
@@ -572,6 +662,32 @@ impl StakeTableFetcher {
             }
         });
 
+        // fetch registered events v2
+        // retry if the call to the provider to fetch the events fails
+        let registered_events_v2 = stream::iter(chunks.clone()).then(|(from, to)| {
+            let retry_delay = l1_client.options().l1_retry_delay;
+            let stake_table_contract = stake_table_contract.clone();
+            async move {
+                tracing::debug!(from, to, "fetch ValidatorRegisteredV2 events in range");
+                loop {
+                    match stake_table_contract
+                        .clone()
+                        .ValidatorRegisteredV2_filter()
+                        .from_block(from)
+                        .to_block(to)
+                        .query()
+                        .await
+                    {
+                        Ok(events) => break stream::iter(events),
+                        Err(err) => {
+                            tracing::warn!(from, to, %err, "ValidatorRegisteredV2 Error");
+                            sleep(retry_delay).await;
+                        },
+                    }
+                }
+            }
+        });
+
         // fetch validator de registration events
         let deregistered_events = stream::iter(chunks.clone()).then(|(from, to)| {
             let retry_delay = l1_client.options().l1_retry_delay;
@@ -644,7 +760,7 @@ impl StakeTableFetcher {
         });
 
         // fetch consensus keys updated events
-        let keys_update_events = stream::iter(chunks).then(|(from, to)| {
+        let keys_update_events = stream::iter(chunks.clone()).then(|(from, to)| {
             let retry_delay = l1_client.options().l1_retry_delay;
             let stake_table_contract = stake_table_contract.clone();
             async move {
@@ -667,18 +783,46 @@ impl StakeTableFetcher {
             }
         });
 
+        // fetch consensus keys updated v2 events
+        let keys_update_events_v2 = stream::iter(chunks).then(|(from, to)| {
+            let retry_delay = l1_client.options().l1_retry_delay;
+            let stake_table_contract = stake_table_contract.clone();
+            async move {
+                tracing::debug!(from, to, "fetch ConsensusKeysUpdatedV2 events in range");
+                loop {
+                    match stake_table_contract
+                        .ConsensusKeysUpdatedV2_filter()
+                        .from_block(from)
+                        .to_block(to)
+                        .query()
+                        .await
+                    {
+                        Ok(events) => break stream::iter(events),
+                        Err(err) => {
+                            tracing::warn!(from, to, %err, "ConsensusKeysUpdatedV2 Error");
+                            sleep(retry_delay).await;
+                        },
+                    }
+                }
+            }
+        });
+
         let registrations = registered_events.flatten().collect().await;
+        let registrations_v2 = registered_events_v2.flatten().collect().await;
         let deregistrations = deregistered_events.flatten().collect().await;
         let delegated = delegated_events.flatten().collect().await;
         let undelegated = undelegated_events.flatten().collect().await;
         let keys = keys_update_events.flatten().collect().await;
+        let keys_v2 = keys_update_events_v2.flatten().collect().await;
 
         Ok(StakeTableEvents {
             registrations,
+            registrations_v2,
             deregistrations,
             delegated,
             undelegated,
             keys,
+            keys_v2,
         })
     }
 

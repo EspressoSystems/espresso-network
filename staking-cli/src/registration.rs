@@ -138,7 +138,6 @@ pub async fn deregister_validator(
 
 #[cfg(test)]
 mod test {
-    use hotshot_contract_adapter::sol_types::StakeTable;
     use rand::{rngs::StdRng, SeedableRng as _};
 
     use super::*;
