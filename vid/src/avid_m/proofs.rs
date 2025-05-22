@@ -80,15 +80,15 @@ impl AvidMScheme {
                 }
                 raw_shares.push((index, mt_proof.clone()));
                 visited_indices.insert(index);
-                if raw_shares.len() >= param.recovery_threshold {
+                if raw_shares.len() == param.recovery_threshold {
                     break;
                 }
             }
-            if raw_shares.len() >= param.recovery_threshold {
+            if raw_shares.len() == param.recovery_threshold {
                 break;
             }
         }
-        if raw_shares.len() < param.recovery_threshold {
+        if raw_shares.len() != param.recovery_threshold {
             return Err(VidError::InsufficientShares);
         }
 
@@ -167,7 +167,7 @@ impl NsAvidMScheme {
             shares[0].ns_commits().iter().map(|commit| commit.commit),
         )?;
         if mt.commitment() != commit.commit {
-            return Err(VidError::InvalidShare);
+            return Err(VidError::InvalidParam);
         }
         let (ns_commit, ns_mt_proof) = mt
             .lookup(ns_index as u64)

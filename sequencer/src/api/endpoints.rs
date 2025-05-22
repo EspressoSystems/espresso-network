@@ -208,7 +208,7 @@ where
 
                     let ns_table = block.payload().ns_table();
                     if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
-                        match NsProof::v11_new_with_correct_encoding(
+                        match NsProof::v1_1_new_with_correct_encoding(
                             block.payload(),
                             &ns_index,
                             common.common(),
@@ -252,7 +252,7 @@ where
                                     })
                                     .collect();
 
-                                match NsProof::v11_new_with_incorrect_encoding(
+                                match NsProof::v1_1_new_with_incorrect_encoding(
                                     &vid_shares,
                                     ns_table,
                                     &ns_index,

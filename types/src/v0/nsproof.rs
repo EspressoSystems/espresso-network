@@ -39,7 +39,7 @@ impl NsProof {
         }
     }
 
-    pub fn v11_new_with_correct_encoding(
+    pub fn v1_1_new_with_correct_encoding(
         payload: &Payload,
         index: &NsIndex,
         common: &VidCommon,
@@ -52,7 +52,7 @@ impl NsProof {
         }
     }
 
-    pub fn v11_new_with_incorrect_encoding(
+    pub fn v1_1_new_with_incorrect_encoding(
         shares: &[AvidMShare],
         ns_table: &NsTable,
         index: &NsIndex,
@@ -66,8 +66,6 @@ impl NsProof {
             _ => None,
         }
     }
-
-    // pub fn v11_new_with_incorrect_encoding(
 
     pub fn verify(
         &self,
