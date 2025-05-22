@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# Used to build crypto-helper
+# Please run `just build-go-crypto-helper` instead
+#
+# arguments are passed to cargo build
+set -euo pipefail
+
+arch=$(uname -m)
+os=$(uname -s)
+
+if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then
+    if [ "$os" = "Darwin" ]; then
+        triple="aarch64-apple-darwin"
+    else
+        triple="aarch64-unknown-linux-gnu"
+    fi
+elif [ "$arch" = "x86_64" ]; then
+    if [ "$os" = "Darwin" ]; then
+        triple="x86_64-apple-darwin"
+    else
+        triple="x86_64-unknown-linux-gnu"
+    fi
+else
+    echo "ERROR: $arch is not supported"
+    exit 1
+fi
+
+if [ "$os" = "Darwin" ]; then
+    extension="dylib"
+else
+    extension="so"
+fi
+
+lib_path="$(cargo build --manifest-path ./sdks/crypto-helper/Cargo.toml --message-format json "$@" | jq -r '
+  select(.reason == "compiler-artifact")
+  | select(.target.name == "espresso_crypto_helper")
+  | .filenames[0]
+')"
+
+project_root=$(pwd)
+go_target_dir=$project_root/sdks/go/verification/target/lib
+rm -rf "$go_target_dir"
+mkdir -p "$go_target_dir"
+
+ln -sv "$lib_path" "$go_target_dir/libespresso_crypto_helper-$triple.$extension"
+ln -sv "$lib_path" "$go_target_dir"
+
+cd $project_root/sdks/go
+
+env LD_LIBRARY_PATH="${go_target_dir}:${LD_LIBRARY_PATH:-}" go test -count=1 ./verification

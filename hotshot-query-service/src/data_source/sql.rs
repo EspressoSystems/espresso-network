@@ -18,7 +18,7 @@ pub use refinery::Migration;
 pub use sql::Transaction;
 
 use super::{
-    fetching::{self},
+    fetching,
     storage::sql::{self, SqlStorage},
     AvailabilityProvider, FetchingDataSource,
 };

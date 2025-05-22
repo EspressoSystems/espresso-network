@@ -10,7 +10,7 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
-    NodeState, PubKey, SolverAuctionResultsProvider, Transaction, ValidatedState,
+    NodeState, PubKey, Transaction, ValidatedState,
 };
 use futures::{
     future::{join_all, Future},
@@ -18,7 +18,7 @@ use futures::{
 };
 use hotshot::{
     types::{Event, EventType, SystemContextHandle},
-    MarketplaceConfig, SystemContext,
+    SystemContext,
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
@@ -145,12 +145,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             initializer,
             ConsensusMetricsValue::new(metrics),
             Arc::clone(&persistence),
-            // TODO: MA: will be removed when more marketplace code is removed,
-            // at the moment we need to pass in a config to hotshot.
-            MarketplaceConfig {
-                auction_results_provider: Arc::new(SolverAuctionResultsProvider::default()),
-                fallback_builder_url: "http://dummy".parse().unwrap(),
-            },
         )
         .await?
         .0;
@@ -173,11 +167,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         // Configure the request-response protocol
         let request_response_config = RequestResponseConfig {
             incoming_request_ttl: Duration::from_secs(40),
-            response_send_timeout: Duration::from_secs(10),
-            request_batch_size: 15,
+            incoming_request_timeout: Duration::from_secs(5),
+            incoming_response_timeout: Duration::from_secs(5),
+            request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
-            max_outgoing_responses: 20,
-            response_validate_timeout: Duration::from_secs(1),
+            max_incoming_requests: 10,
+            max_incoming_requests_per_key: 1,
             max_incoming_responses: 20,
         };
 

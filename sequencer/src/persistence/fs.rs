@@ -12,7 +12,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
@@ -24,7 +24,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -177,6 +177,10 @@ impl Inner {
 
     fn da_dir_path(&self) -> PathBuf {
         self.path.join("da")
+    }
+
+    fn drb_dir_path(&self) -> PathBuf {
+        self.path.join("drb")
     }
 
     fn da2_dir_path(&self) -> PathBuf {
@@ -509,7 +513,7 @@ impl Inner {
         if self.legacy_anchor_leaf_path().is_file() {
             // We may have an old version of storage, where there is just a single file for the
             // anchor leaf. Read it and return the contents.
-            let mut file = File::open(self.legacy_anchor_leaf_path())?;
+            let mut file = BufReader::new(File::open(self.legacy_anchor_leaf_path())?);
 
             // The first 8 bytes just contain the height of the leaf. We can skip this.
             file.seek(SeekFrom::Start(8)).context("seek")?;
@@ -1241,7 +1245,46 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn add_drb_result(
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
+        if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
+            if loaded_drb_input.iteration >= drb_input.iteration {
+                anyhow::bail!(
+                    "DrbInput in storage {:?} is more recent than {:?}, refusing to update",
+                    loaded_drb_input,
+                    drb_input
+                )
+            }
+        }
+
+        let inner = self.inner.write().await;
+        let dir_path = inner.drb_dir_path();
+
+        fs::create_dir_all(dir_path.clone()).context("failed to create drb dir")?;
+
+        let drb_input_bytes =
+            bincode::serialize(&drb_input).context("failed to serialize drb_input")?;
+
+        let file_path = dir_path
+            .join(drb_input.epoch.to_string())
+            .with_extension("bin");
+        fs::write(&file_path, drb_input_bytes).context(format!(
+            "writing epoch drb_input file for epoch {:?} at {:?}",
+            drb_input.epoch, file_path
+        ))
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
+        let inner = self.inner.read().await;
+        let path = &inner.drb_dir_path();
+        let file_path = path.join(epoch.to_string()).with_extension("bin");
+        let bytes = fs::read(&file_path).context("read")?;
+        Ok(bincode::deserialize(&bytes).context(format!(
+            "failed to deserialize DrbInput for epoch {}",
+            epoch
+        ))?)
+    }
+
+    async fn store_drb_result(
         &self,
         epoch: EpochNumber,
         drb_result: DrbResult,
@@ -1260,7 +1303,7 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -1449,45 +1492,182 @@ impl MembershipPersistence for Persistence {
         )
     }
 
+    /// store stake table events upto the l1 block
     async fn store_events(
         &self,
-        l1_block: u64,
+        to_l1_block: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
         let mut inner = self.inner.write().await;
         let dir_path = &inner.stake_table_dir_path();
         let events_dir = dir_path.join("events");
 
         fs::create_dir_all(events_dir.clone()).context("failed to create events dir")?;
+        // Read the last l1 finalized for which events has been stored
+        let last_l1_finalized_path = events_dir.join("last_l1_finalized").with_extension("bin");
 
-        let file_path = events_dir.with_extension("txt");
+        // check if the last l1 events is higher than the incoming one
+        if last_l1_finalized_path.exists() {
+            let bytes = fs::read(&last_l1_finalized_path).with_context(|| {
+                format!("Failed to read file at path: {last_l1_finalized_path:?}")
+            })?;
+            let mut buf = [0; 8];
+            bytes
+                .as_slice()
+                .read_exact(&mut buf[..8])
+                .with_context(|| {
+                    format!("Failed to read 8 bytes from file at path: {last_l1_finalized_path:?}")
+                })?;
+            let persisted_l1_block = u64::from_le_bytes(buf);
+            if persisted_l1_block > to_l1_block {
+                tracing::debug!(?persisted_l1_block, ?to_l1_block, "stored l1 is greater");
+                return Ok(());
+            }
+        }
 
+        // stores each event in a separate file
+        // this can cause performance issue when, for example, reading all the files
+        // However, the plan is to remove file system completely in future
+        for (event_key, event) in events {
+            let (block_number, event_index) = event_key;
+            // file name is like block_index.json
+            let filename = format!("{}_{}", block_number, event_index);
+            let file_path = events_dir.join(filename).with_extension("json");
+
+            if file_path.exists() {
+                continue;
+            }
+
+            let file = File::create(&file_path).context("Failed to create event file")?;
+            let writer = BufWriter::new(file);
+
+            serde_json::to_writer_pretty(writer, &event)
+                .context("Failed to write event to file")?;
+        }
+
+        // update the l1 block for which we have processed events
         inner.replace(
-            &file_path,
+            &last_l1_finalized_path,
             |_| Ok(true),
-            |file| {
-                let writer = BufWriter::new(file);
-                serde_json::to_writer_pretty(writer, &(l1_block, events))?;
+            |mut file| {
+                let bytes = to_l1_block.to_le_bytes();
+
+                file.write_all(&bytes)?;
+                tracing::debug!("updated l1 finalized ={to_l1_block:?}");
                 Ok(())
             },
         )
     }
 
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
-        let inner = self.inner.write().await;
-        let dir_path = &inner.stake_table_dir_path();
+    /// Loads all events from persistent storage up to the specified L1 block.
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple containing:
+    /// - `Option<u64>` - The queried L1 block for which all events have been successfully fetched.
+    /// - `Vec<(EventKey, StakeTableEvent)>` - A list of events, where each entry is a tuple of the event key
+    /// event key is (l1 block number, log index)
+    ///   and the corresponding StakeTable event.
+    ///
+    async fn load_events(
+        &self,
+        to_l1_block: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.stake_table_dir_path();
         let events_dir = dir_path.join("events");
 
-        let file_path = events_dir.with_extension("txt");
+        // check if we have any events in storage
+        // we can do this by checking last l1 finalized block for which we processed events
+        let last_l1_finalized_path = events_dir.join("last_l1_finalized").with_extension("bin");
 
-        if !file_path.exists() {
-            return Ok(None);
+        if !last_l1_finalized_path.exists() || !events_dir.exists() {
+            return Ok((None, Vec::new()));
         }
 
-        let file = File::open(file_path)?;
-        let reader = BufReader::new(file);
-        let (l1_block, events) = serde_json::from_reader(reader)?;
-        Ok(Some((l1_block, events)))
+        let mut events = Vec::new();
+
+        let bytes = fs::read(&last_l1_finalized_path)
+            .with_context(|| format!("Failed to read file at path: {last_l1_finalized_path:?}"))?;
+        let mut buf = [0; 8];
+        bytes
+            .as_slice()
+            .read_exact(&mut buf[..8])
+            .with_context(|| {
+                format!("Failed to read 8 bytes from file at path: {last_l1_finalized_path:?}")
+            })?;
+
+        let last_processed_l1_block = u64::from_le_bytes(buf);
+
+        // Determine the L1 block for querying events.
+        // If the last stored L1 block is greater than the requested block, limit the query to the requested block.
+        // Otherwise, query up to the last stored block.
+        let query_l1_block = if last_processed_l1_block > to_l1_block {
+            to_l1_block
+        } else {
+            last_processed_l1_block
+        };
+
+        for entry in fs::read_dir(&events_dir).context("events directory")? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+
+            if path
+                .extension()
+                .context(format!("extension for path={path:?}"))?
+                != "json"
+            {
+                continue;
+            }
+
+            let filename = path
+                .file_stem()
+                .and_then(|f| f.to_str())
+                .unwrap_or_default();
+
+            let parts: Vec<&str> = filename.split('_').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+
+            let block_number = parts[0].parse::<u64>()?;
+            let log_index = parts[1].parse::<u64>()?;
+
+            if block_number > query_l1_block {
+                continue;
+            }
+
+            let file =
+                File::open(&path).context(format!("Failed to open event file. path={path:?}"))?;
+            let reader = BufReader::new(file);
+
+            let event: StakeTableEvent = serde_json::from_reader(reader)
+                .context(format!("Failed to deserialize event at path={path:?}"))?;
+
+            events.push(((block_number, log_index), event));
+        }
+
+        events.sort_by_key(|(key, _)| *key);
+
+        if query_l1_block == to_l1_block {
+            Ok((Some(EventsPersistenceRead::Complete), events))
+        } else {
+            Ok((
+                Some(EventsPersistenceRead::UntilL1Block(query_l1_block)),
+                events,
+            ))
+        }
     }
 }
 

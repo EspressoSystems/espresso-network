@@ -23,7 +23,7 @@ use espresso_contract_deployer::{
     DeployedContracts, HttpProviderWithWallet,
 };
 use espresso_types::{
-    parse_duration, v0_99::ChainConfig, EpochVersion, SeqTypes, SequencerVersions, ValidatedState,
+    parse_duration, v0_3::ChainConfig, EpochVersion, SeqTypes, SequencerVersions, ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
@@ -535,6 +535,7 @@ async fn main() -> anyhow::Result<()> {
             blocks_per_epoch,
             epoch_start_block,
             max_retries: 0,
+            max_gas_price: None,
         };
 
         // spawn off prover service for this chain
@@ -781,15 +782,14 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     let mut app = tide_disco::App::<_, ServerError>::with_state(client_states);
     let toml =
         toml::from_str::<toml::value::Value>(include_str!("../../api/espresso_dev_node.toml"))
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            .map_err(io::Error::other)?;
 
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
     api.get("devinfo", move |_, _| {
         let info = dev_info.clone();
         async move { Ok(info.clone()) }.boxed()
     })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?
+    .map_err(io::Error::other)?
     .at("sethotshotdown", move |req, state: &ApiState| {
         async move {
             let body = req
@@ -813,7 +813,7 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
         }
         .boxed()
     })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?
+    .map_err(io::Error::other)?
     .at("sethotshotup", move |req, state| {
         async move {
             let chain_id = req
@@ -838,10 +838,9 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
         }
         .boxed()
     })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    .map_err(io::Error::other)?;
 
-    app.register_module("api", api)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    app.register_module("api", api).map_err(io::Error::other)?;
 
     tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
 

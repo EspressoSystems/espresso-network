@@ -90,3 +90,10 @@ pub struct AccountQueryData {
     pub balance: U256,
     pub proof: FeeAccountProof,
 }
+
+
+/// Methods for use w/ Vec<FeeInfo>
+pub trait IterableFeeInfo {
+    fn amount(&self) -> Option<FeeAmount>;
+    fn accounts(&self) -> Vec<FeeAccount>;
+}

@@ -180,18 +180,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let total_weight =
                     vid_total_weight::<TYPES>(&membership.stake_table().await, epoch_number);
 
-                let mut next_epoch_total_weight = total_weight;
-                if epoch_number.is_some() {
-                    next_epoch_total_weight = vid_total_weight::<TYPES>(
-                        &membership
-                            .next_epoch_stake_table()
-                            .await?
-                            .stake_table()
-                            .await,
-                        epoch_number.map(|epoch| epoch + 1),
-                    );
-                }
-
                 let version = self.upgrade_lock.version_infallible(view_number).await;
 
                 let txns = Arc::clone(&proposal.data.encoded_transactions);
@@ -210,7 +198,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     .upgrade_lock
                     .epochs_enabled(proposal.data.view_number())
                     .await
+                    && epoch_number.is_some()
                 {
+                    let next_epoch_total_weight = vid_total_weight::<TYPES>(
+                        &membership
+                            .next_epoch_stake_table()
+                            .await?
+                            .stake_table()
+                            .await,
+                        epoch_number.map(|epoch| epoch + 1),
+                    );
+
                     let commit_result = spawn_blocking(move || {
                         vid_commitment::<V>(
                             &txns_clone,

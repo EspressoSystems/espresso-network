@@ -58,11 +58,10 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
             null_block::builder_fee::<TestConsecutiveLeaderTypes, TestVersions>(
                 num_storage_nodes,
                 <TestVersions as Versions>::Base::VERSION,
-                *ViewNumber::new(4),
             )
             .unwrap()
         ],
-        None,
+        
     );
     output.push(HotShotEvent::BlockRecv(exp_packed_bundle.clone()));
 
@@ -71,7 +70,7 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
     output.push(HotShotEvent::BlockRecv(exp_packed_bundle));
 
     let transaction_state =
-        TransactionTaskState::<TestConsecutiveLeaderTypes, MemoryImpl, TestVersions>::create_from(
+        TransactionTaskState::<TestConsecutiveLeaderTypes, TestVersions>::create_from(
             &handle,
         )
         .await;
