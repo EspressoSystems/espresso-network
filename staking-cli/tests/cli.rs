@@ -1,7 +1,6 @@
 use std::{
     path::PathBuf,
     process::{Command, Output, Stdio},
-    str::FromStr,
 };
 
 use alloy::primitives::{
@@ -10,7 +9,6 @@ use alloy::primitives::{
 };
 use anyhow::Result;
 use rand::{rngs::StdRng, SeedableRng as _};
-use rust_decimal::Decimal;
 use sequencer_utils::test_utils::setup_test;
 use staking_cli::{demo::DelegationConfig, deploy::Signer, *};
 
