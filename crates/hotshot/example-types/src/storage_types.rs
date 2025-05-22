@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
@@ -21,7 +21,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
         VidCommitment,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -63,6 +63,7 @@ pub struct TestStorageState<TYPES: NodeType> {
     epoch: Option<TYPES::Epoch>,
     state_certs: BTreeMap<TYPES::Epoch, LightClientStateUpdateCertificate<TYPES>>,
     drb_results: BTreeMap<TYPES::Epoch, DrbResult>,
+    drb_inputs: BTreeMap<u64, DrbInput>,
     epoch_roots: BTreeMap<TYPES::Epoch, TYPES::BlockHeader>,
 }
 
@@ -83,6 +84,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             epoch: None,
             state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
+            drb_inputs: BTreeMap::new(),
             epoch_roots: BTreeMap::new(),
         }
     }
@@ -405,5 +407,22 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         inner.epoch_roots.insert(epoch, block_header);
 
         Ok(())
+    }
+
+    async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()> {
+        let mut inner = self.inner.write().await;
+
+        inner.drb_inputs.insert(drb_input.epoch, drb_input);
+
+        Ok(())
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> Result<DrbInput> {
+        let inner = self.inner.read().await;
+
+        match inner.drb_inputs.get(&epoch) {
+            Some(drb_input) => Ok(drb_input.clone()),
+            None => Err(anyhow!("Missing DrbInput for epoch {}", epoch)),
+        }
     }
 }

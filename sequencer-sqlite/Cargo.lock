@@ -4688,6 +4688,7 @@ dependencies = [
  "num-traits",
  "rand 0.8.5",
  "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -8469,6 +8470,7 @@ dependencies = [
  "bincode",
  "blake3",
  "byteorder",
+ "dashmap",
  "derive_more 1.0.0",
  "hotshot-types",
  "parking_lot",

@@ -24,7 +24,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -177,6 +177,10 @@ impl Inner {
 
     fn da_dir_path(&self) -> PathBuf {
         self.path.join("da")
+    }
+
+    fn drb_dir_path(&self) -> PathBuf {
+        self.path.join("drb")
     }
 
     fn da2_dir_path(&self) -> PathBuf {
@@ -1239,6 +1243,45 @@ impl SequencerPersistence for Persistence {
     }
     async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
+        if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
+            if loaded_drb_input.iteration >= drb_input.iteration {
+                anyhow::bail!(
+                    "DrbInput in storage {:?} is more recent than {:?}, refusing to update",
+                    loaded_drb_input,
+                    drb_input
+                )
+            }
+        }
+
+        let inner = self.inner.write().await;
+        let dir_path = inner.drb_dir_path();
+
+        fs::create_dir_all(dir_path.clone()).context("failed to create drb dir")?;
+
+        let drb_input_bytes =
+            bincode::serialize(&drb_input).context("failed to serialize drb_input")?;
+
+        let file_path = dir_path
+            .join(drb_input.epoch.to_string())
+            .with_extension("bin");
+        fs::write(&file_path, drb_input_bytes).context(format!(
+            "writing epoch drb_input file for epoch {:?} at {:?}",
+            drb_input.epoch, file_path
+        ))
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
+        let inner = self.inner.read().await;
+        let path = &inner.drb_dir_path();
+        let file_path = path.join(epoch.to_string()).with_extension("bin");
+        let bytes = fs::read(&file_path).context("read")?;
+        Ok(bincode::deserialize(&bytes).context(format!(
+            "failed to deserialize DrbInput for epoch {}",
+            epoch
+        ))?)
     }
 
     async fn store_drb_result(
