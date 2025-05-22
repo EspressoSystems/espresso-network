@@ -5618,6 +5618,8 @@ dependencies = [
  "local-ip-address",
  "portpicker",
  "rand 0.8.5",
+ "reqwest 0.12.15",
+ "sequencer",
  "serde",
  "sha2 0.10.9",
  "surf-disco",
