@@ -74,7 +74,7 @@
 <a href=#74 id=74 data-nosnippet>74</a>    <span class="kw">pub </span>sender: &lt;TYPES <span class="kw">as </span>NodeType&gt;::BuilderSignatureKey,
 <a href=#75 id=75 data-nosnippet>75</a>}
 <a href=#76 id=76 data-nosnippet>76</a>
-<a href=#77 id=77 data-nosnippet>77</a><span class="doccomment">/// legacy version of the AvailableBlockHeaderInputV2 type, used on git tag `20280228-patch3`
+<a href=#77 id=77 data-nosnippet>77</a><span class="doccomment">/// legacy version of the AvailableBlockHeaderInputV2 type, used on git tag `20250228-patch3`
 <a href=#78 id=78 data-nosnippet>78</a>///
 <a href=#79 id=79 data-nosnippet>79</a>/// this was inadvertently changed to remove some deprecated fields,
 <a href=#80 id=80 data-nosnippet>80</a>/// which resulted in a builder incompatibility.
@@ -93,30 +93,76 @@
 <a href=#93 id=93 data-nosnippet>93</a>    <span class="kw">pub </span>sender: &lt;TYPES <span class="kw">as </span>NodeType&gt;::BuilderSignatureKey,
 <a href=#94 id=94 data-nosnippet>94</a>}
 <a href=#95 id=95 data-nosnippet>95</a>
-<a href=#96 id=96 data-nosnippet>96</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; AvailableBlockHeaderInputV2Legacy&lt;TYPES&gt; {
-<a href=#97 id=97 data-nosnippet>97</a>    <span class="kw">pub fn </span>validate_signature(
-<a href=#98 id=98 data-nosnippet>98</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#99 id=99 data-nosnippet>99</a>        offered_fee: u64,
-<a href=#100 id=100 data-nosnippet>100</a>        metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#101 id=101 data-nosnippet>101</a>    ) -&gt; bool {
-<a href=#102 id=102 data-nosnippet>102</a>        <span class="self">self</span>.sender
-<a href=#103 id=103 data-nosnippet>103</a>            .validate_builder_signature(<span class="kw-2">&amp;</span><span class="self">self</span>.message_signature, <span class="self">self</span>.vid_commitment.as_ref())
-<a href=#104 id=104 data-nosnippet>104</a>            &amp;&amp; <span class="self">self</span>.sender.validate_fee_signature_with_vid_commitment(
-<a href=#105 id=105 data-nosnippet>105</a>                <span class="kw-2">&amp;</span><span class="self">self</span>.fee_signature,
-<a href=#106 id=106 data-nosnippet>106</a>                offered_fee,
-<a href=#107 id=107 data-nosnippet>107</a>                metadata,
-<a href=#108 id=108 data-nosnippet>108</a>                <span class="kw-2">&amp;</span>hotshot_types::data::VidCommitment::V0(<span class="self">self</span>.vid_commitment),
-<a href=#109 id=109 data-nosnippet>109</a>            )
-<a href=#110 id=110 data-nosnippet>110</a>    }
-<a href=#111 id=111 data-nosnippet>111</a>}
-<a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; AvailableBlockHeaderInputV2&lt;TYPES&gt; {
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">pub fn </span>validate_signature(
-<a href=#115 id=115 data-nosnippet>115</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#116 id=116 data-nosnippet>116</a>        offered_fee: u64,
-<a href=#117 id=117 data-nosnippet>117</a>        metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
-<a href=#118 id=118 data-nosnippet>118</a>    ) -&gt; bool {
-<a href=#119 id=119 data-nosnippet>119</a>        <span class="self">self</span>.sender
-<a href=#120 id=120 data-nosnippet>120</a>            .validate_fee_signature(<span class="kw-2">&amp;</span><span class="self">self</span>.fee_signature, offered_fee, metadata)
-<a href=#121 id=121 data-nosnippet>121</a>    }
-<a href=#122 id=122 data-nosnippet>122</a>}</code></pre></div></section></main></body></html>
+<a href=#96 id=96 data-nosnippet>96</a><span class="doccomment">/// either version of the AvailableBlockHeaderInputV2 type. Note that we try to deserialize legacy first,
+<a href=#97 id=97 data-nosnippet>97</a>/// as that has extra fields that are not present in the current version. When presented with a legacy
+<a href=#98 id=98 data-nosnippet>98</a>/// input, we'll first try to validate its signature as the current version.
+<a href=#99 id=99 data-nosnippet>99</a></span><span class="attr">#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+<a href=#100 id=100 data-nosnippet>100</a></span><span class="kw">pub enum </span>AvailableBlockHeaderInputV2Either&lt;TYPES: NodeType&gt; {
+<a href=#101 id=101 data-nosnippet>101</a>    Current(AvailableBlockHeaderInputV2&lt;TYPES&gt;),
+<a href=#102 id=102 data-nosnippet>102</a>    Legacy(AvailableBlockHeaderInputV2Legacy&lt;TYPES&gt;),
+<a href=#103 id=103 data-nosnippet>103</a>}
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; AvailableBlockHeaderInputV2Legacy&lt;TYPES&gt; {
+<a href=#106 id=106 data-nosnippet>106</a>    <span class="kw">pub fn </span>validate_signature(
+<a href=#107 id=107 data-nosnippet>107</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#108 id=108 data-nosnippet>108</a>        offered_fee: u64,
+<a href=#109 id=109 data-nosnippet>109</a>        metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
+<a href=#110 id=110 data-nosnippet>110</a>    ) -&gt; bool {
+<a href=#111 id=111 data-nosnippet>111</a>        <span class="self">self</span>.sender
+<a href=#112 id=112 data-nosnippet>112</a>            .validate_builder_signature(<span class="kw-2">&amp;</span><span class="self">self</span>.message_signature, <span class="self">self</span>.vid_commitment.as_ref())
+<a href=#113 id=113 data-nosnippet>113</a>            &amp;&amp; <span class="self">self</span>.sender.validate_fee_signature_with_vid_commitment(
+<a href=#114 id=114 data-nosnippet>114</a>                <span class="kw-2">&amp;</span><span class="self">self</span>.fee_signature,
+<a href=#115 id=115 data-nosnippet>115</a>                offered_fee,
+<a href=#116 id=116 data-nosnippet>116</a>                metadata,
+<a href=#117 id=117 data-nosnippet>117</a>                <span class="kw-2">&amp;</span>hotshot_types::data::VidCommitment::V0(<span class="self">self</span>.vid_commitment),
+<a href=#118 id=118 data-nosnippet>118</a>            )
+<a href=#119 id=119 data-nosnippet>119</a>    }
+<a href=#120 id=120 data-nosnippet>120</a>}
+<a href=#121 id=121 data-nosnippet>121</a>
+<a href=#122 id=122 data-nosnippet>122</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; AvailableBlockHeaderInputV2&lt;TYPES&gt; {
+<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">pub fn </span>validate_signature(
+<a href=#124 id=124 data-nosnippet>124</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#125 id=125 data-nosnippet>125</a>        offered_fee: u64,
+<a href=#126 id=126 data-nosnippet>126</a>        metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
+<a href=#127 id=127 data-nosnippet>127</a>    ) -&gt; bool {
+<a href=#128 id=128 data-nosnippet>128</a>        <span class="self">self</span>.sender
+<a href=#129 id=129 data-nosnippet>129</a>            .validate_fee_signature(<span class="kw-2">&amp;</span><span class="self">self</span>.fee_signature, offered_fee, metadata)
+<a href=#130 id=130 data-nosnippet>130</a>    }
+<a href=#131 id=131 data-nosnippet>131</a>}
+<a href=#132 id=132 data-nosnippet>132</a>
+<a href=#133 id=133 data-nosnippet>133</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; AvailableBlockHeaderInputV2Either&lt;TYPES&gt; {
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">pub fn </span>validate_signature_and_get_input(
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#136 id=136 data-nosnippet>136</a>        offered_fee: u64,
+<a href=#137 id=137 data-nosnippet>137</a>        metadata: <span class="kw-2">&amp;</span>&lt;TYPES::BlockPayload <span class="kw">as </span>BlockPayload&lt;TYPES&gt;&gt;::Metadata,
+<a href=#138 id=138 data-nosnippet>138</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;AvailableBlockHeaderInputV2&lt;TYPES&gt;&gt; {
+<a href=#139 id=139 data-nosnippet>139</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#140 id=140 data-nosnippet>140</a>            AvailableBlockHeaderInputV2Either::Legacy(legacy) =&gt; {
+<a href=#141 id=141 data-nosnippet>141</a>                <span class="comment">// Try to validate this as a current signature first, then fall back to legacy validation
+<a href=#142 id=142 data-nosnippet>142</a>                // Note that "legacy" as a variable name might be misleading here, as in the first case
+<a href=#143 id=143 data-nosnippet>143</a>                // we're treating the 'legacy' struct as 'current' with extra fields. This mirrors the previous
+<a href=#144 id=144 data-nosnippet>144</a>                // behavior of the code.
+<a href=#145 id=145 data-nosnippet>145</a>                </span><span class="kw">if </span>legacy.sender.validate_fee_signature(
+<a href=#146 id=146 data-nosnippet>146</a>                    <span class="kw-2">&amp;</span>legacy.fee_signature,
+<a href=#147 id=147 data-nosnippet>147</a>                    offered_fee,
+<a href=#148 id=148 data-nosnippet>148</a>                    metadata,
+<a href=#149 id=149 data-nosnippet>149</a>                ) || legacy.validate_signature(offered_fee, metadata)
+<a href=#150 id=150 data-nosnippet>150</a>                {
+<a href=#151 id=151 data-nosnippet>151</a>                    <span class="prelude-val">Some</span>(AvailableBlockHeaderInputV2 {
+<a href=#152 id=152 data-nosnippet>152</a>                        fee_signature: legacy.fee_signature.clone(),
+<a href=#153 id=153 data-nosnippet>153</a>                        sender: legacy.sender.clone(),
+<a href=#154 id=154 data-nosnippet>154</a>                    })
+<a href=#155 id=155 data-nosnippet>155</a>                } <span class="kw">else </span>{
+<a href=#156 id=156 data-nosnippet>156</a>                    <span class="prelude-val">None
+<a href=#157 id=157 data-nosnippet>157</a>                </span>}
+<a href=#158 id=158 data-nosnippet>158</a>            },
+<a href=#159 id=159 data-nosnippet>159</a>            AvailableBlockHeaderInputV2Either::Current(current) =&gt; {
+<a href=#160 id=160 data-nosnippet>160</a>                <span class="kw">if </span>current.validate_signature(offered_fee, metadata) {
+<a href=#161 id=161 data-nosnippet>161</a>                    <span class="prelude-val">Some</span>(current.clone())
+<a href=#162 id=162 data-nosnippet>162</a>                } <span class="kw">else </span>{
+<a href=#163 id=163 data-nosnippet>163</a>                    <span class="prelude-val">None
+<a href=#164 id=164 data-nosnippet>164</a>                </span>}
+<a href=#165 id=165 data-nosnippet>165</a>            },
+<a href=#166 id=166 data-nosnippet>166</a>        }
+<a href=#167 id=167 data-nosnippet>167</a>    }
+<a href=#168 id=168 data-nosnippet>168</a>}</code></pre></div></section></main></body></html>
