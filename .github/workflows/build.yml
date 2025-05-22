@@ -21,32 +21,32 @@ env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
   DOCKER_PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-  ARTIFACT_PATHS: |
-    target/release/cdn-broker
-    target/release/cdn-marshal
-    target/release/cdn-whitelist
-    target/release/cli
-    target/release/deploy
-    target/release/espresso-bridge
-    target/release/espresso-dev-node
-    target/release/keygen
-    target/release/nasty-client
-    target/release/node-metrics
-    target/release/orchestrator
-    target/release/permissionless-builder
-    target/release/pub-key
-    target/release/reset-storage
-    target/release/sequencer
-    target/release/sequencer-sqlite
-    target/release/staking-cli
-    target/release/state-prover
-    target/release/state-relay-server
-    target/release/submit-transactions
-    target/release/utils
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04-8core
+  build-x86:
+    name: Build ${{ matrix.binary }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - binary: sequencer
+            shared-key: postgres
+            save-cache: false
+
+          - binary: other
+            shared-key: postgres
+            save-cache: true
+
+          - binary: sequencer-sqlite
+            # uses it's own lock file
+            shared-key: sequencer-embedded
+            save-cache: true
+
+          - binary: espresso-dev-node
+            # uses differend features testing,emdbedded-db
+            shared-key: espresso-dev-node
+            save-cache: true
+
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -56,34 +56,62 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: v3-rust
+          shared-key: ${{ matrix.shared-key }}
+          save-if: >
+            ${{ matrix.save-cache && (
+            github.ref == 'refs/heads/main'
+            || startsWith(github.ref, 'refs/heads/release-')
+            || github.event_name == 'workflow_dispatch' ) }}
           cache-provider: github
 
-      - name: Build
-        # Build in release without `testing` feature, this should work without `hotshot_example` config.
+      - name: Build ${{ matrix.binary }}
         run: |
-          cargo build --locked --release --workspace
+          scripts/ci-build-binary ${{ matrix.binary }}
 
-      - name: Build sequencer-sqlite
-        run: cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
-
-      - name: Build Espresso Dev Node
-        # Espresso Dev Node currently requires testing feature, so it is built separately.
+      - name: Move binaries to upload directory
+        shell: bash
         run: |
-          cargo build --locked --release --features "testing embedded-db" --bin espresso-dev-node
+          mkdir -p upload
+          for item in target/release/*; do
+            if [[ -f "$item" && -x "$item" ]]; then
+              mv -v "$item" ./upload
+              continue
+            fi
+          done
 
-      - name: Upload artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: x86_64-unknown-linux-gnu-services
-          path: ${{ env.ARTIFACT_PATHS }}
+          name: x86-${{ matrix.binary }}
+          path: |
+            upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
   build-arm:
-    if: github.event_name != 'pull_request'
+    name: Build ${{ matrix.binary }}
     runs-on: buildjet-8vcpu-ubuntu-2204-arm
-    env:
-      CARGO_BUILD_JOBS: '6'
+    if: ${{ github.event_name != 'pull_request' }}
+    strategy:
+      matrix:
+        include:
+          - binary: sequencer
+            shared-key: postgres
+            save-cache: false
+
+          - binary: other
+            shared-key: postgres
+            save-cache: true
+
+          - binary: sequencer-sqlite
+            # uses it's own lock file
+            shared-key: sequencer-embedded
+            save-cache: true
+
+          - binary: espresso-dev-node
+            # uses differend features testing,emdbedded-db
+            shared-key: espresso-dev-node
+            save-cache: true
+
     steps:
       - uses: rui314/setup-mold@v1
 
@@ -93,26 +121,35 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: v3-rust
+          shared-key: ${{ matrix.shared-key }}
+          save-if: >
+            ${{ matrix.save-cache && (
+            github.ref == 'refs/heads/main'
+            || startsWith(github.ref, 'refs/heads/release-')
+            || github.event_name == 'workflow_dispatch' ) }}
           cache-provider: buildjet
 
-      - name: Build
+      - name: Build ${{ matrix.binary }}
         run: |
-          cargo build --locked --release --workspace
+          scripts/ci-build-binary ${{ matrix.binary }}
 
-      - name: Build sequencer-sqlite
-        run: cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir ./target
-
-      - name: Build Espresso Dev Node
-        # Espresso Dev Node currently requires testing feature, so it is built separately.
+      - name: Move binaries to upload directory
         run: |
-          cargo build --locked --release --features "embedded-db testing" --bin espresso-dev-node
+          mkdir -p upload
+          for item in target/release/*; do
+            if [[ -f "$item" && -x "$item" ]]; then
+              mv -v "$item" ./upload
+              continue
+            fi
+          done
 
-      - name: Upload artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: aarch64-unknown-linux-gnu-services
-          path: ${{ env.ARTIFACT_PATHS }}
+          name: arm-${{ matrix.binary }}
+          path: |
+            upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
   build-dockers:
     runs-on: ubuntu-latest
@@ -139,7 +176,7 @@ jobs:
           - state-relay-server
           - submit-transactions
 
-    needs: [build, build-arm]
+    needs: [build-x86, build-arm]
     # if build_arm is skipped, run this job anyway
     if: ${{ !(failure() || cancelled()) }}
     steps:
@@ -149,15 +186,17 @@ jobs:
       - name: Download executables AMD
         uses: actions/download-artifact@v4
         with:
-          name: x86_64-unknown-linux-gnu-services
+          pattern: x86-*
           path: target/amd64/release
+          merge-multiple: true
 
       - name: Download executables ARM
         if: github.event_name != 'pull_request'
         uses: actions/download-artifact@v4
         with:
-          name: aarch64-unknown-linux-gnu-services
+          pattern: arm-*
           path: target/arm64/release
+          merge-multiple: true
 
       - name: Setup QEMU
         if: ${{ github.event_name != 'pull_request' }}
