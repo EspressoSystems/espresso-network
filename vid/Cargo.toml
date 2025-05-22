@@ -24,7 +24,7 @@ sha3 = { version = "0.10" }
 tagged-base64 = { workspace = true }
 
 [dev-dependencies]
-ark-bls12-381 = { version = "0.4.0" }
+ark-bls12-381 = { version = "0.5.0" }
 criterion = "0.5"
 rand = "0.8.5"
 
