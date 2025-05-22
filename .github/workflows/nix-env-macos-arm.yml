@@ -43,11 +43,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: Swatinem/rust-cache@v2
-        name: Enable Rust Caching
-        with:
-          prefix-key: v0-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # NOTE: no rust cache this isn't a time critical job
 
       - name: Activate nix env
         run: nix develop --accept-flake-config -c echo Ok

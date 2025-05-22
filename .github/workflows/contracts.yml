@@ -42,11 +42,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: Swatinem/rust-cache@v2
-        name: Enable Rust Caching
-        with:
-          prefix-key: v2-rust-${{ hashFiles('flake.*') }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # NOTE: no rust cache, it doesn't work out of the box our nix env
 
       - name: Check toolchain versions
         run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions
