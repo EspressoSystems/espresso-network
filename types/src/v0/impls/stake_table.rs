@@ -1137,11 +1137,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         view_number: <SeqTypes as NodeType>::View,
         epoch: Option<Epoch>,
     ) -> Result<PubKey, Self::Error> {
-        if let Some(epoch) = epoch {
-            let Some(randomized_committee) = self.randomized_committees.get(&epoch) else {
+        if self.first_epoch.is_some() && epoch.is_some_and(|e| e >= self.first_epoch.unwrap()) {
+            let Some(randomized_committee) = self.randomized_committees.get(&epoch.unwrap()) else {
                 tracing::error!(
                     "We are missing the randomized committee for epoch {}",
-                    epoch
+                    epoch.unwrap()
                 );
                 return Err(LeaderLookupError);
             };
