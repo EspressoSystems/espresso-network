@@ -72,7 +72,7 @@ struct Options {
     /// Seed for generating keys.
     ///
     /// If not provided, a random seed will be generated using system entropy.
-    #[clap(long, short = 's', value_parser = parse_seed)]
+    #[arg(long, short = 's', value_parser = parse_seed)]
     seed: Option<[u8; 32]>,
 
     /// Signature scheme to generate.
@@ -81,13 +81,13 @@ struct Options {
     /// the state key). By default, this program generates these keys in pairs, to make it easy to
     /// configure sequencer nodes, but this option can be specified to generate keys for only one of
     /// the signature schemes.
-    #[clap(long, default_value = "all")]
+    #[arg(long, default_value = "all")]
     scheme: Scheme,
 
     /// Number of setups to generate.
     ///
     /// Default is 1.
-    #[clap(long, short = 'n', name = "N", default_value = "1")]
+    #[arg(long, short = 'n', value_name = "N", default_value = "1")]
     num: usize,
 
     /// Write private keys to .env files under DIR.
@@ -96,10 +96,10 @@ struct Options {
     /// be written to files immediately under DIR, with names like 0.env, 1.env, etc. for 0 through
     /// N - 1. The random seed used to generate the keys will also be written to a file in DIR
     /// called .seed.
-    #[clap(short, long, name = "OUT")]
+    #[arg(short, long, value_name = "OUT")]
     out: PathBuf,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 
