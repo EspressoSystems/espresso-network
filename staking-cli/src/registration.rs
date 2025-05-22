@@ -2,23 +2,17 @@ use alloy::{
     primitives::{Address, Bytes},
     providers::Provider,
     rpc::types::TransactionReceipt,
-    sol_types::SolValue as _,
 };
 use anyhow::Result;
-use ark_ec::CurveGroup;
-use ark_serialize::CanonicalSerialize;
 use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
     sol_types::{
         EdOnBN254PointSol, G1PointSol, G2PointSol,
         StakeTableV2::{self, StakeTableV2Errors},
     },
+    stake_table::{sign_address_bls, sign_address_schnorr},
 };
-use hotshot_types::{
-    light_client::{hash_bytes_to_field, StateKeyPair},
-    signature_key::BLSKeyPair,
-};
-use jf_signature::constants::{CS_ID_BLS_BN254, CS_ID_SCHNORR};
+use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 
 use crate::parse::Commission;
 
@@ -29,11 +23,7 @@ fn prepare_bls_payload(
 ) -> (G2PointSol, G1PointSol) {
     (
         bls_key_pair.ver_key().to_affine().into(),
-        bls_key_pair
-            .sign(&validator_address.abi_encode(), CS_ID_BLS_BN254)
-            .sigma
-            .into_affine()
-            .into(),
+        sign_address_bls(bls_key_pair, validator_address),
     )
 }
 
@@ -43,14 +33,8 @@ fn prepare_schnorr_payload(
     validator_address: Address,
 ) -> (EdOnBN254PointSol, Bytes) {
     let schnorr_vk_sol: EdOnBN254PointSol = schnorr_key_pair.ver_key().to_affine().into();
-    let msg = [hash_bytes_to_field(&validator_address.abi_encode()).expect("hash to field works")];
-    let mut buf = vec![];
-    schnorr_key_pair
-        .sign(&msg, CS_ID_SCHNORR)
-        .serialize_uncompressed(&mut buf)
-        .expect("serialize works");
-
-    (schnorr_vk_sol, buf.into())
+    let sig = sign_address_schnorr(schnorr_key_pair, validator_address);
+    (schnorr_vk_sol, sig)
 }
 
 pub async fn register_validator(
@@ -179,15 +163,15 @@ mod test {
         assert!(receipt.status());
 
         let event = receipt
-            .decoded_log::<StakeTableV2::ValidatorRegistered>()
+            .decoded_log::<StakeTableV2::ValidatorRegisteredV2>()
             .unwrap();
         assert_eq!(event.account, validator_address);
         assert_eq!(event.commission, system.commission.to_evm());
 
-        assert_eq!(event.blsVk, bls_vk_sol);
-        assert_eq!(event.schnorrVk, schnorr_vk_sol);
+        assert_eq!(event.blsVK, bls_vk_sol);
+        assert_eq!(event.schnorrVK, schnorr_vk_sol);
 
-        // TODO verify we can parse keys and verify signature
+        event.data.authenticate()?;
         Ok(())
     }
 
@@ -199,7 +183,9 @@ mod test {
         let receipt = deregister_validator(&system.provider, system.stake_table).await?;
         assert!(receipt.status());
 
-        let event = receipt.decoded_log::<StakeTable::ValidatorExit>().unwrap();
+        let event = receipt
+            .decoded_log::<StakeTableV2::ValidatorExit>()
+            .unwrap();
         assert_eq!(event.validator, system.deployer_address);
 
         Ok(())
@@ -226,12 +212,14 @@ mod test {
         assert!(receipt.status());
 
         let event = receipt
-            .decoded_log::<StakeTableV2::ConsensusKeysUpdated>()
+            .decoded_log::<StakeTableV2::ConsensusKeysUpdatedV2>()
             .unwrap();
         assert_eq!(event.account, system.deployer_address);
 
         assert_eq!(event.blsVK, bls_vk_sol);
         assert_eq!(event.schnorrVK, schnorr_vk_sol);
+
+        event.data.authenticate()?;
 
         Ok(())
     }

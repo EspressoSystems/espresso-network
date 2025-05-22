@@ -15,9 +15,9 @@ use alloy::{
 };
 use anyhow::Result;
 use espresso_contract_deployer::build_signer;
-use hotshot_contract_adapter::sol_types::{ERC1967Proxy, EspToken, StakeTable};
+use hotshot_contract_adapter::sol_types::{ERC1967Proxy, EspToken, StakeTable, StakeTableV2};
 use hotshot_types::light_client::StateKeyPair;
-use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng as _};
+use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
 
 use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
@@ -27,8 +27,6 @@ type TestProvider = FillProvider<
     AnvilProvider<RootProvider>,
     Ethereum,
 >;
-
-type SchnorrKeyPair = jf_signature::schnorr::KeyPair<ark_ed_on_bn254::EdwardsConfig>;
 
 #[derive(Debug, Clone)]
 pub struct TestSystem {
@@ -76,7 +74,7 @@ impl TestSystem {
         let token = EspToken::new(*token_proxy.address(), provider.clone());
 
         // `StakeTable.sol`
-        let stake_table_impl = StakeTable::deploy(provider.clone()).await?;
+        let stake_table_impl = StakeTableV2::deploy(provider.clone()).await?;
         let data = stake_table_impl
             .initialize(
                 *token_proxy.address(),
@@ -125,7 +123,7 @@ impl TestSystem {
         (
             PrivateKeySigner::random_with(rng),
             BLSKeyPair::generate(rng),
-            SchnorrKeyPair::generate(rng).into(),
+            StateKeyPair::generate_from_seed(rng.gen()).into(),
         )
     }
 

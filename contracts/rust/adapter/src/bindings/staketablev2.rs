@@ -1287,7 +1287,7 @@ interface StakeTableV2 {
     event Upgraded(address indexed implementation);
     event ValidatorExit(address indexed validator);
     event ValidatorRegistered(address indexed account, BN254.G2Point blsVk, EdOnBN254.EdOnBN254Point schnorrVk, uint16 commission);
-    event ValidatorRegisteredV2(address indexed account, BN254.G2Point blsVk, EdOnBN254.EdOnBN254Point schnorrVk, uint16 commission, BN254.G1Point blsSig, bytes schnorrSig);
+    event ValidatorRegisteredV2(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK, uint16 commission, BN254.G1Point blsSig, bytes schnorrSig);
     event Withdrawal(address indexed account, uint256 amount);
 
     constructor();
@@ -2397,7 +2397,7 @@ interface StakeTableV2 {
         "internalType": "address"
       },
       {
-        "name": "blsVk",
+        "name": "blsVK",
         "type": "tuple",
         "indexed": false,
         "internalType": "struct BN254.G2Point",
@@ -2425,7 +2425,7 @@ interface StakeTableV2 {
         ]
       },
       {
-        "name": "schnorrVk",
+        "name": "schnorrVK",
         "type": "tuple",
         "indexed": false,
         "internalType": "struct EdOnBN254.EdOnBN254Point",
@@ -5655,7 +5655,7 @@ pub mod StakeTableV2 {
     #[derive()]
     /**Event with signature `ValidatorRegisteredV2(address,(uint256,uint256,uint256,uint256),(uint256,uint256),uint16,(uint256,uint256),bytes)` and selector `0xf057d4ea81e98628653a8f90788541972078137334a92b42347eaccda80fc40a`.
     ```solidity
-    event ValidatorRegisteredV2(address indexed account, BN254.G2Point blsVk, EdOnBN254.EdOnBN254Point schnorrVk, uint16 commission, BN254.G1Point blsSig, bytes schnorrSig);
+    event ValidatorRegisteredV2(address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK, uint16 commission, BN254.G1Point blsSig, bytes schnorrSig);
     ```*/
     #[allow(
         non_camel_case_types,
@@ -5668,9 +5668,9 @@ pub mod StakeTableV2 {
         #[allow(missing_docs)]
         pub account: alloy::sol_types::private::Address,
         #[allow(missing_docs)]
-        pub blsVk: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
+        pub blsVK: <BN254::G2Point as alloy::sol_types::SolType>::RustType,
         #[allow(missing_docs)]
-        pub schnorrVk: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
+        pub schnorrVK: <EdOnBN254::EdOnBN254Point as alloy::sol_types::SolType>::RustType,
         #[allow(missing_docs)]
         pub commission: u16,
         #[allow(missing_docs)]
@@ -5716,8 +5716,8 @@ pub mod StakeTableV2 {
             ) -> Self {
                 Self {
                     account: topics.1,
-                    blsVk: data.0,
-                    schnorrVk: data.1,
+                    blsVK: data.0,
+                    schnorrVK: data.1,
                     commission: data.2,
                     blsSig: data.3,
                     schnorrSig: data.4,
@@ -5739,9 +5739,9 @@ pub mod StakeTableV2 {
             #[inline]
             fn tokenize_body(&self) -> Self::DataToken<'_> {
                 (
-                    <BN254::G2Point as alloy_sol_types::SolType>::tokenize(&self.blsVk),
+                    <BN254::G2Point as alloy_sol_types::SolType>::tokenize(&self.blsVK),
                     <EdOnBN254::EdOnBN254Point as alloy_sol_types::SolType>::tokenize(
-                        &self.schnorrVk,
+                        &self.schnorrVK,
                     ),
                     <alloy::sol_types::sol_data::Uint<16> as alloy_sol_types::SolType>::tokenize(
                         &self.commission,

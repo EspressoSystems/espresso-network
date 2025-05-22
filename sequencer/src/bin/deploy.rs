@@ -105,6 +105,8 @@ struct Options {
     deploy_esp_token: bool,
     #[clap(long, default_value = "false")]
     deploy_stake_table: bool,
+    #[clap(long, default_value = "false")]
+    upgrade_stake_table_v2: bool,
 
     /// Write deployment results to OUT as a .env file.
     ///
@@ -232,6 +234,9 @@ async fn main() -> anyhow::Result<()> {
     if opt.deploy_stake_table {
         args.deploy(&mut contracts, Contract::StakeTableProxy)
             .await?;
+    }
+    if opt.upgrade_stake_table_v2 {
+        args.deploy(&mut contracts, Contract::StakeTableV2).await?;
     }
 
     // finally print out or persist deployed addresses

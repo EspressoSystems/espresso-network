@@ -106,6 +106,10 @@ pub struct DeployedContracts {
     #[clap(long, env = Contract::StakeTable)]
     stake_table: Option<Address>,
 
+    /// Use an already-deployed StakeTableV2.sol instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTableV2)]
+    stake_table_v2: Option<Address>,
+
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
@@ -136,6 +140,8 @@ pub enum Contract {
     EspTokenProxy,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS")]
     StakeTable,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_V2_ADDRESS")]
+    StakeTableV2,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
 }
@@ -185,6 +191,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.stake_table {
             m.insert(Contract::StakeTable, addr);
+        }
+        if let Some(addr) = deployed.stake_table_v2 {
+            m.insert(Contract::StakeTableV2, addr);
         }
         if let Some(addr) = deployed.stake_table_proxy {
             m.insert(Contract::StakeTableProxy, addr);
@@ -623,6 +632,49 @@ pub async fn deploy_stake_table_proxy(
     );
 
     Ok(st_proxy_addr)
+}
+
+/// Upgrade the stake table proxy to use StakeTableV2.
+async fn upgrade_stake_table_v2(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+) -> Result<TransactionReceipt> {
+    let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
+        anyhow::bail!("StakeTableProxy not found, can't upgrade")
+    };
+
+    let proxy = StakeTable::new(proxy_addr, &provider);
+    // Deploy the new implementation
+    let v2_addr = contracts
+        .deploy(
+            Contract::StakeTableV2,
+            StakeTableV2::deploy_builder(&provider),
+        )
+        .await?;
+
+    assert!(is_contract(&provider, v2_addr).await?);
+
+    // prepare init calldata
+    let v2_contract = StakeTableV2::new(v2_addr, &provider);
+    // invoke upgrade on proxy
+    // TODO: MA check if really nothing to initialize and if that's done correctly.
+    let receipt = proxy
+        .upgradeToAndCall(v2_addr, vec![].into())
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    if receipt.inner.is_success() {
+        // post deploy verification checks
+        let proxy_as_v2 = StakeTableV2::new(proxy_addr, &provider);
+        assert_eq!(proxy_as_v2.getVersion().call().await?.majorVersion, 2);
+        tracing::info!(%v2_addr, "StakeTable successfully upgraded to: ")
+    } else {
+        tracing::error!("StakeTable upgrade failed: {:?}", receipt);
+    }
+
+    Ok(receipt)
 }
 
 /// Common logic for any Ownable contract to transfer ownership

@@ -8,8 +8,6 @@ description = "A CLI to interact with the Espresso stake table contract"
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
-ark-ec = { workspace = true }
-ark-ed-on-bn254 = { workspace = true }
 ark-serialize = { workspace = true }
 clap = { workspace = true }
 clap-serde = "0.5.1"

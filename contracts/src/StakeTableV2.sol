@@ -16,8 +16,8 @@ contract StakeTableV2 is StakeTable {
     /// @notice the blsSig and schnorrSig are validated by the Espresso Network
     event ValidatorRegisteredV2(
         address indexed account,
-        BN254.G2Point blsVk,
-        EdOnBN254.EdOnBN254Point schnorrVk,
+        BN254.G2Point blsVK,
+        EdOnBN254.EdOnBN254Point schnorrVK,
         uint16 commission,
         BN254.G1Point blsSig,
         bytes schnorrSig

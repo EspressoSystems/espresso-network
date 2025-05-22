@@ -1,14 +1,25 @@
-use alloy::sol_types::SolValue;
+use alloy::{
+    primitives::{Address, Bytes},
+    sol_types::SolValue,
+};
 use ark_bn254::G2Affine;
-use ark_ec::AffineRepr;
+use ark_ec::{AffineRepr, CurveGroup as _};
+use ark_ed_on_bn254::EdwardsConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use hotshot_types::{
-    light_client::StateVerKey,
-    signature_key::{BLSPubKey, BLSSignature},
+    light_client::{hash_bytes_to_field, StateKeyPair, StateVerKey},
+    signature_key::{BLSKeyPair, BLSPubKey, BLSSignature},
     traits::signature_key::SignatureKey,
 };
+use jf_signature::{
+    constants::{CS_ID_BLS_BN254, CS_ID_SCHNORR},
+    schnorr,
+};
 
-use crate::sol_types::{StakeTableV2::ConsensusKeysUpdatedV2, *};
+use crate::sol_types::{
+    StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+    *,
+};
 
 impl From<G2PointSol> for BLSPubKey {
     fn from(value: G2PointSol) -> Self {
@@ -29,9 +40,74 @@ impl From<EdOnBN254PointSol> for StateVerKey {
     }
 }
 
+pub fn sign_address_bls(bls_key_pair: &BLSKeyPair, address: Address) -> G1PointSol {
+    bls_key_pair
+        .sign(&address.abi_encode(), CS_ID_BLS_BN254)
+        .sigma
+        .into_affine()
+        .into()
+}
+
+pub fn sign_address_schnorr(schnorr_key_pair: &StateKeyPair, address: Address) -> Bytes {
+    let msg = [hash_bytes_to_field(&address.abi_encode()).expect("hash to field works")];
+    let mut buf = vec![];
+    schnorr_key_pair
+        .sign(&msg, CS_ID_SCHNORR)
+        .serialize_compressed(&mut buf)
+        .expect("serialize works");
+    buf.into()
+}
+
+fn authenticate_schnorr_sig(
+    schnorr_vk: &StateVerKey,
+    address: Address,
+    schnorr_sig: &[u8],
+) -> Result<(), StakeTableSolError> {
+    let msg = [hash_bytes_to_field(&address.abi_encode()).expect("hash to field works")];
+    let sig = schnorr::Signature::<EdwardsConfig>::deserialize_compressed(schnorr_sig)?;
+    schnorr_vk.verify(&msg, &sig, CS_ID_SCHNORR)?;
+    Ok(())
+}
+
+fn authenticate_stake_table_validator_event(
+    account: Address,
+    bls_vk: &G2PointSol,
+    schnorr_vk: &EdOnBN254PointSol,
+    bls_sig: &G1PointSol,
+    schnorr_sig: &[u8],
+) -> Result<(), StakeTableSolError> {
+    // TODO(alex): simplify this once jellyfish has `VerKey::from_affine()`
+    let bls_vk = {
+        let bls_vk_inner: ark_bn254::G2Affine = bls_vk.clone().into();
+        let bls_vk_inner = bls_vk_inner.into_group();
+
+        // the two unwrap are safe since it's BLSPubKey is just a wrapper around G2Projective
+        let mut ser_bytes: Vec<u8> = Vec::new();
+        bls_vk_inner.serialize_uncompressed(&mut ser_bytes).unwrap();
+        BLSPubKey::deserialize_uncompressed(&ser_bytes[..]).unwrap()
+    };
+    let msg = account.abi_encode();
+    let sig = {
+        let sigma_sol: G1PointSol = bls_sig.clone().into();
+        let sigma_affine: ark_bn254::G1Affine = sigma_sol.into();
+        BLSSignature {
+            sigma: sigma_affine.into_group(),
+        }
+    };
+    if !bls_vk.validate(&sig, &msg) {
+        return Err(StakeTableSolError::InvalidBlsSignature);
+    }
+
+    let schnorr_vk: StateVerKey = schnorr_vk.clone().into();
+    authenticate_schnorr_sig(&schnorr_vk, account, schnorr_sig)?;
+    Ok(())
+}
+
 /// Stake-table related error from the contract
 #[derive(Debug, thiserror::Error)]
 pub enum StakeTableSolError {
+    #[error("Failed to deserialize Schnorr signature")]
+    SchnorrSigDeserializationError(#[from] ark_serialize::SerializationError),
     #[error("v1 err: {0:?}")]
     V1(StakeTable::StakeTableErrors),
     #[error("v2 err: {0:?}")]
@@ -39,42 +115,46 @@ pub enum StakeTableSolError {
     #[error("BLS signature invalid")]
     InvalidBlsSignature,
     #[error("Schnorr signature invalid")]
-    InvalidSchnorrSignature,
+    InvalidSchnorrSignature(#[from] jf_signature::SignatureError),
 }
-impl ConsensusKeysUpdatedV2 {
-    /// by checking the `blsSig` is indeed produced by the `blsVK` field,
-    /// we authenticate the claimed consensus key
+
+impl ValidatorRegisteredV2 {
+    /// verified the BLS and Schnorr signatures in the event
     pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
-        // TODO(alex): simplify this once jellyfish has `VerKey::from_affine()`
-        let bls_vk = {
-            let bls_vk_inner: ark_bn254::G2Affine = self.blsVK.clone().into();
-            let bls_vk_inner = bls_vk_inner.into_group();
+        authenticate_stake_table_validator_event(
+            self.account,
+            &self.blsVK,
+            &self.schnorrVK,
+            &self.blsSig.clone().into(),
+            &self.schnorrSig,
+        )?;
+        Ok(())
+    }
+}
 
-            // the two unwrap are safe since it's BLSPubKey is just a wrapper around G2Projective
-            let mut ser_bytes: Vec<u8> = Vec::new();
-            bls_vk_inner.serialize_uncompressed(&mut ser_bytes).unwrap();
-            BLSPubKey::deserialize_uncompressed(&ser_bytes[..]).unwrap()
-        };
-        let msg = self.account.abi_encode();
-        let sig = {
-            let sigma_sol: G1PointSol = self.blsSig.clone().into();
-            let sigma_affine: ark_bn254::G1Affine = sigma_sol.into();
-            BLSSignature {
-                sigma: sigma_affine.into_group(),
-            }
-        };
-        if !bls_vk.validate(&sig, &msg) {
-            return Err(StakeTableSolError::InvalidBlsSignature);
-        }
-
+impl ConsensusKeysUpdatedV2 {
+    /// verified the BLS and Schnorr signatures in the event
+    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+        authenticate_stake_table_validator_event(
+            self.account,
+            &self.blsVK,
+            &self.schnorrVK,
+            &self.blsSig.clone().into(),
+            &self.schnorrSig,
+        )?;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
-    use hotshot_types::signature_key::{BLSPrivKey, BLSPubKey};
+    use alloy::primitives::Address;
+    use hotshot_types::{
+        light_client::StateKeyPair,
+        signature_key::{BLSPrivKey, BLSPubKey},
+    };
 
+    use super::{authenticate_schnorr_sig, sign_address_schnorr};
     use crate::sol_types::G2PointSol;
 
     fn check_round_trip(pk: BLSPubKey) {
@@ -98,5 +178,24 @@ mod test {
         let s = "BLS_VER_KEY~JlRLUrn0T_MltAJXaaojwk_CnCgd0tyPny_IGdseMBLBPv9nWabIPAaS-aHmn0ARu5YZHJ7mfmGQ-alW42tkJM663Lse-Is80fyA1jnRxPsHcJDnO05oW1M1SC5LeE8sXITbuhmtG2JdTAgmLqWOxbMRmVIqS1AQXqvGGXdo5qpd";
         let pk: BLSPubKey = s.parse().unwrap();
         check_round_trip(pk);
+    }
+
+    #[test]
+    fn test_schnorr_sigs() {
+        for _ in 0..10 {
+            let key_pair = StateKeyPair::generate();
+            let address = Address::random();
+            let sig = sign_address_schnorr(&key_pair, address);
+            authenticate_schnorr_sig(key_pair.ver_key_ref(), address, &sig).unwrap();
+
+            // signed with wrong key
+            let sig = sign_address_schnorr(&StateKeyPair::generate(), address);
+            assert!(authenticate_schnorr_sig(key_pair.ver_key_ref(), address, &sig).is_err());
+
+            // manipulate one byte
+            let mut bad_sig: Vec<u8> = sig.to_vec();
+            bad_sig[0] = bad_sig[0].wrapping_add(1);
+            assert!(authenticate_schnorr_sig(key_pair.ver_key_ref(), address, &bad_sig).is_err());
+        }
     }
 }

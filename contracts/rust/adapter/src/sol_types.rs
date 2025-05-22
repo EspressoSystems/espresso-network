@@ -208,8 +208,8 @@ impl PartialEq for ValidatorRegistered {
 impl PartialEq for ValidatorRegisteredV2 {
     fn eq(&self, other: &Self) -> bool {
         self.account == other.account
-            && self.blsVk == other.blsVk
-            && self.schnorrVk == other.schnorrVk
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
             && self.commission == other.commission
             && self.blsSig == other.blsSig
             && self.schnorrSig == other.schnorrSig

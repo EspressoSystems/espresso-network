@@ -4683,6 +4683,7 @@ dependencies = [
  "hotshot-types",
  "jf-pcs",
  "jf-plonk",
+ "jf-signature 0.2.0",
  "jf-utils",
  "num-bigint",
  "num-traits",
@@ -9877,8 +9878,6 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "ark-ec",
- "ark-ed-on-bn254",
  "ark-serialize 0.4.2",
  "clap 4.5.37",
  "clap-serde",
