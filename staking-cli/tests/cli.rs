@@ -1,6 +1,7 @@
 use std::{
     path::PathBuf,
     process::{Command, Output, Stdio},
+    str::FromStr,
 };
 
 use alloy::primitives::{
@@ -9,6 +10,7 @@ use alloy::primitives::{
 };
 use anyhow::Result;
 use rand::{rngs::StdRng, SeedableRng as _};
+use rust_decimal::Decimal;
 use sequencer_utils::test_utils::setup_test;
 use staking_cli::{demo::DelegationConfig, deploy::Signer, *};
 
@@ -403,9 +405,11 @@ async fn test_cli_balance() -> Result<()> {
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Mnemonic);
     let s = cmd.arg("token-balance").output()?.assert_success().utf8();
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    let balance = parts[8].split(".").next().unwrap().parse::<U256>()?;
 
     assert!(s.contains(&system.deployer_address.to_string()));
-    assert!(s.contains("3590000000.0"));
+    assert_eq!(balance, U256::from(3590000000u64));
 
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";

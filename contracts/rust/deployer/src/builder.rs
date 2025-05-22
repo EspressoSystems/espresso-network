@@ -69,17 +69,11 @@ impl DeployerArgs {
             },
             Contract::EspTokenProxy => {
                 let token_recipient = self.token_recipient.unwrap_or(admin);
-                let token_name = self
-                    .token_name
-                    .clone()
-                    .unwrap_or_else(|| "Espresso".to_string());
-                let token_symbol = self
-                    .token_symbol
-                    .clone()
-                    .unwrap_or_else(|| "ESP".to_string());
+                let token_name = self.token_name.clone().unwrap_or("Espresso".to_string());
+                let token_symbol = self.token_symbol.clone().unwrap_or("ESP".to_string());
                 let initial_supply = self
                     .initial_token_supply
-                    .unwrap_or_else(|| U256::from(3590000000u64));
+                    .unwrap_or(U256::from(3590000000u64));
                 let addr = crate::deploy_token_proxy(
                     provider,
                     contracts,
