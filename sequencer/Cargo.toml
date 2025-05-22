@@ -97,7 +97,6 @@ jf-vid = { workspace = true }
 libp2p = { workspace = true }
 num_enum = "0.7"
 parking_lot = "0.12"
-vid = { path = "../vid" }
 portpicker = { workspace = true }
 priority-queue = { workspace = true }
 rand = { workspace = true }
@@ -132,6 +131,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+vid = { path = "../vid" }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]

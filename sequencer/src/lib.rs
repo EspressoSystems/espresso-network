@@ -15,7 +15,6 @@ mod message_compat_tests;
 
 use std::sync::Arc;
 
-use crate::request_response::data_source::Storage as RequestResponseStorage;
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::{Mutex, RwLock};
@@ -36,6 +35,8 @@ use proposal_fetcher::ProposalFetcherConfig;
 use tokio::select;
 use tracing::info;
 use url::Url;
+
+use crate::request_response::data_source::Storage as RequestResponseStorage;
 pub mod persistence;
 pub mod state;
 use std::{fmt::Debug, marker::PhantomData, time::Duration};

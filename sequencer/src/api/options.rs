@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use crate::request_response::data_source::Storage as RequestResponseStorage;
 use anyhow::{bail, Context};
 use clap::Parser;
 use espresso_types::{
@@ -41,6 +40,7 @@ use crate::{
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     persistence,
+    request_response::data_source::Storage as RequestResponseStorage,
     state::update_state_storage_loop,
     SequencerApiVersion,
 };

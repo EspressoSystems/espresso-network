@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::Context;
-use crate::request_response::data_source::Storage as RequestResponseStorage;
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
@@ -42,8 +41,10 @@ use crate::{
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
-        data_source::DataSource, network::Sender as RequestResponseSender,
-        recipient_source::RecipientSource, RequestResponseProtocol,
+        data_source::{DataSource, Storage as RequestResponseStorage},
+        network::Sender as RequestResponseSender,
+        recipient_source::RecipientSource,
+        RequestResponseProtocol,
     },
     state_signature::StateSigner,
     Node, SeqTypes, SequencerApiVersion,
