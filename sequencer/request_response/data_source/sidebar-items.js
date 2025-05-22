@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["retain_reward_accounts"],"struct":["DataSource"],"type":["Consensus","Storage"]};
+window.SIDEBAR_ITEMS = {"enum":["Storage"],"fn":["retain_reward_accounts"],"struct":["DataSource"],"type":["Consensus"]};

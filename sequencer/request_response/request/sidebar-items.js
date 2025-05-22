@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Request","Response"],"type":["Height","ViewNumber"]};
+window.SIDEBAR_ITEMS = {"enum":["Request","Response"],"type":["Height","RequestId","ViewNumber"]};
