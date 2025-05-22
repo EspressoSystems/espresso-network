@@ -759,7 +759,7 @@
 <a href=#759 id=759 data-nosnippet>759</a>    ) -&gt; anyhow::Result&lt;()&gt;;
 <a href=#760 id=760 data-nosnippet>760</a>    <span class="kw">async fn </span>store_drb_input(<span class="kw-2">&amp;</span><span class="self">self</span>, drb_input: DrbInput) -&gt; anyhow::Result&lt;()&gt;;
 <a href=#761 id=761 data-nosnippet>761</a>    <span class="kw">async fn </span>load_drb_input(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; anyhow::Result&lt;DrbInput&gt;;
-<a href=#762 id=762 data-nosnippet>762</a>    <span class="kw">async fn </span>add_epoch_root(
+<a href=#762 id=762 data-nosnippet>762</a>    <span class="kw">async fn </span>store_epoch_root(
 <a href=#763 id=763 data-nosnippet>763</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#764 id=764 data-nosnippet>764</a>        epoch: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::Epoch,
 <a href=#765 id=765 data-nosnippet>765</a>        block_header: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::BlockHeader,
@@ -879,12 +879,12 @@
 <a href=#879 id=879 data-nosnippet>879</a>        (<span class="kw-2">**</span><span class="self">self</span>).store_drb_result(epoch, drb_result).<span class="kw">await
 <a href=#880 id=880 data-nosnippet>880</a>    </span>}
 <a href=#881 id=881 data-nosnippet>881</a>
-<a href=#882 id=882 data-nosnippet>882</a>    <span class="kw">async fn </span>add_epoch_root(
+<a href=#882 id=882 data-nosnippet>882</a>    <span class="kw">async fn </span>store_epoch_root(
 <a href=#883 id=883 data-nosnippet>883</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#884 id=884 data-nosnippet>884</a>        epoch: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::Epoch,
 <a href=#885 id=885 data-nosnippet>885</a>        block_header: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::BlockHeader,
 <a href=#886 id=886 data-nosnippet>886</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#887 id=887 data-nosnippet>887</a>        (<span class="kw-2">**</span><span class="self">self</span>).add_epoch_root(epoch, block_header).<span class="kw">await
+<a href=#887 id=887 data-nosnippet>887</a>        (<span class="kw-2">**</span><span class="self">self</span>).store_epoch_root(epoch, block_header).<span class="kw">await
 <a href=#888 id=888 data-nosnippet>888</a>    </span>}
 <a href=#889 id=889 data-nosnippet>889</a>
 <a href=#890 id=890 data-nosnippet>890</a>    <span class="kw">async fn </span>store_drb_input(<span class="kw-2">&amp;</span><span class="self">self</span>, drb_input: DrbInput) -&gt; anyhow::Result&lt;()&gt; {
