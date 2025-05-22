@@ -3,7 +3,7 @@ package client
 import (
 	"context"
 
-	common "github.com/EspressoSystems/espresso-network-go/types/common"
+	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 )
 
 // Interface to the Espresso Sequencer submit API

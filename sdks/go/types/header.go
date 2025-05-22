@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	common_types "github.com/EspressoSystems/espresso-network-go/types/common"
-	v01 "github.com/EspressoSystems/espresso-network-go/types/v0/v0_1"
-	v02 "github.com/EspressoSystems/espresso-network-go/types/v0/v0_2"
-	v03 "github.com/EspressoSystems/espresso-network-go/types/v0/v0_3"
+	common_types "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
+	v01 "github.com/EspressoSystems/espresso-network/sdks/go/types/v0/v0_1"
+	v02 "github.com/EspressoSystems/espresso-network/sdks/go/types/v0/v0_2"
+	v03 "github.com/EspressoSystems/espresso-network/sdks/go/types/v0/v0_3"
 )
 
 // Republic

@@ -1,4 +1,4 @@
-module github.com/EspressoSystems/espresso-network-go
+module github.com/EspressoSystems/espresso-network/sdks/go
 
 go 1.24
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/EspressoSystems/espresso-network-go/types"
+	"github.com/EspressoSystems/espresso-network/sdks/go/types"
 )
 
 func TestVerifyNamespaceWithRealData(t *testing.T) {
