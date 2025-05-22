@@ -26,7 +26,6 @@ jobs:
   build-x86:
     name: Build ${{ matrix.binary }}
     runs-on: ubuntu-latest
-    # runs-on: ubuntu-24.04-8core
     strategy:
       matrix:
         include:
@@ -198,12 +197,6 @@ jobs:
           pattern: arm-*
           path: target/arm64/release
           merge-multiple: true
-
-      - name: DEBUG binaries
-        run: |
-          # List the binaries in the target directory
-          echo "Binaries in target/amd64/release:"
-          ls -lah target/amd64/release
 
       - name: Setup QEMU
         if: ${{ github.event_name != 'pull_request' }}
