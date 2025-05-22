@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::traits::{
     node_implementation::{ConsensusTime, NodeType},
-    storage::StoreDrbProgressFn,
+    storage::{LoadDrbProgressFn, StoreDrbProgressFn},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -72,10 +72,19 @@ pub fn difficulty_level() -> u64 {
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
 #[must_use]
-pub fn compute_drb_result(
+pub async fn compute_drb_result(
     drb_input: DrbInput,
     store_drb_progress: StoreDrbProgressFn,
+    load_drb_progress: LoadDrbProgressFn,
 ) -> DrbResult {
+    let mut drb_input = drb_input;
+
+    if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
+        if loaded_drb_input.iteration >= drb_input.iteration {
+            drb_input = loaded_drb_input;
+        }
+    }
+
     let mut hash = drb_input.value.to_vec();
     let mut iteration = drb_input.iteration;
     let remaining_iterations = DIFFICULTY_LEVEL

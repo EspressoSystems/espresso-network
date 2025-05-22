@@ -1347,6 +1347,10 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.add_drb_result(epoch, initial_drb_result);
         self.add_drb_result(epoch + 1, initial_drb_result);
     }
+
+    fn first_epoch(&self) -> Option<<SeqTypes as NodeType>::Epoch> {
+        self.first_epoch
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
