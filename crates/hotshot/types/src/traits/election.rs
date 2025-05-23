@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
-use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
+use std::{collections::BTreeSet, fmt::Debug, pin::Pin, sync::Arc};
 
 use alloy::primitives::U256;
 use async_lock::RwLock;
@@ -164,18 +164,47 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     #[allow(clippy::type_complexity)]
     /// Handles notifications that a new epoch root has been created
-    /// Is called under a read lock to the Membership. Return a callback
-    /// with Some to have that callback invoked under a write lock.
+    /// This function results in a chain of callbacks being returned. It is invoked
+    /// synchronously under a read lock. Return an Option-wrapped callback to run an
+    /// asynchronous handler to execute. This handler returns another Option-wrapped
+    /// callback, which will be executed synchronously under a write lock to save
+    /// results back to the membership.
     ///
-    /// #3967 REVIEW NOTE: this is only called if epoch is Some. Is there any reason to do otherwise?
+    /// Example usage:
+    /// ```
+    ///    // Do some synchronous work first inside of the read lock
+    ///    Some(Box::new(move || {
+    ///        Box::pin(async move {
+    ///            // We're now in the async context between the two locks.
+    ///            // Do some async work here, like storing the stake table
+    ///
+    ///            // Return a callback to be executed under the write lock
+    ///            Some(Box::new(move |committee: &mut Self| {
+    ///                // Do some synchronous work here, updating the membership
+    ///            }) as Box<dyn FnOnce(&mut Self) + Send>)
+    ///        })
+    ///    }))
+    /// ```
     fn add_epoch_root(
         &self,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> impl std::future::Future<Output = anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>>>
-           + Send {
-        async { Ok(None) }
+    ) -> anyhow::Result<
+        Option<
+            Box<
+                dyn FnOnce() -> Pin<
+                        Box<
+                            dyn std::future::Future<
+                                    Output = Option<Box<dyn FnOnce(&mut Self) + Send>>,
+                                > + Send,
+                        >,
+                    > + Send,
+            >,
+        >,
+    > {
+        Ok(None)
     }
+    //) -> impl std::future::Future<Output = Option<Box<dyn FnOnce(&mut Self) + Send>>> + Send {
 
     /// Called to notify the Membership when a new DRB result has been calculated.
     /// Observes the same semantics as add_epoch_root
