@@ -1222,7 +1222,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 
     #[allow(refining_impl_trait)]
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: Epoch,
         block_header: Header,
@@ -1243,7 +1243,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                 .store_stake(epoch, stake_tables.clone())
                 .await
             {
-                tracing::error!(?e, "`add_epoch_root`, error storing stake table");
+                tracing::error!(?e, "`store_epoch_root`, error storing stake table");
             }
         }
 
