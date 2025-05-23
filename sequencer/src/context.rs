@@ -33,13 +33,17 @@ use hotshot_types::{
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
-use tokio::{spawn, sync::mpsc::channel, task::JoinHandle};
+use tokio::{
+    spawn,
+    sync::mpsc::{channel, Receiver, Sender},
+    task::JoinHandle,
+};
 use tracing::{Instrument, Level};
 use url::Url;
 
 use crate::{
     catchup::ParallelStateCatchup,
-    external_event_handler::ExternalEventHandler,
+    external_event_handler::{ExternalEventHandler, OutboundMessage},
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
         data_source::DataSource, network::Sender as RequestResponseSender,
@@ -70,7 +74,7 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
 
     /// An orchestrator to wait for before starting consensus.
     #[derivative(Debug = "ignore")]
-    wait_for_orchestrator: Option<Arc<OrchestratorClient>>,
+    pub wait_for_orchestrator: Option<Arc<OrchestratorClient>>,
 
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
@@ -371,6 +375,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
     /// When this context is dropped or [`shut_down`](Self::shut_down), background tasks will be
     /// cancelled in the reverse order that they were spawned.
     pub fn spawn(&mut self, name: impl Display, task: impl Future<Output: Debug> + Send + 'static) {
+        tracing::info!("spawn {name}");
         self.tasks.spawn(name, task);
     }
 
@@ -422,9 +427,45 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
     #[cfg(any(test, feature = "testing"))]
     /// Replace Consensus Handle
-    pub async fn replace_handle(&mut self, consensus: Arc<SystemContext<SeqTypes, Node<N, P>, V>>) {
-        let handle = Arc::clone(&consensus).run_tasks().await;
-        self.handle = Arc::new(RwLock::new(handle));
+    pub async fn replace_handle(
+        &mut self,
+        consensus: Arc<SystemContext<SeqTypes, Node<N, P>, V>>,
+        persistence: Arc<P>,
+        anchor_view: Option<ViewNumber>,
+    ) {
+        use espresso_types::traits::NullEventConsumer;
+        tracing::error!("replace handle");
+
+        let handle = consensus.run_tasks().await;
+        tracing::error!("replace handle started tasks");
+        let event_stream = handle.event_stream();
+        tracing::error!("replace handle got event stream");
+        let handle = Arc::new(RwLock::new(handle));
+
+        // Shutdown tasks before we mutate `self`.
+        // self.tasks.join().await;
+        // tracing::error!("replace handle join tasks");
+
+        self.handle = Arc::clone(&handle);
+
+        tracing::error!("replace handle spawn tasks");
+        self.spawn(
+            "event handler replacement",
+            handle_events(
+                Arc::clone(&handle),
+                self.node_id(),
+                event_stream,
+                persistence,
+                self.state_signer.clone(),
+                ExternalEventHandler {
+                    request_response_sender: channel(20).0,
+                    phantom: PhantomData,
+                },
+                Some(self.event_streamer()),
+                NullEventConsumer,
+                anchor_view,
+            ),
+        );
     }
 }
 
@@ -468,6 +509,9 @@ async fn handle_events<N, P, V>(
     P: SequencerPersistence,
     V: Versions,
 {
+    tracing::error!(node_id, "Starting `SequencerContext` event handler");
+
+    // scan logs
     if let Some(view) = anchor_view {
         // Process and clean up any leaves that we may have persisted last time we were running but
         // failed to handle due to a shutdown.

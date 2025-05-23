@@ -452,7 +452,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     "Expected NodeState {node_id}"
                 );
 
-                let hotshot_initializer = self.get_hotshot_initializer(ctx.node_state()).await;
+                let mut storage_opt = S::persistence_options(&self.storage);
+                let persistence = storage_opt.create().await.unwrap();
+                let (hotshot_initializer, anchor_view) = persistence
+                    .load_consensus_state::<MockSequencerVersions>(ctx.node_state())
+                    .await
+                    .unwrap();
+
                 let handle = initializer
                     .hotshot_context
                     // TODO I think all the copied values are static, so should
@@ -460,7 +466,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     .into_self_cloned(hotshot_initializer, node_id)
                     .await;
 
-                ctx.replace_handle(handle).await;
+                tracing::error!("replace handle");
+                // TODO instead of simply replacing  the handle, we need to call
+                // SequencerContext::init with  values on this context  and this
+                // handle.  However that `init` fn  does not support this. So we
+                // can  create  `init2` which takes a handle and event channels.
+                // This will  (hopefully)  set  up channels correctly.
+                ctx.replace_handle(handle, Arc::new(persistence), anchor_view)
+                    .await;
             };
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");
