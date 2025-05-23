@@ -162,17 +162,15 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 schnorrVk,
                 commission,
             }) => {
-                // TODO(abdul): BLS and Schnorr signature keys verification
                 let stake_table_key: BLSPubKey = blsVk.clone().into();
                 let state_ver_key: SchnorrPubKey = schnorrVk.clone().into();
-                // TODO(MA): The stake table contract currently enforces that each bls key is only used once. We will
-                // move this check to the confirmation layer and remove it from the contract. Once we have the signature
-                // check in this functions we can skip if a BLS key, or Schnorr key was previously used.
+                // The stake table contract enforces that each bls key is only used once.
                 if bls_keys.contains(&stake_table_key) {
                     bail!("bls key {} already used", stake_table_key.to_string());
                 };
 
-                // The contract does *not* enforce that each schnorr key is only used once.
+                // The contract does *not* enforce that each schnorr key is only used once,
+                // therefore it's possible to have multiple validators with the same schnorr key.
                 if schnorr_keys.contains(&state_ver_key) {
                     tracing::warn!("schnorr key {} already used", state_ver_key.to_string());
                 };
