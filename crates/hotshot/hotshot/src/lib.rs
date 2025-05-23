@@ -1219,16 +1219,18 @@ async fn load_start_epoch_info<TYPES: NodeType>(
     for epoch_info in start_epoch_info {
         if let Some(block_header) = &epoch_info.block_header {
             tracing::info!("Calling add_epoch_root for epoch {:?}", epoch_info.epoch);
-            let write_callback = {
+            let add_epoch_root_worker = {
                 let membership_reader = membership.read().await;
-                membership_reader
-                    .add_epoch_root(epoch_info.epoch, block_header.clone())
-                    .await
+                membership_reader.add_epoch_root(epoch_info.epoch, block_header.clone())
             };
 
-            if let Ok(Some(write_callback)) = write_callback {
-                let mut membership_writer = membership.write().await;
-                write_callback(&mut *membership_writer);
+            if let Ok(Some(worker)) = add_epoch_root_worker {
+                let add_epoch_root_updater = worker().await;
+
+                if let Some(updater) = add_epoch_root_updater {
+                    let mut membership_writer = membership.write().await;
+                    updater(&mut *membership_writer);
+                }
             }
         }
     }

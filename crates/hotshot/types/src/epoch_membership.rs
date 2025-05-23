@@ -385,16 +385,18 @@ where
             ));
         };
 
-        let add_epoch_root_updater = {
-            let membership_read = self.membership.read().await;
-            membership_read
-                .add_epoch_root(epoch, root_leaf.block_header().clone())
-                .await
+        let add_epoch_root_worker = {
+            let membership_reader = self.membership.read().await;
+            membership_reader.add_epoch_root(epoch, root_leaf.block_header().clone())
         };
 
-        if let Ok(Some(updater)) = add_epoch_root_updater {
-            let mut membership_write = self.membership.write().await;
-            updater(&mut *(membership_write));
+        if let Ok(Some(worker)) = add_epoch_root_worker {
+            let add_epoch_root_updater = worker().await;
+
+            if let Some(updater) = add_epoch_root_updater {
+                let mut membership_writer = self.membership.write().await;
+                updater(&mut *membership_writer);
+            };
         };
 
         Ok(root_leaf)

@@ -224,16 +224,19 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         tracing::info!("Time taken to store epoch root: {:?}", start.elapsed());
 
         start = Instant::now();
-        let write_callback = {
+
+        let add_epoch_root_worker = {
             tracing::debug!("Calling add_epoch_root for epoch {next_epoch_number}");
             let membership_reader = membership.read().await;
-            membership_reader
-                .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
-                .await
+            membership_reader.add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
         };
-        if let Ok(Some(write_callback)) = write_callback {
-            let mut membership_writer = membership.write().await;
-            write_callback(&mut *membership_writer);
+        if let Ok(Some(worker)) = add_epoch_root_worker {
+            let add_epoch_root_updater = worker().await;
+
+            if let Some(updater) = add_epoch_root_updater {
+                let mut membership_writer = membership.write().await;
+                updater(&mut *membership_writer);
+            }
         }
         tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
 

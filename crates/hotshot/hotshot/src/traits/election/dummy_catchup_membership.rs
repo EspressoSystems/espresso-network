@@ -1,4 +1,4 @@
-use std::{collections::HashSet, marker::PhantomData, sync::Arc, time::Duration};
+use std::{collections::HashSet, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Ok;
@@ -208,15 +208,30 @@ where
         self.inner.set_first_epoch(epoch, initial_drb_result);
     }
 
-    #[allow(refining_impl_trait)]
-    async fn add_epoch_root(
+    fn add_epoch_root(
         &self,
         epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>> {
-        Ok(Some(Box::new(move |mem: &mut Self| {
-            tracing::error!("Adding epoch root for {epoch}");
-            mem.epochs.insert(epoch);
+    ) -> anyhow::Result<
+        Option<
+            Box<
+                dyn FnOnce() -> Pin<
+                        Box<
+                            dyn std::future::Future<
+                                    Output = Option<Box<dyn FnOnce(&mut Self) + Send>>,
+                                > + Send,
+                        >,
+                    > + Send,
+            >,
+        >,
+    > {
+        Ok(Some(Box::new(move || {
+            Box::pin(async move {
+                Some(Box::new(move |mem: &mut Self| {
+                    tracing::error!("Adding epoch root for {epoch}");
+                    mem.epochs.insert(epoch);
+                }) as Box<dyn FnOnce(&mut Self) + Send>)
+            })
         })))
     }
 
