@@ -23,7 +23,8 @@ use espresso_contract_deployer::{
     DeployedContracts, HttpProviderWithWallet,
 };
 use espresso_types::{
-    parse_duration, v0_3::ChainConfig, EpochVersion, SeqTypes, SequencerVersions, ValidatedState,
+    parse_duration, v0_3::ChainConfig, EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions,
+    ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
@@ -76,15 +77,8 @@ struct Args {
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_L1_PROVIDER")]
     rpc_url: Option<Url>,
 
-    /// Request rate when polling L1.
-    #[clap(
-        short,
-        long,
-        env = "ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL",
-        default_value = "200ms",
-        value_parser = parse_duration
-    )]
-    l1_interval: Duration,
+    #[clap(flatten)]
+    l1_opt: L1ClientOptions,
 
     /// Mnemonic for an L1 wallet.
     ///
@@ -261,7 +255,7 @@ async fn main() -> anyhow::Result<()> {
         retry_interval,
         alt_prover_retry_intervals,
         alt_prover_update_intervals: _,
-        l1_interval: _,
+        l1_opt,
         max_block_size,
         epoch_height,
         contracts,
@@ -312,6 +306,7 @@ async fn main() -> anyhow::Result<()> {
         .builder_port(builder_port)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
+        .l1_opt(l1_opt)
         .build();
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
