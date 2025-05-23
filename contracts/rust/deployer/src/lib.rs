@@ -1200,6 +1200,7 @@ mod tests {
         // upgrade to v2
         upgrade_stake_table_v2(&provider, &mut contracts).await?;
 
+        assert_eq!(stake_table.getVersion().call().await?, (2, 0, 0).into());
         assert_eq!(stake_table.owner().call().await?._0, owner);
         assert_eq!(stake_table.token().call().await?._0, token_addr);
         assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
