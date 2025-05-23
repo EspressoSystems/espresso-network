@@ -1,16 +1,21 @@
 #![cfg(test)]
 
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    time::Duration,
+};
 
 use alloy::node_bindings::{Anvil, AnvilInstance};
 use anyhow::bail;
+use async_broadcast::Receiver;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
-use derivative::Derivative;
+use derive_more::Debug;
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
     MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
@@ -19,7 +24,7 @@ use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
     stream::{BoxStream, StreamExt},
 };
-use hotshot::traits::implementations::derive_libp2p_peer_id;
+use hotshot::{traits::implementations::derive_libp2p_peer_id, HotShotInitializer, SystemContext};
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
@@ -58,6 +63,7 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
     setup_test();
 
     let mut network = TestNetwork::new(network.0, network.1, cdn).await;
+    // network.start_event_task().await;
 
     // Let the network get going.
     network.check_progress().await;
@@ -228,8 +234,23 @@ impl NodeParams {
     }
 }
 
+#[derive(Debug, Clone)]
+struct NodeInitializer<S: TestableSequencerDataSource> {
+    #[debug(skip)]
+    hotshot_context: Arc<
+        SystemContext<
+            SeqTypes,
+            Node<network::Production, <S::Options as PersistenceOptions>::Persistence>,
+            MockSequencerVersions,
+        >,
+    >,
+    stream: Receiver<Event<SeqTypes>>,
+    node_id: u64,
+}
+
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
+    #[debug(skip)]
     storage: S::Storage,
     context: Option<
         SequencerContext<
@@ -241,6 +262,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    initializer: Option<NodeInitializer<S>>,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -312,17 +334,64 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             opt,
             num_nodes: network.peer_ports.len(),
             context: None,
+            initializer: None,
         }
     }
 
-    fn stop(&mut self) -> BoxFuture<()> {
+    // TODO review if we want this as a separate fn from `stop`.
+    // fn soft_stop(&mut self) -> BoxFuture<()> {
+    //     async {
+    //         self.store().await;
+    //         self.stop();
+    //     }
+    //     .boxed()
+    // }
+
+    fn stop(&mut self) -> BoxFuture<()>
+    where
+        S::Storage: Send,
+    {
         async {
             if let Some(mut context) = self.context.take() {
+                // Store state for recovering channels on restart.
+                self.initializer
+                    .replace(self.get_initializer(&context).await);
+
                 tracing::info!(node_id = context.node_id(), "stopping node");
                 context.shut_down().await;
             }
         }
         .boxed()
+    }
+
+    /// Store state of node, useful to restore node later.
+    async fn get_initializer(
+        &self,
+        context: &SequencerContext<
+            network::Production,
+            <S::Options as PersistenceOptions>::Persistence,
+            MockSequencerVersions,
+        >,
+    ) -> NodeInitializer<S> {
+        let consensus = context.consensus();
+        let handle = consensus.read().await;
+        let stream = handle.event_stream_known_impl();
+        NodeInitializer {
+            stream,
+            hotshot_context: handle.hotshot.clone(),
+            node_id: context.node_id(),
+        }
+    }
+
+    /// Get stored consensus data. See `SequencerContext::init` for reference.
+    async fn get_hotshot_initializer(&self, node_state: NodeState) -> HotShotInitializer<SeqTypes> {
+        let mut storage_opt = S::persistence_options(&self.storage);
+        let persistence = storage_opt.create().await.unwrap();
+        let (initializer, _anchor_view) = persistence
+            .load_consensus_state::<MockSequencerVersions>(node_state.clone())
+            .await
+            .unwrap();
+        initializer
     }
 
     fn start(&mut self) -> BoxFuture<()>
@@ -339,7 +408,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let mut retries = 5;
             let mut delay = Duration::from_secs(1);
             let genesis = Genesis::from_file(&self.opt.genesis_file).unwrap();
-            let ctx = loop {
+            let mut ctx = loop {
                 match init_with_storage(
                     genesis.clone(),
                     self.modules.clone(),
@@ -361,6 +430,50 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                         retries -= 1;
                     },
                 }
+            };
+
+            // Check if we have a stored config for soft-restart.
+            if let Some(initializer) = &self.initializer {
+                tracing::error!("restoring hotshot");
+                let node_id = initializer.node_id;
+
+                tracing::error!(
+                    "restoring event stream prev: {}, context: {}, state: {}",
+                    node_id,
+                    ctx.node_id(),
+                    ctx.node_state().node_id
+                );
+                // TODO maybe better to store node_state and assert several
+                // things against new one.
+                assert_eq!(node_id, ctx.node_id(), "Expected Context {node_id}");
+                assert_eq!(
+                    node_id,
+                    ctx.node_state().node_id,
+                    "Expected NodeState {node_id}"
+                );
+
+                let mut storage_opt = S::persistence_options(&self.storage);
+                let persistence = storage_opt.create().await.unwrap();
+                let (hotshot_initializer, anchor_view) = persistence
+                    .load_consensus_state::<MockSequencerVersions>(ctx.node_state())
+                    .await
+                    .unwrap();
+
+                let handle = initializer
+                    .hotshot_context
+                    // TODO I think all the copied values are static, so should
+                    // be safe, but double check.
+                    .into_self_cloned(hotshot_initializer, node_id)
+                    .await;
+
+                tracing::error!("replace handle");
+                // TODO instead of simply replacing  the handle, we need to call
+                // SequencerContext::init with  values on this context  and this
+                // handle.  However that `init` fn  does not support this. So we
+                // can  create  `init2` which takes a handle and event channels.
+                // This will  (hopefully)  set  up channels correctly.
+                ctx.replace_handle(handle, Arc::new(persistence), anchor_view)
+                    .await;
             };
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");
@@ -398,10 +511,12 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             // conservative: of course if we actually make progress, not every view will time out,
             // and we will take less than this amount of time.
             let timeout_duration =
-                2 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+                5 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
-                Err(_) => bail!("timed out waiting for progress on node {node_id}"),
+                Err(_) => bail!(
+                    "timed out waiting for progress on node {node_id} after {timeout_duration:#?}"
+                ),
             }
         }
         .boxed()
@@ -430,9 +545,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let mut events = context.event_stream().await;
         while let Some(event) = events.next().await {
             let EventType::Decide { leaf_chain, .. } = event.event else {
+                tracing::info!(node_id, num_nodes, "non-decide event from node");
                 continue;
             };
             for leaf in leaf_chain.iter() {
+                // Leader rotation dictates that `node_id` will be proposing every `num_nodes`.
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
                     tracing::info!(
                         node_id,
@@ -499,6 +616,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     }
 }
 
+type LocalState = Arc<Mutex<HashMap<ViewNumber, EventType<SeqTypes>>>>;
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct TestNetwork {
@@ -509,6 +628,8 @@ struct TestNetwork {
     orchestrator_task: Option<JoinHandle<()>>,
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
+    event_task: Option<JoinHandle<()>>,
+    state: LocalState,
     #[derivative(Debug = "ignore")]
     _anvil: AnvilInstance,
 }
@@ -528,6 +649,45 @@ impl Drop for TestNetwork {
 }
 
 impl TestNetwork {
+    async fn start_event_task(&mut self) {
+        // let event_state = Arc::clone(&self.events);
+        let state = Arc::clone(&self.state);
+
+        let contexts: Vec<_> = self
+            .da_nodes
+            .iter()
+            .chain(self.regular_nodes.iter())
+            // since `context` implements `Clone`, it proved easier to
+            // get the stream from there rather than call
+            // `event_stream()` on the `TestNode`.
+            .filter_map(|node| node.context.clone())
+            .collect();
+
+        let streams = join_all(contexts.iter().map(|c| c.event_stream())).await;
+        let mut stream = futures::stream::iter(streams).flatten_unordered(None);
+
+        let task = spawn(async move {
+            loop {
+                let event = stream
+                    .next()
+                    .await
+                    .expect("event stream terminated unexpectedly");
+
+                let Event { view_number, event } = event;
+                tracing::error!(?view_number, "got event");
+
+                let EventType::Decide { .. } = event.clone() else {
+                    continue;
+                };
+
+                let mut event_state = state.lock().await;
+                tracing::error!(?view_number, "got decide event");
+                event_state.insert(view_number, event);
+            }
+        });
+        self.event_task = Some(task);
+    }
+
     async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
         let mut ports = PortPicker::default();
 
@@ -601,6 +761,7 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
+        let local_state = Arc::new(Mutex::new(HashMap::new()));
         let mut network = Self {
             da_nodes: join_all(
                 (0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i])),
@@ -616,6 +777,8 @@ impl TestNetwork {
             orchestrator_task,
             broker_task,
             marshal_task,
+            state: local_state,
+            event_task: None, // Some(event_task),
             _anvil: anvil,
         };
 

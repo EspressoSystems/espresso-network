@@ -46,6 +46,7 @@ vergen = { workspace = true }
 
 [dependencies]
 
+async-broadcast = { workspace = true }
 alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }

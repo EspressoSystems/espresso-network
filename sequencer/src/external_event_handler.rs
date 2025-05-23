@@ -28,10 +28,10 @@ pub enum ExternalMessage {
 #[derive(Clone)]
 pub struct ExternalEventHandler<V: Versions> {
     /// The sender to the request-response protocol
-    request_response_sender: Sender<Bytes>,
+    pub request_response_sender: Sender<Bytes>, // TODO remove `pub`
 
     /// The type phantom
-    phantom: PhantomData<V>,
+    pub phantom: PhantomData<V>,
 }
 
 // The different types of outbound messages (broadcast or direct)
@@ -56,7 +56,7 @@ impl<V: Versions> ExternalEventHandler<V> {
         tasks.spawn(
             "ExternalEventHandler",
             Self::outbound_message_loop(
-                outbound_message_receiver,
+                outbound_message_receiver, //
                 network,
                 public_key,
                 hotshot_upgrade_lock,
