@@ -2183,7 +2183,7 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-lock 3.4.0",
- "clap 4.5.37",
+ "clap 4.5.38",
  "committable",
  "espresso-types",
  "futures",
@@ -2417,7 +2417,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.37",
+ "clap 4.5.38",
  "console-subscriber 0.3.0",
  "dashmap",
  "derivative",
@@ -2440,7 +2440,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.37",
+ "clap 4.5.38",
  "console-subscriber 0.4.1",
  "derivative",
  "jf-signature 0.2.0",
@@ -2462,7 +2462,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.37",
+ "clap 4.5.38",
  "derive_more 1.0.0",
  "jf-signature 0.2.0",
  "parking_lot",
@@ -2478,7 +2478,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade#849e7edb32788e42738541ba4d5c64d3e061d86d"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.37",
+ "clap 4.5.38",
  "jf-signature 0.1.0",
  "tokio",
  "tracing",
@@ -2491,7 +2491,7 @@ version = "0.4.0"
 source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7#fd00e12f730ded87c26c8c2efe26638f4a9df969"
 dependencies = [
  "cdn-proto 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
- "clap 4.5.37",
+ "clap 4.5.38",
  "jf-signature 0.2.0",
  "tokio",
  "tracing",
@@ -2679,9 +2679,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.37"
+version = "4.5.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eccb054f56cbd38340b380d4a8e69ef1f02f1af43db2f0cc817a4774d80ae071"
+checksum = "ed93b9805f8ba930df42c2590f05453d5ec36cbb85d018868a5b24d31f6ac000"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -2703,7 +2703,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4b7d643cbdc3a4eb0b5db8b9844ab2002bc4be44c1244db5cd27df8e594c125"
 dependencies = [
- "clap 4.5.37",
+ "clap 4.5.38",
  "clap-serde-proc",
  "serde",
 ]
@@ -2721,9 +2721,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.37"
+version = "4.5.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efd9466fac8543255d3b1fcad4762c5e116ffe808c8a3043d4263cd4fd4862a2"
+checksum = "379026ff283facf611b0ea629334361c4211d1b12ee01024eec1591133b04120"
 dependencies = [
  "anstream",
  "anstyle",
@@ -3266,7 +3266,7 @@ dependencies = [
  "anes",
  "cast",
  "ciborium",
- "clap 4.5.37",
+ "clap 4.5.38",
  "criterion-plot",
  "is-terminal",
  "itertools 0.10.5",
@@ -3741,7 +3741,7 @@ dependencies = [
  "ark-ff 0.4.2",
  "ark-poly",
  "ark-std 0.4.0",
- "clap 4.5.37",
+ "clap 4.5.38",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
@@ -4089,9 +4089,10 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "clap 4.5.37",
+ "clap 4.5.38",
  "derive_builder",
  "derive_more 1.0.0",
+ "dotenvy",
  "espresso-types",
  "hotshot-contract-adapter",
  "hotshot-types",
@@ -4154,7 +4155,7 @@ dependencies = [
  "bincode",
  "blake3",
  "bytesize",
- "clap 4.5.37",
+ "clap 4.5.38",
  "cld",
  "committable",
  "derive_more 1.0.0",
@@ -4940,7 +4941,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "ark-srs",
- "clap 4.5.37",
+ "clap 4.5.38",
  "hotshot-contract-adapter",
  "hotshot-state-prover",
  "hotshot-types",
@@ -5430,7 +5431,7 @@ name = "hotshot-builder-api"
 version = "0.1.7"
 dependencies = [
  "async-trait",
- "clap 4.5.37",
+ "clap 4.5.38",
  "committable",
  "derive_more 1.0.0",
  "futures",
@@ -5553,7 +5554,7 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.0",
  "async-trait",
- "clap 4.5.37",
+ "clap 4.5.38",
  "derive_more 1.0.0",
  "futures",
  "hotshot-example-types",
@@ -5607,7 +5608,7 @@ dependencies = [
  "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
  "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.7)",
  "chrono",
- "clap 4.5.37",
+ "clap 4.5.38",
  "futures",
  "hotshot",
  "hotshot-example-types",
@@ -5679,7 +5680,7 @@ dependencies = [
  "anyhow",
  "async-lock 3.4.0",
  "blake3",
- "clap 4.5.37",
+ "clap 4.5.38",
  "csv",
  "futures",
  "hotshot-types",
@@ -5709,7 +5710,7 @@ dependencies = [
  "backtrace-on-stack-overflow",
  "bincode",
  "chrono",
- "clap 4.5.37",
+ "clap 4.5.38",
  "committable",
  "custom_debug",
  "derivative",
@@ -5766,7 +5767,7 @@ dependencies = [
  "ark-ff 0.4.2",
  "ark-srs",
  "ark-std 0.4.0",
- "clap 4.5.37",
+ "clap 4.5.38",
  "displaydoc",
  "espresso-contract-deployer",
  "espresso-types",
@@ -5902,7 +5903,7 @@ dependencies = [
  "bincode",
  "bitvec",
  "blake3",
- "clap 4.5.37",
+ "clap 4.5.38",
  "committable",
  "derive_more 1.0.0",
  "digest 0.10.7",
@@ -7135,12 +7136,12 @@ checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 
 [[package]]
 name = "libloading"
-version = "0.8.6"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
+checksum = "6a793df0d7afeac54f95b471d3af7f0d4fb975699f972341a4b76988d49cdf0c"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.53.0",
 ]
 
 [[package]]
@@ -8184,7 +8185,7 @@ dependencies = [
  "bincode",
  "bitvec",
  "circular-buffer",
- "clap 4.5.37",
+ "clap 4.5.38",
  "espresso-types",
  "futures",
  "hotshot",
@@ -9309,9 +9310,9 @@ dependencies = [
 
 [[package]]
 name = "quick_cache"
-version = "0.6.13"
+version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "287e56aac5a2b4fb25a6fb050961d157635924c8696305a5c937a76f29841a0f"
+checksum = "6b450dad8382b1b95061d5ca1eb792081fb082adf48c678791fe917509596d5f"
 dependencies = [
  "ahash 0.8.12",
  "equivalent",
@@ -9824,9 +9825,9 @@ dependencies = [
 
 [[package]]
 name = "resolv-conf"
-version = "0.7.3"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc7c8f7f733062b66dc1c63f9db168ac0b97a9210e247fa90fdc9ad08f51b302"
+checksum = "95325155c684b1c89f7765e30bc1c42e4a6da51ca513615660cb8a62ef9a88e3"
 
 [[package]]
 name = "rfc6979"
@@ -10495,7 +10496,7 @@ dependencies = [
  "byteorder",
  "cdn-broker 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
  "cdn-marshal 0.4.0 (git+https://github.com/EspressoSystems/Push-CDN?tag=0.5.1-upgrade)",
- "clap 4.5.37",
+ "clap 4.5.38",
  "client",
  "committable",
  "csv",
@@ -10573,8 +10574,10 @@ dependencies = [
  "anyhow",
  "ark-serialize 0.4.2",
  "async-trait",
- "clap 4.5.37",
+ "clap 4.5.38",
  "committable",
+ "derive_more 1.0.0",
+ "dotenvy",
  "hotshot",
  "hotshot-example-types",
  "log-panics",
@@ -11262,7 +11265,7 @@ dependencies = [
  "anyhow",
  "ark-ec",
  "ark-ed-on-bn254",
- "clap 4.5.37",
+ "clap 4.5.38",
  "clap-serde",
  "clap-serde-derive",
  "derive_more 1.0.0",
@@ -11726,9 +11729,9 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tempfile"
-version = "3.19.1"
+version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7437ac7763b9b123ccf33c338a5cc1bac6f69b45a136c19bdd8a65e3916435bf"
+checksum = "e8a64e3985349f2441a1a9ef0b853f869006c3855f2cda6862a94d26ebb9d6a1"
 dependencies = [
  "fastrand 2.3.0",
  "getrandom 0.3.3",
@@ -11863,7 +11866,7 @@ dependencies = [
  "async-lock 3.4.0",
  "async-std",
  "async-trait",
- "clap 4.5.37",
+ "clap 4.5.38",
  "config",
  "derivative",
  "derive_more 0.99.20",
