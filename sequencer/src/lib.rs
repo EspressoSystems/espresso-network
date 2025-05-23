@@ -526,6 +526,7 @@ where
         membership,
         network_config.config.epoch_height,
         &persistence.clone(),
+        network_config.config.drb_difficulty,
     );
 
     let instance_state = NodeState {
@@ -1006,6 +1007,7 @@ pub mod testing {
                 epoch_height: 30,
                 epoch_start_block: 1,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+                drb_difficulty: 10,
             };
 
             let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
@@ -1218,6 +1220,7 @@ pub mod testing {
                 membership,
                 config.epoch_height,
                 &persistence.clone(),
+                config.drb_difficulty,
             );
 
             let node_state = NodeState::new(

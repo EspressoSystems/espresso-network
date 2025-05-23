@@ -168,7 +168,7 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership.write().await.add_drb_result(epoch, drb_result)
 }
 /// Start the DRB computation task for the next epoch.
-fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     seed: DrbSeedInput,
     epoch: TYPES::Epoch,
     membership: &Arc<RwLock<TYPES::Membership>>,
@@ -180,10 +180,12 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
     let load_drb_progress_fn = load_drb_progress_fn(storage.clone());
     let consensus = consensus.clone();
+    let difficulty_level = consensus.read().await.drb_difficulty;
     let drb_input = DrbInput {
         epoch: *epoch,
         iteration: 0,
         value: seed,
+        difficulty_level,
     };
     tokio::spawn(async move {
         let drb_result = hotshot_types::drb::compute_drb_result(
@@ -257,7 +259,8 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             membership,
             storage,
             consensus,
-        );
+        )
+        .await;
     }
 }
 

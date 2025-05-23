@@ -55,6 +55,9 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
 
     /// Callback function to store a drb result in storage when one is calculated during catchup
     store_drb_result_fn: StoreDrbResultFn<TYPES>,
+
+    /// difficulty level for the DRB calculation, taken from HotShotConfig
+    drb_difficulty: u64,
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -66,6 +69,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
             store_drb_result_fn: self.store_drb_result_fn.clone(),
+            drb_difficulty: self.drb_difficulty,
         }
     }
 }
@@ -79,6 +83,7 @@ where
         membership: Arc<RwLock<TYPES::Membership>>,
         epoch_height: u64,
         storage: &S,
+        drb_difficulty: u64,
     ) -> Self {
         Self {
             membership,
@@ -87,6 +92,7 @@ where
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
+            drb_difficulty,
         }
     }
 
@@ -448,6 +454,7 @@ where
                 epoch: *epoch,
                 iteration: 0,
                 value: drb_seed_input,
+                difficulty_level: self.drb_difficulty,
             };
 
             let store_drb_progress_fn = self.store_drb_progress_fn.clone();
