@@ -72,6 +72,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+        
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
@@ -218,7 +219,7 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - uses: actions/checkout@v4
-
+    
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download archive

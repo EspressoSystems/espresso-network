@@ -41,5 +41,7 @@ function decodeProposalData() {
   }
 }
 
-// Call the function with the encoded data
-decodeProposalData();
+// Call the function with the encoded data if the file is executed directly
+if (require.main === module) {
+  decodeProposalData();
+}
