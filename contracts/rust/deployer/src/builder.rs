@@ -2,13 +2,13 @@
 
 use alloy::{
     primitives::{Address, U256},
-    providers::WalletProvider,
+    providers::{Provider, WalletProvider},
 };
 use anyhow::{Context, Result};
 use derive_builder::Builder;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 
-use crate::{Contract, Contracts, HttpProviderWithWallet};
+use crate::{Contract, Contracts};
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
 /// - `deployer`: deployer's wallet provider
@@ -23,8 +23,8 @@ use crate::{Contract, Contracts, HttpProviderWithWallet};
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
 #[derive(Builder, Clone)]
 #[builder(setter(strip_option))]
-pub struct DeployerArgs {
-    deployer: HttpProviderWithWallet,
+pub struct DeployerArgs<P: Provider + WalletProvider> {
+    deployer: P,
     #[builder(default)]
     token_recipient: Option<Address>,
     #[builder(default)]
@@ -45,11 +45,11 @@ pub struct DeployerArgs {
     multisig: Option<Address>,
 }
 
-impl DeployerArgs {
+impl<P: Provider + WalletProvider> DeployerArgs<P> {
     /// deploy target contracts
     pub async fn deploy(&self, contracts: &mut Contracts, target: Contract) -> Result<()> {
         let provider = &self.deployer;
-        let admin = <HttpProviderWithWallet as WalletProvider>::default_signer_address(provider);
+        let admin = provider.default_signer_address();
         match target {
             Contract::FeeContractProxy => {
                 let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;

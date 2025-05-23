@@ -14,8 +14,15 @@ use alloy::{
     signers::local::PrivateKeySigner,
 };
 use anyhow::Result;
-use espresso_contract_deployer::build_signer;
-use hotshot_contract_adapter::sol_types::{ERC1967Proxy, EspToken, StakeTable, StakeTableV2};
+use espresso_contract_deployer::{
+    build_signer, builder::DeployerArgsBuilder,
+    network_config::light_client_genesis_from_stake_table, Contract, Contracts,
+};
+use hotshot_contract_adapter::sol_types::{
+    EspToken::{self, EspTokenInstance},
+    StakeTable,
+};
+use hotshot_state_prover::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
@@ -62,36 +69,42 @@ impl TestSystem {
             "Signer address mismatch"
         );
 
-        // `EspToken.sol`
-        let token_impl = EspToken::deploy(provider.clone()).await?;
-        let data = token_impl
-            .initialize(deployer_address, deployer_address)
-            .calldata()
-            .clone();
+        // Create a fake stake table to create a genesis state. Will need to be updated once we
+        // implement slashing where we will use light client contract in the stake table contract.
+        let blocks_per_epoch = 100;
+        let epoch_start_block = 1;
+        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+            &Default::default(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .unwrap();
 
-        let token_proxy =
-            ERC1967Proxy::deploy(provider.clone(), *token_impl.address(), data).await?;
-        let token = EspToken::new(*token_proxy.address(), provider.clone());
+        let mut contracts = Contracts::new();
+        let args = DeployerArgsBuilder::default()
+            .deployer(provider.clone())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(blocks_per_epoch)
+            .epoch_start_block(epoch_start_block)
+            .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
+            .build()
+            .unwrap();
+        args.deploy_all(&mut contracts)
+            .await
+            .expect("failed to deploy all contracts");
 
-        // `StakeTable.sol`
-        let stake_table_impl = StakeTableV2::deploy(provider.clone()).await?;
-        let data = stake_table_impl
-            .initialize(
-                *token_proxy.address(),
-                "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF".parse()?, // fake LC address
-                U256::from(exit_escrow_period.as_secs()),
-                deployer_address,
-            )
-            .calldata()
-            .clone();
-
-        let st_proxy =
-            ERC1967Proxy::deploy(provider.clone(), *stake_table_impl.address(), data).await?;
+        let stake_table = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("StakeTableProxy deployed");
+        let token = contracts
+            .address(Contract::EspTokenProxy)
+            .expect("EspTokenProxy deployed");
 
         let approval_amount = parse_ether("1000000")?;
         // Approve the stake table contract so it can transfer tokens to itself
-        let receipt = token
-            .approve(*st_proxy.address(), approval_amount)
+        let receipt = EspTokenInstance::new(token, &provider)
+            .approve(stake_table, approval_amount)
             .send()
             .await?
             .get_receipt()
@@ -105,8 +118,8 @@ impl TestSystem {
             provider,
             signer,
             deployer_address,
-            token: *token_proxy.address(),
-            stake_table: *st_proxy.address(),
+            token,
+            stake_table,
             exit_escrow_period,
             rpc_url,
             bls_key_pair,
