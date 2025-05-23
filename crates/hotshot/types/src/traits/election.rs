@@ -168,7 +168,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// with Some to have that callback invoked under a write lock.
     ///
     /// #3967 REVIEW NOTE: this is only called if epoch is Some. Is there any reason to do otherwise?
-    fn add_epoch_root(
+    fn store_epoch_root(
         &self,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
@@ -177,7 +177,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     }
 
     /// Called to notify the Membership when a new DRB result has been calculated.
-    /// Observes the same semantics as add_epoch_root
+    /// Observes the same semantics as store_epoch_root
     fn add_drb_result(&mut self, _epoch: TYPES::Epoch, _drb_result: DrbResult);
 
     /// Called to notify the Membership that Epochs are enabled.
