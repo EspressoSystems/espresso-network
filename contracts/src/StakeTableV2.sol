@@ -16,11 +16,11 @@ contract StakeTableV2 is StakeTable {
     /// @notice the blsSig and schnorrSig are validated by the Espresso Network
     event ValidatorRegisteredV2(
         address indexed account,
-        BN254.G2Point blsVk,
-        EdOnBN254.EdOnBN254Point schnorrVk,
+        BN254.G2Point blsVK,
+        EdOnBN254.EdOnBN254Point schnorrVK,
         uint16 commission,
         BN254.G1Point blsSig,
-        EdOnBN254.EdOnBN254Point schnorrSig
+        bytes schnorrSig
     );
 
     /// @notice A validator updates their consensus keys
@@ -30,7 +30,7 @@ contract StakeTableV2 is StakeTable {
         BN254.G2Point blsVK,
         EdOnBN254.EdOnBN254Point schnorrVK,
         BN254.G1Point blsSig,
-        EdOnBN254.EdOnBN254Point schnorrSig
+        bytes schnorrSig
     );
 
     /// @notice The exit escrow period is updated
@@ -65,11 +65,11 @@ contract StakeTableV2 is StakeTable {
     /// @param blsSig The BLS signature that authenticates the BLS VK
     /// @param schnorrSig The Schnorr signature that authenticates the Schnorr VK
     /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
-    function registerValidator(
+    function registerValidatorV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
-        EdOnBN254.EdOnBN254Point memory schnorrSig,
+        bytes memory schnorrSig,
         uint16 commission
     ) external virtual {
         address validator = msg.sender;
@@ -99,11 +99,11 @@ contract StakeTableV2 is StakeTable {
     /// @param schnorrVK The new Schnorr verification key
     /// @param blsSig The BLS signature that authenticates the blsVK
     /// @param schnorrSig The Schnorr signature that authenticates the schnorrVK
-    function updateConsensusKeys(
+    function updateConsensusKeysV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
-        EdOnBN254.EdOnBN254Point memory schnorrSig
+        bytes memory schnorrSig
     ) external virtual {
         address validator = msg.sender;
 

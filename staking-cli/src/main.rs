@@ -14,6 +14,7 @@ use hotshot_contract_adapter::{
     evm::DecodeRevert as _,
     sol_types::EspToken::{self, EspTokenErrors},
 };
+use hotshot_types::light_client::StateKeyPair;
 use staking_cli::{
     claim::{claim_validator_exit, claim_withdrawal},
     delegation::{approve, delegate, undelegate},
@@ -252,7 +253,7 @@ pub async fn main() -> Result<()> {
                 commission,
                 account,
                 (consensus_private_key).into(),
-                (&state_private_key).into(),
+                StateKeyPair::from_sign_key(state_private_key),
             )
             .await
         },
@@ -266,7 +267,7 @@ pub async fn main() -> Result<()> {
                 stake_table_addr,
                 account,
                 (consensus_private_key).into(),
-                (&state_private_key).into(),
+                StateKeyPair::from_sign_key(state_private_key),
             )
             .await
         },

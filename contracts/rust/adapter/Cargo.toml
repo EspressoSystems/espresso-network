@@ -22,11 +22,13 @@ ark-std = { workspace = true }
 hotshot-types = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
+jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-utils = { workspace = true }
 num-bigint = { version = "0.4", default-features = false }
 num-traits = { version = "0.2", default-features = false }
 rand = { workspace = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

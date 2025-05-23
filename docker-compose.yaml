@@ -15,7 +15,7 @@ services:
 
   deploy-sequencer-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-fee --deploy-esp-token --deploy-stake-table
+    command: deploy --deploy-fee --deploy-esp-token --deploy-stake-table --upgrade-stake-table-v2
     environment:
       - ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
       - ESPRESSO_SEQUENCER_L1_PROVIDER

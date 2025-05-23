@@ -39,8 +39,9 @@ pub use crate::bindings::{
     lightclientv2mock::{self, LightClientV2Mock},
     plonkverifier::PlonkVerifier,
     plonkverifierv2::PlonkVerifierV2,
-    staketable::{
-        self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTable,
+    staketable::StakeTable,
+    staketablev2::{
+        self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTableV2,
         BN254::G2Point as G2PointSol,
     },
     timelock::Timelock,
@@ -173,8 +174,14 @@ impl From<LightClientV2Mock::votingStakeTableStateReturn> for StakeTableStateSol
     }
 }
 
-impl From<G1PointSol> for staketable::BN254::G1Point {
+impl From<G1PointSol> for staketablev2::BN254::G1Point {
     fn from(v: G1PointSol) -> Self {
+        unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl From<staketablev2::BN254::G1Point> for G1PointSol {
+    fn from(v: staketablev2::BN254::G1Point) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
@@ -182,9 +189,10 @@ impl From<G1PointSol> for staketable::BN254::G1Point {
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use self::{
-    staketable::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
-    StakeTable::{
-        ConsensusKeysUpdated, Delegated, Undelegated, ValidatorExit, ValidatorRegistered,
+    staketablev2::{EdOnBN254::EdOnBN254Point, BN254::G2Point},
+    StakeTableV2::{
+        ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
+        ValidatorRegistered, ValidatorRegisteredV2,
     },
 };
 
@@ -197,11 +205,32 @@ impl PartialEq for ValidatorRegistered {
     }
 }
 
+impl PartialEq for ValidatorRegisteredV2 {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
+            && self.commission == other.commission
+            && self.blsSig == other.blsSig
+            && self.schnorrSig == other.schnorrSig
+    }
+}
+
 impl PartialEq for ConsensusKeysUpdated {
     fn eq(&self, other: &Self) -> bool {
         self.account == other.account
             && self.blsVK == other.blsVK
             && self.schnorrVK == other.schnorrVK
+    }
+}
+
+impl PartialEq for ConsensusKeysUpdatedV2 {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
+            && self.blsSig == other.blsSig
+            && self.schnorrSig == other.schnorrSig
     }
 }
 
@@ -221,11 +250,47 @@ impl<'de> Deserialize<'de> for ValidatorRegistered {
         D: Deserializer<'de>,
     {
         let (account, blsVk, schnorrVk, commission) = <(_, _, _, u16)>::deserialize(deserializer)?;
-        Ok(ValidatorRegistered {
+        Ok(Self {
             account,
             blsVk,
             schnorrVk,
             commission,
+        })
+    }
+}
+
+impl Serialize for ValidatorRegisteredV2 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (
+            &self.account,
+            &self.blsVK,
+            &self.schnorrVK,
+            self.commission,
+            &self.blsSig,
+            &self.schnorrSig,
+        )
+            .serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for ValidatorRegisteredV2 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (account, blsVK, schnorrVK, commission, blsSig, schnorrSig) =
+            <(_, _, _, u16, _, _)>::deserialize(deserializer)?;
+        Ok(ValidatorRegisteredV2 {
+            account,
+            blsVK,
+            schnorrVK,
+            commission,
+            blsSig,
+            schnorrSig,
         })
     }
 }
@@ -245,7 +310,7 @@ impl<'de> Deserialize<'de> for EdOnBN254Point {
         D: Deserializer<'de>,
     {
         let (x, y) = Deserialize::deserialize(deserializer)?;
-        Ok(EdOnBN254Point { x, y })
+        Ok(Self { x, y })
     }
 }
 
@@ -259,13 +324,32 @@ impl Serialize for G2Point {
 }
 
 impl<'de> Deserialize<'de> for G2Point {
-    fn deserialize<D>(deserializer: D) -> Result<G2Point, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let (x0, x1, y0, y1) = Deserialize::deserialize(deserializer)?;
 
-        Ok(G2Point { x0, x1, y0, y1 })
+        Ok(Self { x0, x1, y0, y1 })
+    }
+}
+
+impl Serialize for staketablev2::BN254::G1Point {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (&self.x, &self.y).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for staketablev2::BN254::G1Point {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (x, y) = Deserialize::deserialize(deserializer)?;
+        Ok(Self { x, y })
     }
 }
 
@@ -358,6 +442,41 @@ impl<'de> Deserialize<'de> for ConsensusKeysUpdated {
             account,
             blsVK,
             schnorrVK,
+        })
+    }
+}
+
+impl Serialize for ConsensusKeysUpdatedV2 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        (
+            &self.account,
+            &self.blsVK,
+            &self.schnorrVK,
+            &self.blsSig,
+            &self.schnorrSig,
+        )
+            .serialize(serializer)
+    }
+}
+
+#[allow(non_snake_case)]
+impl<'de> Deserialize<'de> for ConsensusKeysUpdatedV2 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (account, blsVK, schnorrVK, blsSig, schnorrSig) =
+            Deserialize::deserialize(deserializer)?;
+
+        Ok(ConsensusKeysUpdatedV2 {
+            account,
+            blsVK,
+            schnorrVK,
+            blsSig,
+            schnorrSig,
         })
     }
 }

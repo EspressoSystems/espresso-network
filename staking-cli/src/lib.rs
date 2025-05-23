@@ -11,10 +11,7 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;
-pub(crate) use hotshot_types::{
-    light_client::{StateSignKey, StateVerKey},
-    signature_key::BLSPrivKey,
-};
+pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use parse::Commission;
 use sequencer_utils::logging;
