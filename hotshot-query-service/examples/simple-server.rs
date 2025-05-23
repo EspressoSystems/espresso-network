@@ -219,6 +219,7 @@ async fn init_consensus(
         epoch_height: 0,
         epoch_start_block: 0,
         stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+        drb_difficulty: 0,
     };
 
     let nodes = join_all(priv_keys.into_iter().zip(data_sources).enumerate().map(
@@ -245,6 +246,7 @@ async fn init_consensus(
                     Arc::new(RwLock::new(membership)),
                     config.epoch_height,
                     &storage.clone(),
+                    config.drb_difficulty,
                 );
 
                 SystemContext::init(

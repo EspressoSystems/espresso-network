@@ -78,6 +78,7 @@ pub type MockSqlDataSource = SqlDataSource<MockTypes, NoFetching>;
 
 pub const NUM_NODES: usize = 2;
 const EPOCH_HEIGHT: u64 = 10;
+const DIFFICULTY_LEVEL: u64 = 10;
 
 impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
     pub async fn init() -> Self {
@@ -157,6 +158,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
             epoch_height: EPOCH_HEIGHT,
             epoch_start_block: 0,
             stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+            drb_difficulty: DIFFICULTY_LEVEL,
         };
         update_config(&mut config);
 
@@ -200,6 +202,7 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             membership,
                             config.epoch_height,
                             &hs_storage.clone(),
+                            DIFFICULTY_LEVEL,
                         );
 
                         let hotshot = SystemContext::init(

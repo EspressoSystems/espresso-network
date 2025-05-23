@@ -144,6 +144,7 @@ pub mod testing {
                 epoch_height: 0,
                 epoch_start_block: 0,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+                drb_difficulty: 0,
             };
 
             Self {

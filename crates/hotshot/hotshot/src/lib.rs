@@ -348,6 +348,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             Arc::clone(&consensus_metrics),
             config.epoch_height,
             initializer.state_cert,
+            config.drb_difficulty,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));

@@ -118,8 +118,12 @@ pub async fn build_system_handle_from_launcher<
         hotshot_config.known_da_nodes.clone(),
     )));
 
-    let coordinator =
-        EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height, &storage);
+    let coordinator = EpochMembershipCoordinator::new(
+        memberships,
+        hotshot_config.epoch_height,
+        &storage,
+        hotshot_config.drb_difficulty,
+    );
     let node_key_map = launcher.metadata.build_node_key_map();
 
     let (c, s, r) = SystemContext::init(

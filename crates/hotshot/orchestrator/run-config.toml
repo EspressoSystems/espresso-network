@@ -35,6 +35,7 @@ fixed_leader_for_gpuvid = 1
 next_view_timeout = 30000
 num_bootstrap = 5
 epoch_height = 0
+drb_difficulty = 0
 epoch_start_block = 0
 stake_table_capacity = 200
 
