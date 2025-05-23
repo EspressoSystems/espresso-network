@@ -175,13 +175,18 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         Ok(())
     }
 
-    /// Deploy all contracts
-    pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
+    pub async fn deploy_stake_table_v1(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy(contracts, Contract::FeeContractProxy).await?;
         self.deploy(contracts, Contract::EspTokenProxy).await?;
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
+        Ok(())
+    }
+
+    /// Deploy all contracts
+    pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
+        self.deploy_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
         Ok(())
     }

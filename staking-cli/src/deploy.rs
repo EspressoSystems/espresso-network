@@ -35,6 +35,12 @@ type TestProvider = FillProvider<
     Ethereum,
 >;
 
+#[derive(Debug, Clone, Copy)]
+pub enum StakeTableContractVersion {
+    V1,
+    V2,
+}
+
 #[derive(Debug, Clone)]
 pub struct TestSystem {
     pub provider: TestProvider,
@@ -51,7 +57,17 @@ pub struct TestSystem {
 }
 
 impl TestSystem {
+    pub async fn deploy_v1() -> Result<Self> {
+        Self::deploy_helper(StakeTableContractVersion::V1).await
+    }
+
     pub async fn deploy() -> Result<Self> {
+        Self::deploy_helper(StakeTableContractVersion::V2).await
+    }
+
+    pub async fn deploy_helper(
+        stake_table_contract_version: StakeTableContractVersion,
+    ) -> Result<Self> {
         let exit_escrow_period = Duration::from_secs(1);
         let port = portpicker::pick_unused_port().unwrap();
         // Spawn anvil
@@ -90,9 +106,11 @@ impl TestSystem {
             .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
             .build()
             .unwrap();
-        args.deploy_all(&mut contracts)
-            .await
-            .expect("failed to deploy all contracts");
+
+        match stake_table_contract_version {
+            StakeTableContractVersion::V1 => args.deploy_stake_table_v1(&mut contracts).await?,
+            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await?,
+        };
 
         let stake_table = contracts
             .address(Contract::StakeTableProxy)
