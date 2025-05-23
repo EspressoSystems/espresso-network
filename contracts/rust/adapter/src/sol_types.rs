@@ -43,6 +43,7 @@ pub use crate::bindings::{
         self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTable,
         BN254::G2Point as G2PointSol,
     },
+    staketablev2::{self, StakeTableV2},
     timelock::Timelock,
 };
 

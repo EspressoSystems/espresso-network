@@ -111,6 +111,10 @@ pub struct DeployedContracts {
     #[clap(long, env = Contract::StakeTable)]
     stake_table: Option<Address>,
 
+    /// StakeTableV2.sol
+    #[clap(long, env = Contract::StakeTableV2)]
+    stake_table_v2: Option<Address>,
+
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
@@ -141,6 +145,8 @@ pub enum Contract {
     EspTokenProxy,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS")]
     StakeTable,
+    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_V2_ADDRESS")]
+    StakeTableV2,
     #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
 }
@@ -190,6 +196,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.stake_table {
             m.insert(Contract::StakeTable, addr);
+        }
+        if let Some(addr) = deployed.stake_table_v2 {
+            m.insert(Contract::StakeTableV2, addr);
         }
         if let Some(addr) = deployed.stake_table_proxy {
             m.insert(Contract::StakeTableProxy, addr);
@@ -752,6 +761,68 @@ pub async fn deploy_stake_table_proxy(
     );
 
     Ok(st_proxy_addr)
+}
+
+/// Upgrade the stake table proxy to use StakeTableV2.
+/// Internally, first detect existence of proxy, then deploy StakeTableV2
+/// Assumes:
+/// - the proxy is already deployed.
+/// - the proxy is owned by a multisig.
+///
+/// Returns the url link to the upgrade proposal
+/// This function can only be called on a real network supported by the safeSDK
+pub async fn upgrade_stake_table_v2_multisig_owner(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    rpc_url: String,
+    multisig_address: Address,
+    dry_run: Option<bool>,
+) -> Result<(String, bool)> {
+    let dry_run = dry_run.unwrap_or(false);
+    match contracts.address(Contract::StakeTableProxy) {
+        // check if proxy already exists
+        None => Err(anyhow!("StakeTableProxy not found, can't upgrade")),
+        Some(proxy_addr) => {
+            let proxy = StakeTable::new(proxy_addr, &provider);
+            let owner = proxy.owner().call().await?;
+            let owner_addr = owner._0;
+            assert_eq!(
+                owner_addr, multisig_address,
+                "Proxy is not owned by the multisig"
+            );
+            // TODO: check if owner is a multisig
+            // first deploy StakeTableV2.sol
+            let stake_table_v2_addr = contracts
+                .deploy(
+                    Contract::StakeTableV2,
+                    StakeTableV2::deploy_builder(&provider),
+                )
+                .await?;
+            // invoke upgrade on proxy via the safeSDK
+            let result = call_upgrade_proxy_script(
+                proxy_addr,
+                stake_table_v2_addr,
+                "0x".to_string(),
+                rpc_url,
+                owner_addr,
+                Some(dry_run),
+            )
+            .await;
+
+            // Check the result directly
+            if let Err(ref err) = result {
+                tracing::error!("StakeTableProxy upgrade failed: {:?}", err);
+            } else {
+                tracing::info!("StakeTableProxy upgrade proposal sent");
+                // IDEA: add a function to wait for the proposal to be executed
+            }
+
+            match result {
+                Ok(r) => Ok(r),
+                Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
+            }
+        },
+    }
 }
 
 /// Common logic for any Ownable contract to transfer ownership
@@ -1390,6 +1461,98 @@ mod tests {
         assert_eq!(stake_table.token().call().await?._0, token_addr);
         assert_eq!(stake_table.lightClient().call().await?._0, lc_addr);
         Ok(())
+    }
+
+    // This test is used to test the upgrade of the StakeTableProxy via the multisig wallet
+    // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
+    // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
+    // The test assumes that there is a file .env.deployer.rs.test in the root directory with the following variables:
+    // RPC_URL=
+    // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
+    // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
+    // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
+    #[cfg(feature = "safesdk")]
+    async fn test_upgrade_stake_table_to_v2_multisig_owner_helper(dry_run: bool) -> Result<()> {
+        assert!(
+            std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
+            "Script not found!"
+        );
+        let mut sepolia_rpc_url = "http://localhost:8545".to_string();
+        let mut multisig_admin = Address::random();
+        if !dry_run {
+            dotenvy::from_filename_override(".env.deployer.rs.test").ok();
+
+            for item in dotenvy::from_filename_iter(".env.deployer.rs.test")
+                .expect("Failed to read .env.deployer.rs.test")
+            {
+                let (key, val) = item?;
+                if key == "RPC_URL" {
+                    sepolia_rpc_url = val.to_string();
+                } else if key == "SAFE_MULTISIG_ADDRESS" {
+                    multisig_admin = val.parse::<Address>()?;
+                }
+            }
+
+            if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
+                panic!("RPC_URL and SAFE_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
+            }
+        }
+
+        let provider = ProviderBuilder::new().on_anvil_with_wallet();
+        let mut contracts = Contracts::new();
+        let init_recipient = provider.get_accounts().await?[0];
+        let token_owner = Address::random();
+
+        // deploy proxy and V1
+        let token_addr =
+            deploy_token_proxy(&provider, &mut contracts, token_owner, init_recipient).await?;
+        let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
+        let exit_escrow_period = U256::from(1000);
+        let owner = init_recipient;
+        let stake_table_proxy_addr = deploy_stake_table_proxy(
+            &provider,
+            &mut contracts,
+            token_addr,
+            lc_addr,
+            exit_escrow_period,
+            owner,
+        )
+        .await?;
+        // transfer ownership to multisig
+        let _receipt = transfer_ownership(
+            &provider,
+            Contract::StakeTableProxy,
+            stake_table_proxy_addr,
+            multisig_admin,
+        )
+        .await?;
+        let stake_table = StakeTable::new(stake_table_proxy_addr, &provider);
+        assert_eq!(stake_table.owner().call().await?._0, multisig_admin);
+        // then send upgrade proposal to the multisig wallet
+        let (result, success) = upgrade_stake_table_v2_multisig_owner(
+            &provider,
+            &mut contracts,
+            sepolia_rpc_url,
+            multisig_admin,
+            Some(dry_run),
+        )
+        .await?;
+        tracing::info!(
+            "Result when trying to upgrade StakeTableProxy via the multisig wallet: {:?}",
+            result
+        );
+        assert!(success);
+
+        // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
+        // One has to test that the upgrade proposal is available via the Safe UI
+        // and then test that the v1 state is persisted
+        Ok(())
+    }
+
+    #[cfg(feature = "safesdk")]
+    #[tokio::test]
+    async fn test_upgrade_stake_table_to_v2_multisig_owner_dry_run() -> Result<()> {
+        test_upgrade_stake_table_to_v2_multisig_owner_helper(true).await
     }
 
     #[tokio::test]
