@@ -140,7 +140,7 @@ impl DeployerArgs {
                     .address(Contract::LightClientProxy)
                     .context("no LightClient proxy address")?;
                 let escrow_period = self.exit_escrow_period.unwrap_or(U256::from(300));
-                let addr = crate::deploy_stake_table_proxy(
+                crate::deploy_stake_table_proxy(
                     provider,
                     contracts,
                     token_addr,
@@ -150,9 +150,7 @@ impl DeployerArgs {
                 )
                 .await?;
 
-                if let Some(multisig) = self.multisig {
-                    crate::transfer_ownership(provider, target, addr, multisig).await?;
-                }
+                // NOTE: we don't transfer ownership to multisig, we only do so after V2 upgrade
             },
             Contract::StakeTableV2 => {
                 crate::upgrade_stake_table_v2(provider, contracts).await?;
