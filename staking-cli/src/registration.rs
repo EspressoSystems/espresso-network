@@ -52,9 +52,8 @@ pub async fn register_validator(
     let version = stake_table.getVersion().call().await?.majorVersion;
     Ok(match version {
         1 => {
-            // NOTE: forge bind chose the _1 suffix for this function
             stake_table
-                .registerValidator_1(bls_vk, schnorr_vk, bls_sig.into(), commission.to_evm())
+                .registerValidator(bls_vk, schnorr_vk, bls_sig.into(), commission.to_evm())
                 .send()
                 .await
                 .maybe_decode_revert::<StakeTableV2Errors>()?
@@ -62,9 +61,8 @@ pub async fn register_validator(
                 .await?
         },
         2 => {
-            // NOTE: forge bind chose the _0 suffix for this function
             stake_table
-                .registerValidator_0(
+                .registerValidatorV2(
                     bls_vk,
                     schnorr_vk,
                     bls_sig.into(),
@@ -97,9 +95,8 @@ pub async fn update_consensus_keys(
     let version = stake_table.getVersion().call().await?.majorVersion;
     Ok(match version {
         1 => {
-            // NOTE: forge bind chose the _0 suffix for this function
             stake_table
-                .updateConsensusKeys_0(bls_vk, schnorr_vk, bls_sig.into())
+                .updateConsensusKeys(bls_vk, schnorr_vk, bls_sig.into())
                 .send()
                 .await
                 .maybe_decode_revert::<StakeTableV2Errors>()?
@@ -107,9 +104,8 @@ pub async fn update_consensus_keys(
                 .await?
         },
         2 => {
-            // NOTE: forge bind chose the _1 suffix for this function
             stake_table
-                .updateConsensusKeys_1(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig)
+                .updateConsensusKeysV2(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig)
                 .send()
                 .await
                 .maybe_decode_revert::<StakeTableV2Errors>()?

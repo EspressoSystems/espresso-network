@@ -65,7 +65,7 @@ contract StakeTableV2 is StakeTable {
     /// @param blsSig The BLS signature that authenticates the BLS VK
     /// @param schnorrSig The Schnorr signature that authenticates the Schnorr VK
     /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
-    function registerValidator(
+    function registerValidatorV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
@@ -99,7 +99,7 @@ contract StakeTableV2 is StakeTable {
     /// @param schnorrVK The new Schnorr verification key
     /// @param blsSig The BLS signature that authenticates the blsVK
     /// @param schnorrSig The Schnorr signature that authenticates the schnorrVK
-    function updateConsensusKeys(
+    function updateConsensusKeysV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
