@@ -4,9 +4,11 @@
 #
 # The build is done inside a docker container.
 #
-# Usage: scripts/build-docker-images-native
+# Usage: scripts/build-docker-images-native <extra args to cargo build>
 #
 set -euo pipefail
+
+CARGO_BUILD_ARGS="${@:---release}"
 
 # Check kernel
 case $(uname -s) in
@@ -54,16 +56,16 @@ docker pull rust
 #   - Cargo registry and git directory are mounted to avoid re-downloading
 #     dependencies.
 docker run \
-  -e CARGO_TARGET_DIR=/work/target/docker \
+  -e CARGO_TARGET_DIR=/work/$CARGO_TARGET_DIR \
   -v "$(pwd):/work" \
   -v "$CARGO_HOME/registry:/usr/local/cargo/registry" \
   -v "$CARGO_HOME/git:/usr/local/cargo/git" \
   -it rust \
   bash -c "cd /work \
   && git config --global --add safe.directory /work \
-  && cargo build --release \
-  && cargo build --bin espresso-dev-node --release --features 'embedded-db testing' \
-  && cargo build --release --manifest-path ./sequencer-sqlite/Cargo.toml"
+  && cargo build --message-format json $CARGO_BUILD_ARGS > $CARGO_TARGET_DIR/build.json \
+  && cargo build --message-format json --bin espresso-dev-node --features 'embedded-db testing' $CARGO_BUILD_ARGS >> $CARGO_TARGET_DIR/build.json \
+  && cargo build --message-format json --manifest-path ./sequencer-sqlite/Cargo.toml $CARGO_BUILD_ARGS >> $CARGO_TARGET_DIR/build.json"
 
 # Copy binaries to a temporary directory.
 WORKDIR=$(mktemp -d -t espresso-docker-build-XXXXXXXX)
@@ -78,32 +80,20 @@ cleanup(){
 mkdir -p ${WORKDIR}/data
 cp -rv data/genesis ${WORKDIR}/data/
 
-binaries=(
-  cdn-broker
-  cdn-marshal
-  cdn-whitelist
-  deploy
-  espresso-bridge
-  espresso-dev-node
-  keygen
-  nasty-client
-  node-metrics
-  orchestrator
-  permissionless-builder
-  pub-key
-  reset-storage
-  sequencer
-  sequencer-sqlite
-  state-prover
-  state-relay-server
-  staking-cli
-  submit-transactions
-  utils
+mapfile -t binaries < <(
+  jq -r 'select((.reason == "compiler-artifact") and .target.kind[0] == "bin") | .filenames[0]' $CARGO_TARGET_DIR/build.json |
+  grep -o 'target/.*'
 )
+# exit if no binaries are found
+if [ ${#binaries[@]} -eq 0 ]; then
+  echo "No binaries found"
+  exit 1
+fi
 
+# Always copy to release subfolder because that's what our dockerfiles expect
 mkdir -p "${WORKDIR}/target/$ARCH/release"
 for binary in "${binaries[@]}"; do
-  cp -v "${CARGO_TARGET_DIR}/release/$binary" "${WORKDIR}/target/$ARCH/release"
+  cp -v "$binary" "${WORKDIR}/target/$ARCH/release"
 done
 
 mkdir -p "${WORKDIR}/docker/scripts"
