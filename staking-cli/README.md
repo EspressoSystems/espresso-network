@@ -62,6 +62,7 @@ Commands:
     init                   Initialize the config file with deployment and wallet info
     purge                  Remove the config file
     stake-table            Show the stake table in the Espresso stake table contract
+    info                   Show the stake table in the Espresso stake table contract (alias for stake-table)
     account                Print the signer account address
     register-validator     Register to become a validator
     update-consensus-keys  Update a validators Espresso consensus signing keys
