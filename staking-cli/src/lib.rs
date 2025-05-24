@@ -239,6 +239,18 @@ pub enum Commands {
         #[clap(long)]
         compact: bool,
     },
+    /// Print the stake table info (alias for StakeTable, for user convenience).
+    Info {
+        /// The block number to use for the stake table.
+        ///
+        /// Defaults to the latest block for convenience.
+        #[clap(long)]
+        l1_block_number: Option<BlockId>,
+
+        /// Abbreviate the very long BLS public keys.
+        #[clap(long)]
+        compact: bool,
+    },
     /// Print the signer account address.
     Account,
     /// Register to become a validator.
