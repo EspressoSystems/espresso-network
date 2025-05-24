@@ -196,8 +196,12 @@ pub async fn main() -> Result<()> {
     if let Commands::StakeTable {
         l1_block_number,
         compact,
+    } | Commands::Info {
+        l1_block_number,
+        compact,
     } = config.commands
     {
+        // 'info' is an alias for 'stake-table', both show the stake table
         let provider = ProviderBuilder::new().on_http(config.rpc_url.clone());
         let query_block = l1_block_number.unwrap_or(BlockId::latest());
         let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
