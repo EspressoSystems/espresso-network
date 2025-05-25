@@ -646,9 +646,8 @@ interface EspToken {
     clippy::empty_structs_with_brackets
 )]
 pub mod EspToken {
-    use alloy::sol_types as alloy_sol_types;
-
     use super::*;
+    use alloy::sol_types as alloy_sol_types;
     /// The creation / init bytecode of the contract.
     ///
     /// ```text
