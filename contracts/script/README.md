@@ -461,12 +461,17 @@ This patch updates the `isGtEpochRoot` function on LightClientV2.
 2. In the `.env.contracts.arbSepolia` file, add/update the following:
 
 ```bash
+export MNEMONIC=
+export MNEMONIC_OFFSET=
+export PLONK_VERIFIER_ADDRESS=
 export LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS=
 export PLONK_VERIFIER_V2_ADDRESS=
+export USE_HARDWARE_WALLET= #boolean
+export CHAIN_ID=421614
 export ARBISCAN_API_KEY=
+export RPC_URL=
+export DEPLOYER_HARDWARE_WALLET_ADDRESS=
 ```
-
-Check this [section](#deploy-lightclientarbitrum-no-multisig-admin) for other fields needed in the environment file
 
 3. Then in a terminal, run the following:
 
