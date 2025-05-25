@@ -107,7 +107,7 @@ contract LightClientContractUpgradeToV2Patch2Script is Script {
         vm.startBroadcast(deployer);
 
         // deploy the new implementation contract
-        LCV2 implementationContract = new LCV2();
+        LCAV2 implementationContract = new LCAV2();
 
         vm.stopBroadcast();
 
