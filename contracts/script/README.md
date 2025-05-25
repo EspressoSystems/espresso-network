@@ -449,6 +449,30 @@ Check this [section](#deploy-lightclientarbitrum-no-multisig-admin) for other fi
 source .env.contracts.arbSepolia && forge clean && forge script contracts/script/LightClientArbitrumStaging.s.sol:UpgradeLightClientArbitrumV2PatchScript --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast
 ```
 
+## Upgrade to LightClientArbitrumV2 Patch #2 (no multisig admin)
+
+(https://github.com/EspressoSystems/espresso-network/pull/3314)
+
+This patch updates the `isGtEpochRoot` function on LightClientV2.
+
+1. Ensure that you've deployed [`PlonkVerifierV2`](#deploy-plonkverifierv2)
+
+2. In the `.env.contracts.arbSepolia` file, add/update the following:
+
+```bash
+export LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS=
+export PLONK_VERIFIER_V2_ADDRESS=
+export ARBISCAN_API_KEY=
+```
+
+Check this [section](#deploy-lightclientarbitrum-no-multisig-admin) for other fields needed in the environment file
+
+3. Then in a terminal, run the following:
+
+```bash
+source .env.contracts.arbSepolia && forge clean && forge script contracts/script/LightClientArbitrumStaging.s.sol:UpgradeLightClientArbitrumV2Patch2Script --sig "run(address)" $LIGHT_CLIENT_CONTRACT_PROXY_ADDRESS --ffi --rpc-url $RPC_URL --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS --broadcast --verify --etherscan-api-key $ARBISCAN_API_KEY
+```
+
 # Known Errors
 
 1. Error Parsing ABI for contract Scenario: You ran `just gen-bindings` Example:
