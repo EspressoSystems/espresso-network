@@ -445,8 +445,9 @@ interface FeeContract {
     clippy::empty_structs_with_brackets
 )]
 pub mod FeeContract {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     /// The creation / init bytecode of the contract.
     ///
     /// ```text

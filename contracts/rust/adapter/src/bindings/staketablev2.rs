@@ -16,8 +16,9 @@ library BN254 {
     clippy::empty_structs_with_brackets
 )]
 pub mod BN254 {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -635,8 +636,9 @@ library EdOnBN254 {
     clippy::empty_structs_with_brackets
 )]
 pub mod EdOnBN254 {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
     struct EdOnBN254Point { uint256 x; uint256 y; }
@@ -973,8 +975,9 @@ library StakeTable {
     clippy::empty_structs_with_brackets
 )]
 pub mod StakeTable {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -2731,8 +2734,9 @@ interface StakeTableV2 {
     clippy::empty_structs_with_brackets
 )]
 pub mod StakeTableV2 {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     /// The creation / init bytecode of the contract.
     ///
     /// ```text

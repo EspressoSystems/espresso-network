@@ -14,8 +14,9 @@ library TimelockController {
     clippy::empty_structs_with_brackets
 )]
 pub mod TimelockController {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     #[derive(Default, Debug, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types, non_snake_case, clippy::pub_underscore_fields)]
     #[derive(Clone)]
@@ -1327,8 +1328,9 @@ interface Timelock {
     clippy::empty_structs_with_brackets
 )]
 pub mod Timelock {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     /// The creation / init bytecode of the contract.
     ///
     /// ```text
