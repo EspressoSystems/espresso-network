@@ -333,6 +333,7 @@ forge script contracts/script/LightClient.s.sol:LightClientContractUpgradeToV2Pa
 --libraries contracts/src/libraries/PlonkVerifier.sol:PlonkVerifier:$PLONK_VERIFIER_ADDRESS \
 --libraries contracts/src/libraries/PlonkVerifierV2.sol:PlonkVerifierV2:$PLONK_VERIFIER_V2_ADDRESS \
 --build-info true \
+--verify --etherscan-api-key $ETHERSCAN_API_KEY \
 --broadcast
 ```
 
