@@ -94,8 +94,9 @@ interface ERC1967Proxy {
     clippy::empty_structs_with_brackets
 )]
 pub mod ERC1967Proxy {
-    use super::*;
     use alloy::sol_types as alloy_sol_types;
+
+    use super::*;
     /// The creation / init bytecode of the contract.
     ///
     /// ```text
