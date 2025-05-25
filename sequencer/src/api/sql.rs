@@ -728,14 +728,14 @@ where
 }
 
 #[cfg(any(test, feature = "testing"))]
-mod impl_testable_data_source {
+pub(crate) mod impl_testable_data_source {
 
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
 
     use super::*;
     use crate::api::{self, data_source::testing::TestableSequencerDataSource};
 
-    fn tmp_options(db: &TmpDb) -> Options {
+    pub fn tmp_options(db: &TmpDb) -> Options {
         #[cfg(not(feature = "embedded-db"))]
         {
             let opt = crate::persistence::sql::PostgresOptions {

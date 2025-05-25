@@ -1908,6 +1908,7 @@ mod test {
     };
     use super::*;
     use crate::{
+        api::{options::Query, sql::impl_testable_data_source::tmp_options},
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder},
@@ -3832,5 +3833,154 @@ mod test {
                 "Stake table mismatch for epoch {epoch_num}",
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_state_reconstruction() -> anyhow::Result<()> {
+        setup_test();
+        const EPOCH_HEIGHT: u64 = 10;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        tracing::info!("API PORT = {api_port}");
+        const NUM_NODES: usize = 5;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .await
+            .unwrap()
+            .build();
+        let state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, PosVersion::new()).await;
+        network.peers.remove(0);
+
+        let node_0_storage = &storage[1];
+        let node_0_persistence = persistence[1].clone();
+        let node_0_port = pick_unused_port().expect("No ports free for query service");
+        tracing::error!("NODE 6 port node_0_port {node_0_port}");
+        let opt = Options::with_port(node_0_port).query_sql(
+            Query {
+                peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+            },
+            tmp_options(&node_0_storage),
+        );
+        let node_0 = opt
+            .clone()
+            .serve(|metrics, consumer, storage| {
+                let cfg = network.cfg.clone();
+                let node_0_persistence = node_0_persistence.clone();
+                let state = state.clone();
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            state,
+                            node_0_persistence.clone(),
+                            Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                                Default::default(),
+                                &NoMetrics,
+                            )),
+                            storage,
+                            &*metrics,
+                            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            PosVersion::new(),
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+
+        let mut events = network.peers[2].event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Node 0 decided at height: {}", height);
+                if height > EPOCH_HEIGHT * 1 {
+                    break;
+                }
+            }
+        }
+
+        drop(node_0);
+
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Node 0 decided at height: {}", height);
+                if height > EPOCH_HEIGHT * 4 {
+                    break;
+                }
+            }
+        }
+
+        drop(events);
+
+        let node_0 = opt
+            .serve(|metrics, consumer, storage| {
+                let cfg = network.cfg.clone();
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            state,
+                            node_0_persistence,
+                            None::<NullStateCatchup>,
+                            storage,
+                            &*metrics,
+                            test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            PosVersion::new(),
+                            Default::default(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .unwrap();
+        let mut events = node_0.event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Node 0 decided at height: {}", height);
+                if height > EPOCH_HEIGHT * 10 {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
