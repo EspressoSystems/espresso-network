@@ -117,10 +117,10 @@ async fn test_vid_task() {
                 vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                     num_storage_nodes,
                     <TestVersions as Versions>::Base::VERSION,
-                    *ViewNumber::new(2),
+                   
                 )
                 .unwrap()],
-                None,
+                
             )),
         ],
     ];
@@ -138,10 +138,10 @@ async fn test_vid_task() {
                 vec1![null_block::builder_fee::<TestTypes, TestVersions>(
                     num_storage_nodes,
                     <TestVersions as Versions>::Base::VERSION,
-                    *ViewNumber::new(2),
+                    
                 )
                 .unwrap()],
-                None,
+                 
             )),
             exact(VidDisperseSend(vid_proposal.clone(), pub_key)),
         ]),

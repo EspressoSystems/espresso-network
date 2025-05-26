@@ -40,8 +40,9 @@ use tracing::Instrument;
 use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{EventKey, StakeTableEvent, StakeTableFetcher, StakeTableUpdateTask, Validator},
-    v0_99::ChainConfig,
+    v0_3::{
+        ChainConfig, EventKey, StakeTableEvent, StakeTableFetcher, StakeTableUpdateTask, Validator,
+    },
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
 use crate::traits::EventsPersistenceRead;
@@ -1345,6 +1346,10 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.state.insert(epoch + 1, epoch_committee);
         self.add_drb_result(epoch, initial_drb_result);
         self.add_drb_result(epoch + 1, initial_drb_result);
+    }
+
+    fn first_epoch(&self) -> Option<<SeqTypes as NodeType>::Epoch> {
+        self.first_epoch
     }
 }
 

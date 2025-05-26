@@ -47,6 +47,9 @@ contract StakeTable_register_Test is LightClientCommonTest {
     address public validator;
     string seed1 = "1";
     string seed2 = "255";
+    string public constant NAME = "Espresso";
+    string public constant SYMBOL = "ESP";
+    uint256 public constant INITIAL_SUPPLY = 3_590_000_000;
 
     function genClientWallet(address sender, string memory _seed)
         private
@@ -102,8 +105,14 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
         // deploy EspToken and its proxy
         EspToken tokenImpl = new EspToken();
-        bytes memory initData =
-            abi.encodeWithSignature("initialize(address,address)", admin, tokenGrantRecipient);
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,string,string)",
+            admin,
+            tokenGrantRecipient,
+            INITIAL_SUPPLY,
+            NAME,
+            SYMBOL
+        );
         ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
         token = EspToken(payable(address(proxy)));
 
@@ -1443,6 +1452,22 @@ contract StakeTableUpgradeTest is Test {
         StakeTableV2(proxy).updateExitEscrowPeriod(100 days);
         vm.stopPrank();
     }
+
+    function test_RevertWhen_DeprecatedFunctionsAreCalled() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        bytes memory initData = "";
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+    }
 }
 
 contract StakeTableTimelockTest is Test {
@@ -1461,11 +1486,20 @@ contract StakeTableTimelockTest is Test {
     uint256 public constant INITIAL_BALANCE = 5 ether;
     uint256 public constant ESCROW_PERIOD = 1 weeks;
     uint256 public constant DELAY = 15 seconds;
+    string public constant NAME = "Espresso";
+    string public constant SYMBOL = "ESP";
+    uint256 public constant INITIAL_SUPPLY = 3_590_000_000;
 
     function deployEspToken(address _admin, address _tokenGrantRecipient) public {
         EspToken tokenImpl = new EspToken();
-        bytes memory initData =
-            abi.encodeWithSignature("initialize(address,address)", _admin, _tokenGrantRecipient);
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,string,string)",
+            _admin,
+            _tokenGrantRecipient,
+            INITIAL_SUPPLY,
+            NAME,
+            SYMBOL
+        );
         ERC1967Proxy _proxy = new ERC1967Proxy(address(tokenImpl), initData);
         token = EspToken(payable(address(_proxy)));
     }

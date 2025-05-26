@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     get_l1_deposits,
-    v0_1::{RewardAccount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
-    v0_99::{ChainConfig, IterableFeeInfo},
+    v0_1::{IterableFeeInfo, RewardAccount, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
+    v0_3::ChainConfig,
     BlockMerkleTree, EpochVersion, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
 };
 use hotshot::traits::ValidatedState as _;

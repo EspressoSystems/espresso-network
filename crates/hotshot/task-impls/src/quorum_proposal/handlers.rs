@@ -521,39 +521,20 @@ impl<TYPES: NodeType, V: Versions> ProposalDependencyHandle<TYPES, V> {
                 );
             }
         }
-        let block_header = if version < V::Marketplace::VERSION {
-            TYPES::BlockHeader::new_legacy(
-                state.as_ref(),
-                self.instance_state.as_ref(),
-                &parent_leaf,
-                commitment_and_metadata.commitment,
-                builder_commitment,
-                metadata,
-                commitment_and_metadata.fees.first().clone(),
-                version,
-                *self.view_number,
-            )
-            .await
-            .wrap()
-            .context(warn!("Failed to construct legacy block header"))?
-        } else {
-            TYPES::BlockHeader::new_marketplace(
-                state.as_ref(),
-                self.instance_state.as_ref(),
-                &parent_leaf,
-                commitment_and_metadata.commitment,
-                commitment_and_metadata.builder_commitment,
-                commitment_and_metadata.metadata,
-                commitment_and_metadata.fees.to_vec(),
-                *self.view_number,
-                commitment_and_metadata.auction_result,
-                version,
-            )
-            .await
-            .wrap()
-            .context(warn!("Failed to construct marketplace block header"))?
-        };
-
+        let block_header = TYPES::BlockHeader::new(
+            state.as_ref(),
+            self.instance_state.as_ref(),
+            &parent_leaf,
+            commitment_and_metadata.commitment,
+            builder_commitment,
+            metadata,
+            commitment_and_metadata.fees.first().clone(),
+            version,
+            *self.view_number,
+        )
+        .await
+        .wrap()
+        .context(warn!("Failed to construct block header"))?;
         let epoch = option_epoch_from_block_number::<TYPES>(
             version >= V::Epochs::VERSION,
             block_header.block_number(),
@@ -679,7 +660,6 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                     metadata,
                     view,
                     fees,
-                    auction_result,
                 ) => {
                     commit_and_metadata = Some(CommitmentAndMetadata {
                         commitment: *payload_commitment,
@@ -687,7 +667,6 @@ impl<TYPES: NodeType, V: Versions> HandleDepOutput for ProposalDependencyHandle<
                         metadata: metadata.clone(),
                         fees: fees.clone(),
                         block_view: *view,
-                        auction_result: auction_result.clone(),
                     });
                 },
                 HotShotEvent::Qc2Formed(cert) => match cert {

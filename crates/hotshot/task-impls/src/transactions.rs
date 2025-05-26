@@ -11,10 +11,8 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use futures::{future::join_all, stream::FuturesUnordered, StreamExt};
-use hotshot_builder_api::{
-    v0_1::block_info::AvailableBlockInfo, v0_2::block_info::AvailableBlockHeaderInputV2,
-};
+use futures::{stream::FuturesUnordered, StreamExt};
+use hotshot_builder_api::v0_1::block_info::AvailableBlockInfo;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -23,9 +21,8 @@ use hotshot_types::{
     event::{Event, EventType},
     message::UpgradeLock,
     traits::{
-        auction_results_provider::AuctionResultsProvider,
         block_contents::{BuilderFee, EncodeBytes},
-        node_implementation::{ConsensusTime, HasUrls, NodeImplementation, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{BuilderSignatureKey, SignatureKey},
         BlockPayload,
     },
@@ -34,14 +31,10 @@ use hotshot_types::{
 use hotshot_utils::anytrace::*;
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
-use url::Url;
 use vbs::version::{StaticVersionType, Version};
-use vec1::Vec1;
 
 use crate::{
-    builder::{
-        v0_1::BuilderClient as BuilderClientBase, v0_99::BuilderClient as BuilderClientMarketplace,
-    },
+    builder::v0_1::BuilderClient as BuilderClientBase,
     events::{HotShotEvent, HotShotTaskCompleted},
     helpers::broadcast_event,
 };
@@ -75,7 +68,7 @@ pub struct BuilderResponse<TYPES: NodeType> {
 }
 
 /// Tracks state of a Transaction task
-pub struct TransactionTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
     /// The state's api
     pub builder_timeout: Duration,
 
@@ -112,17 +105,11 @@ pub struct TransactionTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
 
-    /// auction results provider
-    pub auction_results_provider: Arc<I::AuctionResultsProvider>,
-
-    /// fallback builder url
-    pub fallback_builder_url: Url,
-
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTaskState<TYPES, I, V> {
+impl<TYPES: NodeType, V: Versions> TransactionTaskState<TYPES, V> {
     /// handle view change decide legacy or not
     pub async fn handle_view_change(
         &mut self,
@@ -130,7 +117,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         block_view: TYPES::View,
         block_epoch: Option<TYPES::Epoch>,
     ) -> Option<HotShotTaskCompleted> {
-        let version = match self.upgrade_lock.version(block_view).await {
+        let _version = match self.upgrade_lock.version(block_view).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!("Failed to calculate version: {:?}", e);
@@ -138,13 +125,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             },
         };
 
-        if version < V::Marketplace::VERSION {
-            self.handle_view_change_legacy(event_stream, block_view, block_epoch)
-                .await
-        } else {
-            self.handle_view_change_marketplace(event_stream, block_view, block_epoch)
-                .await
-        }
+        self.handle_view_change_legacy(event_stream, block_view, block_epoch)
+            .await
     }
 
     /// legacy view change handler
@@ -248,7 +230,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                     block_view,
                     block_epoch,
                     vec1::vec1![fee],
-                    None,
                 ))),
                 event_stream,
             )
@@ -296,9 +277,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             },
         };
 
-        let Some(null_fee) =
-            null_block::builder_fee::<TYPES, V>(num_storage_nodes, version, *block_view)
-        else {
+        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
             tracing::error!("Failed to get null fee");
             return;
         };
@@ -314,118 +293,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                 block_view,
                 block_epoch,
                 vec1::vec1![null_fee],
-                None,
             ))),
             event_stream,
         )
         .await;
-    }
-
-    /// Produce a block by fetching auction results from the solver and bundles from builders.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the solver cannot be contacted, or if none of the builders respond.
-    async fn produce_block_marketplace(
-        &mut self,
-        block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
-        task_start_time: Instant,
-    ) -> Result<PackedBundle<TYPES>> {
-        ensure!(
-            !self
-                .upgrade_lock
-                .decided_upgrade_certificate
-                .read()
-                .await
-                .as_ref()
-                .is_some_and(|cert| cert.upgrading_in(block_view)),
-            info!("Not requesting block because we are upgrading")
-        );
-
-        let (parent_view, parent_hash) = self
-            .last_vid_commitment_retry(block_view, task_start_time)
-            .await
-            .wrap()
-            .context(warn!("Failed to find parent hash in time"))?;
-
-        let start = Instant::now();
-
-        let maybe_auction_result = timeout(
-            self.builder_timeout,
-            self.auction_results_provider
-                .fetch_auction_result(block_view),
-        )
-        .await
-        .wrap()
-        .context(warn!("Timeout while getting auction result"))?;
-
-        let auction_result = maybe_auction_result
-            .map_err(|e| tracing::warn!("Failed to get auction results: {e:#}"))
-            .unwrap_or_default(); // We continue here, as we still have fallback builder URL
-
-        let mut futures = Vec::new();
-
-        let mut builder_urls = auction_result.clone().urls();
-        builder_urls.push(self.fallback_builder_url.clone());
-
-        for url in builder_urls {
-            futures.push(timeout(
-                self.builder_timeout.saturating_sub(start.elapsed()),
-                async {
-                    let client = BuilderClientMarketplace::new(url);
-                    client.bundle(*parent_view, parent_hash, *block_view).await
-                },
-            ));
-        }
-
-        let mut bundles = Vec::new();
-
-        for bundle in join_all(futures).await {
-            match bundle {
-                Ok(Ok(b)) => bundles.push(b),
-                Ok(Err(e)) => {
-                    tracing::debug!("Failed to retrieve bundle: {e}");
-                    continue;
-                },
-                Err(e) => {
-                    tracing::debug!("Failed to retrieve bundle: {e}");
-                    continue;
-                },
-            }
-        }
-
-        let mut sequencing_fees = Vec::new();
-        let mut transactions: Vec<<TYPES::BlockPayload as BlockPayload<TYPES>>::Transaction> =
-            Vec::new();
-
-        for bundle in bundles {
-            sequencing_fees.push(bundle.sequencing_fee);
-            transactions.extend(bundle.transactions);
-        }
-
-        let validated_state = self.consensus.read().await.decided_state();
-
-        let sequencing_fees = Vec1::try_from_vec(sequencing_fees)
-            .wrap()
-            .context(warn!("Failed to receive a bundle from any builder."))?;
-        let (block_payload, metadata) = TYPES::BlockPayload::from_transactions(
-            transactions,
-            &validated_state,
-            &Arc::clone(&self.instance_state),
-        )
-        .await
-        .wrap()
-        .context(error!("Failed to construct block payload"))?;
-
-        Ok(PackedBundle::new(
-            block_payload.encode(),
-            metadata,
-            block_view,
-            block_epoch,
-            sequencing_fees,
-            Some(auction_result),
-        ))
     }
 
     /// Produce a null block
@@ -436,9 +307,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
         version: Version,
         num_storage_nodes: usize,
     ) -> Option<PackedBundle<TYPES>> {
-        let Some(null_fee) =
-            null_block::builder_fee::<TYPES, V>(num_storage_nodes, version, *block_view)
-        else {
+        let Some(null_fee) = null_block::builder_fee::<TYPES, V>(num_storage_nodes, version) else {
             tracing::error!("Failed to calculate null block fee.");
             return None;
         };
@@ -452,66 +321,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             block_view,
             block_epoch,
             vec1::vec1![null_fee],
-            Some(TYPES::AuctionResult::default()),
         ))
-    }
-
-    #[allow(clippy::too_many_lines)]
-    /// marketplace view change handler
-    pub async fn handle_view_change_marketplace(
-        &mut self,
-        event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
-        block_view: TYPES::View,
-        block_epoch: Option<TYPES::Epoch>,
-    ) -> Option<HotShotTaskCompleted> {
-        let task_start_time = Instant::now();
-
-        let version = match self.upgrade_lock.version(block_view).await {
-            Ok(v) => v,
-            Err(err) => {
-                tracing::error!("Upgrade certificate requires unsupported version, refusing to request blocks: {err}");
-                return None;
-            },
-        };
-
-        let packed_bundle = match self
-            .produce_block_marketplace(block_view, block_epoch, task_start_time)
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::info!("Failed to get a block for view {block_view:?}: {e}. Continuing with empty block.");
-
-                let num_storage_nodes = self
-                    .membership_coordinator
-                    .stake_table_for_epoch(block_epoch)
-                    .await
-                    .ok()?
-                    .total_nodes()
-                    .await;
-                let null_block = self
-                    .null_block(block_view, block_epoch, version, num_storage_nodes)
-                    .await?;
-
-                // Increment the metric for number of empty blocks proposed
-                self.consensus
-                    .write()
-                    .await
-                    .metrics
-                    .number_of_empty_blocks_proposed
-                    .add(1);
-
-                null_block
-            },
-        };
-
-        broadcast_event(
-            Arc::new(HotShotEvent::BlockRecv(packed_bundle)),
-            event_stream,
-        )
-        .await;
-
-        None
     }
 
     /// main task event handler
@@ -806,10 +616,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
             let response = {
                 let client = &self.builder_clients[builder_idx];
 
-                let (block, header_input, legacy_header_input) = futures::join! {
+                let (block, either_header_input) = futures::join! {
                     client.claim_block(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
-                    client.claim_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature),
-                    client.claim_legacy_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
+                    client.claim_either_block_header_input(block_info.block_hash.clone(), view_number.u64(), self.public_key.clone(), &request_signature)
                 };
 
                 let block_data = match block {
@@ -820,59 +629,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
                     },
                 };
 
-                let header_input = match (header_input, legacy_header_input) {
-                    (Ok(header_input), Ok(legacy_header_input)) => {
-                        // verify the message signature and the fee_signature
-                        if header_input
-                            .validate_signature(block_info.offered_fee, &block_data.metadata)
-                        {
-                            header_input
-                        } else if legacy_header_input
-                            .validate_signature(block_info.offered_fee, &block_data.metadata)
-                        {
-                            AvailableBlockHeaderInputV2 {
-                                fee_signature: legacy_header_input.fee_signature,
-                                sender: legacy_header_input.sender,
-                            }
-                        } else {
-                            tracing::warn!(
-                              "Failed to verify available new or legacy block header input data response message signature"
-                            );
-                            continue;
-                        }
-                    },
-                    (Ok(header_input), _) => {
-                        // verify the message signature and the fee_signature
-                        if !header_input
-                            .validate_signature(block_info.offered_fee, &block_data.metadata)
-                        {
-                            tracing::warn!(
-                              "Failed to verify available new block header input data response message signature"
-                            );
-                            continue;
-                        }
+                let Ok(either_header_input) = either_header_input
+                    .inspect_err(|err| tracing::warn!(%err, "Error claiming header input"))
+                else {
+                    continue;
+                };
 
-                        header_input
-                    },
-                    (Err(_), Ok(legacy_header_input)) => {
-                        // verify the message signature and the fee_signature
-                        if !legacy_header_input
-                            .validate_signature(block_info.offered_fee, &block_data.metadata)
-                        {
-                            tracing::warn!(
-                              "Failed to verify available legacy block header input data response message signature"
-                            );
-                            continue;
-                        }
-                        AvailableBlockHeaderInputV2 {
-                            fee_signature: legacy_header_input.fee_signature,
-                            sender: legacy_header_input.sender,
-                        }
-                    },
-                    (Err(err1), Err(err2)) => {
-                        tracing::warn!(%err1, %err2, "Error claiming header input");
-                        continue;
-                    },
+                let Some(header_input) = either_header_input
+                    .validate_signature_and_get_input(block_info.offered_fee, &block_data.metadata)
+                else {
+                    tracing::warn!(
+                        "Failed to verify available new or legacy block header input data response message signature"
+                      );
+                    continue;
                 };
 
                 // verify the signature over the message
@@ -913,9 +682,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TransactionTask
 
 #[async_trait]
 /// task state implementation for Transactions Task
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for TransactionTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, V: Versions> TaskState for TransactionTaskState<TYPES, V> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(

@@ -12,11 +12,11 @@ use hotshot::{
     tasks::EventTransformerState,
     traits::{NetworkReliability, NodeImplementation, TestableNodeImplementation},
     types::SystemContextHandle,
-    HotShotInitializer, MarketplaceConfig, SystemContext, TwinsHandlerState,
+    HotShotInitializer, SystemContext, TwinsHandlerState,
 };
 use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider, node_types::TestTypes,
-    state_types::TestInstanceState, storage_types::TestStorage, testable_delay::DelayConfig,
+    node_types::TestTypes, state_types::TestInstanceState, storage_types::TestStorage,
+    testable_delay::DelayConfig,
 };
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
@@ -239,7 +239,6 @@ pub async fn create_test_handle<
     memberships: Arc<RwLock<TYPES::Membership>>,
     config: HotShotConfig<TYPES>,
     storage: I::Storage,
-    marketplace_config: MarketplaceConfig<TYPES, I>,
 ) -> SystemContextHandle<TYPES, I, V> {
     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
         TestInstanceState::new(metadata.async_delay_config),
@@ -279,7 +278,6 @@ pub async fn create_test_handle<
                     initializer,
                     ConsensusMetricsValue::default(),
                     storage,
-                    marketplace_config,
                 )
                 .await;
 
@@ -299,7 +297,6 @@ pub async fn create_test_handle<
                     initializer,
                     ConsensusMetricsValue::default(),
                     storage,
-                    marketplace_config,
                 )
                 .await
         },
@@ -315,7 +312,6 @@ pub async fn create_test_handle<
                 initializer,
                 ConsensusMetricsValue::default(),
                 storage,
-                marketplace_config,
             )
             .await;
 
@@ -532,7 +528,7 @@ impl<
         V: Versions,
     > TestDescription<TYPES, I, V>
 where
-    I: NodeImplementation<TYPES, AuctionResultsProvider = TestAuctionResultsProvider<TYPES>>,
+    I: NodeImplementation<TYPES>,
 {
     /// turn a description of a test (e.g. a [`TestDescription`]) into
     /// a [`TestLauncher`] that can be used to launch the test.
@@ -607,10 +603,6 @@ where
                 }),
                 hotshot_config,
                 validator_config,
-                marketplace_config: Rc::new(|_| MarketplaceConfig::<TYPES, I> {
-                    auction_results_provider: TestAuctionResultsProvider::<TYPES>::default().into(),
-                    fallback_builder_url: Url::parse("http://localhost:9999").unwrap(),
-                }),
             },
             metadata: self,
             additional_test_tasks,

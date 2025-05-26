@@ -37,12 +37,14 @@ use sqlx::{
 };
 
 use crate::{
+    availability::{QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData},
     data_source::{
         storage::pruning::{PruneStorage, PrunerCfg, PrunerConfig},
         update::Transaction as _,
         VersionedDataSource,
     },
     metrics::PrometheusMetrics,
+    node::BlockId,
     status::HasMetrics,
     QueryError, QueryResult, VidCommon,
 };
@@ -62,6 +64,7 @@ pub use refinery::Migration;
 pub use transaction::*;
 
 use self::{migrate::Migrator, transaction::PoolMetrics};
+use super::{AvailabilityStorage, NodeStorage};
 // This needs to be reexported so that we can reference it by absolute path relative to this crate
 // in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
 // crate which doesn't have `include_dir` as a dependency.
@@ -659,6 +662,50 @@ impl SqlStorage {
             return Ok(None);
         };
         Ok(Some(height as u64))
+    }
+
+    /// Get the stored VID share for a given block, if one exists.
+    pub async fn get_vid_share<Types: NodeType>(
+        &self,
+        block_id: BlockId<Types>,
+    ) -> QueryResult<VidShare> {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let share = tx.vid_share(block_id).await?;
+        Ok(share)
+    }
+
+    /// Get the stored VID common data for a given block, if one exists.
+    pub async fn get_vid_common<Types: NodeType>(
+        &self,
+        block_id: BlockId<Types>,
+    ) -> QueryResult<VidCommonQueryData<Types>>
+    where
+        <Types as NodeType>::BlockPayload: QueryablePayload<Types>,
+        <Types as NodeType>::BlockHeader: QueryableHeader<Types>,
+    {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let common = tx.get_vid_common(block_id).await?;
+        Ok(common)
+    }
+
+    /// Get the stored VID common metadata for a given block, if one exists.
+    pub async fn get_vid_common_metadata<Types: NodeType>(
+        &self,
+        block_id: BlockId<Types>,
+    ) -> QueryResult<VidCommonMetadata<Types>>
+    where
+        <Types as NodeType>::BlockPayload: QueryablePayload<Types>,
+        <Types as NodeType>::BlockHeader: QueryableHeader<Types>,
+    {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let common = tx.get_vid_common_metadata(block_id).await?;
+        Ok(common)
     }
 }
 

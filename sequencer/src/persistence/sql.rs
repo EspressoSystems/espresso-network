@@ -40,7 +40,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -1921,7 +1921,7 @@ impl SequencerPersistence for Persistence {
         tx.commit().await
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -1938,6 +1938,52 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         tx.commit().await
+    }
+
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
+        if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
+            if loaded_drb_input.iteration >= drb_input.iteration {
+                anyhow::bail!(
+                    "DrbInput in storage {:?} is more recent than {:?}, refusing to update",
+                    loaded_drb_input,
+                    drb_input
+                )
+            }
+        }
+
+        let drb_input_bytes = bincode::serialize(&drb_input)
+            .context("Failed to serialize DrbInput. This is not fatal, but should never happen.")?;
+
+        let mut tx = self.db.write().await?;
+
+        tx.upsert(
+            "drb",
+            ["epoch", "drb_input"],
+            ["epoch"],
+            [(drb_input.epoch as i64, drb_input_bytes)],
+        )
+        .await?;
+        tx.commit().await
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
+        let row = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(query("SELECT drb_input FROM drb WHERE epoch = $1").bind(epoch as i64))
+            .await?;
+
+        match row {
+            None => anyhow::bail!("No DrbInput for epoch {} in storage", epoch),
+            Some(row) => {
+                let drb_input_bytes: Vec<u8> = row.try_get("drb_input")?;
+                let drb_input = bincode::deserialize(&drb_input_bytes)
+                    .context("Failed to deserialize drb_input from storage")?;
+
+                Ok(drb_input)
+            },
+        }
     }
 
     async fn add_state_cert(

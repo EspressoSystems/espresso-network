@@ -708,7 +708,7 @@ mod tests {
 
     use async_lock::RwLock;
     use espresso_types::{
-        v0_1::RewardMerkleTree, v0_99::ChainConfig, BlockMerkleTree, FeeMerkleTree, NodeState,
+        v0_1::RewardMerkleTree, v0_3::ChainConfig, BlockMerkleTree, FeeMerkleTree, NodeState,
         ValidatedState,
     };
     use futures::{channel::mpsc, SinkExt, StreamExt};

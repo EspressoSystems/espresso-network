@@ -24,10 +24,10 @@ use sequencer_utils::{
 };
 use thiserror::Error;
 
+use super::v0_1::IterableFeeInfo;
 use crate::{
-    eth_signature_key::EthKeyPair, v0_99::IterableFeeInfo, AccountQueryData, FeeAccount,
-    FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree,
-    SeqTypes,
+    eth_signature_key::EthKeyPair, AccountQueryData, FeeAccount, FeeAccountProof, FeeAmount,
+    FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, SeqTypes,
 };
 
 /// Possible charge fee failures
