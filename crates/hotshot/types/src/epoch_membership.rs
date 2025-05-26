@@ -4,7 +4,6 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use anyhow::Context;
 use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::{Mutex, RwLock};
 use hotshot_utils::{
