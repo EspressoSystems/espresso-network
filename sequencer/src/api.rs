@@ -4283,6 +4283,7 @@ mod test {
                 .await
                 .expect("block height not found");
 
+            tracing::info!("block state: block height={bh}");
             if bh > epoch_6_block {
                 break;
             }
@@ -4470,11 +4471,7 @@ mod test {
             .unwrap();
         assert_eq!(leaf.view_number(), to_view);
         assert!(
-            state
-                .block_merkle_tree
-                .lookup(leaf.height())
-                .expect_ok()
-                .is_ok(),
+            state.block_merkle_tree.lookup(bh - 1).expect_ok().is_ok(),
             "inconsistent block merkle tree"
         );
 
@@ -4486,11 +4483,7 @@ mod test {
 
         assert_eq!(leaf.view_number(), to_view);
         assert!(
-            state
-                .block_merkle_tree
-                .lookup(leaf.height())
-                .expect_ok()
-                .is_ok(),
+            state.block_merkle_tree.lookup(bh - 1).expect_ok().is_ok(),
             "inconsistent block merkle tree"
         );
 
@@ -4515,11 +4508,7 @@ mod test {
 
         assert_eq!(leaf.view_number(), to_view);
         assert!(
-            state
-                .block_merkle_tree
-                .lookup(leaf.height())
-                .expect_ok()
-                .is_ok(),
+            state.block_merkle_tree.lookup(bh - 1).expect_ok().is_ok(),
             "inconsistent block merkle tree"
         );
         // Reconstruct state using both fee and reward accounts
@@ -4536,11 +4525,7 @@ mod test {
         .unwrap();
 
         assert!(
-            state
-                .block_merkle_tree
-                .lookup(leaf.height())
-                .expect_ok()
-                .is_ok(),
+            state.block_merkle_tree.lookup(bh - 1).expect_ok().is_ok(),
             "inconsistent block merkle tree"
         );
         assert_eq!(leaf.view_number(), to_view);
