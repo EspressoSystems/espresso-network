@@ -4127,8 +4127,6 @@ mod test {
         // 4. Allow the network to progress 3 more epochs (query node remains offline).
         // 5. Restart the query node.
         //    - The node is expected to reconstruct or catch up on its own
-        //      by relying on persisted data and local state.
-
         setup_test();
         const EPOCH_HEIGHT: u64 = 10;
 
@@ -4242,7 +4240,7 @@ mod test {
         }
 
         // start the node again.
-        let _node_0 = opt
+        let node_0 = opt
             .serve(|metrics, consumer, storage| {
                 let cfg = network.cfg.clone();
                 async move {
@@ -4298,6 +4296,9 @@ mod test {
                 .await
                 .expect("block merkle tree path not found");
         }
+
+        let decided_leaf = node_0.decided_leaf().await;
+        assert!(decided_leaf.height() >= epoch_6_block);
 
         Ok(())
     }
@@ -4440,17 +4441,17 @@ mod test {
 
         sleep(Duration::from_secs(5)).await;
         tracing::info!("getting node block height");
-        let bh = client
+        let node_block_height = client
             .get::<u64>("node/block-height")
             .send()
             .await
             .context("getting Espresso block height")
             .unwrap();
 
-        tracing::info!("node block height={bh}");
+        tracing::info!("node block height={node_block_height}");
 
         let leaf_query_data = client
-            .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{}", bh - 1))
+            .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{}", node_block_height - 1))
             .send()
             .await
             .context("error getting leaf")
@@ -4466,24 +4467,39 @@ mod test {
         let mut tx = ds.write().await?;
         // Attempt to reconstruct state without fee or reward accounts
 
-        let (state, leaf) = reconstruct_state(&instance, &mut tx, bh - 1, to_view, &[], &[])
-            .await
-            .unwrap();
+        let (state, leaf) =
+            reconstruct_state(&instance, &mut tx, node_block_height - 1, to_view, &[], &[])
+                .await
+                .unwrap();
         assert_eq!(leaf.view_number(), to_view);
         assert!(
-            state.block_merkle_tree.lookup(bh - 1).expect_ok().is_ok(),
+            state
+                .block_merkle_tree
+                .lookup(node_block_height - 1)
+                .expect_ok()
+                .is_ok(),
             "inconsistent block merkle tree"
         );
 
         // Reconstruct state using fee accounts only
-        let (state, leaf) =
-            reconstruct_state(&instance, &mut tx, bh - 1, to_view, &fee_accounts, &[])
-                .await
-                .unwrap();
+        let (state, leaf) = reconstruct_state(
+            &instance,
+            &mut tx,
+            node_block_height - 1,
+            to_view,
+            &fee_accounts,
+            &[],
+        )
+        .await
+        .unwrap();
 
         assert_eq!(leaf.view_number(), to_view);
         assert!(
-            state.block_merkle_tree.lookup(bh - 1).expect_ok().is_ok(),
+            state
+                .block_merkle_tree
+                .lookup(node_block_height - 1)
+                .expect_ok()
+                .is_ok(),
             "inconsistent block merkle tree"
         );
 
@@ -4493,10 +4509,16 @@ mod test {
 
         // Reconstruct state using reward accounts only
 
-        let (state, leaf) =
-            reconstruct_state(&instance, &mut tx, bh - 1, to_view, &[], &reward_accounts)
-                .await
-                .unwrap();
+        let (state, leaf) = reconstruct_state(
+            &instance,
+            &mut tx,
+            node_block_height - 1,
+            to_view,
+            &[],
+            &reward_accounts,
+        )
+        .await
+        .unwrap();
 
         for account in &reward_accounts {
             state
@@ -4508,7 +4530,11 @@ mod test {
 
         assert_eq!(leaf.view_number(), to_view);
         assert!(
-            state.block_merkle_tree.lookup(bh - 1).expect_ok().is_ok(),
+            state
+                .block_merkle_tree
+                .lookup(node_block_height - 1)
+                .expect_ok()
+                .is_ok(),
             "inconsistent block merkle tree"
         );
         // Reconstruct state using both fee and reward accounts
@@ -4516,7 +4542,7 @@ mod test {
         let (state, leaf) = reconstruct_state(
             &instance,
             &mut tx,
-            bh - 1,
+            node_block_height - 1,
             to_view,
             &fee_accounts,
             &reward_accounts,
@@ -4525,7 +4551,11 @@ mod test {
         .unwrap();
 
         assert!(
-            state.block_merkle_tree.lookup(bh - 1).expect_ok().is_ok(),
+            state
+                .block_merkle_tree
+                .lookup(node_block_height - 1)
+                .expect_ok()
+                .is_ok(),
             "inconsistent block merkle tree"
         );
         assert_eq!(leaf.view_number(), to_view);
