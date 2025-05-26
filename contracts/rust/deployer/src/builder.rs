@@ -21,6 +21,9 @@ use crate::{Contract, Contracts, HttpProviderWithWallet};
 /// - `epoch_start_block`: block height for the first *activated* epoch
 /// - `exit_escrow_period`: exit escrow period for stake table (in seconds)
 /// - `multisig`: new owner/multisig that owns all the proxy contracts
+/// - `initial_token_supply`: initial token supply for the token contract
+/// - `token_name`: name of the token
+/// - `token_symbol`: symbol of the token
 #[derive(Builder, Clone)]
 #[builder(setter(strip_option))]
 pub struct DeployerArgs {
@@ -43,6 +46,12 @@ pub struct DeployerArgs {
     exit_escrow_period: Option<U256>,
     #[builder(default)]
     multisig: Option<Address>,
+    #[builder(default)]
+    initial_token_supply: Option<U256>,
+    #[builder(default)]
+    token_name: Option<String>,
+    #[builder(default)]
+    token_symbol: Option<String>,
 }
 
 impl DeployerArgs {
@@ -60,8 +69,21 @@ impl DeployerArgs {
             },
             Contract::EspTokenProxy => {
                 let token_recipient = self.token_recipient.unwrap_or(admin);
-                let addr =
-                    crate::deploy_token_proxy(provider, contracts, admin, token_recipient).await?;
+                let token_name = self.token_name.clone().unwrap_or("Espresso".to_string());
+                let token_symbol = self.token_symbol.clone().unwrap_or("ESP".to_string());
+                let initial_supply = self
+                    .initial_token_supply
+                    .unwrap_or(U256::from(3590000000u64));
+                let addr = crate::deploy_token_proxy(
+                    provider,
+                    contracts,
+                    admin,
+                    token_recipient,
+                    initial_supply,
+                    &token_name,
+                    &token_symbol,
+                )
+                .await?;
 
                 if let Some(multisig) = self.multisig {
                     crate::transfer_ownership(provider, target, addr, multisig).await?;
