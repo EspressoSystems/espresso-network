@@ -75,7 +75,7 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         data_epoch: Option<TYPES::Epoch>,
     ) -> Self {
         let shares = membership
-            .membership_for_epoch(target_epoch)
+            .stake_table_for_epoch(target_epoch)
             .await
             .unwrap()
             .stake_table()
@@ -109,7 +109,7 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         data_epoch: Option<TYPES::Epoch>,
     ) -> Result<Self> {
         let num_nodes = membership
-            .membership_for_epoch(target_epoch)
+            .stake_table_for_epoch(target_epoch)
             .await?
             .total_nodes()
             .await;
