@@ -20,6 +20,11 @@ fn default_builder_urls() -> Vec1<Url> {
     vec1::vec1![Url::parse("http://0.0.0.0:3311").unwrap()]
 }
 
+/// Default DRB difficulty, set to 0 (intended to be overwritten)
+fn default_drb_difficulty() -> u64 {
+    0
+}
+
 /// Holds configuration for a `HotShot`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
@@ -61,6 +66,7 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     /// Stake table capacity for light client use
     #[serde(default = "default_stake_table_capacity")]
     pub stake_table_capacity: usize,
+    #[serde(default = "default_drb_difficulty")]
     /// number of iterations for DRB calculation
     pub drb_difficulty: u64,
 }
