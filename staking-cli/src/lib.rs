@@ -11,6 +11,7 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
 use demo::DelegationConfig;
+use hotshot_contract_adapter::sol_types::StakeTableV2::getVersionReturn;
 pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use parse::Commission;
@@ -29,6 +30,24 @@ pub mod registration;
 pub mod deploy;
 
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
+
+#[derive(Debug, Clone, Copy)]
+pub enum StakeTableContractVersion {
+    V1,
+    V2,
+}
+
+impl TryFrom<getVersionReturn> for StakeTableContractVersion {
+    type Error = anyhow::Error;
+
+    fn try_from(value: getVersionReturn) -> Result<Self> {
+        match value.majorVersion {
+            1 => Ok(StakeTableContractVersion::V1),
+            2 => Ok(StakeTableContractVersion::V2),
+            _ => bail!("Unsupported stake table contract version: {:?}", value),
+        }
+    }
+}
 
 /// CLI to interact with the Espresso stake table contract
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]

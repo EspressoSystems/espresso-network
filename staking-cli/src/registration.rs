@@ -14,7 +14,7 @@ use hotshot_contract_adapter::{
 };
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 
-use crate::parse::Commission;
+use crate::{parse::Commission, StakeTableContractVersion};
 
 /// The ver_key and signature as types that contract bindings expect
 fn prepare_bls_payload(
@@ -49,9 +49,9 @@ pub async fn register_validator(
     let (bls_vk, bls_sig) = prepare_bls_payload(&bls_key_pair, validator_address);
     let (schnorr_vk, schnorr_sig) = prepare_schnorr_payload(&schnorr_key_pair, validator_address);
 
-    let version = stake_table.getVersion().call().await?.majorVersion;
+    let version = stake_table.getVersion().call().await?.try_into()?;
     Ok(match version {
-        1 => {
+        StakeTableContractVersion::V1 => {
             stake_table
                 .registerValidator(bls_vk, schnorr_vk, bls_sig.into(), commission.to_evm())
                 .send()
@@ -60,7 +60,7 @@ pub async fn register_validator(
                 .get_receipt()
                 .await?
         },
-        2 => {
+        StakeTableContractVersion::V2 => {
             stake_table
                 .registerValidatorV2(
                     bls_vk,
@@ -74,9 +74,6 @@ pub async fn register_validator(
                 .maybe_decode_revert::<StakeTableV2Errors>()?
                 .get_receipt()
                 .await?
-        },
-        _ => {
-            unimplemented!("Unsupported stake table version: {}", version);
         },
     })
 }
@@ -92,9 +89,9 @@ pub async fn update_consensus_keys(
     let (bls_vk, bls_sig) = prepare_bls_payload(&bls_key_pair, validator_address);
     let (schnorr_vk, schnorr_sig) = prepare_schnorr_payload(&schnorr_key_pair, validator_address);
 
-    let version = stake_table.getVersion().call().await?.majorVersion;
+    let version = stake_table.getVersion().call().await?.try_into()?;
     Ok(match version {
-        1 => {
+        StakeTableContractVersion::V1 => {
             stake_table
                 .updateConsensusKeys(bls_vk, schnorr_vk, bls_sig.into())
                 .send()
@@ -103,7 +100,7 @@ pub async fn update_consensus_keys(
                 .get_receipt()
                 .await?
         },
-        2 => {
+        StakeTableContractVersion::V2 => {
             stake_table
                 .updateConsensusKeysV2(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig)
                 .send()
@@ -111,9 +108,6 @@ pub async fn update_consensus_keys(
                 .maybe_decode_revert::<StakeTableV2Errors>()?
                 .get_receipt()
                 .await?
-        },
-        _ => {
-            unimplemented!("Unsupported stake table version: {}", version);
         },
     })
 }

@@ -27,19 +27,16 @@ use hotshot_types::light_client::StateKeyPair;
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
 
-use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
+use crate::{
+    parse::Commission, registration::register_validator, BLSKeyPair, StakeTableContractVersion,
+    DEV_MNEMONIC,
+};
 
 type TestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
     AnvilProvider<RootProvider>,
     Ethereum,
 >;
-
-#[derive(Debug, Clone, Copy)]
-pub enum StakeTableContractVersion {
-    V1,
-    V2,
-}
 
 #[derive(Debug, Clone)]
 pub struct TestSystem {
@@ -57,15 +54,11 @@ pub struct TestSystem {
 }
 
 impl TestSystem {
-    pub async fn deploy_v1() -> Result<Self> {
-        Self::deploy_helper(StakeTableContractVersion::V1).await
-    }
-
     pub async fn deploy() -> Result<Self> {
-        Self::deploy_helper(StakeTableContractVersion::V2).await
+        Self::deploy_version(StakeTableContractVersion::V2).await
     }
 
-    pub async fn deploy_helper(
+    pub async fn deploy_version(
         stake_table_contract_version: StakeTableContractVersion,
     ) -> Result<Self> {
         let exit_escrow_period = Duration::from_secs(1);
@@ -85,8 +78,9 @@ impl TestSystem {
             "Signer address mismatch"
         );
 
-        // Create a fake stake table to create a genesis state. Will need to be updated once we
-        // implement slashing where we will use light client contract in the stake table contract.
+        // Create a fake stake table to create a genesis state. This is fine because we don't
+        // currently use the light client contract. Will need to be updated once we implement
+        // slashing and call the light client contract from the stake table contract.
         let blocks_per_epoch = 100;
         let epoch_start_block = 1;
         let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
