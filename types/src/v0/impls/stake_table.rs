@@ -207,9 +207,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 
                 let stake_table_key: BLSPubKey = blsVK.clone().into();
                 let state_ver_key: SchnorrPubKey = schnorrVK.clone().into();
-                // TODO(MA): The stake table contract currently enforces that each bls key is only used once. We will
-                // move this check to the confirmation layer and remove it from the contract. Once we have the signature
-                // check in this functions we can skip if a BLS key, or Schnorr key was previously used.
+                // The stake table contract enforces that each bls key is only used once.
                 if bls_keys.contains(&stake_table_key) {
                     bail!("bls key already used: {}", stake_table_key.to_string());
                 };
@@ -1822,7 +1820,7 @@ mod tests {
             let res = validators_from_l1_events(events.iter().cloned());
             assert!(
                 res.is_err(),
-                "events {:?}, not a valid sequencer of events",
+                "events {:?}, not a valid sequence of events",
                 res
             );
         }
