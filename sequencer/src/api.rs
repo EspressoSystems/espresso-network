@@ -2017,6 +2017,7 @@ mod test {
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+        data_source::{sql::Config, storage::SqlStorage, VersionedDataSource},
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -2046,6 +2047,10 @@ mod test {
     };
     use super::*;
     use crate::{
+        api::{
+            options::Query,
+            sql::{impl_testable_data_source::tmp_options, reconstruct_state},
+        },
         catchup::{NullStateCatchup, StatePeers},
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder},
@@ -4553,5 +4558,4 @@ mod test {
 
         Ok(())
     }
-    
 }
