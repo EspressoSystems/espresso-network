@@ -4,11 +4,12 @@ use std::{
 };
 
 use alloy::primitives::U256;
+use anyhow::Context;
 use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use async_lock::{Mutex, RwLock};
 use hotshot_utils::{
     anytrace::{self, Error, Level, Result, Wrap, DEFAULT_LOG_LEVEL},
-    ensure, line_info, log, warn,
+    ensure, error, line_info, log, warn,
 };
 
 use crate::{
@@ -114,6 +115,12 @@ where
             .read()
             .await
             .has_randomized_stake_table(epoch)
+            .map_err(|e| {
+                error!(
+                    "membership_for_epoch failed while called with maybe_epoch {:?} : {}",
+                    maybe_epoch, e
+                )
+            })?
         {
             return Ok(ret_val);
         }

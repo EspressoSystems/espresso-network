@@ -1285,13 +1285,31 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.state.contains_key(&epoch)
     }
 
-    fn has_randomized_stake_table(&self, epoch: Epoch) -> bool {
-        match self.first_epoch {
-            Some(first_epoch) if epoch >= first_epoch => {
-                self.randomized_committees.contains_key(&epoch)
-            },
-            _ => false,
-        }
+    /// Checks if the randomized stake table is available for the given epoch.
+    ///
+    /// Returns `Ok(true)` if a randomized committee exists for the specified epoch and
+    /// the epoch is not before the first epoch. Returns an error if `first_epoch` is `None`
+    /// or if the provided epoch is before the first epoch.
+    ///
+    /// # Arguments
+    /// * `epoch` - The epoch for which to check the presence of a randomized stake table.
+    ///
+    /// # Errors
+    /// Returns an error if `first_epoch` is `None` or if `epoch` is before `first_epoch`.
+    fn has_randomized_stake_table(&self, epoch: Epoch) -> anyhow::Result<bool> {
+        let Some(first_epoch) = self.first_epoch else {
+            bail!(
+                "Called has_randomized_stake_table with epoch {} but first_epoch is None",
+                epoch
+            );
+        };
+        ensure!(
+            epoch >= first_epoch,
+            "Called has_randomized_stake_table with epoch {} but first_epoch is {}",
+            epoch,
+            first_epoch
+        );
+        Ok(self.randomized_committees.contains_key(&epoch))
     }
 
     async fn get_epoch_root(
