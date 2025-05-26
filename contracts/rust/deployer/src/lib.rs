@@ -1215,8 +1215,19 @@ mod tests {
         // deploy token
         let init_recipient = provider.get_accounts().await?[0];
         let token_owner = Address::random();
-        let token_addr =
-            deploy_token_proxy(&provider, &mut contracts, token_owner, init_recipient).await?;
+        let token_name = "Espresso";
+        let token_symbol = "ESP";
+        let initial_supply = U256::from(3590000000u64);
+        let token_addr = deploy_token_proxy(
+            &provider,
+            &mut contracts,
+            token_owner,
+            init_recipient,
+            initial_supply,
+            token_name,
+            token_symbol,
+        )
+        .await?;
 
         // deploy light client
         let lc_addr = deploy_light_client_contract(&provider, &mut contracts, false).await?;
