@@ -44,6 +44,7 @@ use sequencer_utils::test_utils::setup_test;
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
 use tokio::{
+    sync::mpsc::channel,
     task::{spawn, JoinHandle},
     time::{sleep, timeout},
 };
@@ -53,8 +54,10 @@ use vec1::vec1;
 use super::*;
 use crate::{
     api::{self, data_source::testing::TestableSequencerDataSource, options::Query},
+    external_event_handler::ExternalEventHandler,
     genesis::{L1Finalized, StakeTableConfig},
     network::cdn::{TestingDef, WrappedSignatureKey},
+    request_response::RequestResponseProtocol,
     testing::wait_for_decide_on_handle,
     SequencerApiVersion,
 };
@@ -246,6 +249,11 @@ struct NodeInitializer<S: TestableSequencerDataSource> {
     >,
     stream: Receiver<Event<SeqTypes>>,
     node_id: u64,
+    context: SequencerContext<
+        network::Production,
+        <S::Options as PersistenceOptions>::Persistence,
+        MockSequencerVersions,
+    >,
 }
 
 #[derive(Debug)]
@@ -354,11 +362,12 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         async {
             if let Some(mut context) = self.context.take() {
                 // Store state for recovering channels on restart.
-                self.initializer
-                    .replace(self.get_initializer(&context).await);
 
                 tracing::info!(node_id = context.node_id(), "stopping node");
                 context.shut_down().await;
+
+                self.initializer
+                    .replace(self.get_initializer(&context).await);
             }
         }
         .boxed()
@@ -380,6 +389,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             stream,
             hotshot_context: handle.hotshot.clone(),
             node_id: context.node_id(),
+            context: context.clone(),
         }
     }
 
@@ -408,34 +418,35 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let mut retries = 5;
             let mut delay = Duration::from_secs(1);
             let genesis = Genesis::from_file(&self.opt.genesis_file).unwrap();
-            let mut ctx = loop {
-                match init_with_storage(
-                    genesis.clone(),
-                    self.modules.clone(),
-                    self.opt.clone(),
-                    S::persistence_options(&self.storage),
-                    MockSequencerVersions::new(),
-                )
-                .await
-                {
-                    Ok(ctx) => break ctx,
-                    Err(err) => {
-                        tracing::error!(retries, ?delay, "initialization failed: {err:#}");
-                        if retries == 0 {
-                            panic!("initialization failed too many times");
-                        }
+            // let mut ctx = loop {
+            //     match init_with_storage(
+            //         genesis.clone(),
+            //         self.modules.clone(),
+            //         self.opt.clone(),
+            //         S::persistence_options(&self.storage),
+            //         MockSequencerVersions::new(),
+            //     )
+            //     .await
+            //     {
+            //         Ok(ctx) => break ctx,
+            //         Err(err) => {
+            //             tracing::error!(retries, ?delay, "initialization failed: {err:#}");
+            //             if retries == 0 {
+            //                 panic!("initialization failed too many times");
+            //             }
 
-                        sleep(delay).await;
-                        delay *= 2;
-                        retries -= 1;
-                    },
-                }
-            };
+            //             sleep(delay).await;
+            //             delay *= 2;
+            //             retries -= 1;
+            //         },
+            //     }
+            // };
 
             // Check if we have a stored config for soft-restart.
-            if let Some(initializer) = &self.initializer {
+            let ctx = if let Some(initializer) = &self.initializer {
                 tracing::error!("restoring hotshot");
                 let node_id = initializer.node_id;
+                let mut ctx = initializer.context.clone();
 
                 tracing::error!(
                     "restoring event stream prev: {}, context: {}, state: {}",
@@ -463,17 +474,68 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     .hotshot_context
                     // TODO I think all the copied values are static, so should
                     // be safe, but double check.
-                    .into_self_cloned(hotshot_initializer, node_id)
+                    .into_self_cloned(hotshot_initializer, node_id, initializer.stream.clone())
                     .await;
 
+                // Create the request-response protocol
+
+                let proposal_fetcher_config = self.opt.proposal_fetcher_config;
                 tracing::error!("replace handle");
                 // TODO instead of simply replacing  the handle, we need to call
                 // SequencerContext::init with  values on this context  and this
                 // handle.  However that `init` fn  does not support this. So we
                 // can  create  `init2` which takes a handle and event channels.
                 // This will  (hopefully)  set  up channels correctly.
-                ctx.replace_handle(handle, Arc::new(persistence), anchor_view)
-                    .await;
+
+                sleep(Duration::from_secs(5)).await;
+                loop {
+                    match ctx
+                        .replace_handle(
+                            handle.clone(),
+                            Arc::new(persistence.clone()),
+                            anchor_view,
+                            proposal_fetcher_config,
+                            // self.storage,
+                        )
+                        .await
+                    {
+                        Ok(ctx) => break ctx,
+                        Err(err) => {
+                            tracing::error!(retries, ?delay, "initialization failed: {err:#}");
+                            if retries == 0 {
+                                panic!("initialization failed too many times");
+                            }
+
+                            sleep(delay).await;
+                            delay *= 2;
+                            retries -= 1;
+                        },
+                    }
+                }
+            } else {
+                loop {
+                    match init_with_storage(
+                        genesis.clone(),
+                        self.modules.clone(),
+                        self.opt.clone(),
+                        S::persistence_options(&self.storage),
+                        MockSequencerVersions::new(),
+                    )
+                    .await
+                    {
+                        Ok(ctx) => break ctx,
+                        Err(err) => {
+                            tracing::error!(retries, ?delay, "initialization failed: {err:#}");
+                            if retries == 0 {
+                                panic!("initialization failed too many times");
+                            }
+
+                            sleep(delay).await;
+                            delay *= 2;
+                            retries -= 1;
+                        },
+                    }
+                }
             };
 
             tracing::info!(node_id = ctx.node_id(), "starting consensus");

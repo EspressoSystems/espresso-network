@@ -388,6 +388,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         &self,
         initializer: HotShotInitializer<TYPES>,
         node_id: u64,
+        receiver: Receiver<Event<TYPES>>,
     ) -> Arc<Self> {
         let Self {
             public_key,
@@ -405,7 +406,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         } = self.clone();
 
         let (internal_tx, internal_rx) = internal_event_stream;
-        let (external_tx, external_rx) = external_event_stream;
+        let (external_tx, _external_rx) = external_event_stream;
 
         // panics:
         // let metrics = Arc::<ConsensusMetricsValue>::into_inner(metrics).unwrap();
@@ -427,7 +428,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             metrics,
             storage,
             (internal_tx, internal_rx.activate()), // I think we don't need this one anyway
-            (external_tx, external_rx.activate()), // TODO probably not the correct place to activate
+            (external_tx, receiver), // TODO probably not the correct place to activate
         )
         .await
     }

@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use crate::api::data_source::testing::TestableSequencerDataSource;
 use anyhow::Context;
 use async_lock::RwLock;
 use derivative::Derivative;
@@ -236,7 +237,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
 
     /// Constructor
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub fn new(
         handle: Consensus<N, P, V>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
@@ -251,7 +252,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         proposal_fetcher_cfg: ProposalFetcherConfig,
         metrics: &dyn Metrics,
     ) -> Self {
-        let events = handle.event_stream();
+        let events = handle.event_stream(); //
 
         let node_id = node_state.node_id;
         let mut ctx = Self {
@@ -432,40 +433,125 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         consensus: Arc<SystemContext<SeqTypes, Node<N, P>, V>>,
         persistence: Arc<P>,
         anchor_view: Option<ViewNumber>,
-    ) {
+        proposal_fetcher_cfg: ProposalFetcherConfig,
+    ) -> anyhow::Result<Self> {
         use espresso_types::traits::NullEventConsumer;
+        use hotshot_types::traits::metrics::NoMetrics;
+
         tracing::error!("replace handle");
 
         let handle = consensus.run_tasks().await;
-        tracing::error!("replace handle started tasks");
-        let event_stream = handle.event_stream();
-        tracing::error!("replace handle got event stream");
-        let handle = Arc::new(RwLock::new(handle));
+        // tracing::error!("replace handle started tasks");
+        // let event_stream = handle.event_stream();
+        // tracing::error!("replace handle got event stream");
+        // let handle = Arc::new(RwLock::new(handle));
 
         // Shutdown tasks before we mutate `self`.
         // self.tasks.join().await;
         // tracing::error!("replace handle join tasks");
 
-        self.handle = Arc::clone(&handle);
+        // self.handle = Arc::clone(&handle);
 
         tracing::error!("replace handle spawn tasks");
-        self.spawn(
-            "event handler replacement",
-            handle_events(
-                Arc::clone(&handle),
-                self.node_id(),
-                event_stream,
-                persistence,
-                self.state_signer.clone(),
-                ExternalEventHandler {
-                    request_response_sender: channel(20).0,
-                    phantom: PhantomData,
-                },
-                Some(self.event_streamer()),
-                NullEventConsumer,
-                anchor_view,
-            ),
+
+        let stake_table_capacity = 10; // TODO pass it in
+
+        let (outbound_message_sender, outbound_message_receiver) = channel(20);
+        let (request_response_sender, request_response_receiver) = channel(20);
+        let validator_config = self.validator_config.clone();
+        let instance_state = self.node_state();
+
+        let network_config = self.network_config();
+        let config = &network_config.config;
+        let stake_table = config.hotshot_stake_table();
+        let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
+        let stake_table_epoch = None;
+
+        let state_signer = StateSigner::new(
+            validator_config.state_private_key.clone(),
+            validator_config.state_public_key.clone(),
+            stake_table_commit,
+            stake_table_epoch,
+            stake_table_capacity,
         );
+
+        let request_response_config = RequestResponseConfig {
+            incoming_request_ttl: Duration::from_secs(40),
+            response_send_timeout: Duration::from_secs(10),
+            request_batch_size: 15,
+            request_batch_interval: Duration::from_secs(2),
+            max_outgoing_responses: 20,
+            response_validate_timeout: Duration::from_secs(1),
+            max_incoming_responses: 20,
+        };
+
+        let request_response_protocol = RequestResponseProtocol::new(
+            request_response_config,
+            RequestResponseSender::new(outbound_message_sender),
+            request_response_receiver,
+            RecipientSource {
+                memberships: handle.membership_coordinator.clone(),
+                consensus: handle.hotshot.clone(),
+                public_key: validator_config.public_key,
+            },
+            DataSource {
+                node_state: instance_state.clone(),
+                storage: None,
+                consensus: handle.hotshot.clone(),
+                phantom: PhantomData,
+            },
+            validator_config.public_key,
+            validator_config.private_key.clone(),
+        );
+
+        let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
+            stake_table.0,
+            0,
+        )));
+
+        // let coordinator = EpochMembershipCoordinator::new(
+        //     membership,
+        //     network_config.config.epoch_height,
+        //     &persistence.clone(),
+        // );
+
+        let context = SequencerContext::new(
+            handle,
+            persistence,
+            state_signer,
+            ExternalEventHandler {
+                request_response_sender,
+                phantom: PhantomData,
+            },
+            request_response_protocol,
+            event_streamer,
+            instance_state,
+            network_config,
+            validator_config,
+            NullEventConsumer,
+            anchor_view,
+            proposal_fetcher_cfg,
+            &NoMetrics,
+        );
+
+        // self.spawn(
+        //     "event handler replacement",
+        //     handle_events(
+        //         Arc::clone(&handle),
+        //         self.node_id(),
+        //         event_stream,
+        //         persistence,
+        //         self.state_signer.clone(),
+        //         ExternalEventHandler {
+        //             request_response_sender: channel(20).0,
+        //             phantom: PhantomData,
+        //         },
+        //         Some(self.event_streamer()),
+        //         NullEventConsumer,
+        //         anchor_view,
+        //     ),
+        // );
+        Ok(context)
     }
 }
 
@@ -526,7 +612,7 @@ async fn handle_events<N, P, V>(
     }
 
     while let Some(event) = events.next().await {
-        tracing::debug!(node_id, ?event, "consensus event");
+        tracing::debug!(node_id, ?event, "consensus event"); // scan logs
 
         // Store latest consensus state.
         persistence.handle_event(&event, &event_consumer).await;
