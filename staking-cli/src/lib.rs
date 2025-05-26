@@ -38,22 +38,22 @@ pub const DEV_MNEMONIC: &str = "test test test test test test test test test tes
 #[command(version, about, long_about = None)]
 pub struct Config {
     /// L1 Ethereum RPC.
-    #[clap(long, env = "L1_PROVIDER")]
+    #[arg(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
     pub rpc_url: Url,
 
     /// Deployed ESP token contract address.
-    #[clap(long, env = "ESP_TOKEN_ADDRESS")]
+    #[arg(long, env = "ESP_TOKEN_ADDRESS")]
     pub token_address: Address,
 
     /// Deployed stake table contract address.
-    #[clap(long, env = "STAKE_TABLE_ADDRESS")]
+    #[arg(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     pub signer: SignerConfig,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     #[serde(skip)]
     pub logging: logging::Config,
 
@@ -65,11 +65,11 @@ pub struct Config {
 #[derive(ClapSerde, Parser, Clone, Debug, Deserialize, Serialize)]
 pub struct SignerConfig {
     /// The mnemonic to use when deriving the key.
-    #[clap(long, env = "MNEMONIC")]
+    #[arg(long, env = "MNEMONIC")]
     pub mnemonic: Option<String>,
 
     /// The mnemonic account index to use when deriving the key.
-    #[clap(long, env = "ACCOUNT_INDEX")]
+    #[arg(long, env = "ACCOUNT_INDEX")]
     #[default(Some(0))]
     pub account_index: Option<u32>,
 
@@ -77,7 +77,7 @@ pub struct SignerConfig {
     ///
     /// NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the
     /// Ethereum app settings.
-    #[clap(long, env = "USE_LEDGER")]
+    #[arg(long, env = "USE_LEDGER")]
     pub ledger: bool,
 }
 
@@ -210,21 +210,21 @@ pub enum Commands {
     /// Initialize the config file with deployment and wallet info.
     Init {
         /// The mnemonic to use when deriving the key.
-        #[clap(long, env = "MNEMONIC", required_unless_present = "ledger")]
+        #[arg(long, env = "MNEMONIC", required_unless_present = "ledger")]
         mnemonic: Option<String>,
 
         /// The mnemonic account index to use when deriving the key.
-        #[clap(long, env = "ACCOUNT_INDEX", default_value_t = 0)]
+        #[arg(long, env = "ACCOUNT_INDEX", default_value_t = 0)]
         account_index: u32,
 
         /// The ledger account index to use when deriving the key.
-        #[clap(long, env = "LEDGER_INDEX", required_unless_present = "mnemonic")]
+        #[arg(long, env = "LEDGER_INDEX", required_unless_present = "mnemonic")]
         ledger: bool,
     },
     /// Remove the config file.
     Purge {
         /// Don't ask for confirmation.
-        #[clap(long)]
+        #[arg(long)]
         force: bool,
     },
     /// Show the stake table in the Espresso stake table contract.
@@ -232,11 +232,11 @@ pub enum Commands {
         /// The block numberto use for the stake table.
         ///
         /// Defaults to the latest block for convenience.
-        #[clap(long)]
+        #[arg(long)]
         l1_block_number: Option<BlockId>,
 
         /// Abbreviate the very long BLS public keys.
-        #[clap(long)]
+        #[arg(long)]
         compact: bool,
     },
     /// Print the signer account address.
@@ -244,84 +244,84 @@ pub enum Commands {
     /// Register to become a validator.
     RegisterValidator {
         /// The consensus signing key. Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
+        #[arg(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
         consensus_private_key: BLSPrivKey,
 
         /// The state signing key.
         ///
         /// TODO: Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
+        #[arg(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
         state_private_key: StateSignKey,
 
         /// The commission to charge delegators
-        #[clap(long, value_parser = parse::parse_commission, env = "COMMISSION")]
+        #[arg(long, value_parser = parse::parse_commission, env = "COMMISSION")]
         commission: Commission,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
         /// The consensus signing key. Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
+        #[arg(long, value_parser = parse::parse_bls_priv_key, env = "CONSENSUS_PRIVATE_KEY")]
         consensus_private_key: BLSPrivKey,
 
         /// The state signing key.
         ///
         /// TODO: Used to sign a message to prove ownership of the key.
-        #[clap(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
+        #[arg(long, value_parser = parse::parse_state_priv_key, env = "STATE_PRIVATE_KEY")]
         state_private_key: StateSignKey,
     },
     /// Deregister a validator.
     DeregisterValidator {},
     /// Approve stake table contract to move tokens
     Approve {
-        #[clap(long, value_parser = parse_ether)]
+        #[arg(long, value_parser = parse_ether)]
         amount: U256,
     },
     /// Delegate funds to a validator.
     Delegate {
-        #[clap(long)]
+        #[arg(long)]
         validator_address: Address,
 
-        #[clap(long, value_parser = parse_ether)]
+        #[arg(long, value_parser = parse_ether)]
         amount: U256,
     },
     /// Initiate a withdrawal of delegated funds from a validator.
     Undelegate {
-        #[clap(long)]
+        #[arg(long)]
         validator_address: Address,
 
-        #[clap(long, value_parser = parse_ether)]
+        #[arg(long, value_parser = parse_ether)]
         amount: U256,
     },
     /// Claim withdrawal after an undelegation.
     ClaimWithdrawal {
-        #[clap(long)]
+        #[arg(long)]
         validator_address: Address,
     },
     /// Claim withdrawal after validator exit.
     ClaimValidatorExit {
-        #[clap(long)]
+        #[arg(long)]
         validator_address: Address,
     },
     /// Check ESP token balance.
     TokenBalance {
         /// The address to check.
-        #[clap(long)]
+        #[arg(long)]
         address: Option<Address>,
     },
     /// Check ESP token allowance of stake table contract.
     TokenAllowance {
         /// The address to check.
-        #[clap(long)]
+        #[arg(long)]
         owner: Option<Address>,
     },
     /// Transfer ESP tokens
     Transfer {
         /// The address to transfer to.
-        #[clap(long)]
+        #[arg(long)]
         to: Address,
 
         /// The amount to transfer
-        #[clap(long, value_parser = parse_ether)]
+        #[arg(long, value_parser = parse_ether)]
         amount: U256,
     },
     /// Register the validators and delegates for the local demo.
@@ -329,7 +329,7 @@ pub enum Commands {
         /// The number of validators to register.
         ///
         /// The default (5) works for the local native and docker demos.
-        #[clap(long, default_value_t = 5)]
+        #[arg(long, default_value_t = 5)]
         num_validators: u16,
 
         #[arg(long, value_enum, default_value_t = DelegationConfig::default())]

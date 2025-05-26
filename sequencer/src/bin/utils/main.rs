@@ -9,7 +9,7 @@ mod reset_storage;
 
 #[derive(Debug, Parser)]
 struct Options {
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 
     #[command(subcommand)]

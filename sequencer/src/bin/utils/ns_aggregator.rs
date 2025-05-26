@@ -11,25 +11,25 @@ use surf_disco::Url;
 #[derive(Debug, Parser)]
 pub struct Options {
     /// Block to start counting from.
-    #[clap(short, long, default_value = "0")]
+    #[arg(short, long, default_value = "0")]
     from_block: usize,
 
     /// Last block to count (inclusive).
     ///
     /// If not specified, will count until the end of the chain at the moment the program is
     /// invoked.
-    #[clap(short, long)]
+    #[arg(short, long)]
     to_block: Option<usize>,
 
     /// Namespace to aggregate.
-    #[clap(short, long)]
+    #[arg(short, long)]
     namespace: u64,
 
     /// Number of parallel tasks to run.
     ///
     /// Since the process is mostly I/O bound, increasing this can dramatically speed up
     /// aggregation.
-    #[clap(short, long, default_value = "1")]
+    #[arg(short, long, default_value = "1")]
     jobs: usize,
 
     /// Espresso query service URL.

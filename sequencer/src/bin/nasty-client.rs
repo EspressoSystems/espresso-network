@@ -65,7 +65,7 @@ use vbs::version::StaticVersionType;
 #[derive(Clone, Debug, Parser)]
 struct Options {
     /// Port on which to serve the nasty-client API.
-    #[clap(
+    #[arg(
         short,
         long,
         env = "ESPRESSO_NASTY_CLIENT_PORT",
@@ -74,16 +74,16 @@ struct Options {
     port: u16,
 
     /// The URL of the query service to connect to.
-    #[clap(env = "ESPRESSO_SEQUENCER_URL")]
+    #[arg(env = "ESPRESSO_SEQUENCER_URL")]
     url: Url,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     client_config: ClientConfig,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     distribution: ActionDistribution,
 
-    #[clap(flatten)]
+    #[command(flatten)]
     logging: logging::Config,
 }
 
@@ -93,7 +93,7 @@ struct ClientConfig {
     ///
     /// Requests that take longer than this will fail, causing an error log and an increment of the
     /// `failed_actions` metric.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_HTTP_TIMEOUT_ERROR",
         default_value = "5s",
@@ -105,7 +105,7 @@ struct ClientConfig {
     ///
     /// Requests that take longer than this but shorter than HTTP_TIMEOUT_ERROR will not generate an
     /// error but will output a warning and increment a counter of slow HTTP requests.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_HTTP_TIMEOUT_WARNING",
         default_value = "1s",
@@ -114,7 +114,7 @@ struct ClientConfig {
     http_timeout_warning: Duration,
 
     /// The maximum number of open WebSockets connections for each resource type at any time.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_MAX_OPEN_STREAMS",
         default_value = "100"
@@ -122,7 +122,7 @@ struct ClientConfig {
     max_open_streams: usize,
 
     /// The maximum number of consecutive blocking polls to make at one time.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_MAX_BLOCKING_POLLS",
         default_value = "10"
@@ -130,11 +130,11 @@ struct ClientConfig {
     max_blocking_polls: u8,
 
     /// The maximum number of retries before considering a fallible query failed.
-    #[clap(long, env = "ESPRESSO_NASTY_CLIENT_MAX_RETRIES", default_value = "3")]
+    #[arg(long, env = "ESPRESSO_NASTY_CLIENT_MAX_RETRIES", default_value = "3")]
     max_retries: usize,
 
     /// The amount of time to wait between each retry of a fallible query.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_RETRY_DELAY",
         default_value = "1s",
@@ -143,7 +143,7 @@ struct ClientConfig {
     retry_delay: Duration,
 
     /// The minimum number of successful tries to consider a failed operation "healed".
-    #[clap(long, env = "ESPRESSO_NASTY_CLIENT_MIN_RETRIES", default_value = "5")]
+    #[arg(long, env = "ESPRESSO_NASTY_CLIENT_MIN_RETRIES", default_value = "5")]
     min_retries: usize,
 
     /// Time after which WebSockets connection failures are allowed.
@@ -155,7 +155,7 @@ struct ClientConfig {
     /// If there is an error polling a WebSockets connection last used more recently than this
     /// duration, it is considered an error. If the connection is staler than this, it is only a
     /// warning, and the connection is automatically refreshed.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEB_SOCKET_TIMEOUT",
         default_value = "60s",
@@ -167,11 +167,11 @@ struct ClientConfig {
 #[derive(Clone, Debug, Parser)]
 struct ActionDistribution {
     /// The weight of query actions in the random distribution.
-    #[clap(long, env = "ESPRESSO_NASTY_CLIENT_WEIGHT_QUERY", default_value = "20")]
+    #[arg(long, env = "ESPRESSO_NASTY_CLIENT_WEIGHT_QUERY", default_value = "20")]
     weight_query: u8,
 
     /// The weight of query range actions in the random distribution.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEIGHT_QUERY_RANGE",
         default_value = "10"
@@ -179,7 +179,7 @@ struct ActionDistribution {
     weight_query_range: u8,
 
     /// The weight of "open stream" actions in the random distribution.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEIGHT_OPEN_STREAM",
         default_value = "2"
@@ -187,7 +187,7 @@ struct ActionDistribution {
     weight_open_stream: u8,
 
     /// The weight of "close stream" actions in the random distribution.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEIGHT_CLOSE_STREAM",
         default_value = "1"
@@ -195,7 +195,7 @@ struct ActionDistribution {
     weight_close_stream: u8,
 
     /// The weight of "poll stream" actions in the random distribution.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEIGHT_POLL_STREAM",
         default_value = "10"
@@ -203,7 +203,7 @@ struct ActionDistribution {
     weight_poll_stream: u8,
 
     /// The weight of "query window" actions in the random distribution.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEIGHT_QUERY_WINDOW",
         default_value = "15"
@@ -211,7 +211,7 @@ struct ActionDistribution {
     weight_query_window: u8,
 
     /// The weight of "query namespace" actions in the random distribution.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEIGHT_QUERY_NAMESPACE",
         default_value = "15"
@@ -219,7 +219,7 @@ struct ActionDistribution {
     weight_query_namespace: u8,
 
     /// The weight of "query block state" actions in the random distribution.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEIGHT_QUERY_BLOCK_STATE",
         default_value = "15"
@@ -227,7 +227,7 @@ struct ActionDistribution {
     weight_query_block_state: u8,
 
     /// The weight of "query fee state" actions in the random distribution.
-    #[clap(
+    #[arg(
         long,
         env = "ESPRESSO_NASTY_CLIENT_WEIGHT_QUERY_FEE_STATE",
         default_value = "15"
