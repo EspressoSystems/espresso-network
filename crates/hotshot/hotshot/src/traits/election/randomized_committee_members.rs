@@ -432,8 +432,8 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
     fn has_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
         true
     }
-    fn has_randomized_stake_table(&self, _epoch: TYPES::Epoch) -> bool {
-        true
+    fn has_randomized_stake_table(&self, _epoch: TYPES::Epoch) -> anyhow::Result<bool> {
+        Ok(true)
     }
 
     fn add_drb_result(&mut self, _epoch: <TYPES as NodeType>::Epoch, _drb_result: DrbResult) {}

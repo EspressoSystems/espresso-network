@@ -141,7 +141,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool;
 
     /// Returns if the randomized stake table is available for the given epoch
-    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> bool;
+    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool>;
 
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height

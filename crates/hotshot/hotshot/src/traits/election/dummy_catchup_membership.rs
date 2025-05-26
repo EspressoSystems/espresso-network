@@ -159,9 +159,9 @@ where
         self.epochs.contains(&epoch)
     }
 
-    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> bool {
+    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool> {
         self.assert_has_randomized_stake_table(Some(epoch));
-        self.drbs.contains(&epoch)
+        Ok(self.drbs.contains(&epoch))
     }
 
     async fn get_epoch_root(
