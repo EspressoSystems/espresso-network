@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
@@ -7,7 +7,8 @@ use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
 use data_source::{
-    CatchupDataSource, StakeTableDataSource, StakeTableWithEpochNumber, SubmitDataSource,
+    CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
+    SubmitDataSource,
 };
 use derivative::Derivative;
 use espresso_types::{
@@ -27,9 +28,11 @@ use hotshot::types::BLSPubKey;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
-use hotshot_query_service::data_source::ExtensibleDataSource;
+use hotshot_query_service::{
+    availability::VidCommonQueryData, data_source::ExtensibleDataSource, VidCommon,
+};
 use hotshot_types::{
-    data::ViewNumber,
+    data::{VidCommitment, VidShare, ViewNumber},
     event::{Event, LegacyEvent},
     light_client::StateSignatureRequestBody,
     network::NetworkConfig,
@@ -37,18 +40,25 @@ use hotshot_types::{
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
     },
+    vid::avidm::{init_avidm_param, AvidMScheme},
     vote::HasViewNumber,
     PeerConfig,
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree::MerkleTreeScheme;
+use rand::Rng;
+use request_response::RequestType;
+use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
     catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, CatchupStorage},
     context::Consensus,
-    request_response::data_source::retain_reward_accounts,
+    request_response::{
+        data_source::retain_reward_accounts,
+        request::{Request, Response},
+    },
     state_signature::StateSigner,
     SeqTypes, SequencerApiVersion, SequencerContext,
 };
@@ -68,18 +78,15 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-struct ConsensusState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
+struct ConsensusState {
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
     node_state: NodeState,
     network_config: NetworkConfig<SeqTypes>,
-
-    #[derivative(Debug = "ignore")]
-    handle: Arc<RwLock<Consensus<N, P, V>>>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
-    From<&SequencerContext<N, P, V>> for ConsensusState<N, P, V>
+    From<&SequencerContext<N, P, V>> for ConsensusState
 {
     fn from(ctx: &SequencerContext<N, P, V>) -> Self {
         Self {
@@ -87,7 +94,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
             event_streamer: ctx.event_streamer(),
             node_state: ctx.node_state(),
             network_config: ctx.network_config(),
-            handle: ctx.consensus(),
         }
     }
 }
@@ -100,36 +106,50 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Version
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    consensus: BoxLazy<ConsensusState<N, P, V>>,
+    sequencer_context: BoxLazy<SequencerContext<N, P, V>>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState<N, P, V> {
-    fn new(init: impl Future<Output = ConsensusState<N, P, V>> + Send + 'static) -> Self {
+    fn new(context_init: impl Future<Output = SequencerContext<N, P, V>> + Send + 'static) -> Self {
         Self {
-            consensus: Arc::pin(Lazy::from_future(init.boxed())),
+            sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
         }
     }
 
-    async fn state_signer(&self) -> &Arc<RwLock<StateSigner<SequencerApiVersion>>> {
-        &self.consensus.as_ref().get().await.get_ref().state_signer
-    }
-
-    async fn event_streamer(&self) -> &RwLock<EventsStreamer<SeqTypes>> {
-        &self.consensus.as_ref().get().await.get_ref().event_streamer
-    }
-
-    async fn consensus(&self) -> Arc<RwLock<Consensus<N, P, V>>> {
-        Arc::clone(&self.consensus.as_ref().get().await.get_ref().handle)
-    }
-
-    async fn network_config(&self) -> NetworkConfig<SeqTypes> {
-        self.consensus
+    async fn state_signer(&self) -> Arc<RwLock<StateSigner<SequencerApiVersion>>> {
+        self.sequencer_context
             .as_ref()
             .get()
             .await
             .get_ref()
-            .network_config
-            .clone()
+            .state_signer()
+    }
+
+    async fn event_streamer(&self) -> Arc<RwLock<EventsStreamer<SeqTypes>>> {
+        self.sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .get_ref()
+            .event_streamer()
+    }
+
+    async fn consensus(&self) -> Arc<RwLock<Consensus<N, P, V>>> {
+        self.sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .get_ref()
+            .consensus()
+    }
+
+    async fn network_config(&self) -> NetworkConfig<SeqTypes> {
+        self.sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .get_ref()
+            .network_config()
     }
 }
 
@@ -274,6 +294,124 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 }
 
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
+    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D, V>
+{
+    async fn request_vid_shares(
+        &self,
+        block_number: u64,
+        vid_common_data: VidCommonQueryData<SeqTypes>,
+        timeout_duration: Duration,
+    ) -> anyhow::Result<Vec<VidShare>> {
+        self.as_ref()
+            .request_vid_shares(block_number, vid_common_data, timeout_duration)
+            .await
+    }
+}
+
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
+    RequestResponseDataSource<SeqTypes> for ApiState<N, P, V>
+{
+    async fn request_vid_shares(
+        &self,
+        block_number: u64,
+        vid_common_data: VidCommonQueryData<SeqTypes>,
+        duration: Duration,
+    ) -> anyhow::Result<Vec<VidShare>> {
+        // Get a handle to the request response protocol
+        let request_response_protocol = self
+            .sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .request_response_protocol
+            .clone();
+
+        // Get the total VID weight based on the VID common data
+        let total_weight = match vid_common_data.common() {
+            VidCommon::V0(_) => {
+                // TODO: This needs to be done via the stake table
+                return Err(anyhow::anyhow!(
+                    "V0 total weight calculation not supported yet"
+                ));
+            },
+            VidCommon::V1(v1) => v1.total_weights,
+        };
+
+        // Create the AvidM parameters from the total weight
+        let avidm_param =
+            init_avidm_param(total_weight).with_context(|| "failed to initialize avidm param")?;
+
+        // Get the payload hash for verification
+        let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
+            bail!("V0 share verification not supported yet");
+        };
+
+        // Create a random request id
+        let request_id = rand::thread_rng().gen();
+
+        // Request and verify the shares from all other nodes, timing out after `duration` seconds
+        let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let received_shares_clone = received_shares.clone();
+        let request_result: anyhow::Result<_, _> = timeout(
+            duration,
+            request_response_protocol.request_indefinitely::<_, _, _>(
+                Request::VidShare(block_number, request_id),
+                RequestType::Broadcast,
+                move |_request, response| {
+                    let avidm_param = avidm_param.clone();
+                    let received_shares = received_shares_clone.clone();
+                    async move {
+                        // Make sure the response was a V1 share
+                        let Response::VidShare(VidShare::V1(received_share)) = response else {
+                            bail!("V0 share verification not supported yet");
+                        };
+
+                        // Verify the share
+                        let Ok(Ok(_)) = AvidMScheme::verify_share(
+                            &avidm_param,
+                            &local_payload_hash,
+                            &received_share,
+                        ) else {
+                            bail!("share verification failed");
+                        };
+
+                        // Add the share to the list of received shares
+                        received_shares.lock().push(received_share);
+
+                        bail!("waiting for more shares");
+
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    }
+                },
+            ),
+        )
+        .await;
+
+        // If the request timed out, return the shares we have collected so far
+        match request_result {
+            Err(_) => {
+                // If it timed out, this was successful. Return the shares we have collected so far
+                Ok(received_shares
+                    .lock()
+                    .clone()
+                    .into_iter()
+                    .map(VidShare::V1)
+                    .collect())
+            },
+
+            // If it was an error from the inner request, return that error
+            Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
+
+            // If it was successful, this was unexpected.
+            Ok(Ok(_)) => bail!("this should not be possible"),
+        }
+    }
+}
+
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDataSource<N, P>
     for ApiState<N, P, V>
 {
@@ -319,7 +457,7 @@ where
     P: SequencerPersistence,
     D: Sync,
 {
-    async fn node_state(&self) -> &NodeState {
+    async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
     }
 }
@@ -479,8 +617,8 @@ where
     V: Versions,
     P: SequencerPersistence,
 {
-    async fn node_state(&self) -> &NodeState {
-        &self.consensus.as_ref().get().await.get_ref().node_state
+    async fn node_state(&self) -> NodeState {
+        self.sequencer_context.as_ref().get().await.node_state()
     }
 }
 
@@ -1868,8 +2006,8 @@ mod test {
         traits::NullEventConsumer,
         v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::StakeTableFetcher,
-        validators_from_l1_events, FeeAmount, Header, L1ClientOptions, MockSequencerVersions,
-        SequencerVersions, ValidatedState,
+        validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
+        MockSequencerVersions, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -1900,7 +2038,7 @@ mod test {
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use tokio::time::sleep;
-    use vbs::version::StaticVersion;
+    use vbs::version::{StaticVersion, StaticVersionType};
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -2649,6 +2787,102 @@ mod test {
 
         network.server.shut_down().await;
         drop(network);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pos_upgrade_view_based() {
+        type PosUpgrade = SequencerVersions<FeeVersion, EpochVersion>;
+        test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
+    }
+
+    async fn test_upgrade_helper<V: Versions>(version: V) {
+        setup_test();
+        // wait this number of views beyond the configured first view
+        // before asserting anything.
+        let wait_extra_views = 10;
+        // Number of nodes running in the test network.
+        const NUM_NODES: usize = 5;
+        let upgrade_version = <V as Versions>::Upgrade::VERSION;
+        let port = pick_unused_port().expect("No ports free");
+
+        let test_config = TestConfigBuilder::default()
+            .epoch_height(200)
+            .epoch_start_block(321)
+            .set_upgrades(upgrade_version)
+            .await
+            .build();
+
+        let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
+        tracing::debug!(?chain_config_upgrade);
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::from(options::Http {
+                port,
+                max_connections: None,
+            }))
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let mut network = TestNetwork::new(config, version).await;
+        let mut events = network.server.event_stream().await;
+
+        // First loop to get an `UpgradeProposal`. Note that the
+        // actual upgrade will take several to many subsequent views for
+        // voting and finally the actual upgrade.
+        let upgrade = loop {
+            let event = events.next().await.unwrap();
+            match event.event {
+                EventType::UpgradeProposal { proposal, .. } => {
+                    tracing::info!(?proposal, "proposal");
+                    let upgrade = proposal.data.upgrade_proposal;
+                    let new_version = upgrade.new_version;
+                    tracing::info!(?new_version, "upgrade proposal new version");
+                    assert_eq!(new_version, <V as Versions>::Upgrade::VERSION);
+                    break upgrade;
+                },
+                _ => continue,
+            }
+        };
+
+        let wanted_view = upgrade.new_version_first_view + wait_extra_views;
+        // Loop until we get the `new_version_first_view`, then test the upgrade.
+        loop {
+            let event = events.next().await.unwrap();
+            let view_number = event.view_number;
+
+            tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
+            if view_number > wanted_view {
+                let states: Vec<_> = network
+                    .peers
+                    .iter()
+                    .map(|peer| async { peer.consensus().read().await.decided_state().await })
+                    .collect();
+
+                let configs: Option<Vec<ChainConfig>> = join_all(states)
+                    .await
+                    .iter()
+                    .map(|state| state.chain_config.resolve())
+                    .collect();
+
+                tracing::debug!(?configs, "`ChainConfig`s for nodes");
+                if let Some(configs) = configs {
+                    for config in configs {
+                        assert_eq!(config, chain_config_upgrade);
+                    }
+                    break; // if assertion did not panic, the test was successful, so we exit the loop
+                }
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        network.server.shut_down().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -397,7 +397,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         Ok(())
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: TYPES::Epoch,
         block_header: TYPES::BlockHeader,

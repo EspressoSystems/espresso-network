@@ -1303,7 +1303,7 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,

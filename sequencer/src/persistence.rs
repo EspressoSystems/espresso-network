@@ -290,7 +290,7 @@ mod persistence_tests {
 
         // Test storing the header
         storage
-            .add_epoch_root(EpochNumber::new(1), header.clone())
+            .store_epoch_root(EpochNumber::new(1), header.clone())
             .await
             .unwrap();
         assert_eq!(

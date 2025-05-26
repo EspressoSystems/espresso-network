@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	tagged_base64 "github.com/EspressoSystems/espresso-network-go/tagged-base64"
-	common_types "github.com/EspressoSystems/espresso-network-go/types/common"
+	tagged_base64 "github.com/EspressoSystems/espresso-network/sdks/go/tagged-base64"
+	common_types "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 	common "github.com/ethereum/go-ethereum/common"
 )
 

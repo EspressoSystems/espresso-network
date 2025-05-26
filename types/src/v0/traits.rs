@@ -759,7 +759,7 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -879,12 +879,12 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).store_drb_result(epoch, drb_result).await
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
-        (**self).add_epoch_root(epoch, block_header).await
+        (**self).store_epoch_root(epoch, block_header).await
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {

@@ -309,6 +309,39 @@ where
         }
         Ok(())
     }
+
+    /// Get the stored VID share for a given block, if one exists.
+    pub async fn get_vid_share(&self, block_id: BlockId<Types>) -> QueryResult<VidShare> {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let share = tx.vid_share(block_id).await?;
+        Ok(share)
+    }
+
+    /// Get the stored VID common data for a given block, if one exists.
+    pub async fn get_vid_common(
+        &self,
+        block_id: BlockId<Types>,
+    ) -> QueryResult<VidCommonQueryData<Types>> {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let share = tx.get_vid_common(block_id).await?;
+        Ok(share)
+    }
+
+    /// Get the stored VID common metadata for a given block, if one exists.
+    pub async fn get_vid_common_metadata(
+        &self,
+        block_id: BlockId<Types>,
+    ) -> QueryResult<VidCommonMetadata<Types>> {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let share = tx.get_vid_common_metadata(block_id).await?;
+        Ok(share)
+    }
 }
 
 pub trait Revert {

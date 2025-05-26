@@ -3,8 +3,8 @@ package v0_2
 import (
 	"encoding/json"
 
-	"github.com/EspressoSystems/espresso-network-go/types/common"
-	v01 "github.com/EspressoSystems/espresso-network-go/types/v0/v0_1"
+	"github.com/EspressoSystems/espresso-network/sdks/go/types/common"
+	v01 "github.com/EspressoSystems/espresso-network/sdks/go/types/v0/v0_1"
 )
 
 type Header struct {

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/EspressoSystems/espresso-network-go/types/common"
-	common_types "github.com/EspressoSystems/espresso-network-go/types/common"
+	"github.com/EspressoSystems/espresso-network/sdks/go/types/common"
+	common_types "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 )
 
 type Header struct {

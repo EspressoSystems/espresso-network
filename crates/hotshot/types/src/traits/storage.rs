@@ -145,7 +145,7 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a drb result
     async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
     /// Add an epoch block header
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: TYPES::Epoch,
         block_header: TYPES::BlockHeader,

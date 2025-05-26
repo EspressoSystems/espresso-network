@@ -74,7 +74,7 @@ pub struct AvailableBlockHeaderInputV2<TYPES: NodeType> {
     pub sender: <TYPES as NodeType>::BuilderSignatureKey,
 }
 
-/// legacy version of the AvailableBlockHeaderInputV2 type, used on git tag `20280228-patch3`
+/// legacy version of the AvailableBlockHeaderInputV2 type, used on git tag `20250228-patch3`
 ///
 /// this was inadvertently changed to remove some deprecated fields,
 /// which resulted in a builder incompatibility.
@@ -91,6 +91,15 @@ pub struct AvailableBlockHeaderInputV2Legacy<TYPES: NodeType> {
     pub message_signature:
         <<TYPES as NodeType>::BuilderSignatureKey as BuilderSignatureKey>::BuilderSignature,
     pub sender: <TYPES as NodeType>::BuilderSignatureKey,
+}
+
+/// either version of the AvailableBlockHeaderInputV2 type. Note that we try to deserialize legacy first,
+/// as that has extra fields that are not present in the current version. When presented with a legacy
+/// input, we'll first try to validate its signature as the current version.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AvailableBlockHeaderInputV2Either<TYPES: NodeType> {
+    Current(AvailableBlockHeaderInputV2<TYPES>),
+    Legacy(AvailableBlockHeaderInputV2Legacy<TYPES>),
 }
 
 impl<TYPES: NodeType> AvailableBlockHeaderInputV2Legacy<TYPES> {
@@ -118,5 +127,42 @@ impl<TYPES: NodeType> AvailableBlockHeaderInputV2<TYPES> {
     ) -> bool {
         self.sender
             .validate_fee_signature(&self.fee_signature, offered_fee, metadata)
+    }
+}
+
+impl<TYPES: NodeType> AvailableBlockHeaderInputV2Either<TYPES> {
+    pub fn validate_signature_and_get_input(
+        &self,
+        offered_fee: u64,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ) -> Option<AvailableBlockHeaderInputV2<TYPES>> {
+        match self {
+            AvailableBlockHeaderInputV2Either::Legacy(legacy) => {
+                // Try to validate this as a current signature first, then fall back to legacy validation
+                // Note that "legacy" as a variable name might be misleading here, as in the first case
+                // we're treating the 'legacy' struct as 'current' with extra fields. This mirrors the previous
+                // behavior of the code.
+                if legacy.sender.validate_fee_signature(
+                    &legacy.fee_signature,
+                    offered_fee,
+                    metadata,
+                ) || legacy.validate_signature(offered_fee, metadata)
+                {
+                    Some(AvailableBlockHeaderInputV2 {
+                        fee_signature: legacy.fee_signature.clone(),
+                        sender: legacy.sender.clone(),
+                    })
+                } else {
+                    None
+                }
+            },
+            AvailableBlockHeaderInputV2Either::Current(current) => {
+                if current.validate_signature(offered_fee, metadata) {
+                    Some(current.clone())
+                } else {
+                    None
+                }
+            },
+        }
     }
 }

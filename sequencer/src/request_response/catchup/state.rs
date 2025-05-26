@@ -18,6 +18,7 @@ use hotshot_types::{
     utils::verify_leaf_chain,
 };
 use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use request_response::RequestType;
 use tokio::time::timeout;
 
 use crate::request_response::{
@@ -188,10 +189,8 @@ impl<
         // Wait for the protocol to send us the accounts
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::Accounts(height, *view, accounts),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -240,10 +239,8 @@ impl<
         // Wait for the protocol to send us the accounts
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::Leaf(height),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -280,10 +277,8 @@ impl<
         // Wait for the protocol to send us the chain config
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::ChainConfig(commitment),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -339,10 +334,8 @@ impl<
         // Wait for the protocol to send us the blocks frontier
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::BlocksFrontier(height, *view),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -398,10 +391,8 @@ impl<
         // Wait for the protocol to send us the reward accounts
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::RewardAccounts(height, *view, accounts),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await

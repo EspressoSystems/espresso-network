@@ -10,8 +10,8 @@ import (
 	"sort"
 	"sync"
 
-	types "github.com/EspressoSystems/espresso-network-go/types"
-	common "github.com/EspressoSystems/espresso-network-go/types/common"
+	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
+	common "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 )
 
 var _ QueryService = (*MultipleNodesClient)(nil)

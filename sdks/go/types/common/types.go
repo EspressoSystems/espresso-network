@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
-	tagged_base64 "github.com/EspressoSystems/espresso-network-go/tagged-base64"
+	tagged_base64 "github.com/EspressoSystems/espresso-network/sdks/go/tagged-base64"
 
 	"github.com/ethereum/go-ethereum/common"
 )

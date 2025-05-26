@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use data_source::DataSource;
 use derive_more::derive::Deref;
 use espresso_types::{traits::SequencerPersistence, PubKey, SeqTypes};
@@ -5,8 +7,10 @@ use hotshot::{traits::NodeImplementation, types::BLSPrivKey};
 use hotshot_types::traits::{network::ConnectedNetwork, node_implementation::Versions};
 use network::Sender;
 use recipient_source::RecipientSource;
-use request::Request;
-use request_response::{network::Bytes, RequestResponse, RequestResponseConfig};
+use request::{Request, Response};
+use request_response::{
+    network::Bytes, RequestError, RequestResponse, RequestResponseConfig, RequestType,
+};
 use tokio::sync::mpsc::Receiver;
 
 pub mod catchup;
@@ -84,5 +88,40 @@ impl<
             public_key,
             private_key,
         }
+    }
+}
+
+impl<
+        I: NodeImplementation<SeqTypes>,
+        V: Versions,
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    > RequestResponseProtocol<I, V, N, P>
+{
+    pub async fn request_indefinitely<F, Fut, O>(
+        &self,
+        // The request to make
+        request: Request,
+        // The type of request
+        request_type: RequestType,
+        // The response validation function
+        response_validation_fn: F,
+    ) -> std::result::Result<O, RequestError>
+    where
+        F: Fn(&Request, Response) -> Fut + Send + Sync + 'static + Clone,
+        Fut: Future<Output = anyhow::Result<O>> + Send + Sync + 'static,
+        O: Send + Sync + 'static + Clone,
+    {
+        // Request from the inner protocol
+        self.inner
+            .request_indefinitely(
+                &self.public_key,
+                &self.private_key,
+                request_type,
+                self.config.incoming_request_ttl,
+                request,
+                response_validation_fn,
+            )
+            .await
     }
 }

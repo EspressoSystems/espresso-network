@@ -265,7 +265,6 @@ jobs:
         timeout-minutes: 20
 
   test-go-sdk:
-    needs: build-test-bins
     runs-on: ubuntu-latest
     steps:
       - name: Install Nix

@@ -1921,7 +1921,7 @@ impl SequencerPersistence for Persistence {
         tx.commit().await
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,

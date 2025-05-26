@@ -27,7 +27,6 @@ use espresso_types::{
 };
 use genesis::L1Finalized;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
-use hotshot_query_service::data_source::storage::SqlStorage;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -35,6 +34,8 @@ use proposal_fetcher::ProposalFetcherConfig;
 use tokio::select;
 use tracing::info;
 use url::Url;
+
+use crate::request_response::data_source::Storage as RequestResponseStorage;
 pub mod persistence;
 pub mod state;
 use std::{fmt::Debug, marker::PhantomData, time::Duration};
@@ -197,7 +198,7 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     metrics: &dyn Metrics,
     persistence: P,
     l1_params: L1Params,
-    storage: Option<Arc<SqlStorage>>,
+    storage: Option<RequestResponseStorage>,
     seq_versions: V,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
@@ -795,6 +796,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        l1_opt: L1ClientOptions,
         anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
@@ -847,6 +849,12 @@ pub mod testing {
             self.l1_url = l1_url;
             self
         }
+
+        pub fn l1_opt(mut self, opt: L1ClientOptions) -> Self {
+            self.l1_opt = opt;
+            self
+        }
+
         pub fn signer(mut self, signer: LocalSigner<SigningKey>) -> Self {
             self.signer = signer;
             self
@@ -942,6 +950,7 @@ pub mod testing {
                 state_key_pairs: self.state_key_pairs,
                 master_map: self.master_map,
                 l1_url: self.l1_url,
+                l1_opt: self.l1_opt,
                 signer: self.signer,
                 state_relay_url: self.state_relay_url,
                 builder_port: self.builder_port,
@@ -1021,6 +1030,13 @@ pub mod testing {
                 state_key_pairs,
                 master_map,
                 l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
+                l1_opt: L1ClientOptions {
+                    stake_table_update_interval: Duration::from_secs(5),
+                    l1_events_max_block_range: 1000,
+                    l1_polling_interval: Duration::from_secs(1),
+                    subscription_timeout: Duration::from_secs(5),
+                    ..Default::default()
+                },
                 anvil_provider: Some(anvil_provider),
                 signer,
                 state_relay_url: None,
@@ -1037,6 +1053,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        l1_opt: L1ClientOptions,
         anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
@@ -1117,7 +1134,7 @@ pub mod testing {
             mut state: ValidatedState,
             mut persistence_opt: P,
             state_peers: Option<impl StateCatchup + 'static>,
-            storage: Option<Arc<SqlStorage>>,
+            storage: Option<RequestResponseStorage>,
             metrics: &dyn Metrics,
             stake_table_capacity: usize,
             event_consumer: impl EventConsumer + 'static,
@@ -1183,14 +1200,9 @@ pub mod testing {
                 },
             };
 
-            let l1_opt = L1ClientOptions {
-                stake_table_update_interval: Duration::from_secs(5),
-                l1_events_max_block_range: 1000,
-                l1_polling_interval: Duration::from_secs(1),
-                subscription_timeout: Duration::from_secs(5),
-                ..Default::default()
-            };
-            let l1_client = l1_opt
+            let l1_client = self
+                .l1_opt
+                .clone()
                 .connect(vec![self.l1_url.clone()])
                 .expect("failed to create L1 client");
             l1_client.spawn_tasks().await;
