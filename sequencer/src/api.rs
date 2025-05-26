@@ -4182,7 +4182,7 @@ mod test {
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
             },
-            tmp_options(&node_0_storage),
+            tmp_options(node_0_storage),
         );
 
         // start the query node so that it builds the merklized state
@@ -4222,7 +4222,7 @@ mod test {
             if let EventType::Decide { leaf_chain, .. } = event.event {
                 let height = leaf_chain[0].leaf.height();
                 tracing::info!("Node 0 decided at height: {}", height);
-                if height > EPOCH_HEIGHT * 1 {
+                if height > EPOCH_HEIGHT {
                     break;
                 }
             }
@@ -4278,7 +4278,7 @@ mod test {
             sleep(Duration::from_secs(1)).await;
 
             let bh = client
-                .get::<u64>(&format!("block-state/block-height",))
+                .get::<u64>("block-state/block-height")
                 .send()
                 .await
                 .expect("block height not found");
@@ -4371,7 +4371,7 @@ mod test {
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
             },
-            tmp_options(&node_0_storage),
+            tmp_options(node_0_storage),
         );
         let node_0 = opt
             .clone()
