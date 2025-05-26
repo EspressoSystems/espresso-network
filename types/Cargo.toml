@@ -64,6 +64,8 @@ vid = { workspace = true }
 espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = ".", features = [ "testing" ] }
 portpicker = { workspace = true }
+rstest = { workspace = true }
+rstest_reuse = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["base64_bytes", "hotshot_testing"]

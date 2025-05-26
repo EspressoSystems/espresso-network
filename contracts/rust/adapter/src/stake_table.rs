@@ -17,9 +17,27 @@ use jf_signature::{
 };
 
 use crate::sol_types::{
-    StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+    StakeTableV2::{getVersionReturn, ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
     *,
 };
+
+#[derive(Debug, Clone, Copy)]
+pub enum StakeTableContractVersion {
+    V1,
+    V2,
+}
+
+impl TryFrom<getVersionReturn> for StakeTableContractVersion {
+    type Error = anyhow::Error;
+
+    fn try_from(value: getVersionReturn) -> anyhow::Result<Self> {
+        match value.majorVersion {
+            1 => Ok(StakeTableContractVersion::V1),
+            2 => Ok(StakeTableContractVersion::V2),
+            _ => anyhow::bail!("Unsupported stake table contract version: {:?}", value),
+        }
+    }
+}
 
 impl From<G2PointSol> for BLSPubKey {
     fn from(value: G2PointSol) -> Self {

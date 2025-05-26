@@ -18,19 +18,19 @@ use espresso_contract_deployer::{
     build_signer, builder::DeployerArgsBuilder,
     network_config::light_client_genesis_from_stake_table, Contract, Contracts,
 };
-use hotshot_contract_adapter::sol_types::{
-    EspToken::{self, EspTokenInstance},
-    StakeTable,
+use hotshot_contract_adapter::{
+    sol_types::{
+        EspToken::{self, EspTokenInstance},
+        StakeTable,
+    },
+    stake_table::StakeTableContractVersion,
 };
 use hotshot_state_prover::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::StateKeyPair;
 use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
 use url::Url;
 
-use crate::{
-    parse::Commission, registration::register_validator, BLSKeyPair, StakeTableContractVersion,
-    DEV_MNEMONIC,
-};
+use crate::{parse::Commission, registration::register_validator, BLSKeyPair, DEV_MNEMONIC};
 
 type TestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,

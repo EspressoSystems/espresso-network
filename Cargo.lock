@@ -4181,6 +4181,8 @@ dependencies = [
  "portpicker",
  "pretty_assertions",
  "rand 0.8.5",
+ "rstest",
+ "rstest_reuse",
  "sequencer-utils",
  "serde",
  "serde_json",

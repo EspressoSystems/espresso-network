@@ -8,11 +8,10 @@ use alloy::primitives::{
     Address, U256,
 };
 use anyhow::Result;
+use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use rand::{rngs::StdRng, SeedableRng as _};
 use sequencer_utils::test_utils::setup_test;
-use staking_cli::{
-    demo::DelegationConfig, deploy, deploy::Signer, Config, StakeTableContractVersion,
-};
+use staking_cli::{demo::DelegationConfig, deploy, deploy::Signer, Config};
 
 use crate::deploy::TestSystem;
 

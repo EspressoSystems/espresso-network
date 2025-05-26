@@ -10,11 +10,11 @@ use hotshot_contract_adapter::{
         EdOnBN254PointSol, G1PointSol, G2PointSol,
         StakeTableV2::{self, StakeTableV2Errors},
     },
-    stake_table::{sign_address_bls, sign_address_schnorr},
+    stake_table::{sign_address_bls, sign_address_schnorr, StakeTableContractVersion},
 };
 use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 
-use crate::{parse::Commission, StakeTableContractVersion};
+use crate::parse::Commission;
 
 /// The ver_key and signature as types that contract bindings expect
 fn prepare_bls_payload(
