@@ -443,7 +443,7 @@ async fn load_chain_config<Mode: TransactionMode>(
 /// range of leaves, and the STF requires all associated data to be present in the `ValidatedState`;
 /// otherwise, it will attempt to trigger catchup itself.
 #[tracing::instrument(skip(instance, tx))]
-async fn reconstruct_state<Mode: TransactionMode>(
+pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     instance: &NodeState,
     tx: &mut Transaction<Mode>,
     from_height: u64,
