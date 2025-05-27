@@ -208,31 +208,15 @@ where
         self.inner.set_first_epoch(epoch, initial_drb_result);
     }
 
-    fn add_epoch_root(
-        &self,
+    async fn add_epoch_root(
+        membership: Arc<RwLock<Self>>,
         epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> anyhow::Result<
-        Option<
-            Box<
-                dyn FnOnce() -> Pin<
-                        Box<
-                            dyn std::future::Future<
-                                    Output = Option<Box<dyn FnOnce(&mut Self) + Send>>,
-                                > + Send,
-                        >,
-                    > + Send,
-            >,
-        >,
-    > {
-        Ok(Some(Box::new(move || {
-            Box::pin(async move {
-                Some(Box::new(move |mem: &mut Self| {
-                    tracing::error!("Adding epoch root for {epoch}");
-                    mem.epochs.insert(epoch);
-                }) as Box<dyn FnOnce(&mut Self) + Send>)
-            })
-        })))
+    ) -> anyhow::Result<()> {
+        let mut membership_writer = membership.write().await;
+        tracing::error!("Adding epoch root for {epoch}");
+        membership_writer.epochs.insert(epoch);
+        Ok(())
     }
 
     fn first_epoch(&self) -> Option<TYPES::Epoch> {

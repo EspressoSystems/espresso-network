@@ -31,7 +31,7 @@ use hotshot_types::{
     stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader,
-        election::Membership,
+        election::{membership_spawn_add_epoch_root, Membership},
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
         storage::{load_drb_progress_fn, store_drb_progress_fn, Storage},
@@ -225,20 +225,12 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
         start = Instant::now();
 
-        let add_epoch_root_worker = {
-            tracing::debug!("Calling add_epoch_root for epoch {next_epoch_number}");
-            let membership_reader = membership.read().await;
-            membership_reader.add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
-        };
-        if let Ok(Some(worker)) = add_epoch_root_worker {
-            let add_epoch_root_updater = worker().await;
-
-            if let Some(updater) = add_epoch_root_updater {
-                let mut membership_writer = membership.write().await;
-                updater(&mut *membership_writer);
-            }
-        }
-        tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
+        membership_spawn_add_epoch_root(
+            Arc::clone(membership),
+            next_epoch_number,
+            decided_leaf.block_header().clone(),
+        );
+        tracing::info!("Time taken to spawn add epoch root: {:?}", start.elapsed());
 
         let mut consensus_writer = consensus.write().await;
         consensus_writer
