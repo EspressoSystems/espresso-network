@@ -260,6 +260,7 @@ mod test {
 
         let stake_table = StakeTableV2::new(system.stake_table, provider);
 
+        // register a validator with the schnorr sig from another key
         let receipt = stake_table
             .registerValidatorV2(
                 bls_vk,
@@ -284,6 +285,8 @@ mod test {
         )
         .await?
         .sort_events()?;
+
+        // verify that we only have the first RegisterV2 event
         assert_eq!(events.len(), 1);
         match events[0].1.clone() {
             StakeTableEvent::RegisterV2(event) => {
@@ -321,7 +324,7 @@ mod test {
 
         let stake_table = StakeTableV2::new(system.stake_table, system.provider);
 
-        // perform an update consensus keys event with the wrong schnorr key
+        // update consensus keys with the schnorr sig from another key
         let receipt = stake_table
             .updateConsensusKeysV2(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig_other_key)
             .send()
@@ -340,6 +343,8 @@ mod test {
         )
         .await?
         .sort_events()?;
+
+        // verify that we only have the RegisterV2 event
         assert_eq!(events.len(), 1);
         match events[0].1.clone() {
             StakeTableEvent::RegisterV2(event) => {
