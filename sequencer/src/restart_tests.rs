@@ -452,7 +452,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 let reader = self.state.upgradable_read().await;
                 // Note that not all nodes will be at the same height, so in
                 // some cases nothing happens. But there is generally enough
-                // overlap that this will fail.
+                // overlap that the comparison will occur for some leaves.
                 if let Some(known_commitment) = reader.get(&height) {
                     tracing::info!(node_id, height, "Comparing commitments across nodes");
                     assert_eq!(
