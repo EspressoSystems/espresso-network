@@ -1381,20 +1381,14 @@ impl Membership<SeqTypes> for EpochCommittees {
             .insert(epoch, randomized_committee);
     }
 
-    fn set_first_epoch(&mut self, first_epoch: Epoch, initial_drb_result: DrbResult) {
-        self.first_epoch = Some(first_epoch);
+    fn set_first_epoch(&mut self, epoch: Epoch, initial_drb_result: DrbResult) {
+        self.first_epoch = Some(epoch);
 
-        let genesis_epoch = Epoch::genesis();
-        let genesis_epoch_committee = self.state.get(&genesis_epoch).unwrap().clone();
-        // Populate epochs from genesis + 1 to first_epoch + 1 with the genesis stake table
-        for epoch_number in *genesis_epoch..=*first_epoch {
-            let epoch = <SeqTypes as NodeType>::Epoch::new(epoch_number);
-            self.state
-                .insert(epoch + 1, genesis_epoch_committee.clone());
-        }
-        // Populate first_epoch and first_epoch + 1 with the initial DRB result
-        self.add_drb_result(first_epoch, initial_drb_result);
-        self.add_drb_result(first_epoch + 1, initial_drb_result);
+        let epoch_committee = self.state.get(&Epoch::genesis()).unwrap().clone();
+        self.state.insert(epoch, epoch_committee.clone());
+        self.state.insert(epoch + 1, epoch_committee);
+        self.add_drb_result(epoch, initial_drb_result);
+        self.add_drb_result(epoch + 1, initial_drb_result);
     }
 
     fn first_epoch(&self) -> Option<<SeqTypes as NodeType>::Epoch> {
