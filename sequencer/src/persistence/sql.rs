@@ -1088,6 +1088,19 @@ impl SequencerPersistence for Persistence {
             }))
     }
 
+    async fn load_restart_view(&self) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(self
+            .db
+            .read()
+            .await?
+            .fetch_optional(query("SELECT view FROM restart_view WHERE id = 0"))
+            .await?
+            .map(|row| {
+                let view: i64 = row.get("view");
+                ViewNumber::new(view as u64)
+            }))
+    }
+
     async fn load_anchor_leaf(
         &self,
     ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
@@ -1278,6 +1291,17 @@ impl SequencerPersistence for Persistence {
 
         let mut tx = self.db.write().await?;
         tx.execute(query(&stmt).bind(view.u64() as i64)).await?;
+
+        if matches!(action, HotShotAction::Vote) {
+            let restart_view = view + 1;
+            let stmt = format!(
+                "INSERT INTO restart_view (id, view) VALUES (0, $1)
+                ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, excluded.view)"
+            );
+            tx.execute(query(&stmt).bind(restart_view.u64() as i64))
+                .await?;
+        }
+
         tx.commit().await
     }
 

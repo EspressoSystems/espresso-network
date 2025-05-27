@@ -446,6 +446,9 @@ pub trait SequencerPersistence:
     /// Load the highest view saved with [`save_voted_view`](Self::save_voted_view).
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>>;
 
+    /// Load the view to restart from.
+    async fn load_restart_view(&self) -> anyhow::Result<Option<ViewNumber>>;
+
     /// Load the proposals saved by consensus
     async fn load_quorum_proposals(
         &self,
@@ -489,7 +492,7 @@ pub trait SequencerPersistence:
             .context("loading last voted view")?
         {
             Some(view) => {
-                tracing::info!(?view, "starting from saved view");
+                tracing::info!(?view, "starting with last actioned view");
                 view
             },
             None => {
@@ -498,6 +501,20 @@ pub trait SequencerPersistence:
             },
         };
 
+        let restart_view = match self
+            .load_restart_view()
+            .await
+            .context("loading restart view")?
+        {
+            Some(view) => {
+                tracing::info!(?view, "starting from saved view");
+                view
+            },
+            None => {
+                tracing::info!("no saved view, starting from genesis");
+                ViewNumber::genesis()
+            },
+        };
         let next_epoch_high_qc = self
             .load_next_epoch_quorum_certificate()
             .await
@@ -544,7 +561,7 @@ pub trait SequencerPersistence:
         // between `highest_voted_view` and `leaf.view_number`. This prevents double votes from
         // starting in a view in which we had already voted before the restart, and prevents
         // unnecessary catchup from starting in a view earlier than the anchor leaf.
-        let view = max(highest_voted_view, leaf.view_number());
+        let restart_view = max(restart_view, leaf.view_number());
         // TODO:
         let epoch = genesis_epoch_from_version::<V, SeqTypes>();
 
@@ -580,7 +597,7 @@ pub trait SequencerPersistence:
 
         tracing::info!(
             ?leaf,
-            ?view,
+            ?restart_view,
             ?epoch,
             ?high_qc,
             ?validated_state,
@@ -596,7 +613,7 @@ pub trait SequencerPersistence:
                 anchor_leaf: leaf,
                 anchor_state: Arc::new(validated_state),
                 anchor_state_delta: None,
-                start_view: view,
+                start_view: restart_view,
                 start_epoch: epoch,
                 last_actioned_view: highest_voted_view,
                 saved_proposals,

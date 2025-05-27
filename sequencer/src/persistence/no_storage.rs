@@ -91,6 +91,10 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn load_restart_view(&self) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(None)
+    }
+
     async fn load_anchor_leaf(
         &self,
     ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {

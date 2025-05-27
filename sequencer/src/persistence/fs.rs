@@ -156,6 +156,10 @@ impl Inner {
         self.path.join("highest_voted_view")
     }
 
+    fn restart_view_path(&self) -> PathBuf {
+        self.path.join("restart_view")
+    }
+
     /// Path to a directory containing decided leaves.
     fn decided_leaf_path(&self) -> PathBuf {
         self.path.join("decided_leaves")
@@ -599,6 +603,18 @@ impl SequencerPersistence for Persistence {
         Ok(Some(ViewNumber::new(u64::from_le_bytes(bytes))))
     }
 
+    async fn load_restart_view(&self) -> anyhow::Result<Option<ViewNumber>> {
+        let inner = self.inner.read().await;
+        let path = inner.restart_view_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(path)?
+            .try_into()
+            .map_err(|bytes| anyhow!("malformed restart view file: {bytes:?}"))?;
+        Ok(Some(ViewNumber::new(u64::from_le_bytes(bytes))))
+    }
+
     async fn append_decided_leaves(
         &self,
         view: ViewNumber,
@@ -803,7 +819,31 @@ impl SequencerPersistence for Persistence {
                 file.write_all(&view.u64().to_le_bytes())?;
                 Ok(())
             },
-        )
+        )?;
+
+        if matches!(action, HotShotAction::Vote) {
+            let restart_view_path = &inner.restart_view_path();
+            let restart_view = view + 1;
+            inner.replace(
+                restart_view_path,
+                |mut file| {
+                    let mut bytes = vec![];
+                    file.read_to_end(&mut bytes)?;
+                    let bytes = bytes
+                        .try_into()
+                        .map_err(|bytes| anyhow!("malformed voted view file: {bytes:?}"))?;
+                    let saved_view = ViewNumber::new(u64::from_le_bytes(bytes));
+
+                    // Overwrite the file if the saved view is older than the new view.
+                    Ok(saved_view < restart_view)
+                },
+                |mut file| {
+                    file.write_all(&restart_view.u64().to_le_bytes())?;
+                    Ok(())
+                },
+            )?;
+        }
+        Ok(())
     }
 
     async fn append_quorum_proposal2(
