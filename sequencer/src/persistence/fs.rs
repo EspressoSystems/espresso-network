@@ -1783,26 +1783,6 @@ fn epoch_files(
 }
 
 #[cfg(test)]
-mod testing {
-    use tempfile::TempDir;
-
-    use super::{super::testing::TestablePersistence, *};
-
-    #[async_trait]
-    impl TestablePersistence for Persistence {
-        type Storage = TempDir;
-
-        async fn tmp_storage() -> Self::Storage {
-            TempDir::new().unwrap()
-        }
-
-        fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self> {
-            Options::new(storage.path().into())
-        }
-    }
-}
-
-#[cfg(test)]
 mod test {
     use std::marker::PhantomData;
 
@@ -1822,10 +1802,24 @@ mod test {
     use jf_vid::VidScheme;
     use sequencer_utils::test_utils::setup_test;
     use serde_json::json;
+    use tempfile::TempDir;
     use vbs::version::StaticVersionType;
 
     use super::*;
-    use crate::{persistence::testing::TestablePersistence, BLSPubKey};
+    use crate::{persistence::tests::TestablePersistence, BLSPubKey};
+
+    #[async_trait]
+    impl TestablePersistence for Persistence {
+        type Storage = TempDir;
+
+        async fn tmp_storage() -> Self::Storage {
+            TempDir::new().unwrap()
+        }
+
+        fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self> {
+            Options::new(storage.path().into())
+        }
+    }
 
     #[test]
     fn test_config_migrations_add_builder_urls() {

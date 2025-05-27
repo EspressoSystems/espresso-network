@@ -2437,7 +2437,8 @@ async fn fetch_leaf_from_proposals<Mode: TransactionMode>(
 mod testing {
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
 
-    use super::{super::testing::TestablePersistence, *};
+    use super::*;
+    use crate::persistence::tests::TestablePersistence;
 
     #[async_trait]
     impl TestablePersistence for Persistence {
@@ -2502,7 +2503,7 @@ mod test {
     use vbs::version::StaticVersionType;
 
     use super::*;
-    use crate::{persistence::testing::TestablePersistence, BLSPubKey, PubKey};
+    use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quorum_proposals_leaf_hash_migration() {

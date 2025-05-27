@@ -10,7 +10,6 @@
 
 use async_trait::async_trait;
 use espresso_types::v0_3::ChainConfig;
-use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 
 pub mod fs;
 pub mod no_storage;
@@ -21,39 +20,8 @@ pub trait ChainConfigPersistence: Sized + Send + Sync {
     async fn insert_chain_config(&mut self, chain_config: ChainConfig) -> anyhow::Result<()>;
 }
 
-#[cfg(any(test, feature = "testing"))]
-mod testing {
-
-    use espresso_types::{
-        traits::MembershipPersistence,
-        v0::traits::{PersistenceOptions, SequencerPersistence},
-    };
-
-    use super::*;
-    #[allow(dead_code)]
-    #[async_trait]
-    pub trait TestablePersistence: SequencerPersistence + MembershipPersistence {
-        type Storage: Sync;
-
-        async fn tmp_storage() -> Self::Storage;
-        fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self>;
-
-        async fn connect(storage: &Self::Storage) -> Self {
-            Self::options(storage).create().await.unwrap()
-        }
-    }
-
-    #[allow(dead_code)]
-    #[rstest_reuse::template]
-    #[rstest::rstest]
-    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
-    #[case(PhantomData::<crate::persistence::fs::Persistence>)]
-    #[tokio::test(flavor = "multi_thread")]
-    fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
-}
-
 #[cfg(test)]
-mod blah_tests {
+mod tests {
     use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 
     use alloy::{
@@ -63,13 +31,17 @@ mod blah_tests {
     };
     use anyhow::bail;
     use async_lock::{Mutex, RwLock};
+    use async_trait::async_trait;
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
         builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
         Contract, Contracts,
     };
     use espresso_types::{
-        traits::{EventConsumer, EventsPersistenceRead, NullEventConsumer, PersistenceOptions},
+        traits::{
+            EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
+            PersistenceOptions, SequencerPersistence,
+        },
         v0_3::{StakeTableFetcher, Validator},
         Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
         SequencerVersions, ValidatedState,
@@ -79,6 +51,7 @@ mod blah_tests {
         types::{BLSPubKey, SignatureKey},
         InitializerEpochInfo,
     };
+    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MockVersions};
     use hotshot_types::{
@@ -108,12 +81,10 @@ mod blah_tests {
     use sequencer_utils::test_utils::setup_test;
     use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
-    use testing::TestablePersistence;
     use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
-    use super::{testing::persistence_types, *};
     use crate::{
         api::{
             test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
@@ -123,6 +94,25 @@ mod blah_tests {
         testing::{staking_priv_keys, TestConfigBuilder},
         SequencerApiVersion, RECENT_STAKE_TABLES_LIMIT,
     };
+
+    #[async_trait]
+    pub trait TestablePersistence: SequencerPersistence + MembershipPersistence {
+        type Storage: Sync;
+
+        async fn tmp_storage() -> Self::Storage;
+        fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self>;
+
+        async fn connect(storage: &Self::Storage) -> Self {
+            Self::options(storage).create().await.unwrap()
+        }
+    }
+
+    #[rstest_reuse::template]
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::fs::Persistence>)]
+    #[tokio::test(flavor = "multi_thread")]
+    pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 
     #[derive(Clone, Debug, Default)]
     struct EventCollector {
@@ -1385,6 +1375,9 @@ mod blah_tests {
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
+        use espresso_types::v0_3::ChainConfig;
+        use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+
         setup_test();
 
         let blocks_per_epoch = 10;

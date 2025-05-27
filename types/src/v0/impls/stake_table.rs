@@ -162,8 +162,8 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 schnorrVk,
                 commission,
             }) => {
-                let stake_table_key: BLSPubKey = blsVk.clone().into();
-                let state_ver_key: SchnorrPubKey = schnorrVk.clone().into();
+                let stake_table_key: BLSPubKey = blsVk.into();
+                let state_ver_key: SchnorrPubKey = schnorrVk.into();
                 // The stake table contract enforces that each bls key is only used once.
                 if bls_keys.contains(&stake_table_key) {
                     bail!("bls key already used: {}", stake_table_key.to_string());
@@ -205,8 +205,8 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                     ..
                 } = event;
 
-                let stake_table_key: BLSPubKey = blsVK.clone().into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.clone().into();
+                let stake_table_key: BLSPubKey = blsVK.into();
+                let state_ver_key: SchnorrPubKey = schnorrVK.into();
                 // The stake table contract enforces that each bls key is only used once.
                 if bls_keys.contains(&stake_table_key) {
                     bail!("bls key already used: {}", stake_table_key.to_string());
@@ -300,8 +300,8 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 let validator = validators
                     .get_mut(&account)
                     .with_context(|| "validator {account:#x} not found")?;
-                let stake_table_key: BLSPubKey = blsVK.clone().into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.clone().into();
+                let stake_table_key: BLSPubKey = blsVK.into();
+                let state_ver_key: SchnorrPubKey = schnorrVK.into();
                 // The stake table contract enforces that each bls key is only used once.
                 if bls_keys.contains(&stake_table_key) {
                     bail!("bls key already used: {}", stake_table_key.to_string());
@@ -332,8 +332,8 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 } = update;
 
                 // The stake table contract enforces that each bls key is only used once.
-                let stake_table_key: BLSPubKey = blsVK.clone().into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.clone().into();
+                let stake_table_key: BLSPubKey = blsVK.into();
+                let state_ver_key: SchnorrPubKey = schnorrVK.into();
                 // The stake table contract enforces that each bls key is only used once.
                 if bls_keys.contains(&stake_table_key) {
                     bail!("bls key already used: {}", stake_table_key.to_string());
@@ -1628,8 +1628,8 @@ pub mod testing {
         fn from(value: &TestValidator) -> Self {
             Self {
                 account: value.account,
-                blsVK: value.bls_vk.clone(),
-                schnorrVK: value.schnorr_vk.clone(),
+                blsVK: value.bls_vk,
+                schnorrVK: value.schnorr_vk,
             }
         }
     }
