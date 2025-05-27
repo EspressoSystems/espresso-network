@@ -809,6 +809,7 @@ pub mod test_helpers {
         stream::StreamExt,
     };
     use hotshot::types::{Event, EventType};
+    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -956,6 +957,7 @@ pub mod test_helpers {
         pub async fn pos_hook<V: Versions>(
             self,
             delegation_config: DelegationConfig,
+            stake_table_version: StakeTableContractVersion,
         ) -> anyhow::Result<Self> {
             if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
                 && <V as Versions>::Base::VERSION < EpochVersion::VERSION
@@ -992,9 +994,12 @@ pub mod test_helpers {
                 .epoch_start_block(epoch_start_block)
                 .build()
                 .unwrap();
-            args.deploy_all(&mut contracts)
-                .await
-                .expect("failed to deploy all contracts");
+
+            match stake_table_version {
+                StakeTableContractVersion::V1 => args.deploy_stake_table_v1(&mut contracts).await,
+                StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+            }
+            .context("failed to deploy contracts")?;
 
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
@@ -3155,7 +3160,7 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config.clone())
-            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts)
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
             .await
             .expect("Pos Deployment")
             .build();
@@ -3254,7 +3259,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts)
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
             .await
             .unwrap()
             .build();
@@ -3346,7 +3351,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3465,7 +3470,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3578,7 +3583,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3789,7 +3794,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3866,7 +3871,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -4005,7 +4010,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();

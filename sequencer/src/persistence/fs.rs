@@ -1803,16 +1803,6 @@ mod testing {
 }
 
 #[cfg(test)]
-mod generic_tests {
-    use super::{super::persistence_tests, Persistence};
-    // For some reason this is the only way to import the macro defined in another module of this
-    // crate.
-    use crate::*;
-
-    instantiate_persistence_tests!(Persistence);
-}
-
-#[cfg(test)]
 mod test {
     use std::marker::PhantomData;
 

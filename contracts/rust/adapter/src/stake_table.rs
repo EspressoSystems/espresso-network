@@ -21,9 +21,10 @@ use crate::sol_types::{
     *,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum StakeTableContractVersion {
     V1,
+    #[default]
     V2,
 }
 
@@ -89,14 +90,14 @@ fn authenticate_schnorr_sig(
 
 fn authenticate_stake_table_validator_event(
     account: Address,
-    bls_vk: &G2PointSol,
-    schnorr_vk: &EdOnBN254PointSol,
-    bls_sig: &G1PointSol,
+    bls_vk: G2PointSol,
+    schnorr_vk: EdOnBN254PointSol,
+    bls_sig: G1PointSol,
     schnorr_sig: &[u8],
 ) -> Result<(), StakeTableSolError> {
     // TODO(alex): simplify this once jellyfish has `VerKey::from_affine()`
     let bls_vk = {
-        let bls_vk_inner: ark_bn254::G2Affine = bls_vk.clone().into();
+        let bls_vk_inner: ark_bn254::G2Affine = bls_vk.into();
         let bls_vk_inner = bls_vk_inner.into_group();
 
         // the two unwrap are safe since it's BLSPubKey is just a wrapper around G2Projective
@@ -106,7 +107,7 @@ fn authenticate_stake_table_validator_event(
     };
     let msg = account.abi_encode();
     let sig = {
-        let sigma_affine: ark_bn254::G1Affine = bls_sig.clone().into();
+        let sigma_affine: ark_bn254::G1Affine = bls_sig.into();
         BLSSignature {
             sigma: sigma_affine.into_group(),
         }
@@ -115,7 +116,7 @@ fn authenticate_stake_table_validator_event(
         return Err(StakeTableSolError::InvalidBlsSignature);
     }
 
-    let schnorr_vk: StateVerKey = schnorr_vk.clone().into();
+    let schnorr_vk: StateVerKey = schnorr_vk.into();
     authenticate_schnorr_sig(&schnorr_vk, account, schnorr_sig)?;
     Ok(())
 }
@@ -140,9 +141,9 @@ impl ValidatorRegisteredV2 {
     pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
-            &self.blsVK,
-            &self.schnorrVK,
-            &self.blsSig.clone().into(),
+            self.blsVK,
+            self.schnorrVK,
+            self.blsSig.into(),
             &self.schnorrSig,
         )?;
         Ok(())
@@ -154,9 +155,9 @@ impl ConsensusKeysUpdatedV2 {
     pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
-            &self.blsVK,
-            &self.schnorrVK,
-            &self.blsSig.clone().into(),
+            self.blsVK,
+            self.schnorrVK,
+            self.blsSig.into(),
             &self.schnorrSig,
         )?;
         Ok(())

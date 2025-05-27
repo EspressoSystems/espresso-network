@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 use espresso_types::v0_3::ChainConfig;
+use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 
 pub mod fs;
 pub mod no_storage;
@@ -41,11 +42,18 @@ mod testing {
             Self::options(storage).create().await.unwrap()
         }
     }
+
+    #[allow(dead_code)]
+    #[rstest_reuse::template]
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::fs::Persistence>)]
+    #[tokio::test(flavor = "multi_thread")]
+    fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 }
 
 #[cfg(test)]
-#[espresso_macros::generic_tests]
-mod persistence_tests {
+mod blah_tests {
     use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 
     use alloy::{
@@ -105,7 +113,7 @@ mod persistence_tests {
     use tokio::{spawn, time::sleep};
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
-    use super::*;
+    use super::{testing::persistence_types, *};
     use crate::{
         api::{
             test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
@@ -145,8 +153,8 @@ mod persistence_tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_voted_view<P: TestablePersistence>() {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_voted_view<P: TestablePersistence>(_p: PhantomData<P>) {
         setup_test();
 
         let tmp = P::tmp_storage().await;
@@ -188,8 +196,8 @@ mod persistence_tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_store_drb_input<P: TestablePersistence>() {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_store_drb_input<P: TestablePersistence>(_p: PhantomData<P>) {
         use hotshot_types::drb::DrbInput;
 
         setup_test();
@@ -235,8 +243,8 @@ mod persistence_tests {
         assert_eq!(storage.load_drb_input(10).await.unwrap(), drb_input_3);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_epoch_info<P: TestablePersistence>() {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_epoch_info<P: TestablePersistence>(_p: PhantomData<P>) {
         setup_test();
 
         let tmp = P::tmp_storage().await;
@@ -349,8 +357,8 @@ mod persistence_tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_append_and_decide<P: TestablePersistence>() {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_append_and_decide<P: TestablePersistence>(_p: PhantomData<P>) {
         setup_test();
 
         let tmp = P::tmp_storage().await;
@@ -730,8 +738,8 @@ mod persistence_tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_upgrade_certificate<P: TestablePersistence>() {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_upgrade_certificate<P: TestablePersistence>(_p: PhantomData<P>) {
         setup_test();
 
         let tmp = P::tmp_storage().await;
@@ -779,8 +787,8 @@ mod persistence_tests {
         assert_eq!(view_number, new_view_number_for_certificate);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_next_epoch_quorum_certificate<P: TestablePersistence>() {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_next_epoch_quorum_certificate<P: TestablePersistence>(_p: PhantomData<P>) {
         setup_test();
 
         let tmp = P::tmp_storage().await;
@@ -841,8 +849,10 @@ mod persistence_tests {
         assert_eq!(view_number, new_view_number_for_qc);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_decide_with_failing_event_consumer<P: TestablePersistence>() {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_decide_with_failing_event_consumer<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) {
         #[derive(Clone, Copy, Debug)]
         struct FailConsumer;
 
@@ -1060,8 +1070,8 @@ mod persistence_tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_pruning<P: TestablePersistence>() {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_pruning<P: TestablePersistence>(_p: PhantomData<P>) {
         setup_test();
 
         let tmp = P::tmp_storage().await;
@@ -1241,8 +1251,11 @@ mod persistence_tests {
 
     // test for validating stake table event fetching from persistence,
     // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
-    #[tokio::test(flavor = "multi_thread")]
+    #[rstest_reuse::apply(persistence_types)]
     pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
+        #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+        stake_table_version: StakeTableContractVersion,
+        _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
         setup_test();
 
@@ -1277,7 +1290,7 @@ mod persistence_tests {
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, stake_table_version)
             .await
             .expect("Pos deployment failed")
             .build();
@@ -1366,9 +1379,12 @@ mod persistence_tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_stake_table_background_fetching<P: TestablePersistence>() -> anyhow::Result<()>
-    {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stake_table_background_fetching<P: TestablePersistence>(
+        #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+        stake_table_version: StakeTableContractVersion,
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
         setup_test();
 
         let blocks_per_epoch = 10;
@@ -1408,16 +1424,19 @@ mod persistence_tests {
             .epoch_start_block(1)
             .build()
             .unwrap();
-        args.deploy_all(&mut contracts)
-            .await
-            .expect("failed to deploy all contracts");
+
+        match stake_table_version {
+            StakeTableContractVersion::V1 => args.deploy_stake_table_v1(&mut contracts).await,
+            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+        }
+        .expect("contracts deployed");
 
         let st_addr = contracts
             .address(Contract::StakeTableProxy)
-            .expect("StakeTableProxy address not found");
+            .expect("StakeTableProxy deployed");
         let token_addr = contracts
             .address(Contract::EspTokenProxy)
-            .expect("EspTokenProxy address not found");
+            .expect("EspTokenProxy deployed");
         let l1_url = network_config.l1_url().clone();
 
         // new block every 1s
@@ -1516,8 +1535,10 @@ mod persistence_tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_membership_persistence<P: TestablePersistence>() -> anyhow::Result<()> {
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_membership_persistence<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
         setup_test();
 
         let tmp = P::tmp_storage().await;
