@@ -27,6 +27,16 @@ jobs:
   slow-tests-sqlite:
     runs-on: ubuntu-latest
     steps:
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: true
+
       # These tests need the `anvil` binary provided by foundry
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -38,12 +48,8 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          shared-key: slow-test
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # NOTE: no rust cache, these tests are very slow anyway
+
 
       - name: Build slow test
         run: just nextest --features embedded-db --no-run
@@ -55,6 +61,16 @@ jobs:
   slow-tests-postgres:
     runs-on: ubuntu-latest
     steps:
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: true
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
@@ -65,12 +81,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          shared-key: slow-test
-          save-if: false
+      # NOTE: no rust cache, these tests are very slow anyway
 
       - name: Build slow test
         run: just nextest --no-run

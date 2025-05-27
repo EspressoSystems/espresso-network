@@ -15,6 +15,9 @@ use espresso_types::{
 };
 use futures::stream::StreamExt;
 use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
+    DhtPersistentStorage, SerializableRecord,
+};
 use hotshot_query_service::{
     availability::LeafQueryData,
     data_source::{
@@ -40,7 +43,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -1921,7 +1924,7 @@ impl SequencerPersistence for Persistence {
         tx.commit().await
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -1938,6 +1941,52 @@ impl SequencerPersistence for Persistence {
         )
         .await?;
         tx.commit().await
+    }
+
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
+        if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
+            if loaded_drb_input.iteration >= drb_input.iteration {
+                anyhow::bail!(
+                    "DrbInput in storage {:?} is more recent than {:?}, refusing to update",
+                    loaded_drb_input,
+                    drb_input
+                )
+            }
+        }
+
+        let drb_input_bytes = bincode::serialize(&drb_input)
+            .context("Failed to serialize DrbInput. This is not fatal, but should never happen.")?;
+
+        let mut tx = self.db.write().await?;
+
+        tx.upsert(
+            "drb",
+            ["epoch", "drb_input"],
+            ["epoch"],
+            [(drb_input.epoch as i64, drb_input_bytes)],
+        )
+        .await?;
+        tx.commit().await
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
+        let row = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(query("SELECT drb_input FROM drb WHERE epoch = $1").bind(epoch as i64))
+            .await?;
+
+        match row {
+            None => anyhow::bail!("No DrbInput for epoch {} in storage", epoch),
+            Some(row) => {
+                let drb_input_bytes: Vec<u8> = row.try_get("drb_input")?;
+                let drb_input = bincode::deserialize(&drb_input_bytes)
+                    .context("Failed to deserialize drb_input from storage")?;
+
+                Ok(drb_input)
+            },
+        }
     }
 
     async fn add_state_cert(
@@ -2233,6 +2282,62 @@ impl MembershipPersistence for Persistence {
                 events,
             ))
         }
+    }
+}
+
+#[async_trait]
+impl DhtPersistentStorage for Persistence {
+    /// Save the DHT to the database
+    ///
+    /// # Errors
+    /// - If we fail to serialize the records
+    /// - If we fail to write the serialized records to the DB
+    async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
+        // Bincode-serialize the records
+        let to_save =
+            bincode::serialize(&records).with_context(|| "failed to serialize records")?;
+
+        // Prepare the statement
+        let stmt = "INSERT INTO libp2p_dht (id, serialized_records) VALUES (0, $1) ON CONFLICT (id) DO UPDATE SET serialized_records = $1";
+
+        // Execute the query
+        let mut tx = self
+            .db
+            .write()
+            .await
+            .with_context(|| "failed to start an atomic DB transaction")?;
+        tx.execute(query(stmt).bind(to_save))
+            .await
+            .with_context(|| "failed to execute DB query")?;
+
+        // Commit the state
+        tx.commit().await.with_context(|| "failed to commit to DB")
+    }
+
+    /// Load the DHT from the database
+    ///
+    /// # Errors
+    /// - If we fail to read from the DB
+    /// - If we fail to deserialize the records
+    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
+        // Fetch the results from the DB
+        let result = self
+            .db
+            .read()
+            .await
+            .with_context(|| "failed to start a DB read transaction")?
+            .fetch_one("SELECT * FROM libp2p_dht where id = 0")
+            .await
+            .with_context(|| "failed to fetch from DB")?;
+
+        // Get the `serialized_records` row
+        let serialied_records: Vec<u8> = result.get("serialized_records");
+
+        // Deserialize it
+        let records: Vec<SerializableRecord> = bincode::deserialize(&serialied_records)
+            .with_context(|| "Failed to deserialize records")?;
+
+        Ok(records)
     }
 }
 

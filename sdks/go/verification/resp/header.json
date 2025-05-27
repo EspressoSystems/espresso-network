@@ -1,0 +1,40 @@
+{
+  "version": { "Version": { "major": 0, "minor": 3 } },
+  "fields": {
+    "chain_config": {
+      "chain_config": {
+        "Left": {
+          "chain_id": "912559",
+          "max_block_size": "1000000",
+          "base_fee": "1",
+          "fee_contract": "0x42835083fd1d3fc5d799b5f6815ae4bf2623e6d0",
+          "fee_recipient": "0x0000000000000000000000000000000000000000",
+          "stake_table_contract": "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
+        }
+      }
+    },
+    "height": 3207986,
+    "timestamp": 1745959394,
+    "l1_head": 8221861,
+    "l1_finalized": {
+      "number": 8221805,
+      "timestamp": "0x681136e0",
+      "hash": "0x46ed2e943f721f065f8ef587cdc4fb1dc0342ed17b3b1a3d19e15a3522c611a3"
+    },
+    "payload_commitment": "AvidMCommit~TbqFKauXuC8EGQ_Jek9yK-9X0oyeZrE2C49tdw-AhJwz",
+    "builder_commitment": "BUILDER_COMMITMENT~ybvEKT9QTgl_B_hxGosHWslRQRS0OLEHadxFxBoVMRSt",
+    "ns_table": { "bytes": "AQAAAGlyYXI0EwAA" },
+    "block_merkle_tree_root": "MERKLE_COMM~91n-_aFMbHXfyE2qO0uOK37bYr-m2N6bzw1K_EYi_lUgAAAAAAAAADLzMAAAAAAA4Q",
+    "fee_merkle_tree_root": "MERKLE_COMM~mw5p_OwBfBEcD3txEv2f_m9ZcPGxmIC6_MqesvPlS50UAAAAAAAAAAIAAAAAAAAA3w",
+    "fee_info": {
+      "account": "0x8c7d6cc949837fa57c1f70531c1e0e8ba3710a99",
+      "amount": "4916"
+    },
+    "builder_signature": {
+      "r": "0x921d1ffbae01a2a1cffc3913f9b644b8f974b90c08e157200de46cc50ad2c87c",
+      "s": "0xfcc64734df80fe13eded82c846b76f8e93345fbaecb867c2f4fe86d9d2d3850",
+      "v": 28
+    },
+    "reward_merkle_tree_root": "MERKLE_COMM~pswYpKtk2GwpbrtwPVyumyrfkx4_jwgWKNWKNJ1glPkUAAAAAAAAAF8AAAAAAAAACA"
+  }
+}

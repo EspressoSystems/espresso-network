@@ -403,9 +403,11 @@ async fn test_cli_balance() -> Result<()> {
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Mnemonic);
     let s = cmd.arg("token-balance").output()?.assert_success().utf8();
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    let balance = parts[8].split(".").next().unwrap().parse::<U256>()?;
 
     assert!(s.contains(&system.deployer_address.to_string()));
-    assert!(s.contains(" 10000000000.0"));
+    assert_eq!(balance, U256::from(3590000000u64));
 
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";

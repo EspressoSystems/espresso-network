@@ -18,13 +18,16 @@ use espresso_types::{
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
 use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
+    DhtPersistentStorage, SerializableRecord,
+};
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -179,6 +182,10 @@ impl Inner {
         self.path.join("da")
     }
 
+    fn drb_dir_path(&self) -> PathBuf {
+        self.path.join("drb")
+    }
+
     fn da2_dir_path(&self) -> PathBuf {
         self.path.join("da2")
     }
@@ -203,6 +210,9 @@ impl Inner {
         self.path.join("next_epoch_quorum_certificate")
     }
 
+    fn libp2p_dht_path(&self) -> PathBuf {
+        self.path.join("libp2p_dht")
+    }
     fn epoch_drb_result_dir_path(&self) -> PathBuf {
         self.path.join("epoch_drb_result")
     }
@@ -1241,6 +1251,45 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
+        if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
+            if loaded_drb_input.iteration >= drb_input.iteration {
+                anyhow::bail!(
+                    "DrbInput in storage {:?} is more recent than {:?}, refusing to update",
+                    loaded_drb_input,
+                    drb_input
+                )
+            }
+        }
+
+        let inner = self.inner.write().await;
+        let dir_path = inner.drb_dir_path();
+
+        fs::create_dir_all(dir_path.clone()).context("failed to create drb dir")?;
+
+        let drb_input_bytes =
+            bincode::serialize(&drb_input).context("failed to serialize drb_input")?;
+
+        let file_path = dir_path
+            .join(drb_input.epoch.to_string())
+            .with_extension("bin");
+        fs::write(&file_path, drb_input_bytes).context(format!(
+            "writing epoch drb_input file for epoch {:?} at {:?}",
+            drb_input.epoch, file_path
+        ))
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
+        let inner = self.inner.read().await;
+        let path = &inner.drb_dir_path();
+        let file_path = path.join(epoch.to_string()).with_extension("bin");
+        let bytes = fs::read(&file_path).context("read")?;
+        Ok(bincode::deserialize(&bytes).context(format!(
+            "failed to deserialize DrbInput for epoch {}",
+            epoch
+        ))?)
+    }
+
     async fn store_drb_result(
         &self,
         epoch: EpochNumber,
@@ -1260,7 +1309,7 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -1628,6 +1677,64 @@ impl MembershipPersistence for Persistence {
     }
 }
 
+#[async_trait]
+impl DhtPersistentStorage for Persistence {
+    /// Save the DHT to the file on disk
+    ///
+    /// # Errors
+    /// - If we fail to serialize the records
+    /// - If we fail to write the serialized records to the file
+    async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
+        // Bincode-serialize the records
+        let to_save =
+            bincode::serialize(&records).with_context(|| "failed to serialize records")?;
+
+        // Get the path to save the file to
+        let path = self.inner.read().await.libp2p_dht_path();
+
+        // Create the directory if it doesn't exist
+        fs::create_dir_all(path.parent().with_context(|| "directory had no parent")?)
+            .with_context(|| "failed to create directory")?;
+
+        // Get a write lock on the inner struct
+        let mut inner = self.inner.write().await;
+
+        // Save the file, replacing the previous one if it exists
+        inner
+            .replace(
+                &path,
+                |_| {
+                    // Always overwrite the previous file
+                    Ok(true)
+                },
+                |mut file| {
+                    file.write_all(&to_save)
+                        .with_context(|| "failed to write records to file")?;
+                    Ok(())
+                },
+            )
+            .with_context(|| "failed to save records to file")?;
+
+        Ok(())
+    }
+
+    /// Load the DHT from the file on disk
+    ///
+    /// # Errors
+    /// - If we fail to read the file
+    /// - If we fail to deserialize the records
+    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
+        // Read the contents of the file
+        let contents = std::fs::read(self.inner.read().await.libp2p_dht_path())
+            .with_context(|| "Failed to read records from file")?;
+
+        // Deserialize the contents
+        let records: Vec<SerializableRecord> =
+            bincode::deserialize(&contents).with_context(|| "Failed to deserialize records")?;
+
+        Ok(records)
+    }
+}
 /// Update a `NetworkConfig` that may have originally been persisted with an old version.
 fn migrate_network_config(
     mut network_config: serde_json::Value,

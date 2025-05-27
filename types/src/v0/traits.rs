@@ -11,13 +11,14 @@ use hotshot::{
     types::{BLSPubKey, EventType},
     HotShotInitializer, InitializerEpochInfo,
 };
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -422,7 +423,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 }
 
 #[async_trait]
-pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
+pub trait SequencerPersistence:
+    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage
+{
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
         self,
@@ -757,7 +760,9 @@ pub trait SequencerPersistence: Sized + Send + Sync + Clone + 'static {
         epoch: <SeqTypes as NodeType>::Epoch,
         drb_result: DrbResult,
     ) -> anyhow::Result<()>;
-    async fn add_epoch_root(
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
+    async fn store_epoch_root(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -877,12 +882,20 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).store_drb_result(epoch, drb_result).await
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
-        (**self).add_epoch_root(epoch, block_header).await
+        (**self).store_epoch_root(epoch, block_header).await
+    }
+
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
+        (**self).store_drb_input(drb_input).await
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
+        (**self).load_drb_input(epoch).await
     }
 
     async fn update_state_cert(

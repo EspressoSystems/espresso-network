@@ -131,6 +131,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+vid = { path = "../vid" }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]

@@ -57,6 +57,18 @@ pub type IncomingRequests<K> = NamedSemaphore<K>;
 /// A type alias for the list of tasks that are validating incoming responses
 pub type IncomingResponses = NamedSemaphore<()>;
 
+/// The type of request to make
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum RequestType {
+    /// A request that can be satisfied by a single participant,
+    /// and as such will be batched to a few participants at a time
+    /// until one succeeds
+    Batched,
+    /// A request that needs most or all participants to respond,
+    /// and as such will be broadcasted to all participants
+    Broadcast,
+}
+
 /// The errors that can occur when making a request for data
 #[derive(thiserror::Error, Debug)]
 pub enum RequestError {
@@ -130,7 +142,7 @@ pub struct RequestResponse<
 > {
     #[deref]
     /// The inner implementation of the request-response protocol
-    inner: Arc<RequestResponseInner<S, R, Req, RS, DS, K>>,
+    pub inner: Arc<RequestResponseInner<S, R, Req, RS, DS, K>>,
     /// A handle to the receiving task. This will automatically get cancelled when the protocol is dropped
     _receiving_task_handle: Arc<AbortOnDropHandle<()>>,
 }
@@ -230,7 +242,7 @@ pub struct RequestResponseInner<
     /// The sender to use for the protocol
     pub sender: S,
     /// The recipient source to use for the protocol
-    recipient_source: RS,
+    pub recipient_source: RS,
     /// The data source to use for the protocol
     data_source: DS,
     /// The map of currently active, outgoing requests
@@ -257,6 +269,8 @@ impl<
         self: &Arc<Self>,
         public_key: &K,
         private_key: &K::PrivateKey,
+        // The type of request to make
+        request_type: RequestType,
         // The estimated TTL of other participants. This is used to decide when to
         // stop making requests and sign a new one
         estimated_request_ttl: Duration,
@@ -283,6 +297,7 @@ impl<
             match self
                 .request(
                     request_message,
+                    request_type,
                     estimated_request_ttl,
                     response_validation_fn.clone(),
                 )
@@ -306,6 +321,7 @@ impl<
     pub async fn request<F, Fut, O>(
         self: &Arc<Self>,
         request_message: RequestMessage<Req, K>,
+        request_type: RequestType,
         timeout_duration: Duration,
         response_validation_fn: F,
     ) -> std::result::Result<O, RequestError>
@@ -365,19 +381,6 @@ impl<
                 }
             };
 
-            // Get the recipients that the request should expect responses from. Shuffle them so
-            // that we don't always send to the same recipients in the same order
-            let mut recipients = self
-                .recipient_source
-                .get_expected_responders(&request_message.request)
-                .await
-                .map_err(|e| {
-                    RequestError::InvalidRequest(anyhow::anyhow!(
-                        "failed to get expected responders for request: {e}"
-                    ))
-                })?;
-            recipients.shuffle(&mut rand::thread_rng());
-
             // Create a request message and serialize it
             let message = Bytes::from(
                 Message::Request(request_message.clone())
@@ -389,55 +392,96 @@ impl<
                     })?,
             );
 
-            // Get the current time so we can check when the timeout has elapsed
-            let start_time = Instant::now();
+            // Create a place to put the handle for the batched sending task. We need this because
+            // otherwise it gets dropped when the closure goes out of scope, instead of when the function
+            // gets cancelled or returns
+            let mut _batched_sending_task = None;
 
-            // Spawn a task that sends out requests to the network
-            let self_clone = Arc::clone(self);
-            let _handle = AbortOnDropHandle::new(spawn(async move {
-                // Create a bounded queue for the outgoing requests. We use this to make sure
-                // we have less than [`config.request_batch_size`] requests in flight at any time.
-                //
-                // When newer requests are added, older ones are removed from the queue. Because we use
-                // `AbortOnDropHandle`, the older ones will automatically get cancelled
-                let mut outgoing_requests =
-                    BoundedVecDeque::new(self_clone.config.request_batch_size);
+            // Match on the type of request
+            if request_type == RequestType::Broadcast {
+                trace!("Sending request {:?} to all participants", request_message,);
 
-                // While the timeout hasn't elapsed, send out requests to the network
-                while start_time.elapsed() < timeout_duration {
-                    // Send out requests to the network in their own separate tasks
-                    for recipient_batch in recipients.chunks(self_clone.config.request_batch_size) {
-                        for recipient in recipient_batch {
-                            // Clone ourselves, the message, and the recipient so they can be moved
-                            let self_clone = Arc::clone(&self_clone);
-                            let recipient_clone = recipient.clone();
-                            let message_clone = Arc::clone(&message);
-                            let request_message_clone = request_message.clone();
+                // If the message is a broadcast request, just send it to all participants
+                self.sender
+                    .send_broadcast_message(&message)
+                    .await
+                    .map_err(|e| {
+                        RequestError::Other(anyhow::anyhow!(
+                            "failed to send broadcast message: {e}"
+                        ))
+                    })?;
+            } else {
+                // If the message is a batched request, we need to batch it with other requests
 
-                            // Spawn the task that sends the request to the participant
-                            let individual_sending_task = spawn(async move {
-                                trace!(
-                                    "Sending request {:?} to {:?}",
-                                    request_message_clone,
-                                    recipient_clone
-                                );
+                // Get the recipients that the request should expect responses from. Shuffle them so
+                // that we don't always send to the same recipients in the same order
+                let mut recipients = self
+                    .recipient_source
+                    .get_expected_responders(&request_message.request)
+                    .await
+                    .map_err(|e| {
+                        RequestError::InvalidRequest(anyhow::anyhow!(
+                            "failed to get expected responders for request: {e}"
+                        ))
+                    })?;
+                recipients.shuffle(&mut rand::thread_rng());
 
-                                let _ = self_clone
-                                    .sender
-                                    .send_message(&message_clone, recipient_clone)
-                                    .await;
-                            });
+                // Get the current time so we can check when the timeout has elapsed
+                let start_time = Instant::now();
 
-                            // Add the sending task to the queue
-                            outgoing_requests.push(AbortOnDropHandle::new(individual_sending_task));
+                // Spawn a task that sends out requests to the network
+                let self_clone = Arc::clone(self);
+                let batched_sending_handle = AbortOnDropHandle::new(spawn(async move {
+                    // Create a bounded queue for the outgoing requests. We use this to make sure
+                    // we have less than [`config.request_batch_size`] requests in flight at any time.
+                    //
+                    // When newer requests are added, older ones are removed from the queue. Because we use
+                    // `AbortOnDropHandle`, the older ones will automatically get cancelled
+                    let mut outgoing_requests =
+                        BoundedVecDeque::new(self_clone.config.request_batch_size);
+
+                    // While the timeout hasn't elapsed, send out requests to the network
+                    while start_time.elapsed() < timeout_duration {
+                        // Send out requests to the network in their own separate tasks
+                        for recipient_batch in
+                            recipients.chunks(self_clone.config.request_batch_size)
+                        {
+                            for recipient in recipient_batch {
+                                // Clone ourselves, the message, and the recipient so they can be moved
+                                let self_clone = Arc::clone(&self_clone);
+                                let request_message_clone = request_message.clone();
+                                let recipient_clone = recipient.clone();
+                                let message_clone = Arc::clone(&message);
+
+                                // Spawn the task that sends the request to the participant
+                                let individual_sending_task = spawn(async move {
+                                    trace!(
+                                        "Sending request {:?} to {:?}",
+                                        request_message_clone,
+                                        recipient_clone
+                                    );
+
+                                    let _ = self_clone
+                                        .sender
+                                        .send_direct_message(&message_clone, recipient_clone)
+                                        .await;
+                                });
+
+                                // Add the sending task to the queue
+                                outgoing_requests
+                                    .push(AbortOnDropHandle::new(individual_sending_task));
+                            }
+
+                            // After we send the batch out, wait the [`config.request_batch_interval`]
+                            // before sending the next one
+                            sleep(self_clone.config.request_batch_interval).await;
                         }
-
-                        // After we send the batch out, wait the [`config.request_batch_interval`]
-                        // before sending the next one
-                        sleep(self_clone.config.request_batch_interval).await;
                     }
-                }
-            }));
+                }));
+
+                // Store the handle so it doesn't get dropped
+                _batched_sending_task = Some(batched_sending_handle);
+            }
 
             // Wait for a response on the channel
             request
@@ -569,7 +613,7 @@ impl<
                 // Send the response to the requester
                 self_clone
                     .sender
-                    .send_message(&response, request_message.public_key)
+                    .send_direct_message(&response, request_message.public_key)
                     .await
                     .with_context(|| "failed to send response to requester")?;
 
@@ -628,7 +672,7 @@ impl<
                 {
                     Ok(validation_result) => validation_result,
                     Err(e) => {
-                        warn!("Received invalid response: {e:#}");
+                        debug!("Received invalid response: {e:#}");
                         return;
                     },
                 };
@@ -745,7 +789,7 @@ mod tests {
     /// An implementation of the [`Sender`] trait for the [`TestSender`] type
     #[async_trait]
     impl Sender<BLSPubKey> for TestSender {
-        async fn send_message(&self, message: &Bytes, recipient: BLSPubKey) -> Result<()> {
+        async fn send_direct_message(&self, message: &Bytes, recipient: BLSPubKey) -> Result<()> {
             self.network
                 .get(&recipient)
                 .ok_or(anyhow::anyhow!("recipient not found"))?
@@ -753,6 +797,16 @@ mod tests {
                 .await
                 .map_err(|_| anyhow::anyhow!("failed to send message"))?;
 
+            Ok(())
+        }
+
+        async fn send_broadcast_message(&self, message: &Bytes) -> Result<()> {
+            for sender in self.network.values() {
+                sender
+                    .send(Arc::clone(message))
+                    .await
+                    .map_err(|_| anyhow::anyhow!("failed to send message"))?;
+            }
             Ok(())
         }
     }
@@ -952,6 +1006,7 @@ mod tests {
                 let response = protocol
                     .request(
                         request,
+                        RequestType::Batched,
                         config.request_timeout,
                         |_request, response| async move { Ok(response) },
                     )
@@ -1088,6 +1143,7 @@ mod tests {
                     .0
                     .request(
                         request_message,
+                        RequestType::Batched,
                         Duration::from_secs(20),
                         |_request, response| async move { Ok(response) },
                     )

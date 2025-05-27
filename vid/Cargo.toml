@@ -41,7 +41,7 @@ name = "recovery"
 harness = false
 
 [features]
-default = ["parallel"]
+default = ["parallel", "keccak256"]
 parallel = ["ark-ff/parallel", "jf-utils/parallel", "p3-maybe-rayon/parallel"]
 print-trace = ["ark-std/print-trace"]
 sha256 = []

@@ -3703,6 +3703,7 @@ dependencies = [
  "hotshot",
  "hotshot-contract-adapter",
  "hotshot-example-types",
+ "hotshot-libp2p-networking",
  "hotshot-query-service",
  "hotshot-types",
  "indexmap 2.9.0",
@@ -4740,24 +4741,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-fakeapi"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-lock 3.4.0",
- "async-trait",
- "futures",
- "hotshot-example-types",
- "hotshot-types",
- "rand 0.8.5",
- "tide-disco",
- "tokio",
- "toml",
- "vbs",
- "workspace-hack",
-]
-
-[[package]]
 name = "hotshot-libp2p-networking"
 version = "0.1.0"
 dependencies = [
@@ -4978,7 +4961,6 @@ dependencies = [
  "hotshot",
  "hotshot-builder-api",
  "hotshot-example-types",
- "hotshot-fakeapi",
  "hotshot-macros",
  "hotshot-task",
  "hotshot-task-impls",
@@ -9215,6 +9197,7 @@ dependencies = [
  "vbs",
  "vec1",
  "vergen",
+ "vid",
 ]
 
 [[package]]
