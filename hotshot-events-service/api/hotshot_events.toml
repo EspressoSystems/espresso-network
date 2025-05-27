@@ -30,7 +30,7 @@ FORMAT_VERSION = "0.1.0"
 PATH = ["events"]
 METHOD = "SOCKET"
 DOC = """
-Get hotshot events starting now.
+Get legacy hotshot events starting now.
 """
 
 [route.startup_info]

@@ -5,7 +5,7 @@ use committable::{Commitment, Committable};
 use espresso_types::{
     traits::{SequencerPersistence, StateCatchup},
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
-    v0_99::ChainConfig,
+    v0_3::ChainConfig,
     BackoffParams, BlockMerkleTree, EpochVersion, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
 };
@@ -13,11 +13,12 @@ use hotshot::traits::NodeImplementation;
 use hotshot_types::{
     data::ViewNumber,
     message::UpgradeLock,
+    stake_table::HSStakeTable,
     traits::{network::ConnectedNetwork, node_implementation::Versions},
     utils::verify_leaf_chain,
-    PeerConfig,
 };
 use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
+use request_response::RequestType;
 use tokio::time::timeout;
 
 use crate::request_response::{
@@ -37,7 +38,7 @@ impl<
         &self,
         _retry: usize,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Timeout after a few batches
@@ -188,10 +189,8 @@ impl<
         // Wait for the protocol to send us the accounts
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::Accounts(height, *view, accounts),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -205,7 +204,7 @@ impl<
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         tracing::info!("Fetching leaf for height: {height}");
@@ -240,10 +239,8 @@ impl<
         // Wait for the protocol to send us the accounts
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::Leaf(height),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -280,10 +277,8 @@ impl<
         // Wait for the protocol to send us the chain config
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::ChainConfig(commitment),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -339,10 +334,8 @@ impl<
         // Wait for the protocol to send us the blocks frontier
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::BlocksFrontier(height, *view),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -398,10 +391,8 @@ impl<
         // Wait for the protocol to send us the reward accounts
         let response = self
             .request_indefinitely(
-                &self.public_key,
-                &self.private_key,
-                self.config.incoming_request_ttl,
                 Request::RewardAccounts(height, *view, accounts),
+                RequestType::Batched,
                 response_validation_fn,
             )
             .await

@@ -23,27 +23,66 @@ pub type NsAvidMParam = super::AvidMParam;
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, Eq, PartialEq, Default)]
 pub struct NsAvidMShare {
     /// Index number of the given share.
-    index: u32,
+    pub(crate) index: u32,
     /// The list of all namespace commitments
-    ns_commits: Vec<AvidMCommit>,
+    pub(crate) ns_commits: Vec<AvidMCommit>,
     /// The size of each namespace
-    ns_lens: Vec<usize>,
+    pub(crate) ns_lens: Vec<usize>,
     /// Actual share content
-    content: Vec<RawAvidMShare>,
+    pub(crate) content: Vec<RawAvidMShare>,
 }
 
 impl NsAvidMShare {
-    fn inner_ns_share(&self, ns_id: usize) -> AvidMShare {
-        AvidMShare {
-            index: self.index,
-            payload_byte_len: self.ns_lens[ns_id],
-            content: self.content[ns_id].clone(),
+    /// Return the number of namespaces.
+    /// WARN: it assume that the share is well formed, i.e. `ns_commits`, `ns_lens`, and `content` have the same length.
+    pub fn num_nss(&self) -> usize {
+        self.ns_commits.len()
+    }
+
+    /// Return the inner share for a given namespace if there exists one.
+    pub fn inner_ns_share(&self, ns_index: usize) -> Option<AvidMShare> {
+        if ns_index >= self.ns_lens.len() || ns_index >= self.content.len() {
+            return None;
         }
+        Some(AvidMShare {
+            index: self.index,
+            payload_byte_len: self.ns_lens[ns_index],
+            content: self.content[ns_index].clone(),
+        })
     }
 
     /// Return the length of underlying payload in bytes
     pub fn payload_byte_len(&self) -> usize {
         self.ns_lens.iter().sum()
+    }
+
+    /// Peek if the share contains a given namespace.
+    pub fn contains_ns(&self, ns_index: usize) -> bool {
+        self.ns_commits.len() > ns_index
+            && self.ns_lens.len() > ns_index
+            && self.content.len() > ns_index
+    }
+
+    /// Return the list of namespace commitments.
+    pub fn ns_commits(&self) -> &[AvidMCommit] {
+        &self.ns_commits
+    }
+
+    /// Return the list of namespace byte lengths.
+    pub fn ns_lens(&self) -> &[usize] {
+        &self.ns_lens
+    }
+
+    /// Return the commitment for a given namespace.
+    /// WARN: will panic if `ns_index` is out of bound.
+    pub fn ns_commit(&self, ns_index: usize) -> &AvidMCommit {
+        &self.ns_commits[ns_index]
+    }
+
+    /// Return the byte length of a given namespace.
+    /// WARN: will panic if `ns_index` is out of bound.
+    pub fn ns_len(&self, ns_index: usize) -> usize {
+        self.ns_lens[ns_index]
     }
 }
 
@@ -156,18 +195,18 @@ impl NsAvidMScheme {
             return Err(VidError::InsufficientShares);
         }
         let mut result = vec![];
-        for ns_id in 0..shares[0].ns_lens.len() {
-            result.append(&mut Self::ns_recover(param, ns_id, shares)?)
+        for ns_index in 0..shares[0].ns_lens.len() {
+            result.append(&mut Self::ns_recover(param, ns_index, shares)?)
         }
         Ok(result)
     }
 
     /// Recover the payload for a given namespace.
     /// Given namespace ID should be valid for all shares, i.e. `ns_commits` and `content` have
-    /// at least `ns_id` elements for all shares.
+    /// at least `ns_index` elements for all shares.
     pub fn ns_recover(
         param: &NsAvidMParam,
-        ns_id: usize,
+        ns_index: usize,
         shares: &[NsAvidMShare],
     ) -> VidResult<Vec<u8>> {
         if shares.is_empty() {
@@ -175,14 +214,14 @@ impl NsAvidMScheme {
         }
         if shares
             .iter()
-            .any(|share| ns_id >= share.ns_lens.len() || ns_id >= share.content.len())
+            .any(|share| ns_index >= share.ns_lens.len() || ns_index >= share.content.len())
         {
             return Err(VidError::IndexOutOfBound);
         }
-        let ns_commit = shares[0].ns_commits[ns_id];
+        let ns_commit = shares[0].ns_commits[ns_index];
         let shares: Vec<_> = shares
             .iter()
-            .map(|share| share.inner_ns_share(ns_id))
+            .filter_map(|share| share.inner_ns_share(ns_index))
             .collect();
         AvidMScheme::recover(param, &ns_commit, &shares)
     }

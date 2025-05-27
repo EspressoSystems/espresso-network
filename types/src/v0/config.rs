@@ -73,6 +73,12 @@ pub struct PublicHotShotConfig {
     stop_voting_time: u64,
     epoch_height: u64,
     epoch_start_block: u64,
+    #[serde(default = "default_stake_table_capacity")]
+    stake_table_capacity: usize,
+}
+
+fn default_stake_table_capacity() -> usize {
+    hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY
 }
 
 impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
@@ -103,6 +109,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stop_voting_time,
             epoch_height,
             epoch_start_block,
+            stake_table_capacity,
         } = v;
 
         Self {
@@ -128,6 +135,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stop_voting_time,
             epoch_height,
             epoch_start_block,
+            stake_table_capacity,
         }
     }
 }
@@ -157,6 +165,7 @@ impl PublicHotShotConfig {
             stop_voting_time: self.stop_voting_time,
             epoch_height: self.epoch_height,
             epoch_start_block: self.epoch_start_block,
+            stake_table_capacity: self.stake_table_capacity,
         }
     }
 
@@ -265,5 +274,85 @@ impl PublicNetworkConfig {
 
     pub fn hotshot_config(&self) -> PublicHotShotConfig {
         self.config.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PublicNetworkConfig;
+
+    #[test]
+    fn test_deserialize_from_old_config() {
+        // pulled from decaf node
+        let json_str = r#"
+        {
+  "rounds": 100,
+  "indexed_da": false,
+  "transactions_per_round": 10,
+  "manual_start_password": "*****",
+  "num_bootrap": 5,
+  "next_view_timeout": 10,
+  "view_sync_timeout": {
+    "secs": 2,
+    "nanos": 0
+  },
+  "builder_timeout": {
+    "secs": 10,
+    "nanos": 0
+  },
+  "data_request_delay": {
+    "secs": 2,
+    "nanos": 500000000
+  },
+  "node_index": 1,
+  "seed": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  "transaction_size": 100,
+  "key_type_name": "jf_signature::bls_over_bn254::VerKey",
+  "libp2p_config": {
+    "bootstrap_nodes": []
+  },
+  "config": {
+    "start_threshold": [100, 100],
+    "num_nodes_with_stake": 100,
+    "known_nodes_with_stake": [],
+    "known_da_nodes": [],
+    "da_staked_committee_size": 100,
+    "fixed_leader_for_gpuvid": 1,
+    "next_view_timeout": 12000,
+    "view_sync_timeout": {
+      "secs": 1,
+      "nanos": 0
+    },
+    "num_bootstrap": 5,
+    "builder_timeout": {
+      "secs": 8,
+      "nanos": 0
+    },
+    "data_request_delay": {
+      "secs": 5,
+      "nanos": 0
+    },
+    "builder_urls": [
+      "https://builder.decaf.testnet.espresso.network/"
+    ],
+    "start_proposing_view": 0,
+    "stop_proposing_view": 0,
+    "start_voting_view": 0,
+    "stop_voting_view": 0,
+    "start_proposing_time": 0,
+    "stop_proposing_time": 0,
+    "start_voting_time": 0,
+    "stop_voting_time": 0,
+    "epoch_height": 3000,
+    "epoch_start_block": 3160636
+  },
+  "cdn_marshal_address": null,
+  "combined_network_config": null,
+  "commit_sha": "",
+  "builder": "Simple",
+  "random_builder": null
+}
+        "#;
+        let _public_config: PublicNetworkConfig = serde_json::from_str(json_str).unwrap();
     }
 }

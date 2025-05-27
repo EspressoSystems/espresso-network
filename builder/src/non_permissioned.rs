@@ -4,7 +4,9 @@ use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::StakeTableFetcher, v0_99::ChainConfig,
+    eth_signature_key::EthKeyPair,
+    v0_1::NoStorage,
+    v0_3::{ChainConfig, StakeTableFetcher},
     EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
 };
 use hotshot::traits::BlockPayload;
@@ -60,6 +62,7 @@ pub fn build_instance_state<V: Versions>(
         l1_client.clone(),
         chain_config,
     );
+
     let coordinator = EpochMembershipCoordinator::new(
         Arc::new(RwLock::new(EpochCommittees::new_stake(
             vec![],
@@ -67,6 +70,7 @@ pub fn build_instance_state<V: Versions>(
             fetcher,
         ))),
         100,
+        &Arc::new(sequencer::persistence::no_storage::NoStorage),
     );
 
     NodeState::new(
@@ -236,7 +240,6 @@ impl BuilderConfig {
 
 #[cfg(test)]
 mod test {
-    use alloy::node_bindings::Anvil;
     use espresso_types::MockSequencerVersions;
     use futures::StreamExt;
     use portpicker::pick_unused_port;
@@ -246,7 +249,7 @@ mod test {
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
             Options,
         },
-        persistence::{self},
+        persistence,
         testing::TestConfigBuilder,
     };
     use sequencer_utils::test_utils::setup_test;
@@ -271,10 +274,7 @@ mod test {
         let builder_port = pick_unused_port().expect("No ports free");
         let builder_api_url: Url = format!("http://localhost:{builder_port}").parse().unwrap();
 
-        // Set up and start the network
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let network_config = TestConfigBuilder::default().l1_url(l1).build();
+        let network_config = TestConfigBuilder::default().build();
 
         let tmpdir = TempDir::new().unwrap();
 

@@ -10,6 +10,7 @@ use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duratio
 use alloy::primitives::U256;
 use bincode::Options;
 use displaydoc::Display;
+use stake_table::HSStakeTable;
 use tracing::error;
 use traits::{
     node_implementation::NodeType,
@@ -170,21 +171,6 @@ impl<TYPES: NodeType> Default for PeerConfig<TYPES> {
     }
 }
 
-pub struct StakeTableEntries<TYPES: NodeType>(
-    pub Vec<<<TYPES as NodeType>::SignatureKey as SignatureKey>::StakeTableEntry>,
-);
-
-impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for StakeTableEntries<TYPES> {
-    fn from(peers: Vec<PeerConfig<TYPES>>) -> Self {
-        Self(
-            peers
-                .into_iter()
-                .map(|peer| peer.stake_table_entry)
-                .collect::<Vec<_>>(),
-        )
-    }
-}
-
 /// Holds configuration for a `HotShot`
 #[derive(Clone, derive_more::Debug, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
@@ -236,10 +222,17 @@ pub struct HotShotConfig<TYPES: NodeType> {
     /// Epoch start block   
     #[serde(default = "default_epoch_start_block")]
     pub epoch_start_block: u64,
+    /// Stake table capacity for light client use
+    #[serde(default = "default_stake_table_capacity")]
+    pub stake_table_capacity: usize,
 }
 
 fn default_epoch_start_block() -> u64 {
     1
+}
+
+fn default_stake_table_capacity() -> usize {
+    crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY
 }
 
 impl<TYPES: NodeType> HotShotConfig<TYPES> {
@@ -253,5 +246,10 @@ impl<TYPES: NodeType> HotShotConfig<TYPES> {
         self.stop_proposing_time = u64::MAX;
         self.start_voting_time = 0;
         self.stop_voting_time = u64::MAX;
+    }
+
+    /// Return the `known_nodes_with_stake` as a `HSStakeTable`
+    pub fn hotshot_stake_table(&self) -> HSStakeTable<TYPES> {
+        self.known_nodes_with_stake.clone().into()
     }
 }

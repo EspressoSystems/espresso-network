@@ -7,7 +7,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
@@ -74,7 +73,7 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
     pub id: u64,
 
     /// This node's storage ref
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES, V>,
@@ -179,19 +178,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     debug!("We were not chosen for consensus committee for view {view_number} in epoch {epoch_number:?}")
                 );
                 let total_weight =
-                    vid_total_weight::<TYPES>(membership.stake_table().await, epoch_number);
-
-                let mut next_epoch_total_weight = total_weight;
-                if epoch_number.is_some() {
-                    next_epoch_total_weight = vid_total_weight::<TYPES>(
-                        membership
-                            .next_epoch_stake_table()
-                            .await?
-                            .stake_table()
-                            .await,
-                        epoch_number.map(|epoch| epoch + 1),
-                    );
-                }
+                    vid_total_weight::<TYPES>(&membership.stake_table().await, epoch_number);
 
                 let version = self.upgrade_lock.version_infallible(view_number).await;
 
@@ -211,7 +198,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                     .upgrade_lock
                     .epochs_enabled(proposal.data.view_number())
                     .await
+                    && epoch_number.is_some()
                 {
+                    let next_epoch_total_weight = vid_total_weight::<TYPES>(
+                        &membership
+                            .next_epoch_stake_table()
+                            .await?
+                            .stake_table()
+                            .await,
+                        epoch_number.map(|epoch| epoch + 1),
+                    );
+
                     let commit_result = spawn_blocking(move || {
                         vid_commitment::<V>(
                             &txns_clone,
@@ -227,8 +224,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 };
 
                 self.storage
-                    .write()
-                    .await
                     .append_da2(proposal, payload_commitment)
                     .await
                     .wrap()

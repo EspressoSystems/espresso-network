@@ -6,9 +6,23 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::traits::node_implementation::{ConsensusTime, NodeType};
+use crate::traits::{
+    node_implementation::{ConsensusTime, NodeType},
+    storage::{LoadDrbProgressFn, StoreDrbProgressFn},
+};
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrbInput {
+    /// The epoch we are calculating the result for
+    pub epoch: u64,
+    /// The iteration this seed is from. For fresh calculations, this should be `0`.
+    pub iteration: u64,
+    /// the value of the drb calculation at the current iteration
+    pub value: [u8; 32],
+}
 
 // TODO: Add the following consts once we bench the hash time.
 // <https://github.com/EspressoSystems/HotShot/issues/3880>
@@ -21,7 +35,10 @@ use crate::traits::node_implementation::{ConsensusTime, NodeType};
 // the hash time.
 // <https://github.com/EspressoSystems/HotShot/issues/3880>
 /// Arbitrary number of times the hash function will be repeatedly called.
-const DIFFICULTY_LEVEL: u64 = 10;
+pub const DIFFICULTY_LEVEL: u64 = 10;
+
+/// Interval at which to store the results
+pub const DRB_CHECKPOINT_INTERVAL: u64 = 3;
 
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
@@ -55,12 +72,66 @@ pub fn difficulty_level() -> u64 {
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
 #[must_use]
-pub fn compute_drb_result<TYPES: NodeType>(drb_seed_input: DrbSeedInput) -> DrbResult {
-    let mut hash = drb_seed_input.to_vec();
-    for _iter in 0..DIFFICULTY_LEVEL {
-        // TODO: This may be optimized to avoid memcopies after we bench the hash time.
-        // <https://github.com/EspressoSystems/HotShot/issues/3880>
+pub async fn compute_drb_result(
+    drb_input: DrbInput,
+    store_drb_progress: StoreDrbProgressFn,
+    load_drb_progress: LoadDrbProgressFn,
+) -> DrbResult {
+    let mut drb_input = drb_input;
+
+    if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
+        if loaded_drb_input.iteration >= drb_input.iteration {
+            drb_input = loaded_drb_input;
+        }
+    }
+
+    let mut hash = drb_input.value.to_vec();
+    let mut iteration = drb_input.iteration;
+    let remaining_iterations = DIFFICULTY_LEVEL
+      .checked_sub(iteration)
+      .unwrap_or_else(||
+        panic!(
+          "DRB difficulty level {} exceeds the iteration {} of the input we were given. This is a fatal error", 
+          DIFFICULTY_LEVEL,
+          iteration
+        )
+      );
+
+    let final_checkpoint = remaining_iterations / DRB_CHECKPOINT_INTERVAL;
+
+    // loop up to, but not including, the `final_checkpoint`
+    for _ in 0..final_checkpoint {
+        for _ in 0..DRB_CHECKPOINT_INTERVAL {
+            // TODO: This may be optimized to avoid memcopies after we bench the hash time.
+            // <https://github.com/EspressoSystems/HotShot/issues/3880>
+            hash = Sha256::digest(hash).to_vec();
+        }
+
+        let mut partial_drb_result = [0u8; 32];
+        partial_drb_result.copy_from_slice(&hash);
+
+        iteration += DRB_CHECKPOINT_INTERVAL;
+
+        let updated_drb_input = DrbInput {
+            epoch: drb_input.epoch,
+            iteration,
+            value: partial_drb_result,
+        };
+
+        let store_drb_progress = store_drb_progress.clone();
+        tokio::spawn(async move {
+            if let Err(e) = store_drb_progress(updated_drb_input).await {
+                tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+            }
+        });
+    }
+
+    let final_checkpoint_iteration = iteration;
+
+    // perform the remaining iterations
+    for _ in final_checkpoint_iteration..DIFFICULTY_LEVEL {
         hash = Sha256::digest(hash).to_vec();
+        iteration += 1;
     }
 
     // Convert the hash to the DRB result.
@@ -228,5 +299,63 @@ pub mod election {
         stake_table_hash: [u8; 32],
         /// DRB result
         drb: [u8; 32],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use alloy::primitives::U256;
+    use rand::RngCore;
+    use sha2::{Digest, Sha256};
+
+    use super::election::{generate_stake_cdf, select_randomized_leader};
+    use crate::{
+        signature_key::BLSPubKey,
+        stake_table::StakeTableEntry,
+        traits::signature_key::{BuilderSignatureKey, StakeTableEntryType},
+    };
+
+    #[test]
+    fn test_randomized_leader() {
+        let mut rng = rand::thread_rng();
+        // use an arbitrary Sha256 output.
+        let drb: [u8; 32] = Sha256::digest(b"drb").into();
+        // a stake table with 10 nodes, each with a stake of 1-100
+        let stake_table_entries: Vec<_> = (0..10)
+            .map(|i| StakeTableEntry {
+                stake_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0,
+                stake_amount: U256::from(rng.next_u64() % 100 + 1),
+            })
+            .collect();
+        let randomized_committee = generate_stake_cdf(stake_table_entries.clone(), drb);
+
+        // Number of views to test
+        let num_views = 100000;
+        let mut selected = HashMap::<_, u64>::new();
+        // Test the leader election for 100000 views.
+        for i in 0..num_views {
+            let leader = select_randomized_leader(&randomized_committee, i);
+            *selected.entry(leader).or_insert(0) += 1;
+        }
+
+        // Total variation distance
+        let mut tvd = 0.;
+        let total_stakes = stake_table_entries
+            .iter()
+            .map(|e| e.stake())
+            .sum::<U256>()
+            .to::<u64>() as f64;
+        for entry in stake_table_entries {
+            let expected = entry.stake().to::<u64>() as f64 / total_stakes;
+            let actual = *selected.get(&entry).unwrap_or(&0) as f64 / num_views as f64;
+            tvd += (expected - actual).abs();
+        }
+
+        // sanity check
+        assert!(tvd >= 0.0);
+        // Allow a small margin of error
+        assert!(tvd < 0.03);
     }
 }

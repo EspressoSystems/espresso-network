@@ -7,19 +7,18 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use alloy::primitives::U256;
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
-use either::Either;
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewChangeEvidence2},
-    drb::{DrbResult, DrbSeedInput},
+    drb::{DrbInput, DrbResult, DrbSeedInput},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
     message::{Proposal, UpgradeLock},
@@ -29,12 +28,13 @@ use hotshot_types::{
         QuorumCertificate2, UpgradeCertificate,
     },
     simple_vote::HasEpoch,
+    stake_table::StakeTableEntries,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
-        storage::Storage,
+        storage::{load_drb_progress_fn, store_drb_progress_fn, Storage},
         BlockPayload, ValidatedState,
     },
     utils::{
@@ -42,7 +42,6 @@ use hotshot_types::{
         option_epoch_from_block_number, Terminator, View, ViewInner,
     },
     vote::{Certificate, HasViewNumber},
-    StakeTableEntries,
 };
 use hotshot_utils::anytrace::*;
 use tokio::time::timeout;
@@ -154,20 +153,15 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
 pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership: &Arc<RwLock<TYPES::Membership>>,
     epoch: TYPES::Epoch,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
     drb_result: DrbResult,
 ) {
     let mut consensus_writer = consensus.write().await;
     consensus_writer.drb_results.store_result(epoch, drb_result);
     drop(consensus_writer);
-    tracing::debug!("Calling add_drb_result for epoch {epoch}");
-    if let Err(e) = storage
-        .write()
-        .await
-        .add_drb_result(epoch, drb_result)
-        .await
-    {
+    tracing::debug!("Calling store_drb_result for epoch {epoch}");
+    if let Err(e) = storage.store_drb_result(epoch, drb_result).await {
         tracing::error!("Failed to store drb result for epoch {epoch}: {e}");
     }
 
@@ -178,18 +172,26 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     seed: DrbSeedInput,
     epoch: TYPES::Epoch,
     membership: &Arc<RwLock<TYPES::Membership>>,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
 ) {
     let membership = membership.clone();
     let storage = storage.clone();
+    let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
+    let load_drb_progress_fn = load_drb_progress_fn(storage.clone());
     let consensus = consensus.clone();
+    let drb_input = DrbInput {
+        epoch: *epoch,
+        iteration: 0,
+        value: seed,
+    };
     tokio::spawn(async move {
-        let drb_result = tokio::task::spawn_blocking(move || {
-            hotshot_types::drb::compute_drb_result::<TYPES>(seed)
-        })
-        .await
-        .unwrap();
+        let drb_result = hotshot_types::drb::compute_drb_result(
+            drb_input,
+            store_drb_progress_fn,
+            load_drb_progress_fn,
+        )
+        .await;
 
         handle_drb_result::<TYPES, I>(&membership, epoch, &storage, &consensus, drb_result).await;
         drb_result
@@ -200,7 +202,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     decided_leaf: &Leaf2<TYPES>,
     epoch_height: u64,
     membership: &Arc<RwLock<TYPES::Membership>>,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
 ) {
     let decided_block_number = decided_leaf.block_header().block_number();
@@ -212,9 +214,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
         let mut start = Instant::now();
         if let Err(e) = storage
-            .write()
-            .await
-            .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
+            .store_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
             .await
         {
             tracing::error!("Failed to store epoch root for epoch {next_epoch_number}: {e}");
@@ -312,7 +312,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
     membership: &EpochMembershipCoordinator<TYPES>,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let mut res = LeafChainTraversalOutcome::default();
     let consensus_reader = consensus.read().await;
@@ -321,7 +321,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
 
     // If we don't have the proposals parent return early
     let Some(parent_info) = consensus_reader
-        .parent_leaf_info(&proposed_leaf, public_key, membership)
+        .parent_leaf_info(&proposed_leaf, public_key)
         .await
     else {
         return res;
@@ -329,7 +329,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     // Get the parents parent and check if it's consecutive in view to the parent, if so we can decided
     // the grandparents view.  If not we're done.
     let Some(grand_parent_info) = consensus_reader
-        .parent_leaf_info(&parent_info.leaf, public_key, membership)
+        .parent_leaf_info(&parent_info.leaf, public_key)
         .await
     else {
         return res;
@@ -380,7 +380,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         }
 
         current_leaf_info = consensus_reader
-            .parent_leaf_info(&info.leaf, public_key, membership)
+            .parent_leaf_info(&info.leaf, public_key)
             .await;
         res.leaf_views.push(info.clone());
     }
@@ -454,7 +454,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
     membership: &Arc<RwLock<TYPES::Membership>>,
-    storage: &Arc<RwLock<I::Storage>>,
+    storage: &I::Storage,
     epoch_height: u64,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let consensus_reader = consensus.read().await;
@@ -686,8 +686,6 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         );
         if let Err(e) = validation_info
             .storage
-            .write()
-            .await
             .update_high_qc2(justify_qc.clone())
             .await
         {
@@ -703,8 +701,6 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
             };
             if let Err(e) = validation_info
                 .storage
-                .write()
-                .await
                 .update_state_cert(state_cert.clone())
                 .await
             {
@@ -719,8 +715,6 @@ pub(crate) async fn update_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>
         if let Some(ref next_epoch_justify_qc) = maybe_next_epoch_justify_qc {
             if let Err(e) = validation_info
                 .storage
-                .write()
-                .await
                 .update_next_epoch_high_qc2(next_epoch_justify_qc.clone())
                 .await
             {
@@ -1122,64 +1116,6 @@ pub async fn broadcast_event<E: Clone + std::fmt::Debug>(event: E, sender: &Send
     }
 }
 
-/// Gets the next epoch QC corresponding to this epoch QC from the shared consensus state;
-/// if it's not yet available, waits for it with a given timeout.
-pub async fn wait_for_next_epoch_qc<TYPES: NodeType>(
-    high_qc: &QuorumCertificate2<TYPES>,
-    consensus: &OuterConsensus<TYPES>,
-    timeout: u64,
-    view_start_time: Instant,
-    receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
-) -> Result<NextEpochQuorumCertificate2<TYPES>> {
-    tracing::debug!("getting the next epoch QC");
-    if let Some(next_epoch_qc) = consensus.read().await.next_epoch_high_qc() {
-        if next_epoch_qc.data.leaf_commit == high_qc.data.leaf_commit {
-            // We have it already, no reason to wait
-            return Ok(next_epoch_qc.clone());
-        }
-    };
-
-    let wait_duration = Duration::from_millis(timeout / 2);
-
-    // TODO configure timeout
-    let Some(time_spent) = Instant::now().checked_duration_since(view_start_time) else {
-        // Shouldn't be possible, now must be after the start
-        return Err(warn!(
-            "Now is earlier than the view start time. Shouldn't be possible."
-        ));
-    };
-    let Some(time_left) = wait_duration.checked_sub(time_spent) else {
-        // No time left
-        return Err(warn!("Run out of time waiting for the next epoch QC."));
-    };
-    let receiver = receiver.clone();
-    let Ok(Some(event)) = tokio::time::timeout(time_left, async move {
-        let this_epoch_high_qc = high_qc.clone();
-        EventDependency::new(
-            receiver,
-            Box::new(move |event| {
-                let event = event.as_ref();
-                if let HotShotEvent::NextEpochQc2Formed(Either::Left(qc)) = event {
-                    qc.data.leaf_commit == this_epoch_high_qc.data.leaf_commit
-                } else {
-                    false
-                }
-            }),
-        )
-        .completed()
-        .await
-    })
-    .await
-    else {
-        return Err(warn!("Error while waiting for the next epoch QC."));
-    };
-    let HotShotEvent::NextEpochQc2Formed(Either::Left(next_epoch_qc)) = event.as_ref() else {
-        // this shouldn't happen
-        return Err(warn!("Received event is not NextEpochQc2Formed but we checked it earlier. Shouldn't be possible."));
-    };
-    Ok(next_epoch_qc.clone())
-}
-
 /// Validates qc's signatures and, if provided, validates next_epoch_qc's signatures and whether it
 /// corresponds to the provided high_qc.
 pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
@@ -1191,25 +1127,22 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
     epoch_height: u64,
 ) -> Result<()> {
     let mut epoch_membership = membership_coordinator
-        .membership_for_epoch(qc.data.epoch)
+        .stake_table_for_epoch(qc.data.epoch)
         .await?;
 
     let membership_stake_table = epoch_membership.stake_table().await;
     let membership_success_threshold = epoch_membership.success_threshold().await;
 
-    {
-        let consensus_reader = consensus.read().await;
-        qc.is_valid_cert(
+    if let Err(e) = qc
+        .is_valid_cert(
             &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
             membership_success_threshold,
             upgrade_lock,
         )
         .await
-        .context(|e| {
-            consensus_reader.metrics.invalid_qc.update(1);
-
-            warn!("Invalid certificate: {e}")
-        })?;
+    {
+        consensus.read().await.metrics.invalid_qc.update(1);
+        return Err(warn!("Invalid certificate: {e}"));
     }
 
     if upgrade_lock.epochs_enabled(qc.view_number()).await {
@@ -1317,8 +1250,6 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
     da_cert: &DaCertificate2<TYPES>,
     consensus: &OuterConsensus<TYPES>,
-    timeout: u64,
-    view_start_time: Instant,
     receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<Proposal<TYPES, VidDisperseShare<TYPES>>> {
     tracing::debug!("getting the second VID share for epoch {:?}", target_epoch);
@@ -1341,42 +1272,26 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         }
     }
 
-    let wait_duration = Duration::from_millis(timeout / 2);
-
-    // TODO configure timeout
-    let Some(time_spent) = Instant::now().checked_duration_since(view_start_time) else {
-        // Shouldn't be possible, now must be after the start
-        return Err(warn!(
-            "Now is earlier than the view start time. Shouldn't be possible."
-        ));
-    };
-    let Some(time_left) = wait_duration.checked_sub(time_spent) else {
-        // No time left
-        return Err(warn!("Run out of time waiting for the second VID share."));
-    };
     let receiver = receiver.clone();
-    let Ok(Some(event)) = tokio::time::timeout(time_left, async move {
-        let da_cert_clone = da_cert.clone();
-        EventDependency::new(
-            receiver,
-            Box::new(move |event| {
-                let event = event.as_ref();
-                if let HotShotEvent::VidShareValidated(second_vid_share) = event {
-                    if target_epoch == da_cert_clone.epoch() {
-                        second_vid_share.data.payload_commitment()
-                            == da_cert_clone.data().payload_commit
-                    } else {
-                        Some(second_vid_share.data.payload_commitment())
-                            == da_cert_clone.data().next_epoch_payload_commit
-                    }
+    let da_cert_clone = da_cert.clone();
+    let Some(event) = EventDependency::new(
+        receiver,
+        Box::new(move |event| {
+            let event = event.as_ref();
+            if let HotShotEvent::VidShareValidated(second_vid_share) = event {
+                if target_epoch == da_cert_clone.epoch() {
+                    second_vid_share.data.payload_commitment()
+                        == da_cert_clone.data().payload_commit
                 } else {
-                    false
+                    Some(second_vid_share.data.payload_commitment())
+                        == da_cert_clone.data().next_epoch_payload_commit
                 }
-            }),
-        )
-        .completed()
-        .await
-    })
+            } else {
+                false
+            }
+        }),
+    )
+    .completed()
     .await
     else {
         return Err(warn!("Error while waiting for the second VID share."));
@@ -1386,4 +1301,28 @@ pub async fn wait_for_second_vid_share<TYPES: NodeType>(
         return Err(warn!("Received event is not VidShareValidated but we checked it earlier. Shouldn't be possible."));
     };
     Ok(second_vid_share.clone())
+}
+
+pub async fn broadcast_view_change<TYPES: NodeType>(
+    sender: &Sender<Arc<HotShotEvent<TYPES>>>,
+    new_view_number: TYPES::View,
+    epoch: Option<TYPES::Epoch>,
+    first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+) {
+    let mut broadcast_epoch = epoch;
+    if let Some((first_epoch_view, first_epoch)) = first_epoch {
+        if new_view_number == first_epoch_view && broadcast_epoch != Some(first_epoch) {
+            broadcast_epoch = Some(first_epoch);
+        }
+    }
+    tracing::trace!(
+        "Sending ViewChange for view {} and epoch {:?}",
+        new_view_number,
+        broadcast_epoch
+    );
+    broadcast_event(
+        Arc::new(HotShotEvent::ViewChange(new_view_number, broadcast_epoch)),
+        sender,
+    )
+    .await
 }

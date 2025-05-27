@@ -10,7 +10,7 @@ use alloy::primitives::{
 use anyhow::Result;
 use rand::{rngs::StdRng, SeedableRng as _};
 use sequencer_utils::test_utils::setup_test;
-use staking_cli::{deploy::Signer, *};
+use staking_cli::{demo::DelegationConfig, deploy::Signer, *};
 
 use crate::deploy::TestSystem;
 
@@ -198,7 +198,7 @@ async fn test_cli_register_validator() -> Result<()> {
         .arg("--state-private-key")
         .arg(
             system
-                .schnorr_key_pair
+                .state_key_pair
                 .sign_key()
                 .to_tagged_base64()?
                 .to_string(),
@@ -216,7 +216,7 @@ async fn test_cli_update_consensus_keys() -> Result<()> {
     system.register_validator().await?;
 
     let mut rng = StdRng::from_seed([43u8; 32]);
-    let (new_bls, new_schnorr) = TestSystem::gen_consensus_keys(&mut rng);
+    let (_, new_bls, new_state) = TestSystem::gen_keys(&mut rng);
 
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Mnemonic);
@@ -224,7 +224,7 @@ async fn test_cli_update_consensus_keys() -> Result<()> {
         .arg("--consensus-private-key")
         .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
         .arg("--state-private-key")
-        .arg(new_schnorr.sign_key().to_tagged_base64()?.to_string())
+        .arg(new_state.sign_key().to_tagged_base64()?.to_string())
         .output()?
         .assert_success();
     Ok(())
@@ -346,6 +346,35 @@ async fn test_cli_stake_for_demo_three_validators() -> Result<()> {
     Ok(())
 }
 
+async fn stake_for_demo_delegation_config_helper(config: DelegationConfig) -> Result<()> {
+    setup_test();
+    let system = TestSystem::deploy().await?;
+
+    let mut cmd = base_cmd();
+    system.args(&mut cmd, Signer::Mnemonic);
+    cmd.arg("stake-for-demo")
+        .arg("--delegation-config")
+        .arg(config.to_string())
+        .output()?
+        .assert_success();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cli_stake_for_demo_delegation_config_equal_amounts() -> Result<()> {
+    stake_for_demo_delegation_config_helper(DelegationConfig::EqualAmounts).await
+}
+
+#[tokio::test]
+async fn test_cli_stake_for_demo_delegation_config_variable_amounts() -> Result<()> {
+    stake_for_demo_delegation_config_helper(DelegationConfig::VariableAmounts).await
+}
+
+#[tokio::test]
+async fn test_cli_stake_for_demo_delegation_config_multiple_delegators() -> Result<()> {
+    stake_for_demo_delegation_config_helper(DelegationConfig::MultipleDelegators).await
+}
+
 #[tokio::test]
 async fn test_cli_approve() -> Result<()> {
     setup_test();
@@ -374,9 +403,11 @@ async fn test_cli_balance() -> Result<()> {
     let mut cmd = base_cmd();
     system.args(&mut cmd, Signer::Mnemonic);
     let s = cmd.arg("token-balance").output()?.assert_success().utf8();
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    let balance = parts[8].split(".").next().unwrap().parse::<U256>()?;
 
     assert!(s.contains(&system.deployer_address.to_string()));
-    assert!(s.contains(" 10000000000.0"));
+    assert_eq!(balance, U256::from(3590000000u64));
 
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";

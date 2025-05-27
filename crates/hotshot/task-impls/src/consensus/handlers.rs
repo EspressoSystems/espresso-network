@@ -6,7 +6,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use async_broadcast::{Receiver, Sender};
+use async_broadcast::Sender;
 use chrono::Utc;
 use hotshot_types::{
     event::{Event, EventType},
@@ -25,10 +25,7 @@ use super::ConsensusTaskState;
 use crate::{
     consensus::Versions,
     events::HotShotEvent,
-    helpers::{
-        broadcast_event, check_qc_state_cert_correspondence, validate_qc_and_next_epoch_qc,
-        wait_for_next_epoch_qc,
-    },
+    helpers::{broadcast_event, check_qc_state_cert_correspondence},
     vote_collection::{handle_epoch_root_vote, handle_vote},
 };
 
@@ -47,7 +44,7 @@ pub(crate) async fn handle_quorum_vote_recv<
         .consensus
         .read()
         .await
-        .is_high_qc_for_last_block();
+        .is_high_qc_for_epoch_transition();
     let epoch_membership = task_state
         .membership_coordinator
         .membership_for_epoch(vote.data.epoch)
@@ -220,7 +217,6 @@ pub(crate) async fn handle_timeout_vote_recv<
 pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TYPES>>(
     new_view_number: TYPES::View,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
 ) -> Result<()> {
     let version = task_state.upgrade_lock.version(new_view_number).await?;
@@ -247,17 +243,18 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
     drop(consensus_reader);
 
     if is_eqc {
-        let next_epoch_high_qc = wait_for_next_epoch_qc(
-            &high_qc,
-            &task_state.consensus,
-            task_state.timeout,
-            task_state.view_start_time,
-            receiver,
-        )
-        .await
-        .context(warn!(
+        let maybe_next_epoch_high_qc = task_state
+            .consensus
+            .read()
+            .await
+            .next_epoch_high_qc()
+            .cloned();
+        ensure!(
+            maybe_next_epoch_high_qc
+                .as_ref()
+                .is_some_and(|neqc| neqc.data.leaf_commit == high_qc.data.leaf_commit),
             "We've seen an extended QC but we don't have a corresponding next epoch extended QC"
-        ))?;
+        );
 
         tracing::debug!(
             "Broadcasting Extended QC for view {:?} and epoch {:?}, my id {:?}.",
@@ -268,7 +265,7 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
         broadcast_event(
             Arc::new(HotShotEvent::ExtendedQcSend(
                 high_qc,
-                next_epoch_high_qc,
+                maybe_next_epoch_high_qc.unwrap(),
                 task_state.public_key.clone(),
             )),
             sender,
@@ -292,28 +289,14 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
             else {
                 bail!("We don't have a transition QC");
             };
-            validate_qc_and_next_epoch_qc(
-                &high_qc,
-                Some(&next_epoch_qc),
-                &task_state.consensus,
-                &task_state.membership_coordinator,
-                &task_state.upgrade_lock,
-                task_state.epoch_height,
-            )
-            .await?;
+            ensure!(
+                next_epoch_qc.data.leaf_commit == qc.data.leaf_commit,
+                "Transition QC is invalid because leaf commits are not equal."
+            );
             (qc, Some(next_epoch_qc))
         } else {
             (high_qc, None)
         };
-        validate_qc_and_next_epoch_qc(
-            &high_qc,
-            maybe_next_epoch_qc.as_ref(),
-            &task_state.consensus,
-            &task_state.membership_coordinator,
-            &task_state.upgrade_lock,
-            task_state.epoch_height,
-        )
-        .await?;
 
         if is_epoch_root {
             // For epoch root QC, we are sending high QC and state cert
@@ -373,7 +356,6 @@ pub(crate) async fn handle_view_change<
     new_view_number: TYPES::View,
     epoch_number: Option<TYPES::Epoch>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
     task_state: &mut ConsensusTaskState<TYPES, I, V>,
 ) -> Result<()> {
     if epoch_number > task_state.cur_epoch {
@@ -398,7 +380,7 @@ pub(crate) async fn handle_view_change<
 
     // Send our high qc to the next leader immediately upon finishing a view.
     // Part of HotStuff 2
-    let _ = send_high_qc(new_view_number, sender, receiver, task_state)
+    let _ = send_high_qc(new_view_number, sender, task_state)
         .await
         .inspect_err(|e| {
             tracing::debug!("High QC sending failed with error: {e:?}");

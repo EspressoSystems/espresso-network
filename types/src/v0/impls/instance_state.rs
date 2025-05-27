@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
+use anyhow::bail;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -10,21 +11,19 @@ use hotshot_types::{
     HotShotConfig,
 };
 use indexmap::IndexMap;
-use sequencer_utils::ser::FromStringOrInteger;
-use time::OffsetDateTime;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
 use vbs::version::Version;
 
 use super::{
     state::ValidatedState,
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
-    SeqTypes, TimeBasedUpgrade, UpgradeType, ViewBasedUpgrade,
+    SeqTypes, UpgradeType, ViewBasedUpgrade,
 };
 use crate::v0::{
-    traits::StateCatchup, v0_99::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
+    traits::StateCatchup, v0_3::ChainConfig, GenesisHeader, L1BlockInfo, L1Client, Timestamp,
     Upgrade, UpgradeMode,
 };
 #[cfg(any(test, feature = "testing"))]
@@ -36,7 +35,7 @@ use crate::EpochCommittees;
 #[derive(derive_more::Debug, Clone)]
 pub struct NodeState {
     pub node_id: u64,
-    pub chain_config: crate::v0_99::ChainConfig,
+    pub chain_config: ChainConfig,
     pub l1_client: L1Client,
     #[debug("{}", state_catchup.name())]
     pub state_catchup: Arc<dyn StateCatchup>,
@@ -88,13 +87,20 @@ impl MembershipPersistence for NoStorage {
 
     async fn store_events(
         &self,
-        _l1_block: u64,
+        _l1_finalized: u64,
         _events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
-        Ok(None)
+
+    async fn load_events(
+        &self,
+        _l1_block: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
+        bail!("unimplemented")
     }
 }
 
@@ -127,6 +133,7 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
@@ -141,7 +148,8 @@ impl NodeState {
             StakeTableFetcher::mock(),
         )));
 
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
         Self::new(
             0,
             chain_config,
@@ -154,6 +162,7 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v2() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
@@ -167,7 +176,8 @@ impl NodeState {
             vec![],
             StakeTableFetcher::mock(),
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             0,
@@ -181,6 +191,7 @@ impl NodeState {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn mock_v3() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
@@ -193,39 +204,14 @@ impl NodeState {
             StakeTableFetcher::mock(),
         )));
 
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
         Self::new(
             0,
             ChainConfig::default(),
             l1,
             mock::MockStateCatchup::default(),
             StaticVersion::<0, 3>::version(),
-            coordinator,
-        )
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn mock_v99() -> Self {
-        use vbs::version::StaticVersion;
-
-        use crate::v0_3::StakeTableFetcher;
-        let chain_config = ChainConfig::default();
-        let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
-            .expect("Failed to create L1 client");
-
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
-            vec![],
-            vec![],
-            StakeTableFetcher::mock(),
-        )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
-
-        Self::new(
-            0,
-            chain_config,
-            l1,
-            Arc::new(mock::MockStateCatchup::default()),
-            StaticVersion::<0, 99>::version(),
             coordinator,
         )
     }
@@ -285,9 +271,11 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 #[cfg(any(test, feature = "testing"))]
 impl Default for NodeState {
     fn default() -> Self {
+        use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
 
         use crate::v0_3::StakeTableFetcher;
+
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
@@ -297,7 +285,8 @@ impl Default for NodeState {
             vec![],
             StakeTableFetcher::mock(),
         )));
-        let coordinator = EpochMembershipCoordinator::new(membership, 100);
+        let storage = TestStorage::default();
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             1u64,
@@ -357,26 +346,6 @@ impl Upgrade {
         let upgrade_type = UpgradeType::Epoch { chain_config };
         Upgrade { mode, upgrade_type }
     }
-
-    pub fn marketplace_time_based() -> Upgrade {
-        let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
-        let mode = UpgradeMode::Time(TimeBasedUpgrade {
-            start_proposing_time: Timestamp::from_integer(now).unwrap(),
-            stop_proposing_time: Timestamp::from_integer(now + 500).unwrap(),
-            start_voting_time: None,
-            stop_voting_time: None,
-        });
-
-        let upgrade_type = UpgradeType::Marketplace {
-            chain_config: ChainConfig {
-                max_block_size: 400.into(),
-                base_fee: 2.into(),
-                bid_recipient: Some(Default::default()),
-                ..Default::default()
-            },
-        };
-        Upgrade { mode, upgrade_type }
-    }
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -387,7 +356,7 @@ pub mod mock {
     use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
-    use hotshot_types::{data::ViewNumber, PeerConfig};
+    use hotshot_types::{data::ViewNumber, stake_table::HSStakeTable};
     use jf_merkle_tree::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
     use super::*;
@@ -418,7 +387,7 @@ pub mod mock {
             &self,
             _retry: usize,
             _height: u64,
-            _stake_table: Vec<PeerConfig<SeqTypes>>,
+            _stake_table: HSStakeTable<SeqTypes>,
             _success_threshold: U256,
         ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))

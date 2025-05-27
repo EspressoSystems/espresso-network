@@ -46,8 +46,8 @@ use vbs::version::StaticVersionType;
 use crate::{
     genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
     ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, EpochMembershipCoordinator,
-    HotShotConfig, HotShotInitializer, MarketplaceConfig, NetworkTaskRegistry, SignatureKey,
-    StateSignatureKey, SystemContext, Versions,
+    HotShotConfig, HotShotInitializer, NetworkTaskRegistry, SignatureKey, StateSignatureKey,
+    SystemContext, Versions,
 };
 
 /// event for global event stream
@@ -198,7 +198,7 @@ pub fn add_network_event_task<
         view: TYPES::View::genesis(),
         epoch: genesis_epoch_from_version::<V, TYPES>(),
         membership_coordinator: handle.membership_coordinator.clone(),
-        storage: Arc::clone(&handle.storage()),
+        storage: handle.storage(),
         consensus: OuterConsensus::new(handle.consensus()),
         upgrade_lock: handle.hotshot.upgrade_lock.clone(),
         transmit_tasks: BTreeMap::new(),
@@ -220,7 +220,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     handle.add_task(ViewSyncTaskState::<TYPES, V>::create_from(handle).await);
     handle.add_task(VidTaskState::<TYPES, I, V>::create_from(handle).await);
     handle.add_task(DaTaskState::<TYPES, I, V>::create_from(handle).await);
-    handle.add_task(TransactionTaskState::<TYPES, I, V>::create_from(handle).await);
+    handle.add_task(TransactionTaskState::<TYPES, V>::create_from(handle).await);
 
     {
         let mut upgrade_certificate_lock = handle
@@ -332,7 +332,6 @@ where
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
         storage: I::Storage,
-        marketplace_config: MarketplaceConfig<TYPES, I>,
     ) -> SystemContextHandle<TYPES, I, V> {
         let epoch_height = config.epoch_height;
 
@@ -346,8 +345,7 @@ where
             network,
             initializer,
             metrics,
-            storage,
-            marketplace_config,
+            storage.clone(),
         )
         .await;
         let consensus_registry = ConsensusTaskRegistry::new();
@@ -362,7 +360,7 @@ where
             output_event_stream: output_event_stream.clone(),
             internal_event_stream: internal_event_stream.clone(),
             hotshot: Arc::clone(&hotshot),
-            storage: Arc::clone(&hotshot.storage),
+            storage,
             network: Arc::clone(&hotshot.network),
             membership_coordinator: memberships.clone(),
             epoch_height,

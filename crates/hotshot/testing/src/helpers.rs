@@ -18,7 +18,6 @@ use hotshot::{
     HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
-    auction_results_provider_types::TestAuctionResultsProvider,
     block_types::TestTransaction,
     node_types::TestTypes,
     state_types::{TestInstanceState, TestValidatedState},
@@ -32,6 +31,7 @@ use hotshot_types::{
     message::{Proposal, UpgradeLock},
     simple_certificate::DaCertificate2,
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
+    stake_table::StakeTableEntries,
     traits::{
         election::Membership,
         node_implementation::{NodeType, Versions},
@@ -39,7 +39,7 @@ use hotshot_types::{
     },
     utils::{option_epoch_from_block_number, View, ViewInner},
     vote::{Certificate, HasViewNumber, Vote},
-    StakeTableEntries, ValidatorConfig,
+    ValidatorConfig,
 };
 use serde::Serialize;
 use vbs::version::Version;
@@ -56,11 +56,7 @@ pub type TestNodeKeyMap = BTreeMap<
 /// if cannot create a [`HotShotInitializer`]
 pub async fn build_system_handle<
     TYPES: NodeType<InstanceState = TestInstanceState>,
-    I: NodeImplementation<
-            TYPES,
-            Storage = TestStorage<TYPES>,
-            AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
-        > + TestableNodeImplementation<TYPES>,
+    I: NodeImplementation<TYPES, Storage = TestStorage<TYPES>> + TestableNodeImplementation<TYPES>,
     V: Versions,
 >(
     node_id: u64,
@@ -83,11 +79,7 @@ pub async fn build_system_handle<
 /// if cannot create a [`HotShotInitializer`]
 pub async fn build_system_handle_from_launcher<
     TYPES: NodeType<InstanceState = TestInstanceState>,
-    I: NodeImplementation<
-            TYPES,
-            Storage = TestStorage<TYPES>,
-            AuctionResultsProvider = TestAuctionResultsProvider<TYPES>,
-        > + TestableNodeImplementation<TYPES>,
+    I: NodeImplementation<TYPES, Storage = TestStorage<TYPES>> + TestableNodeImplementation<TYPES>,
     V: Versions,
 >(
     node_id: u64,
@@ -100,7 +92,6 @@ pub async fn build_system_handle_from_launcher<
 ) {
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
     let storage = (launcher.resource_generators.storage)(node_id);
-    let marketplace_config = (launcher.resource_generators.marketplace_config)(node_id);
     let hotshot_config = (launcher.resource_generators.hotshot_config)(node_id);
 
     let initializer = HotShotInitializer::<TYPES>::from_genesis::<V>(
@@ -127,7 +118,8 @@ pub async fn build_system_handle_from_launcher<
         hotshot_config.known_da_nodes.clone(),
     )));
 
-    let coordinator = EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height);
+    let coordinator =
+        EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height, &storage);
     let node_key_map = launcher.metadata.build_node_key_map();
 
     let (c, s, r) = SystemContext::init(
@@ -141,7 +133,6 @@ pub async fn build_system_handle_from_launcher<
         initializer,
         ConsensusMetricsValue::default(),
         storage,
-        marketplace_config,
     )
     .await
     .expect("Could not init hotshot");

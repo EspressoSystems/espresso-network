@@ -9,7 +9,7 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::{Address, Bytes, U256},
-    providers::{DynProvider, Provider, ProviderBuilder, WalletProvider},
+    providers::{Provider, ProviderBuilder, WalletProvider},
     signers::{
         k256::ecdsa::SigningKey,
         local::{coins_bip39::English, LocalSigner, MnemonicBuilder},
@@ -18,15 +18,21 @@ use alloy::{
 use anyhow::Context;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
+use espresso_contract_deployer::{
+    self as deployer, network_config::light_client_genesis_from_stake_table, Contract, Contracts,
+    DeployedContracts, HttpProviderWithWallet,
+};
 use espresso_types::{
-    parse_duration, v0_99::ChainConfig, EpochVersion, SequencerVersions, ValidatedState,
+    parse_duration, v0_3::ChainConfig, EpochVersion, L1ClientOptions, SeqTypes, SequencerVersions,
+    ValidatedState,
 };
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
-use hotshot_state_prover::service::{
-    light_client_genesis_from_stake_table, run_prover_service, StateProverConfig,
+use hotshot_state_prover::service::{run_prover_service, StateProverConfig};
+use hotshot_types::{
+    stake_table::{one_honest_threshold, HSStakeTable},
+    utils::epoch_from_block_number,
 };
-use hotshot_types::{light_client::one_honest_threshold, utils::epoch_from_block_number};
 use itertools::izip;
 use portpicker::pick_unused_port;
 use sequencer::{
@@ -39,12 +45,9 @@ use sequencer::{
     testing::TestConfigBuilder,
     SequencerApiVersion,
 };
-use sequencer_utils::{
-    deployer::{self, Contract, Contracts, DeployedContracts},
-    logging, HttpProviderWithWallet,
-};
+use sequencer_utils::logging;
 use serde::{Deserialize, Serialize};
-use staking_cli::demo::stake_in_contract_for_test;
+use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
 use tempfile::NamedTempFile;
 use tide_disco::{error::ServerError, method::ReadState, Api, Error as _, StatusCode};
 use tokio::spawn;
@@ -74,15 +77,8 @@ struct Args {
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_L1_PROVIDER")]
     rpc_url: Option<Url>,
 
-    /// Request rate when polling L1.
-    #[clap(
-        short,
-        long,
-        env = "ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL",
-        default_value = "200ms",
-        value_parser = parse_duration
-    )]
-    l1_interval: Duration,
+    #[clap(flatten)]
+    l1_opt: L1ClientOptions,
 
     /// Mnemonic for an L1 wallet.
     ///
@@ -205,6 +201,18 @@ struct Args {
     #[clap(long, env = "ESPRESSO_DEV_NODE_EPOCH_HEIGHT", default_value_t = 300)]
     epoch_height: u64,
 
+    /// The initial supply of the tokens.
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = U256::from(3590000000u64))]
+    initial_token_supply: U256,
+
+    /// The name of the tokens.
+    #[clap(long, env = "ESP_TOKEN_NAME", default_value = "Espresso")]
+    token_name: String,
+
+    /// The symbol of the tokens.
+    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP")]
+    token_symbol: String,
+
     #[clap(flatten)]
     sql: persistence::sql::Options,
 
@@ -216,7 +224,7 @@ struct Args {
 struct ChainInfo {
     url: Url,
     signer: LocalSigner<SigningKey>,
-    provider: DynProvider,
+    provider: HttpProviderWithWallet,
     chain_id: u64,
     admin: Address,
     retry_interval: Duration,
@@ -247,11 +255,14 @@ async fn main() -> anyhow::Result<()> {
         retry_interval,
         alt_prover_retry_intervals,
         alt_prover_update_intervals: _,
-        l1_interval: _,
+        l1_opt,
         max_block_size,
         epoch_height,
         contracts,
         l1_deployment,
+        initial_token_supply,
+        token_name,
+        token_symbol,
     } = cli_params;
 
     logging.init();
@@ -295,18 +306,17 @@ async fn main() -> anyhow::Result<()> {
         .builder_port(builder_port)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
+        .l1_opt(l1_opt)
         .build();
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
 
-    let initial_stake_table = network_config
+    let initial_stake_table: HSStakeTable<SeqTypes> = network_config
         .hotshot_config()
         .known_nodes_with_stake
-        .clone();
-    let initial_total_stakes = initial_stake_table
-        .iter()
-        .map(|config| config.stake_table_entry.stake_amount)
-        .sum();
+        .clone()
+        .into();
+    let initial_total_stakes = initial_stake_table.total_stakes();
     let (genesis_state, genesis_stake) =
         light_client_genesis_from_stake_table(&initial_stake_table, STAKE_TABLE_CAPACITY_FOR_TEST)?;
 
@@ -365,7 +375,7 @@ async fn main() -> anyhow::Result<()> {
             admin,
             multisig_address,
             retry_interval,
-            provider: provider.erased(),
+            provider,
         })
     }
 
@@ -390,7 +400,7 @@ async fn main() -> anyhow::Result<()> {
     // deploy fee contract, EspToken, stake table contracts on L1 only.
     for ChainInfo {
         url,
-        signer,
+        signer: _,
         provider,
         chain_id,
         admin,
@@ -457,8 +467,16 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // deploy EspToken, proxy
-            let token_proxy_addr =
-                deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
+            let token_proxy_addr = deployer::deploy_token_proxy(
+                &provider,
+                contracts,
+                admin,
+                admin,
+                initial_token_supply,
+                &token_name,
+                &token_symbol,
+            )
+            .await?;
             if let Some(multisig) = multisig_address {
                 deployer::transfer_ownership(
                     &provider,
@@ -491,9 +509,9 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let staking_priv_keys = network_config.staking_priv_keys();
-            stake_in_contract_for_test(
+            setup_stake_table_contract_for_test(
                 l1_url.clone(),
-                signer,
+                &provider,
                 l1_contracts
                     .address(Contract::StakeTableProxy)
                     .expect("stake table deployed"),
@@ -501,7 +519,7 @@ async fn main() -> anyhow::Result<()> {
                     .address(Contract::EspTokenProxy)
                     .expect("ESP token deployed"),
                 staking_priv_keys,
-                false,
+                DelegationConfig::default(),
             )
             .await?;
         }
@@ -535,6 +553,7 @@ async fn main() -> anyhow::Result<()> {
             blocks_per_epoch,
             epoch_start_block,
             max_retries: 0,
+            max_gas_price: None,
         };
 
         // spawn off prover service for this chain
@@ -781,15 +800,14 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
     let mut app = tide_disco::App::<_, ServerError>::with_state(client_states);
     let toml =
         toml::from_str::<toml::value::Value>(include_str!("../../api/espresso_dev_node.toml"))
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            .map_err(io::Error::other)?;
 
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
     api.get("devinfo", move |_, _| {
         let info = dev_info.clone();
         async move { Ok(info.clone()) }.boxed()
     })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?
+    .map_err(io::Error::other)?
     .at("sethotshotdown", move |req, state: &ApiState| {
         async move {
             let body = req
@@ -813,7 +831,7 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
         }
         .boxed()
     })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?
+    .map_err(io::Error::other)?
     .at("sethotshotup", move |req, state| {
         async move {
             let chain_id = req
@@ -838,10 +856,9 @@ async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
         }
         .boxed()
     })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    .map_err(io::Error::other)?;
 
-    app.register_module("api", api)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    app.register_module("api", api).map_err(io::Error::other)?;
 
     tracing::info!("Starting dev-node API on http://0.0.0.0:{port}");
 

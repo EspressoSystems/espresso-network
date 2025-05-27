@@ -1,12 +1,10 @@
 //! Mock implementation of persistence, for testing.
-#![cfg(any(test, feature = "testing"))]
-
 use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    traits::MembershipPersistence,
+    traits::{EventsPersistenceRead, MembershipPersistence},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
     Leaf2, NetworkConfig,
@@ -21,7 +19,7 @@ use hotshot_types::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
     simple_certificate::{
@@ -215,7 +213,7 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
         _drb_result: DrbResult,
@@ -223,7 +221,14 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn add_epoch_root(
+    async fn store_drb_input(&self, _drb_input: DrbInput) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn load_drb_input(&self, _epoch: u64) -> anyhow::Result<DrbInput> {
+        bail!("Cannot load from NoStorage")
+    }
+
+    async fn store_epoch_root(
         &self,
         _epoch: EpochNumber,
         _block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -272,13 +277,19 @@ impl MembershipPersistence for NoStorage {
 
     async fn store_events(
         &self,
-        _l1_block: u64,
+        _l1: u64,
         _events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>> {
-        Ok(None)
+    async fn load_events(
+        &self,
+        _l1_block: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )> {
+        Ok((None, Vec::new()))
     }
 }
 

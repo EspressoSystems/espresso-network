@@ -71,7 +71,7 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// This node's storage ref
-    pub storage: Arc<RwLock<I::Storage>>,
+    pub storage: I::Storage,
 
     /// Spawned tasks related to a specific view, so we can cancel them when
     /// they are stale
@@ -85,6 +85,9 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
 /// all the info we need to validate a proposal.  This makes it easy to spawn an effemeral task to
@@ -109,13 +112,16 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// This node's storage ref
-    pub(crate) storage: Arc<RwLock<I::Storage>>,
+    pub(crate) storage: I::Storage,
 
     /// Lock for a decided upgrade
     pub(crate) upgrade_lock: UpgradeLock<TYPES, V>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
+
+    /// First view in which epoch version takes effect
+    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
 }
 
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
@@ -174,9 +180,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                     consensus: self.consensus.clone(),
                     membership: epoch_membership,
                     output_event_stream: self.output_event_stream.clone(),
-                    storage: Arc::clone(&self.storage),
+                    storage: self.storage.clone(),
                     upgrade_lock: self.upgrade_lock.clone(),
                     epoch_height: self.epoch_height,
+                    first_epoch: self.first_epoch,
                 };
                 match handle_quorum_proposal_recv(
                     proposal,
@@ -205,6 +212,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>
                 // to enter view V + 1.
                 let oldest_view_to_keep = TYPES::View::new(view.saturating_sub(1));
                 self.cancel_tasks(oldest_view_to_keep);
+            },
+            HotShotEvent::SetFirstEpoch(view, epoch) => {
+                self.first_epoch = Some((*view, *epoch));
             },
             _ => {},
         }

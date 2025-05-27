@@ -32,12 +32,13 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     data::{Leaf2, VidCommitment},
+    stake_table::StakeTableEntries,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         ValidatedState,
     },
     vote::{Certificate, HasViewNumber},
-    PeerConfig, StakeTableEntries,
+    PeerConfig,
 };
 
 /// A view's state
@@ -474,7 +475,7 @@ pub fn is_ge_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height >= epoch_height - 5
+        block_number % epoch_height == 0 || block_number % epoch_height >= epoch_height - 5
     }
 }
 
@@ -483,7 +484,7 @@ pub fn is_gt_epoch_root(block_number: u64, epoch_height: u64) -> bool {
     if block_number == 0 || epoch_height == 0 {
         false
     } else {
-        block_number % epoch_height > epoch_height - 5
+        block_number % epoch_height == 0 || block_number % epoch_height > epoch_height - 5
     }
 }
 

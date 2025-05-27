@@ -1,33 +1,25 @@
+use std::fmt;
+
 use alloy::{
-    network::{Ethereum, EthereumWallet, TransactionBuilder as _},
+    network::{EthereumWallet, TransactionBuilder as _},
     primitives::{
         utils::{format_ether, parse_ether},
         Address, U256,
     },
-    providers::{
-        fillers::{
-            BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller, TxFiller,
-            WalletFiller,
-        },
-        Identity, Provider, ProviderBuilder, RootProvider, WalletProvider,
-    },
+    providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::types::TransactionRequest,
-    signers::{
-        k256::ecdsa::SigningKey,
-        local::{coins_bip39::English, LocalSigner, MnemonicBuilder, PrivateKeySigner},
-    },
+    signers::local::PrivateKeySigner,
 };
 use anyhow::Result;
-use espresso_types::SeqTypes;
+use clap::ValueEnum;
+use espresso_contract_deployer::{build_provider, build_random_provider, build_signer};
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::EspToken::{self, EspTokenErrors},
 };
-use hotshot_state_prover::service::light_client_genesis_from_stake_table;
-use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair, PeerConfig};
+use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use sequencer_utils::deployer::{self, Contract, Contracts};
 use url::Url;
 
 use crate::{
@@ -37,45 +29,45 @@ use crate::{
     Config,
 };
 
-pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 3;
-type Prov = FillProvider<
-    JoinFill<
-        JoinFill<
-            Identity,
-            JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
-        >,
-        WalletFiller<EthereumWallet>,
-    >,
-    RootProvider,
->;
-
-fn make_provider(rpc_url: &Url, signer: LocalSigner<SigningKey>) -> Prov {
-    let wallet = EthereumWallet::from(signer);
-    ProviderBuilder::new()
-        .wallet(wallet)
-        .on_http(rpc_url.clone())
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum DelegationConfig {
+    EqualAmounts,
+    #[default]
+    VariableAmounts,
+    MultipleDelegators,
 }
 
-pub async fn stake_in_contract_for_test(
+// Manual implementation to match parsing of clap's ValueEnum
+impl fmt::Display for DelegationConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DelegationConfig::EqualAmounts => "equal-amounts",
+            DelegationConfig::VariableAmounts => "variable-amounts",
+            DelegationConfig::MultipleDelegators => "multiple-delegators",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// Setup validator by sending them tokens and ethers, and registering them on stake table
+pub async fn setup_stake_table_contract_for_test(
     rpc_url: Url,
-    grant_recipient: PrivateKeySigner,
+    token_holder: &(impl Provider + WalletProvider),
     stake_table_address: Address,
     token_address: Address,
-    validator_keys: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
-    multiple_delegators: bool,
+    validators: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
+    config: DelegationConfig,
 ) -> Result<()> {
-    tracing::info!("staking to stake table contract for demo");
+    tracing::info!(%stake_table_address, "staking to stake table contract for demo");
 
-    tracing::info!("stake table address: {}", stake_table_address);
-
-    let token_signer = make_provider(&rpc_url, grant_recipient.clone());
+    let token_holder_addr = token_holder.default_signer_address();
 
     tracing::info!("ESP token address: {token_address}");
-    let token = EspToken::new(token_address, token_signer.clone());
-    let token_balance = token.balanceOf(grant_recipient.address()).call().await?._0;
+    let token = EspToken::new(token_address, token_holder);
+    let token_balance = token.balanceOf(token_holder_addr).call().await?._0;
     tracing::info!(
         "token distributor account {} balance: {} ESP",
-        token_signer.default_signer_address(),
+        token_holder_addr,
         format_ether(token_balance)
     );
     if token_balance.is_zero() {
@@ -89,17 +81,18 @@ pub async fn stake_in_contract_for_test(
     let seed = [42u8; 32];
     let mut rng = ChaCha20Rng::from_seed(seed);
 
-    for (val_index, (signer, bls_key_pair, state_key_pair)) in
-        validator_keys.into_iter().enumerate()
-    {
-        let validator_provider = make_provider(&rpc_url, signer);
-        let validator_address = validator_provider.default_signer_address();
+    for (val_index, (signer, bls_key_pair, state_key_pair)) in validators.into_iter().enumerate() {
+        let validator_address = signer.address();
+        let validator_wallet: EthereumWallet = EthereumWallet::from(signer);
+        let validator_provider = ProviderBuilder::new()
+            .wallet(validator_wallet)
+            .on_http(rpc_url.clone());
 
         tracing::info!("fund val {val_index} address: {validator_address}, {fund_amount_eth} ETH");
         let tx = TransactionRequest::default()
             .with_to(validator_address)
             .with_value(fund_amount_eth);
-        let receipt = token_signer
+        let receipt = token_holder
             .send_transaction(tx)
             .await?
             .get_receipt()
@@ -112,7 +105,12 @@ pub async fn stake_in_contract_for_test(
         let commission = Commission::try_from(100u64 + 10u64 * val_index as u64)?;
 
         // delegate 100 to 500 ESP
-        let delegate_amount = parse_ether("100")? * U256::from(val_index % 5 + 1);
+        let delegate_amount = match config {
+            DelegationConfig::EqualAmounts => parse_ether("100")?,
+            DelegationConfig::MultipleDelegators | DelegationConfig::VariableAmounts => {
+                parse_ether("100")? * U256::from(val_index % 5 + 1)
+            },
+        };
         let delegate_amount_esp = format_ether(delegate_amount);
 
         tracing::info!("validator {val_index} address: {validator_address}, balance: {bal}");
@@ -162,22 +160,24 @@ pub async fn stake_in_contract_for_test(
         .await?;
         assert!(receipt.status());
 
-        if multiple_delegators {
-            tracing::info!("adding multiple delegators for validator  {val_index} ");
-
-            let num_delegators = rng.gen_range(2..=5);
-
-            add_multiple_delegators(
-                &rpc_url,
-                validator_address,
-                &token_signer,
-                &token,
-                stake_table_address,
-                token_address,
-                &mut rng,
-                num_delegators,
-            )
-            .await?;
+        match config {
+            DelegationConfig::EqualAmounts | DelegationConfig::VariableAmounts => {
+                tracing::debug!("not adding extra delegators");
+            },
+            DelegationConfig::MultipleDelegators => {
+                tracing::info!("adding multiple delegators for validator {val_index} ");
+                let num_delegators = rng.gen_range(2..=5);
+                add_multiple_delegators(
+                    &rpc_url,
+                    validator_address,
+                    token_holder,
+                    stake_table_address,
+                    token_address,
+                    &mut rng,
+                    num_delegators,
+                )
+                .await?;
+            },
         }
     }
     tracing::info!("completed staking for demo");
@@ -185,28 +185,29 @@ pub async fn stake_in_contract_for_test(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn add_multiple_delegators<F: TxFiller<Ethereum>, P: Provider<Ethereum>>(
+async fn add_multiple_delegators(
     rpc_url: &Url,
     validator_address: Address,
-    token_signer: &FillProvider<F, P, Ethereum>,
-    token: &EspToken::EspTokenInstance<(), FillProvider<F, P, Ethereum>>,
+    token_holder: &(impl Provider + WalletProvider),
     stake_table_address: Address,
     token_address: Address,
     rng: &mut ChaCha20Rng,
     num_delegators: u64,
 ) -> Result<()> {
+    let token = EspToken::new(token_address, token_holder);
     let fund_amount_esp = parse_ether("1000")?;
     let fund_amount_eth = parse_ether("10")?;
 
     for delegator_index in 0..num_delegators {
-        let delegator_wallet: LocalSigner<SigningKey> = SigningKey::random(rng).into();
-        let delegator_address = delegator_wallet.address();
+        let delegator_provider = build_random_provider(rpc_url.clone());
+        let delegator_address = delegator_provider.default_signer_address();
+
         tracing::info!("delegator {delegator_index}: address {delegator_address}");
 
         let tx = TransactionRequest::default()
             .with_to(delegator_address)
             .with_value(fund_amount_eth);
-        let receipt = token_signer
+        let receipt = token_holder
             .send_transaction(tx)
             .await?
             .get_receipt()
@@ -229,9 +230,7 @@ async fn add_multiple_delegators<F: TxFiller<Ethereum>, P: Provider<Ethereum>>(
 
         tracing::info!("delegator {delegator_index}: received {fund_amount_esp} ESP");
 
-        let delegator_provider = make_provider(rpc_url, delegator_wallet.clone());
-
-        let validator_token = EspToken::new(token_address, delegator_provider.clone());
+        let validator_token = EspToken::new(token_address, &delegator_provider);
         let receipt = validator_token
             .approve(stake_table_address, delegate_amount)
             .send()
@@ -265,21 +264,23 @@ async fn add_multiple_delegators<F: TxFiller<Ethereum>, P: Provider<Ethereum>>(
 /// loaded directly from the environment.
 ///
 /// Account indexes 20+ of the dev mnemonic are used for the validator accounts.
-pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> {
+pub async fn stake_for_demo(
+    config: &Config,
+    num_validators: u16,
+    delegation_config: DelegationConfig,
+) -> Result<()> {
     tracing::info!("staking to stake table contract for demo");
 
-    let mk_signer = |account_index| -> Result<PrivateKeySigner> {
-        Ok(MnemonicBuilder::<English>::default()
-            .phrase(config.signer.mnemonic.as_ref().unwrap())
-            .index(account_index)?
-            .build()?)
-    };
-
-    let grant_recipient = mk_signer(config.signer.account_index.unwrap())?;
+    // let grant_recipient = mk_signer(config.signer.account_index.unwrap())?;
+    let grant_recipient = build_provider(
+        config.signer.mnemonic.clone().unwrap(),
+        config.signer.account_index.unwrap(),
+        config.rpc_url.clone(),
+    );
 
     tracing::info!(
         "grant recipient account for token funding: {}",
-        grant_recipient.address()
+        grant_recipient.default_signer_address()
     );
 
     let token_address = config.token_address;
@@ -289,7 +290,11 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
 
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
-        let signer = mk_signer(20u32 + val_index as u32)?;
+        let signer = build_signer(
+            config.signer.mnemonic.clone().unwrap(),
+            20u32 + val_index as u32,
+        );
+
         let consensus_private_key = parse_bls_priv_key(&dotenvy::var(format!(
             "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_{val_index}"
         ))?)?
@@ -304,13 +309,13 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
         ));
     }
 
-    stake_in_contract_for_test(
+    setup_stake_table_contract_for_test(
         config.rpc_url.clone(),
-        grant_recipient,
+        &grant_recipient,
         config.stake_table_address,
         config.token_address,
         validator_keys,
-        false,
+        delegation_config,
     )
     .await?;
 
@@ -318,144 +323,102 @@ pub async fn stake_for_demo(config: &Config, num_validators: u16) -> Result<()> 
     Ok(())
 }
 
-/// Commonly used contract deployment routine.
-// TODO move to proper place for shared code. See:
-// https://github.com/EspressoSystems/espresso-network/pull/3083#discussion_r2048832370
-#[allow(clippy::too_many_arguments)]
-pub async fn pos_deploy_routine(
-    l1_url: &Url,
-    signer: &LocalSigner<SigningKey>, // TODO maybe from_instance(AnvilInstance)
-    blocks_per_epoch: u64,
-    epoch_start_block: u64,
-    initial_stake_table: Vec<PeerConfig<SeqTypes>>,
-    private_keys: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
-    _multisig: Option<Address>,
-    multiple_delegators: bool,
-    stake_table_capacity: usize,
-) -> anyhow::Result<Address> {
-    let contracts = &mut Contracts::new();
-
-    let wallet = EthereumWallet::from(signer.clone());
-    let provider = ProviderBuilder::new()
-        .wallet(wallet.clone())
-        .on_http(l1_url.clone());
-    let admin = provider.get_accounts().await?[0];
-
-    let (genesis_state, genesis_stake) =
-        light_client_genesis_from_stake_table(&initial_stake_table, stake_table_capacity)?;
-
-    // deploy EspToken, proxy
-    let token_proxy_addr = deployer::deploy_token_proxy(&provider, contracts, admin, admin).await?;
-
-    // deploy light client v1, proxy
-    let lc_proxy_addr = deployer::deploy_light_client_proxy(
-        &provider,
-        contracts,
-        true, // use mock
-        genesis_state.clone(),
-        genesis_stake.clone(),
-        admin,
-        None, // no permissioned prover
-    )
-    .await?;
-    // upgrade to LightClientV2
-    deployer::upgrade_light_client_v2(
-        &provider,
-        contracts,
-        true, // use mock
-        blocks_per_epoch,
-        epoch_start_block,
-    )
-    .await?;
-
-    // deploy permissionless stake table
-    let exit_escrow_period = U256::from(300); // 300 sec
-    let _stake_table_proxy_addr = deployer::deploy_stake_table_proxy(
-        &provider,
-        contracts,
-        token_proxy_addr,
-        lc_proxy_addr,
-        exit_escrow_period,
-        admin,
-    )
-    .await?;
-
-    let stake_table_address = contracts
-        .address(Contract::StakeTableProxy)
-        .expect("stake table deployed");
-
-    stake_in_contract_for_test(
-        l1_url.clone(),
-        signer.clone(),
-        stake_table_address,
-        contracts
-            .address(Contract::EspTokenProxy)
-            .expect("ESP token deployed"),
-        private_keys,
-        multiple_delegators,
-    )
-    .await?;
-
-    Ok(stake_table_address)
-}
-
 #[cfg(test)]
 mod test {
-    use alloy::node_bindings::Anvil;
-    use espresso_types::{PubKey, SeqTypes};
-    use hotshot_types::{traits::signature_key::SignatureKey, PeerConfig};
+    use espresso_types::v0_3::Validator;
+    use hotshot_types::signature_key::BLSPubKey;
+    use rand::rngs::StdRng;
+    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
+    use crate::{deploy::TestSystem, info::stake_table_info};
 
-    fn mock_stake(n: u16) -> Vec<PeerConfig<SeqTypes>> {
-        (0..n)
-            .map(|_| PeerConfig::default())
-            .collect::<Vec<PeerConfig<SeqTypes>>>()
-    }
+    async fn shared_setup(
+        config: DelegationConfig,
+    ) -> Result<(Validator<BLSPubKey>, Validator<BLSPubKey>)> {
+        setup_test();
+        let system = TestSystem::deploy().await?;
 
-    fn staking_priv_keys() -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
-        let seed = [42u8; 32];
-        let num_nodes = STAKE_TABLE_CAPACITY_FOR_TEST;
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let keys = vec![
+            TestSystem::gen_keys(&mut rng),
+            TestSystem::gen_keys(&mut rng),
+        ];
 
-        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..num_nodes)
-            .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed(seed, i as u64))
-            .unzip();
-        let state_key_pairs = (0..num_nodes)
-            .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i as u64))
-            .collect::<Vec<_>>();
+        setup_stake_table_contract_for_test(
+            system.rpc_url.clone(),
+            &system.provider,
+            system.stake_table,
+            system.token,
+            keys,
+            config,
+        )
+        .await?;
 
-        let mut rng = ChaCha20Rng::from_seed([42u8; 32]); // Create a deterministic RNG
-        let eth_key_pairs = (0..num_nodes).map(|_| SigningKey::random(&mut rng).into());
-        eth_key_pairs
-            .zip(priv_keys.iter())
-            .zip(state_key_pairs.iter())
-            .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
-            .collect()
+        let l1_block_number = system.provider.get_block_number().await?;
+        let st = stake_table_info(system.rpc_url, system.stake_table, l1_block_number).await?;
+
+        // The stake table should have 2 validators
+        assert_eq!(st.len(), 2);
+        let val1 = st[0].clone();
+        let val2 = st[1].clone();
+
+        // The validators are not the same
+        assert_ne!(val1.account, val2.account);
+
+        Ok((val1, val2))
     }
 
     #[tokio::test]
-    async fn test_deploy_routine() -> Result<()> {
-        let num_nodes = 3;
-        let anvil = Anvil::new().spawn();
-        let l1 = anvil.endpoint_url();
-        let secret_key = anvil.keys()[0].clone();
-        let signer = LocalSigner::from(secret_key);
-        let st = mock_stake(num_nodes);
+    async fn test_stake_for_demo_equal_amounts() -> Result<()> {
+        let (val1, val2) = shared_setup(DelegationConfig::EqualAmounts).await?;
 
-        let priv_keys = staking_priv_keys();
-        let _address = pos_deploy_routine(
-            &l1,
-            &signer,
-            50,
-            1,
-            st,
-            priv_keys,
-            None,
-            false,
-            STAKE_TABLE_CAPACITY_FOR_TEST,
-        )
-        .await
-        .unwrap();
+        // The total stake of the validator is equal to it's own delegation
+        assert_eq!(val1.delegators.get(&val1.account), Some(&val1.stake));
+        assert_eq!(val2.delegators.get(&val2.account), Some(&val2.stake));
+
+        // The are no other delegators
+        assert_eq!(val1.delegators.len(), 1);
+        assert_eq!(val2.delegators.len(), 1);
+
+        // The stake amounts are equal
+        assert_eq!(val1.stake, val2.stake);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stake_for_demo_variable_amounts() -> Result<()> {
+        let (val1, val2) = shared_setup(DelegationConfig::VariableAmounts).await?;
+
+        // The total stake of the validator is equal to it's own delegation
+        assert_eq!(val1.delegators.get(&val1.account), Some(&val1.stake));
+        assert_eq!(val2.delegators.get(&val2.account), Some(&val2.stake));
+
+        // The are no other delegators
+        assert_eq!(val1.delegators.len(), 1);
+        assert_eq!(val2.delegators.len(), 1);
+
+        // The stake amounts are not equal
+        assert_ne!(val1.stake, val2.stake);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stake_for_demo_multiple_delegators() -> Result<()> {
+        let (val1, val2) = shared_setup(DelegationConfig::MultipleDelegators).await?;
+
+        // The total stake of the validator is not equal to it's own delegation
+        assert_ne!(val1.delegators.get(&val1.account), Some(&val1.stake));
+        assert_ne!(val2.delegators.get(&val2.account), Some(&val2.stake));
+
+        // The are other delegators
+        assert!(val1.delegators.len() > 1);
+        assert!(val2.delegators.len() > 1);
+
+        // The stake amounts are not equal
+        assert_ne!(val1.stake, val2.stake);
 
         Ok(())
     }

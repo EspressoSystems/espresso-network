@@ -23,11 +23,10 @@ use context::SequencerContext;
 use espresso_types::{
     traits::{EventConsumer, MembershipPersistence},
     v0_3::StakeTableFetcher,
-    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes,
-    SolverAuctionResultsProvider, ValidatedState,
+    BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
-use hotshot_query_service::data_source::storage::SqlStorage;
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -35,6 +34,8 @@ use proposal_fetcher::ProposalFetcherConfig;
 use tokio::select;
 use tracing::info;
 use url::Url;
+
+use crate::request_response::data_source::Storage as RequestResponseStorage;
 pub mod persistence;
 pub mod state;
 use std::{fmt::Debug, marker::PhantomData, time::Duration};
@@ -49,7 +50,6 @@ use hotshot::{
         RequestResponseConfig, WrappedSignatureKey,
     },
     types::SignatureKey,
-    MarketplaceConfig,
 };
 use hotshot_orchestrator::client::{get_complete_config, OrchestratorClient};
 use hotshot_types::{
@@ -61,6 +61,7 @@ use hotshot_types::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType, Versions},
+        storage::Storage,
     },
     utils::BuilderCommitment,
     ValidatorConfig,
@@ -101,7 +102,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeImplementation<Se
 {
     type Network = N;
     type Storage = Arc<P>;
-    type AuctionResultsProvider = SolverAuctionResultsProvider;
 }
 
 #[derive(Clone, Debug)]
@@ -192,20 +192,25 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versions>(
+pub async fn init_node<
+    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
+    V: Versions,
+>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
     persistence: P,
     l1_params: L1Params,
-    storage: Option<Arc<SqlStorage>>,
+    storage: Option<RequestResponseStorage>,
     seq_versions: V,
     event_consumer: impl EventConsumer + 'static,
     is_da: bool,
     identity: Identity,
-    marketplace_config: MarketplaceConfig<SeqTypes, Node<network::Production, P>>,
     proposal_fetcher_config: ProposalFetcherConfig,
-) -> anyhow::Result<SequencerContext<network::Production, P, V>> {
+) -> anyhow::Result<SequencerContext<network::Production, P, V>>
+where
+    Arc<P>: Storage<SeqTypes>,
+{
     // Expose git information via status API.
     metrics
         .text_family(
@@ -367,11 +372,16 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
     let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
+    let stake_table_capacity = genesis
+        .stake_table_capacity
+        .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
     tracing::info!("setting epoch_height={epoch_height:?}");
     tracing::info!("setting epoch_start_block={epoch_start_block:?}");
+    tracing::info!("setting stake_table_capacity={stake_table_capacity:?}");
     network_config.config.epoch_height = epoch_height;
     network_config.config.epoch_start_block = epoch_start_block;
+    network_config.config.stake_table_capacity = stake_table_capacity;
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
     // present in the config file.
@@ -514,8 +524,12 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
 
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
-    let coordinator =
-        EpochMembershipCoordinator::new(membership, network_config.config.epoch_height);
+    let persistence = Arc::new(persistence);
+    let coordinator = EpochMembershipCoordinator::new(
+        membership,
+        network_config.config.epoch_height,
+        &persistence.clone(),
+    );
 
     let instance_state = NodeState {
         chain_config: genesis.chain_config,
@@ -586,7 +600,6 @@ pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versi
         genesis.stake_table.capacity,
         event_consumer,
         seq_versions,
-        marketplace_config,
         proposal_fetcher_config,
     )
     .await?;
@@ -608,7 +621,16 @@ pub mod testing {
     };
 
     use alloy::{
+        network::EthereumWallet,
+        node_bindings::{Anvil, AnvilInstance},
         primitives::U256,
+        providers::{
+            fillers::{
+                BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
+            },
+            layers::AnvilProvider,
+            ProviderBuilder, RootProvider,
+        },
         signers::{
             k256::ecdsa::SigningKey,
             local::{LocalSigner, PrivateKeySigner},
@@ -617,11 +639,15 @@ pub mod testing {
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
+    use espresso_contract_deployer::{
+        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
+        Contract, Contracts,
+    };
     use espresso_types::{
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
-        EpochVersion, Event, FeeAccount, MarketplaceVersion, NetworkConfig, PubKey, SeqTypes,
-        Transaction, Upgrade, UpgradeMap,
+        EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap,
     };
     use futures::{
         future::join_all,
@@ -650,14 +676,10 @@ pub mod testing {
         },
         HotShotConfig, PeerConfig,
     };
-    use marketplace_builder_core::{
-        hooks::NoHooks,
-        service::{BuilderConfig, GlobalState},
-    };
     use portpicker::pick_unused_port;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::pos_deploy_routine;
+    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use tokio::spawn;
     use vbs::version::Version;
 
@@ -669,7 +691,15 @@ pub mod testing {
 
     const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
     const BUILDER_CHANNEL_CAPACITY_FOR_TEST: usize = 128;
-
+    type AnvilFillProvider = AnvilProvider<
+        FillProvider<
+            JoinFill<
+                alloy::providers::Identity,
+                JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+            >,
+            RootProvider,
+        >,
+    >;
     struct LegacyBuilderImplementation {
         global_state: Arc<LegacyGlobalState<SeqTypes>>,
     }
@@ -738,73 +768,6 @@ pub mod testing {
         (Box::new(LegacyBuilderImplementation { global_state }), url)
     }
 
-    struct MarketplaceBuilderImplementation {
-        global_state: Arc<GlobalState<SeqTypes, NoHooks<SeqTypes>>>,
-    }
-
-    impl BuilderTask<SeqTypes> for MarketplaceBuilderImplementation {
-        fn start(
-            self: Box<Self>,
-            stream: Box<
-                dyn Stream<Item = hotshot::types::Event<SeqTypes>>
-                    + std::marker::Unpin
-                    + Send
-                    + 'static,
-            >,
-        ) {
-            spawn(async move {
-                let res = self.global_state.start_event_loop(stream).await;
-                tracing::error!(?res, "Testing marketplace builder service exited");
-            });
-        }
-    }
-
-    pub async fn run_marketplace_builder<const NUM_NODES: usize>(
-        port: Option<u16>,
-    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let builder_key_pair = TestConfig::<0>::builder_key();
-        let port = port.unwrap_or_else(|| pick_unused_port().expect("No ports available"));
-
-        // This should never fail.
-        let url: Url = format!("http://localhost:{port}")
-            .parse()
-            .expect("Failed to parse builder URL");
-
-        // create the global state
-        let global_state = GlobalState::new(
-            BuilderConfig {
-                builder_keys: (builder_key_pair.fee_account(), builder_key_pair),
-                api_timeout: Duration::from_secs(60),
-                tx_capture_timeout: Duration::from_millis(100),
-                txn_garbage_collect_duration: Duration::from_secs(60),
-                txn_channel_capacity: BUILDER_CHANNEL_CAPACITY_FOR_TEST,
-                tx_status_cache_capacity: 81920,
-                base_fee: 10,
-            },
-            NoHooks(PhantomData),
-        );
-
-        // Create and spawn the tide-disco app to serve the builder APIs
-        let app = Arc::clone(&global_state)
-            .into_app()
-            .expect("Failed to create builder tide-disco app");
-
-        spawn(
-            app.serve(
-                format!("http://0.0.0.0:{port}")
-                    .parse::<Url>()
-                    .expect("Failed to parse builder listener"),
-                MarketplaceVersion::instance(),
-            ),
-        );
-
-        // Pass on the builder task to be injected in the testing harness
-        (
-            Box::new(MarketplaceBuilderImplementation { global_state }),
-            url,
-        )
-    }
-
     pub async fn run_test_builder<const NUM_NODES: usize>(
         port: Option<u16>,
     ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
@@ -836,10 +799,11 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        l1_opt: L1ClientOptions,
+        anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
-        marketplace_builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
@@ -864,18 +828,33 @@ pub mod testing {
             self
         }
 
-        pub fn marketplace_builder_port(mut self, port: Option<u16>) -> Self {
-            self.marketplace_builder_port = port;
-            self
-        }
-
         pub fn state_relay_url(mut self, url: Url) -> Self {
             self.state_relay_url = Some(url);
             self
         }
 
+        /// Sets the Anvil provider, constructed using the Anvil instance.
+        /// Also sets the L1 URL based on the Anvil endpoint.
+        /// The `AnvilProvider` can be used to configure the Anvil, for example,
+        /// by enabling interval mining after the test network is initialized.
+        pub fn anvil_provider(mut self, anvil: AnvilInstance) -> Self {
+            self.l1_url = anvil.endpoint().parse().unwrap();
+            let l1_client = L1Client::anvil(&anvil).expect("create l1 client");
+            let anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
+            self.anvil_provider = Some(anvil_provider);
+            self
+        }
+
+        /// Sets a custom L1 URL, overriding any previously set Anvil instance URL.
+        /// This removes the anvil provider, as well as it is no longer needed
         pub fn l1_url(mut self, l1_url: Url) -> Self {
+            self.anvil_provider = None;
             self.l1_url = l1_url;
+            self
+        }
+
+        pub fn l1_opt(mut self, opt: L1ClientOptions) -> Self {
+            self.l1_opt = opt;
             self
         }
 
@@ -900,25 +879,51 @@ pub mod testing {
                     let blocks_per_epoch = self.config.epoch_height;
                     let epoch_start_block = self.config.epoch_start_block;
 
-                    let initial_stake_table = self.config.known_nodes_with_stake.clone();
-
-                    let staking_private_keys =
-                        staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
-
-                    let address = pos_deploy_routine(
-                        &self.l1_url,
-                        &self.signer,
-                        blocks_per_epoch,
-                        epoch_start_block,
-                        initial_stake_table,
-                        staking_private_keys.clone(),
-                        None,
-                        false,
+                    let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+                        &self.config.hotshot_stake_table(),
                         STAKE_TABLE_CAPACITY_FOR_TEST,
                     )
+                    .unwrap();
+
+                    let validators =
+                        staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
+
+                    let deployer = ProviderBuilder::new()
+                        .wallet(EthereumWallet::from(self.signer.clone()))
+                        .on_http(self.l1_url.clone());
+
+                    let mut contracts = Contracts::new();
+                    let args = DeployerArgsBuilder::default()
+                        .deployer(deployer.clone())
+                        .mock_light_client(true)
+                        .genesis_lc_state(genesis_state)
+                        .genesis_st_state(genesis_stake)
+                        .blocks_per_epoch(blocks_per_epoch)
+                        .epoch_start_block(epoch_start_block)
+                        .build()
+                        .unwrap();
+                    args.deploy_all(&mut contracts)
+                        .await
+                        .expect("failed to deploy all contracts");
+
+                    let st_addr = contracts
+                        .address(Contract::StakeTableProxy)
+                        .expect("StakeTableProxy address not found");
+                    let token_addr = contracts
+                        .address(Contract::EspTokenProxy)
+                        .expect("EspTokenProxy address not found");
+                    setup_stake_table_contract_for_test(
+                        self.l1_url.clone(),
+                        &deployer,
+                        st_addr,
+                        token_addr,
+                        validators,
+                        DelegationConfig::default(),
+                    )
                     .await
-                    .expect("deployed pos contracts");
-                    Upgrade::pos_view_based(address)
+                    .expect("stake table setup failed");
+
+                    Upgrade::pos_view_based(st_addr)
                 },
                 _ => panic!("Upgrade not configured for version {:?}", version),
             };
@@ -948,11 +953,12 @@ pub mod testing {
                 state_key_pairs: self.state_key_pairs,
                 master_map: self.master_map,
                 l1_url: self.l1_url,
+                l1_opt: self.l1_opt,
                 signer: self.signer,
                 state_relay_url: self.state_relay_url,
-                marketplace_builder_port: self.marketplace_builder_port,
                 builder_port: self.builder_port,
                 upgrades: self.upgrades,
+                anvil_provider: self.anvil_provider,
             }
         }
     }
@@ -1008,20 +1014,36 @@ pub mod testing {
                 start_voting_time: 0,
                 stop_proposing_time: 0,
                 stop_voting_time: 0,
-                epoch_height: 300,
+                epoch_height: 30,
                 epoch_start_block: 1,
+                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
             };
+
+            let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
+
+            let l1_client = L1Client::anvil(&anvil).expect("failed to create l1 client");
+            let anvil_provider = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
+
+            let l1_signer_key = anvil_provider.anvil().keys()[0].clone();
+            let signer = LocalSigner::from(l1_signer_key);
 
             Self {
                 config,
                 priv_keys,
                 state_key_pairs,
                 master_map,
-                l1_url: "http://localhost:8545".parse().unwrap(),
-                signer: LocalSigner::random(),
+                l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
+                l1_opt: L1ClientOptions {
+                    stake_table_update_interval: Duration::from_secs(5),
+                    l1_events_max_block_range: 1000,
+                    l1_polling_interval: Duration::from_secs(1),
+                    subscription_timeout: Duration::from_secs(5),
+                    ..Default::default()
+                },
+                anvil_provider: Some(anvil_provider),
+                signer,
                 state_relay_url: None,
                 builder_port: None,
-                marketplace_builder_port: None,
                 upgrades: Default::default(),
             }
         }
@@ -1034,10 +1056,11 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        l1_opt: L1ClientOptions,
+        anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
-        marketplace_builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
     }
 
@@ -1054,10 +1077,6 @@ pub mod testing {
             self.config.builder_urls = builder_urls;
         }
 
-        pub fn marketplace_builder_port(&self) -> Option<u16> {
-            self.marketplace_builder_port
-        }
-
         pub fn builder_port(&self) -> Option<u16> {
             self.builder_port
         }
@@ -1068,6 +1087,9 @@ pub mod testing {
 
         pub fn l1_url(&self) -> Url {
             self.l1_url.clone()
+        }
+        pub fn anvil(&self) -> Option<&AnvilFillProvider> {
+            self.anvil_provider.as_ref()
         }
 
         pub fn get_upgrade_map(&self) -> UpgradeMap {
@@ -1098,15 +1120,14 @@ pub mod testing {
                     NullEventConsumer,
                     bind_version,
                     Default::default(),
-                    Url::parse(&format!(
-                        "http://localhost:{}",
-                        self.marketplace_builder_port.unwrap_or_default()
-                    ))
-                    .unwrap(),
                 )
                 .await
             }))
             .await
+        }
+
+        pub fn known_nodes_with_stake(&self) -> &[PeerConfig<SeqTypes>] {
+            &self.config.known_nodes_with_stake
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -1116,13 +1137,12 @@ pub mod testing {
             mut state: ValidatedState,
             mut persistence_opt: P,
             state_peers: Option<impl StateCatchup + 'static>,
-            storage: Option<Arc<SqlStorage>>,
+            storage: Option<RequestResponseStorage>,
             metrics: &dyn Metrics,
             stake_table_capacity: usize,
             event_consumer: impl EventConsumer + 'static,
             bind_version: V,
             upgrades: BTreeMap<Version, Upgrade>,
-            marketplace_builder_url: Url,
         ) -> SequencerContext<network::Memory, P::Persistence, V> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
@@ -1183,21 +1203,16 @@ pub mod testing {
                 },
             };
 
-            let l1_opt = L1ClientOptions {
-                stake_table_update_interval: Duration::from_secs(5),
-                l1_events_max_block_range: 1,
-                l1_polling_interval: Duration::from_secs(1),
-                subscription_timeout: Duration::from_secs(5),
-                ..Default::default()
-            };
-            let l1_client = l1_opt
+            let l1_client = self
+                .l1_opt
+                .clone()
                 .connect(vec![self.l1_url.clone()])
                 .expect("failed to create L1 client");
             l1_client.spawn_tasks().await;
 
             let fetcher = StakeTableFetcher::new(
                 Arc::new(catchup_providers.clone()),
-                Arc::new(Mutex::new(persistence)),
+                Arc::new(Mutex::new(persistence.clone())),
                 l1_client.clone(),
                 chain_config,
             );
@@ -1211,8 +1226,13 @@ pub mod testing {
             membership.reload_stake(50).await;
 
             let membership = Arc::new(RwLock::new(membership));
+            let persistence = Arc::new(persistence);
 
-            let coordinator = EpochMembershipCoordinator::new(membership, 100);
+            let coordinator = EpochMembershipCoordinator::new(
+                membership,
+                config.epoch_height,
+                &persistence.clone(),
+            );
 
             let node_state = NodeState::new(
                 i as u64,
@@ -1234,7 +1254,6 @@ pub mod testing {
                 "starting node",
             );
 
-            let persistence = persistence_opt.create().await.unwrap();
             SequencerContext::init(
                 NetworkConfig {
                     config,
@@ -1254,10 +1273,6 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 bind_version,
-                MarketplaceConfig::<SeqTypes, Node<network::Memory, P::Persistence>> {
-                    auction_results_provider: Arc::new(SolverAuctionResultsProvider::default()),
-                    fallback_builder_url: marketplace_builder_url,
-                },
                 Default::default(),
             )
             .await

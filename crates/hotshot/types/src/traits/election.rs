@@ -12,7 +12,10 @@ use async_lock::RwLock;
 use hotshot_utils::anytrace::Result;
 
 use super::node_implementation::NodeType;
-use crate::{data::Leaf2, drb::DrbResult, traits::signature_key::StakeTableEntryType, PeerConfig};
+use crate::{
+    data::Leaf2, drb::DrbResult, stake_table::HSStakeTable,
+    traits::signature_key::StakeTableEntryType, PeerConfig,
+};
 
 /// A protocol for determining membership in and participating in a committee.
 pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
@@ -43,10 +46,10 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     }
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES>>;
+    fn stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES>;
 
     /// Get all participants in the committee (including their stake) for a specific epoch
-    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> Vec<PeerConfig<TYPES>>;
+    fn da_stake_table(&self, epoch: Option<TYPES::Epoch>) -> HSStakeTable<TYPES>;
 
     /// Get all participants in the committee for a specific view for a specific epoch
     fn committee_members(
@@ -181,5 +184,10 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
     /// when this is called. The value of initial_drb_result should be used for DRB
     /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult);
+    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {}
+
+    /// Get first epoch if epochs are enabled, `None` otherwise
+    fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        None
+    }
 }

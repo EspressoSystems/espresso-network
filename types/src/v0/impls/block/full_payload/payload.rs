@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::{
     v0::impls::{NodeState, ValidatedState},
-    v0_1::ChainConfig,
+    v0_3::ChainConfig,
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
     NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxProof,
 };
@@ -156,7 +156,7 @@ impl BlockPayload<SeqTypes> for Payload {
             }
         };
 
-        Self::from_transactions_sync(transactions, ChainConfig::from(chain_config))
+        Self::from_transactions_sync(transactions, chain_config)
     }
 
     // TODO avoid cloning the entire payload here?

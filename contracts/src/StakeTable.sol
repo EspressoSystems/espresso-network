@@ -1,11 +1,11 @@
 pragma solidity ^0.8.0;
 
 import { SafeTransferLib, ERC20 } from "solmate/utils/SafeTransferLib.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { UUPSUpgradeable } from
     "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import { OwnableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 import { LightClientV2 as LightClient } from "../src/LightClientV2.sol";
@@ -54,8 +54,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         EdOnBN254.EdOnBN254Point schnorrVk,
         uint16 commission
     );
-    // TODO: emit the BLS signature so GCL can verify it.
-    // TODO: emit the Schnorr signature so GCL can verify it.
 
     /// @notice A validator initiated an exit from stake table
     ///
@@ -93,8 +91,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     event ConsensusKeysUpdated(
         address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
     );
-    // TODO: emit the BLS signature so GCL can verify it.
-    // TODO: emit the Schnorr signature so GCL can verify it.
 
     /// @notice A delegator claims unlocked funds.
     ///
@@ -207,7 +203,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     // @dev these are stored indexed by validator so we can keep track of them for slashing later
     mapping(address validator => mapping(address delegator => Undelegation)) public undelegations;
 
-    /// The time the contract will hold funds after undelegations are requested.
+    /// The time (seconds) the contract will hold funds after undelegations are requested.
     ///
     /// Must allow ample time for node to exit active validator set and slashing
     /// evidence to be submitted.
@@ -224,9 +220,9 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         address _tokenAddress,
         address _lightClientAddress,
         uint256 _exitEscrowPeriod,
-        address _initialOwner
+        address _timelock
     ) public initializer {
-        __Ownable_init(_initialOwner);
+        __Ownable_init(_timelock);
         __UUPSUpgradeable_init();
         initializeAtBlock();
 
@@ -262,7 +258,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         return (1, 0, 0);
     }
 
-    /// @notice only the owner can authorize an upgrade
+    /// @notice only the timelock can authorize an upgrade
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner {
         emit Upgrade(newImplementation);
     }
@@ -275,20 +271,18 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     }
 
     function ensureValidatorActive(address validator) internal view {
-        if (!(validators[validator].status == ValidatorStatus.Active)) {
+        ValidatorStatus status = validators[validator].status;
+        if (status == ValidatorStatus.Unknown) {
             revert ValidatorInactive();
+        }
+        if (status == ValidatorStatus.Exited) {
+            revert ValidatorAlreadyExited();
         }
     }
 
     function ensureValidatorNotRegistered(address validator) internal view {
         if (validators[validator].status != ValidatorStatus.Unknown) {
             revert ValidatorAlreadyRegistered();
-        }
-    }
-
-    function ensureValidatorNotExited(address validator) internal view {
-        if (validatorExits[validator] != 0) {
-            revert ValidatorAlreadyExited();
         }
     }
 
@@ -339,8 +333,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
-        //
-        // TODO: we will move this check to the GCL to save gas.
         bytes memory message = abi.encode(validator);
         BLSSig.verifyBlsSig(message, blsSig, blsVK);
 
@@ -361,6 +353,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         validators[validator].status = ValidatorStatus.Exited;
         validatorExits[validator] = block.timestamp + exitEscrowPeriod;
+        validators[validator].delegatedAmount = 0;
 
         emit ValidatorExit(validator);
     }
@@ -381,10 +374,10 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
             revert InsufficientAllowance(allowance, amount);
         }
 
+        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
+
         validators[validator].delegatedAmount += amount;
         delegations[validator][delegator] += amount;
-
-        SafeTransferLib.safeTransferFrom(token, delegator, address(this), amount);
 
         emit Delegated(delegator, validator, amount);
     }
@@ -398,10 +391,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         if (amount == 0) {
             revert ZeroAmount();
-        }
-
-        if (validators[delegator].status == ValidatorStatus.Exited) {
-            revert ValidatorAlreadyExited();
         }
 
         if (undelegations[validator][delegator].amount != 0) {

@@ -9,7 +9,7 @@ doc *args:
 demo *args:
     docker compose up {{args}}
 
-demo-native *args: build
+demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
 fmt:
@@ -21,6 +21,7 @@ lint:
     # Use the same target dir for both `clippy` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
     cargo clippy --workspace --features testing --all-targets -- -D warnings
+    cargo clippy --workspace --features "embedded-db testing" --all-targets -- -D warnings
     cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml -- -D warnings
 
 build profile="dev" features="":
@@ -30,9 +31,6 @@ build profile="dev" features="":
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
     cargo build --profile {{profile}} {{features}}
     cargo build --profile {{profile}} --manifest-path ./sequencer-sqlite/Cargo.toml {{features}}
-
-demo-native-mp *args: (build "test" "--features fee,marketplace")
-    scripts/demo-native -f process-compose.yaml -f process-compose-mp.yml {{args}}
 
 demo-native-pos *args: (build "test" "--features fee,pos")
     ESPRESSO_SEQUENCER_PROCESS_COMPOSE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -85,9 +83,6 @@ test-all:
 
 test-integration: (build "test" "--features fee")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
-
-test-integration-mp: (build "test" "--features fee,marketplace")
-    INTEGRATION_TEST_SEQUENCER_VERSION=99 cargo nextest run -p tests --nocapture --profile integration test_native_demo_upgrade
 
 clippy:
     @echo 'features: "embedded-db"'
@@ -143,7 +138,7 @@ build-docker-images:
     scripts/build-docker-images-native
 
 # generate rust bindings for contracts
-REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^EspToken$"
+REGEXP := "^LightClient(V\\d+)?$|^LightClientArbitrum(V\\d+)?$|^FeeContract$|PlonkVerifier(V\\d+)?$|^ERC1967Proxy$|^LightClient(V\\d+)?Mock$|^StakeTable$|^StakeTableV2$|^EspToken$|^Timelock$"
 gen-bindings:
     # Update the git submodules
     git submodule update --init --recursive
@@ -159,12 +154,13 @@ gen-bindings:
     cargo sort -g -w
 
     just export-contract-abis
+    just gen-go-bindings
 
 # export select ABIs, to let downstream projects can use them without solc compilation
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}}; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable EspToken; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 
@@ -218,3 +214,14 @@ dev-download-srs:
     @AZTEC_SRS_PATH="$PWD/data/aztec20/kzg10-aztec20-srs-65544.bin" ./scripts/download_srs_aztec.sh
     2>&1 | tee log.txt
 
+gen-go-bindings:
+	abigen --abi contracts/artifacts/abi/LightClient.json --pkg lightclient --out sdks/go/light-client/lightclient.go
+	abigen --abi contracts/artifacts/abi/LightClientMock.json --pkg lightclientmock --out sdks/go/light-client-mock/lightclient.go
+
+build-go-crypto-helper *args:
+    ./scripts/build-go-crypto-helper {{args}}
+
+test-go:
+    #!/usr/bin/env bash
+    export LD_LIBRARY_PATH=$PWD/sdks/go/verification/target/lib:$LD_LIBRARY_PATH
+    cd sdks/go && go test -v ./...

@@ -8,14 +8,17 @@ use std::{
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{Address, U256},
+    primitives::{utils::format_units, Address, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
     signers::{k256::ecdsa::SigningKey, local::LocalSigner},
 };
 use anyhow::{anyhow, Context, Result};
 use displaydoc::Display;
-use espresso_types::{config::PublicNetworkConfig, SeqTypes};
+use espresso_contract_deployer::{
+    is_proxy_contract, network_config::fetch_stake_table_from_sequencer,
+};
+use espresso_types::SeqTypes;
 use futures::FutureExt;
 use hotshot_contract_adapter::{
     field_to_u256,
@@ -25,10 +28,11 @@ use hotshot_query_service::availability::StateCertQueryData;
 use hotshot_types::{
     data::EpochNumber,
     light_client::{
-        compute_stake_table_commitment, CircuitField, LightClientState, PublicInput,
-        StakeTableState, StateSignature, StateSignaturesBundle, StateVerKey,
+        CircuitField, LightClientState, PublicInput, StakeTableState, StateSignature,
+        StateSignaturesBundle, StateVerKey,
     },
     simple_certificate::LightClientStateUpdateCertificate,
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::{ConsensusTime, NodeType},
         signature_key::StateSignatureKey,
@@ -36,12 +40,10 @@ use hotshot_types::{
     utils::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
     },
-    PeerConfig,
 };
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_plonk::errors::PlonkError;
 use jf_relation::Circuit as _;
-use sequencer_utils::deployer::is_proxy_contract;
 use surf_disco::Client;
 use tide_disco::{error::ServerError, Api};
 use time::ext::InstantExt;
@@ -81,6 +83,8 @@ pub struct StateProverConfig {
     pub epoch_start_block: u64,
     /// Maximum number of retires for one-shot prover
     pub max_retries: u64,
+    /// optional gas price cap **in wei** to prevent prover sending updates during jammed base layer
+    pub max_gas_price: Option<u128>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,7 +94,7 @@ pub struct ProverServiceState {
     /// The current epoch number of the stake table
     pub epoch: Option<<SeqTypes as NodeType>::Epoch>,
     /// The stake table
-    pub stake_table: Vec<PeerConfig<SeqTypes>>,
+    pub stake_table: HSStakeTable<SeqTypes>,
     /// The current stake table state
     pub st_state: StakeTableState,
 }
@@ -100,7 +104,8 @@ impl ProverServiceState {
         let stake_table = fetch_stake_table_from_sequencer(&config.sequencer_url, None)
             .await
             .with_context(|| "Failed to initialize stake table")?;
-        let st_state = compute_stake_table_commitment(&stake_table, config.stake_table_capacity)
+        let st_state = stake_table
+            .commitment(config.stake_table_capacity)
             .with_context(|| "Failed to compute stake table commitment")?;
         Ok(Self {
             config,
@@ -118,9 +123,10 @@ impl ProverServiceState {
             self.stake_table = fetch_stake_table_from_sequencer(&self.config.sequencer_url, epoch)
                 .await
                 .with_context(|| format!("Failed to update stake table for epoch: {:?}", epoch))?;
-            self.st_state =
-                compute_stake_table_commitment(&self.stake_table, self.config.stake_table_capacity)
-                    .with_context(|| "Failed to compute stake table commitment")?;
+            self.st_state = self
+                .stake_table
+                .commitment(self.config.stake_table_capacity)
+                .with_context(|| "Failed to compute stake table commitment")?;
             self.epoch = epoch;
         }
         Ok(())
@@ -140,108 +146,6 @@ impl StateProverConfig {
 
         Ok(())
     }
-}
-
-/// Get the epoch-related  from the sequencer's `PublicHotShotConfig` struct
-/// return (blocks_per_epoch, epoch_start_block)
-pub async fn fetch_epoch_config_from_sequencer(sequencer_url: &Url) -> anyhow::Result<(u64, u64)> {
-    // Request the configuration until it is successful
-    let epoch_config = loop {
-        match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-            sequencer_url.clone(),
-        )
-        .get::<PublicNetworkConfig>("config/hotshot")
-        .send()
-        .await
-        {
-            Ok(resp) => {
-                let config = resp.hotshot_config();
-                break (config.blocks_per_epoch(), config.epoch_start_block());
-            },
-            Err(e) => {
-                tracing::error!("Failed to fetch the network config: {e}");
-                sleep(Duration::from_secs(5)).await;
-            },
-        }
-    };
-    Ok(epoch_config)
-}
-
-/// Initialize the stake table from a sequencer node given the epoch number
-///
-/// Does not error, runs until the stake table is provided.
-pub async fn fetch_stake_table_from_sequencer(
-    sequencer_url: &Url,
-    epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    // stake_table_capacity: usize,
-) -> Result<Vec<PeerConfig<SeqTypes>>> {
-    tracing::info!("Initializing stake table from node for epoch {epoch:?}");
-
-    match epoch {
-        Some(epoch) => loop {
-            match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-                sequencer_url.clone(),
-            )
-            .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", epoch.u64()))
-            .send()
-            .await
-            {
-                Ok(resp) => break Ok(resp),
-                Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5)).await;
-                },
-            }
-        },
-        None => loop {
-            match surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-                sequencer_url.clone(),
-            )
-            .get::<PublicNetworkConfig>("config/hotshot")
-            .send()
-            .await
-            {
-                Ok(resp) => break Ok(resp.hotshot_config().known_nodes_with_stake()),
-                Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5)).await;
-                },
-            }
-        },
-    }
-}
-
-/// Returns both genesis light client state and stake table state
-pub async fn light_client_genesis(
-    sequencer_url: &Url,
-    stake_table_capacity: usize,
-) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let st = fetch_stake_table_from_sequencer(sequencer_url, None)
-        .await
-        .with_context(|| "Failed to initialize stake table")?;
-    light_client_genesis_from_stake_table(&st, stake_table_capacity)
-}
-
-#[inline]
-pub fn light_client_genesis_from_stake_table(
-    st: &[PeerConfig<SeqTypes>],
-    stake_table_capacity: usize,
-) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
-    let st_state = compute_stake_table_commitment(st, stake_table_capacity)
-        .with_context(|| "Failed to compute stake table commitment")?;
-    Ok((
-        LightClientStateSol {
-            viewNum: 0,
-            blockHeight: 0,
-            blockCommRoot: U256::from(0u32),
-        },
-        StakeTableStateSol {
-            blsKeyComm: field_to_u256(st_state.bls_key_comm),
-            schnorrKeyComm: field_to_u256(st_state.schnorr_key_comm),
-            amountComm: field_to_u256(st_state.amount_comm),
-            threshold: field_to_u256(st_state.threshold),
-        },
-    ))
 }
 
 pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
@@ -518,6 +422,26 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         .wallet(wallet)
         .on_http(state.config.provider_endpoint.clone());
 
+    // only sync light client state when gas price is sane
+    if let Some(max_gas_price) = state.config.max_gas_price {
+        let cur_gas_price = provider
+            .get_gas_price()
+            .await
+            .map_err(|e| ProverError::NetworkError(anyhow!("{e}")))?;
+        if cur_gas_price > max_gas_price {
+            let cur_gwei = format_units(cur_gas_price, "gwei")
+                .map_err(|e| ProverError::Internal(format!("{e}")))?;
+            let max_gwei = format_units(max_gas_price, "gwei")
+                .map_err(|e| ProverError::Internal(format!("{e}")))?;
+            tracing::warn!(
+                "Current gas price too high: cur={} gwei, max={} gwei",
+                cur_gwei,
+                max_gwei,
+            );
+            return Err(ProverError::GasPriceTooHigh(cur_gwei, max_gwei));
+        }
+    }
+
     tracing::info!(
         ?light_client_address,
         "Start syncing light client state for provider: {}",
@@ -657,22 +581,21 @@ fn start_http_server<ApiVer: StaticVersionType + 'static>(
 ) -> io::Result<()> {
     let mut app = tide_disco::App::<_, ServerError>::with_state(());
     let toml = toml::from_str::<toml::value::Value>(include_str!("../api/prover-service.toml"))
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        .map_err(io::Error::other)?;
 
-    let mut api = Api::<_, ServerError, ApiVer>::new(toml)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    let mut api = Api::<_, ServerError, ApiVer>::new(toml).map_err(io::Error::other)?;
 
     api.get("getlightclientcontract", move |_, _| {
         async move { Ok(light_client_address) }.boxed()
     })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-    app.register_module("api", api)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    .map_err(io::Error::other)?;
+    app.register_module("api", api).map_err(io::Error::other)?;
 
     spawn(app.serve(format!("0.0.0.0:{port}"), bind_version));
     Ok(())
 }
 
+/// Run prover in daemon mode
 pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     config: StateProverConfig,
     bind_version: ApiVer,
@@ -730,6 +653,10 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     for _ in 0..state.config.max_retries {
         match sync_state(&mut state, &proving_key, &relay_server_client).await {
             Ok(_) => return Ok(()),
+            Err(ProverError::GasPriceTooHigh(..)) => {
+                // static ERROR message for easier observability and alert
+                tracing::error!("Gas price too high, sync later");
+            },
             Err(err) => {
                 tracing::error!("Cannot sync the light client state, will retry: {}", err);
                 sleep(state.config.retry_interval).await;
@@ -753,6 +680,8 @@ pub enum ProverError {
     Internal(String),
     /// General network issue: {0}
     NetworkError(anyhow::Error),
+    /// Abort due to high gas price: current {0} gwei, max allowed: {1} gwei
+    GasPriceTooHigh(String, String),
 }
 
 impl From<ServerError> for ProverError {
@@ -774,12 +703,12 @@ mod test {
 
     use alloy::{node_bindings::Anvil, providers::layers::AnvilProvider, sol_types::SolValue};
     use anyhow::Result;
+    use espresso_contract_deployer::{
+        deploy_light_client_proxy, upgrade_light_client_v2, Contracts,
+    };
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use jf_utils::test_rng;
-    use sequencer_utils::{
-        deployer::{deploy_light_client_proxy, upgrade_light_client_v2, Contracts},
-        test_utils::setup_test,
-    };
+    use sequencer_utils::test_utils::setup_test;
 
     use super::*;
     use crate::mock_ledger::{

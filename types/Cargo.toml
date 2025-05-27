@@ -29,6 +29,7 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
+hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 indexmap = { workspace = true }
@@ -61,6 +62,7 @@ vec1 = { workspace = true }
 vid = { workspace = true }
 
 [dev-dependencies]
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = ".", features = [ "testing" ] }
 portpicker = { workspace = true }
 

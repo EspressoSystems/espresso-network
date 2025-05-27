@@ -115,8 +115,7 @@ mod tests {
         One, UniformRand,
     };
     use hotshot_types::{
-        light_client::{compute_stake_table_commitment, LightClientState},
-        signature_key::SchnorrPubKey,
+        light_client::LightClientState, signature_key::SchnorrPubKey,
         traits::signature_key::StateSignatureKey,
     };
     use jf_plonk::{
@@ -197,7 +196,8 @@ mod tests {
 
         let (bls_keys, schnorr_keys) = key_pairs_for_testing(num_validators, &mut prng);
         let st = stake_table_for_testing(&bls_keys, &schnorr_keys);
-        let st_state = compute_stake_table_commitment(&st, ST_CAPACITY)
+        let st_state = st
+            .commitment(ST_CAPACITY)
             .expect("Failed to compute stake table commitment");
         let next_st_state = st_state;
 

@@ -18,16 +18,14 @@ use futures::{
 };
 use hotshot::{
     types::{Event, EventType, SystemContextHandle},
-    MarketplaceConfig, SystemContext,
+    SystemContext,
 };
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_orchestrator::client::OrchestratorClient;
-use hotshot_query_service::data_source::storage::SqlStorage;
 use hotshot_types::{
     consensus::ConsensusMetricsValue,
     data::{Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    light_client::compute_stake_table_commitment,
     network::NetworkConfig,
     traits::{metrics::Metrics, network::ConnectedNetwork, node_implementation::Versions},
     PeerConfig, ValidatorConfig,
@@ -43,8 +41,10 @@ use crate::{
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
-        data_source::DataSource, network::Sender as RequestResponseSender,
-        recipient_source::RecipientSource, RequestResponseProtocol,
+        data_source::{DataSource, Storage as RequestResponseStorage},
+        network::Sender as RequestResponseSender,
+        recipient_source::RecipientSource,
+        RequestResponseProtocol,
     },
     state_signature::StateSigner,
     Node, SeqTypes, SequencerApiVersion,
@@ -64,7 +64,7 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
+    pub request_response_protocol: RequestResponseProtocol<Node<N, P>, V, N, P>,
 
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
@@ -97,16 +97,15 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         validator_config: ValidatorConfig<SeqTypes>,
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         instance_state: NodeState,
-        storage: Option<Arc<SqlStorage>>,
+        storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
-        persistence: P,
+        persistence: Arc<P>,
         network: Arc<N>,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         _: V,
-        marketplace_config: MarketplaceConfig<SeqTypes, Node<N, P>>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
@@ -126,16 +125,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             .load_consensus_state::<V>(instance_state.clone())
             .await?;
 
-        let stake_table_commit =
-            compute_stake_table_commitment(&config.known_nodes_with_stake, stake_table_capacity)?;
+        let stake_table = config.hotshot_stake_table();
+        let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
         let stake_table_epoch = None;
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
-            config.known_nodes_with_stake.clone(),
+            stake_table.0,
             0,
         )));
-
-        let persistence = Arc::new(persistence);
 
         let handle = SystemContext::init(
             validator_config.public_key,
@@ -147,8 +144,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
             network.clone(),
             initializer,
             ConsensusMetricsValue::new(metrics),
-            persistence.clone(),
-            marketplace_config,
+            Arc::clone(&persistence),
         )
         .await?
         .0;
@@ -171,11 +167,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> Sequence
         // Configure the request-response protocol
         let request_response_config = RequestResponseConfig {
             incoming_request_ttl: Duration::from_secs(40),
-            response_send_timeout: Duration::from_secs(10),
-            request_batch_size: 15,
+            incoming_request_timeout: Duration::from_secs(5),
+            incoming_response_timeout: Duration::from_secs(5),
+            request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
-            max_outgoing_responses: 20,
-            response_validate_timeout: Duration::from_secs(1),
+            max_incoming_requests: 10,
+            max_incoming_requests_per_key: 1,
             max_incoming_responses: 20,
         };
 

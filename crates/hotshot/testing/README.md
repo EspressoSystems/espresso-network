@@ -1,6 +1,7 @@
 # Purpose
 
-Infrastructure and integration tests for hotshot. Since a lot of our tests can take a while to run, they've been split into groups to allow for parallelization in CI.
+Infrastructure and integration tests for hotshot. Since a lot of our tests can take a while to run, they've been split
+into groups to allow for parallelization in CI.
 
 # Usage
 
@@ -18,7 +19,9 @@ TestBuilder::default().build() ->  TestLauncher::launch()      -> TestRunner::ex
 - easily override launching
 ```
 
-Easily overriding setup/correctness checks/hooks and launching is all done by anonymous functions. Fairly sane and configurable setup and correct check functions may be generated from the round builder. The intended workflow should look like:
+Easily overriding setup/correctness checks/hooks and launching is all done by anonymous functions. Fairly sane and
+configurable setup and correct check functions may be generated from the round builder. The intended workflow should
+look like:
 
 ```rust
 use std::sync::Arc;

@@ -9,7 +9,7 @@
 //! persistence which is _required_ to run a node.
 
 use async_trait::async_trait;
-use espresso_types::v0_99::ChainConfig;
+use espresso_types::v0_3::ChainConfig;
 
 pub mod fs;
 pub mod no_storage;
@@ -46,17 +46,25 @@ mod testing {
 #[cfg(test)]
 #[espresso_macros::generic_tests]
 mod persistence_tests {
-    use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
+    use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 
-    use alloy::{node_bindings::Anvil, signers::local::LocalSigner};
+    use alloy::{
+        network::EthereumWallet,
+        primitives::Address,
+        providers::{ext::AnvilApi, Provider, ProviderBuilder},
+    };
     use anyhow::bail;
-    use async_lock::RwLock;
+    use async_lock::{Mutex, RwLock};
     use committable::{Commitment, Committable};
+    use espresso_contract_deployer::{
+        builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
+        Contract, Contracts,
+    };
     use espresso_types::{
-        traits::{EventConsumer, NullEventConsumer, PersistenceOptions},
+        traits::{EventConsumer, EventsPersistenceRead, NullEventConsumer, PersistenceOptions},
         v0_3::{StakeTableFetcher, Validator},
-        Event, L1Client, Leaf, Leaf2, NodeState, PubKey, SeqTypes, SequencerVersions,
-        ValidatedState,
+        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
+        SequencerVersions, ValidatedState,
     };
     use futures::{future::join_all, StreamExt, TryStreamExt};
     use hotshot::{
@@ -72,6 +80,7 @@ mod persistence_tests {
             ViewNumber,
         },
         event::{EventType, HotShotAction, LeafInfo},
+        light_client::StateKeyPair,
         message::{convert_proposal, Proposal, UpgradeLock},
         simple_certificate::{
             NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
@@ -89,18 +98,21 @@ mod persistence_tests {
     use indexmap::IndexMap;
     use portpicker::pick_unused_port;
     use sequencer_utils::test_utils::setup_test;
+    use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
     use surf_disco::Client;
     use testing::TestablePersistence;
     use tide_disco::error::ServerError;
+    use tokio::{spawn, time::sleep};
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 
     use super::*;
     use crate::{
         api::{
-            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+            test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
             Options,
         },
-        testing::TestConfigBuilder,
+        catchup::NullStateCatchup,
+        testing::{staking_priv_keys, TestConfigBuilder},
         SequencerApiVersion, RECENT_STAKE_TABLES_LIMIT,
     };
 
@@ -177,6 +189,53 @@ mod persistence_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    pub async fn test_store_drb_input<P: TestablePersistence>() {
+        use hotshot_types::drb::DrbInput;
+
+        setup_test();
+
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        // Initially, there is no saved info.
+        if storage.load_drb_input(10).await.is_ok() {
+            panic!("unexpected nonempty drb_input");
+        }
+
+        let drb_input_1 = DrbInput {
+            epoch: 10,
+            iteration: 10,
+            value: [0u8; 32],
+        };
+
+        let drb_input_2 = DrbInput {
+            epoch: 10,
+            iteration: 20,
+            value: [0u8; 32],
+        };
+
+        let drb_input_3 = DrbInput {
+            epoch: 10,
+            iteration: 30,
+            value: [0u8; 32],
+        };
+
+        let _ = storage.store_drb_input(drb_input_1.clone()).await;
+
+        assert_eq!(storage.load_drb_input(10).await.unwrap(), drb_input_1);
+
+        let _ = storage.store_drb_input(drb_input_3.clone()).await;
+
+        // check that the drb input is overwritten
+        assert_eq!(storage.load_drb_input(10).await.unwrap(), drb_input_3);
+
+        let _ = storage.store_drb_input(drb_input_2.clone()).await;
+
+        // check that the drb input is not overwritten by the older value
+        assert_eq!(storage.load_drb_input(10).await.unwrap(), drb_input_3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     pub async fn test_epoch_info<P: TestablePersistence>() {
         setup_test();
 
@@ -188,7 +247,7 @@ mod persistence_tests {
 
         // Store a drb result.
         storage
-            .add_drb_result(EpochNumber::new(1), [1; 32])
+            .store_drb_result(EpochNumber::new(1), [1; 32])
             .await
             .unwrap();
         assert_eq!(
@@ -202,7 +261,7 @@ mod persistence_tests {
 
         // Store a second DRB result
         storage
-            .add_drb_result(EpochNumber::new(2), [3; 32])
+            .store_drb_result(EpochNumber::new(2), [3; 32])
             .await
             .unwrap();
         assert_eq!(
@@ -231,7 +290,7 @@ mod persistence_tests {
 
         // Test storing the header
         storage
-            .add_epoch_root(EpochNumber::new(1), header.clone())
+            .store_epoch_root(EpochNumber::new(1), header.clone())
             .await
             .unwrap();
         assert_eq!(
@@ -256,7 +315,7 @@ mod persistence_tests {
             let epoch = EpochNumber::new(i);
             let drb = [i as u8; 32];
             storage
-                .add_drb_result(epoch, drb)
+                .store_drb_result(epoch, drb)
                 .await
                 .unwrap_or_else(|_| panic!("Failed to store DRB result for epoch {}", i));
         }
@@ -1145,6 +1204,41 @@ mod persistence_tests {
             .is_err());
     }
 
+    async fn assert_events_eq<P: TestablePersistence>(
+        persistence: &P,
+        block: u64,
+        stake_table_fetcher: &StakeTableFetcher,
+        l1_client: &L1Client,
+        stake_table_contract: Address,
+    ) -> anyhow::Result<()> {
+        // Load persisted events
+        let (stored_l1, events) = persistence.load_events(block).await?;
+        assert!(!events.is_empty());
+        assert!(stored_l1.is_some());
+        assert!(events.iter().all(|((l1_block, _), _)| *l1_block <= block));
+        // Fetch events directly from the contract and compare with persisted data
+        let contract_events = StakeTableFetcher::fetch_events_from_contract(
+            l1_client.clone(),
+            stake_table_contract,
+            None,
+            block,
+        )
+        .await?
+        .sort_events()?;
+        assert_eq!(
+            contract_events, events,
+            "Events from contract and persistence do not match"
+        );
+
+        // Fetch events from stake table fetcher and compare with persisted data
+        let fetched_events = stake_table_fetcher
+            .fetch_events(stake_table_contract, block)
+            .await?;
+        assert_eq!(fetched_events, events);
+
+        Ok(())
+    }
+
     // test for validating stake table event fetching from persistence,
     // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
     #[tokio::test(flavor = "multi_thread")]
@@ -1155,16 +1249,11 @@ mod persistence_tests {
         let epoch_height = 20;
         type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
 
-        let anvil_instance = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
-        let l1_rpc_url = anvil_instance.endpoint_url();
-        let l1_signer_key = anvil_instance.keys()[0].clone();
-        let signer = LocalSigner::from(l1_signer_key);
-
         let network_config = TestConfigBuilder::default()
-            .l1_url(l1_rpc_url.clone())
-            .signer(signer.clone())
             .epoch_height(epoch_height)
             .build();
+
+        let anvil_provider = network_config.anvil().unwrap();
 
         let query_service_port = pick_unused_port().expect("No ports free for query service");
         let query_api_options = Options::with_port(query_service_port);
@@ -1179,20 +1268,22 @@ mod persistence_tests {
             .try_into()
             .unwrap();
 
+        let persistence = persistence_options[0].clone().create().await.unwrap();
+
         // Build the config with PoS hook
+        let l1_url = network_config.l1_url();
 
         let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook::<PosVersion>(true)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
             .await
             .expect("Pos deployment failed")
             .build();
 
         //start the network
-
-        let mut test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
+        let test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
 
         let client: Client<ServerError, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")
@@ -1212,18 +1303,39 @@ mod persistence_tests {
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
-
         // Load initial persisted events and validate they exist.
-        let persistence = persistence_options[0].clone().create().await.unwrap();
-        let res1 = persistence
-            .load_events()
+        let membership_coordinator = test_network
+            .server
+            .consensus()
+            .read()
             .await
-            .expect("failed to load events");
-        assert!(res1.is_some());
+            .membership_coordinator
+            .clone();
 
-        let (events1_l1_block, events1) = res1.unwrap();
-        assert!(!events1.is_empty());
+        let l1_client = L1Client::new(vec![l1_url]).unwrap();
+        let node_state = test_network.server.node_state();
+        let chain_config = node_state.chain_config;
+        let stake_table_contract = chain_config.stake_table_contract.unwrap();
 
+        let current_membership = membership_coordinator.membership();
+        {
+            let membership_state = current_membership.read().await;
+            let stake_table_fetcher = membership_state.fetcher();
+
+            let block1 = anvil_provider
+                .get_block_number()
+                .await
+                .expect("latest l1 block");
+
+            assert_events_eq(
+                &persistence,
+                block1,
+                stake_table_fetcher,
+                &l1_client,
+                stake_table_contract,
+            )
+            .await?;
+        }
         let _epoch_4_blocks = client
             .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
@@ -1233,87 +1345,24 @@ mod persistence_tests {
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
-
-        // Stop consensus to freeze the state
-        test_network.stop_consensus().await;
-
-        let latest_events_data = persistence
-            .load_events()
+        let block2 = anvil_provider
+            .get_block_number()
             .await
-            .expect("failed to load events");
-        assert!(latest_events_data.is_some());
+            .expect("latest l1 block");
 
-        let (latest_l1_block, final_persisted_events) = latest_events_data.unwrap();
-        assert!(!final_persisted_events.is_empty());
+        {
+            let membership_state = current_membership.read().await;
+            let stake_table_fetcher = membership_state.fetcher();
 
-        let membership_coordinator = test_network
-            .server
-            .consensus()
-            .read()
-            .await
-            .membership_coordinator
-            .clone();
-
-        let l1_client = L1Client::new(vec![l1_rpc_url]).unwrap();
-        let node_state = test_network.server.node_state();
-        let chain_config = node_state.chain_config;
-        let stake_table_contract = chain_config.stake_table_contract.unwrap();
-
-        // Fetch events directly from the contract and compare with persisted data.
-        let contract_events = StakeTableFetcher::fetch_events_from_contract(
-            l1_client.clone(),
-            stake_table_contract,
-            None,
-            latest_l1_block,
-        )
-        .await
-        .unwrap()
-        .sort_events()
-        .unwrap();
-
-        assert_eq!(
-            contract_events, final_persisted_events,
-            "Events from contract and persistence do not match"
-        );
-
-        let current_membership = membership_coordinator.membership();
-        let membership_state = current_membership.read().await;
-        let stake_table_fetcher = membership_state.fetcher();
-
-        let fetched_events = stake_table_fetcher
-            .fetch_events(stake_table_contract, latest_l1_block)
-            .await
-            .unwrap();
-        assert_eq!(fetched_events, final_persisted_events);
-
-        // store an old snapshot of events in contract
-        // so that fetcher has to get additional events from the contract
-        persistence
-            .store_events(events1_l1_block, events1.clone())
-            .await
-            .unwrap();
-        let events = persistence.load_events().await.unwrap();
-        assert_eq!(events1.clone(), events.clone().unwrap().1);
-        assert_eq!(events.unwrap().0, events1_l1_block);
-
-        // Ensure fetcher events still matches contract state after restoring older snapshot.
-        let fetcher_events = stake_table_fetcher
-            .fetch_events(stake_table_contract, latest_l1_block)
-            .await
-            .unwrap();
-        let expected_events = StakeTableFetcher::fetch_events_from_contract(
-            l1_client,
-            stake_table_contract,
-            None,
-            latest_l1_block,
-        )
-        .await
-        .unwrap()
-        .sort_events()
-        .unwrap();
-
-        assert_eq!(fetcher_events, expected_events);
-
+            assert_events_eq(
+                &persistence,
+                block2,
+                stake_table_fetcher,
+                &l1_client,
+                stake_table_contract,
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -1322,93 +1371,146 @@ mod persistence_tests {
     {
         setup_test();
 
-        let epoch_height = 30;
-        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+        let blocks_per_epoch = 10;
 
-        let anvil_instance = Anvil::new()
-            .args(["--slots-in-an-epoch", "0", "--block-time", "1"])
-            .spawn();
-        let l1_rpc_url = anvil_instance.endpoint_url();
-        let l1_signer_key = anvil_instance.keys()[0].clone();
-        let signer = LocalSigner::from(l1_signer_key);
-
-        let network_config = TestConfigBuilder::default()
-            .l1_url(l1_rpc_url.clone())
-            .signer(signer.clone())
-            .epoch_height(epoch_height)
+        let network_config = TestConfigBuilder::<1>::default()
+            .epoch_height(blocks_per_epoch)
             .build();
 
-        let query_service_port = pick_unused_port().expect("No ports free for query service");
-        let query_api_options = Options::with_port(query_service_port);
+        let anvil_provider = network_config.anvil().unwrap();
 
-        const NODE_COUNT: usize = 2;
+        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+            &network_config.hotshot_config().hotshot_stake_table(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .unwrap();
 
-        let storage = join_all((0..NODE_COUNT).map(|_| P::tmp_storage())).await;
-        let persistence_options: [_; NODE_COUNT] = storage
-            .iter()
-            .map(P::options)
-            .collect::<Vec<_>>()
-            .try_into()
+        let (_, priv_keys): (Vec<_>, Vec<_>) = (0..200)
+            .map(|i| <PubKey as SignatureKey>::generated_from_seed_indexed([1; 32], i as u64))
+            .unzip();
+        let state_key_pairs = (0..200)
+            .map(|i| StateKeyPair::generate_from_seed_indexed([2; 32], i as u64))
+            .collect::<Vec<_>>();
+
+        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 1000);
+
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(network_config.signer().clone()))
+            .on_http(network_config.l1_url().clone());
+
+        let mut contracts = Contracts::new();
+        let args = DeployerArgsBuilder::default()
+            .deployer(deployer.clone())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(blocks_per_epoch)
+            .epoch_start_block(1)
+            .build()
             .unwrap();
-
-        // Build the config with PoS hook
-        let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(query_api_options)
-            .network_config(network_config.clone())
-            .persistences(persistence_options.clone())
-            .pos_hook::<PosVersion>(true)
+        args.deploy_all(&mut contracts)
             .await
-            .expect("Pos deployment failed")
-            .build();
+            .expect("failed to deploy all contracts");
 
-        //start the network
-        let _test_network = TestNetwork::new(testnet_config, PosVersion::new()).await;
+        let st_addr = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("StakeTableProxy address not found");
+        let token_addr = contracts
+            .address(Contract::EspTokenProxy)
+            .expect("EspTokenProxy address not found");
+        let l1_url = network_config.l1_url().clone();
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(
-            format!("http://localhost:{query_service_port}")
-                .parse()
-                .unwrap(),
+        // new block every 1s
+        anvil_provider
+            .anvil_set_interval_mining(1)
+            .await
+            .expect("interval mining");
+
+        // spawn a separate task
+        // this is going to keep registering validators and multiple delegators
+        // the interval mining is set to 1s so each transaction finalization would take atleast 1s
+        spawn({
+            let l1_url = l1_url.clone();
+            async move {
+                {
+                    setup_stake_table_contract_for_test(
+                        l1_url,
+                        &deployer,
+                        st_addr,
+                        token_addr,
+                        validators,
+                        DelegationConfig::MultipleDelegators,
+                    )
+                    .await
+                    .expect("stake table setup failed");
+                }
+            }
+        });
+
+        let storage = P::tmp_storage().await;
+        let persistence = P::options(&storage).create().await.unwrap();
+
+        let l1_client = L1ClientOptions {
+            stake_table_update_interval: Duration::from_secs(7),
+            l1_retry_delay: Duration::from_millis(10),
+            l1_events_max_block_range: 10000,
+            ..Default::default()
+        }
+        .connect(vec![l1_url])
+        .unwrap();
+        l1_client.spawn_tasks().await;
+
+        let fetcher = StakeTableFetcher::new(
+            Arc::new(NullStateCatchup::default()),
+            Arc::new(Mutex::new(persistence.clone())),
+            l1_client.clone(),
+            ChainConfig {
+                stake_table_contract: Some(st_addr),
+                base_fee: 0.into(),
+                ..Default::default()
+            },
         );
-        client.connect(None).await;
-        tracing::info!(query_service_port, "server running");
 
-        // wait until we enter in epoch 3
-        let _initial_blocks = client
-            .socket("availability/stream/blocks/0")
-            .subscribe::<BlockQueryData<SeqTypes>>()
-            .await
-            .unwrap()
-            .take(60)
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
+        // sleep so that we have enough events
+        sleep(Duration::from_secs(20)).await;
 
-        // Load initial persisted events and validate they exist.
-        let persistence = persistence_options[0].clone().create().await.unwrap();
-        let res1 = persistence
-            .load_events()
-            .await
-            .expect("failed to load events");
-        assert!(res1.is_some());
-
-        let (mut prev_l1, prev_events) = res1.unwrap();
-        assert!(!prev_events.is_empty());
-
+        fetcher.spawn_update_loop().await;
+        let mut prev_l1_block = 0;
+        let mut prev_events_len = 0;
         for _i in 0..10 {
             // Wait for more than update interval to assert that persistence was updated
-            // L1 update interval is 5s for testing
-            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+            // L1 update interval is 7s in this test
+            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
-            let res = persistence
-                .load_events()
+            let block = anvil_provider
+                .get_block_number()
                 .await
-                .expect("failed to load events");
+                .expect("latest l1 block");
 
-            let (l1, events) = res.unwrap();
-            assert!(!events.is_empty());
+            let (read_offset, persisted_events) = persistence.load_events(block).await?;
+            let read_offset = read_offset.unwrap();
+            let l1_block = match read_offset {
+                EventsPersistenceRead::Complete => block,
+                EventsPersistenceRead::UntilL1Block(block) => block,
+            };
 
-            assert!(l1 > prev_l1, "events not updated");
-            prev_l1 = l1;
+            tracing::info!("{l1_block:?}, persistence events = {persisted_events:?}.");
+            assert!(persisted_events.len() > prev_events_len);
+
+            assert!(l1_block > prev_l1_block, "events not updated");
+
+            let contract_events = StakeTableFetcher::fetch_events_from_contract(
+                l1_client.clone(),
+                st_addr,
+                None,
+                l1_block,
+            )
+            .await?
+            .sort_events()?;
+            assert_eq!(persisted_events, contract_events);
+
+            prev_l1_block = l1_block;
+            prev_events_len = persisted_events.len();
         }
 
         Ok(())

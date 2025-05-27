@@ -9,7 +9,6 @@ edition = "2021"
 default = ["fee", "pos"]
 testing = [
     "hotshot-testing",
-    "marketplace-builder-core",
     "espresso-types/testing",
     "sequencer-utils/testing",
     "hotshot-query-service/testing",
@@ -22,7 +21,6 @@ sqlite-unbundled = [
 ]
 fee = []
 pos = []
-marketplace = []
 
 [[bin]]
 name = "espresso-dev-node"
@@ -47,6 +45,8 @@ anyhow = { workspace = true }
 vergen = { workspace = true }
 
 [dependencies]
+
+alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true, features = ["derive"] }
@@ -56,15 +56,12 @@ async-once-cell = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 byteorder = "1"
-staking-cli = { workspace = true }
 
 # CDN imports
 cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-broker", features = [
     "global-permits",
 ] }
 cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.5.1-upgrade", package = "cdn-marshal" }
-
-alloy = { workspace = true }
 clap = { workspace = true }
 client = { path = "../client" }
 committable = "0.2"
@@ -72,9 +69,9 @@ csv = "1"
 derivative = "2.2"
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+espresso-contract-deployer = { path = "../contracts/rust/deployer" }
 espresso-types = { path = "../types" }
 futures = { workspace = true }
-indexmap = { workspace = true }
 
 hotshot = { workspace = true }
 hotshot-builder-core-refactored = { path = "../hotshot-builder-core-refactored" }
@@ -84,12 +81,12 @@ hotshot-libp2p-networking = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-state-prover = { workspace = true }
-
 # Dependencies for feature `testing`
 hotshot-testing = { workspace = true, optional = true }
-
 hotshot-types = { workspace = true }
+
 include_dir = "0.7"
+indexmap = { workspace = true }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
 jf-merkle-tree = { workspace = true }
@@ -98,8 +95,6 @@ jf-rescue = { workspace = true }
 jf-signature = { workspace = true, features = ["bls", "schnorr"] }
 jf-vid = { workspace = true }
 libp2p = { workspace = true }
-marketplace-builder-core = { workspace = true, optional = true }
-marketplace-solver = { path = "../marketplace-solver" }
 num_enum = "0.7"
 parking_lot = "0.12"
 portpicker = { workspace = true }
@@ -120,6 +115,7 @@ sqlx = { workspace = true, features = [
     "runtime-tokio",
     "tls-native-tls",
 ] }
+staking-cli = { workspace = true }
 static_assertions = "1"
 strum = { workspace = true }
 surf-disco = { workspace = true }
@@ -127,7 +123,6 @@ tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
-todo_by = "0.3"
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
@@ -136,6 +131,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+vid = { path = "../vid" }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]

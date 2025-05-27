@@ -9,8 +9,11 @@
 //! This modules provides the [`Storage`] trait.
 //!
 
-use anyhow::Result;
+use std::sync::Arc;
+
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 
 use super::node_implementation::NodeType;
 use crate::{
@@ -19,7 +22,7 @@ use crate::{
         DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
         VidCommitment, VidDisperseShare,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::HotShotAction,
     message::{convert_proposal, Proposal},
     simple_certificate::{
@@ -30,7 +33,7 @@ use crate::{
 
 /// Abstraction for storing a variety of consensus payload datum.
 #[async_trait]
-pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
+pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Add a proposal to the stored VID proposals.
     async fn append_vid(&self, proposal: &Proposal<TYPES, ADVZDisperseShare<TYPES>>) -> Result<()>;
     /// Add a proposal to the stored VID proposals.
@@ -140,11 +143,88 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone {
         Ok(())
     }
     /// Add a drb result
-    async fn add_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
+    async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
     /// Add an epoch block header
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: TYPES::Epoch,
         block_header: TYPES::BlockHeader,
     ) -> Result<()>;
+    async fn store_drb_input(&self, drb_input: DrbInput) -> Result<()>;
+    async fn load_drb_input(&self, _epoch: u64) -> Result<DrbInput>;
+}
+
+pub async fn load_drb_input_impl<TYPES: NodeType>(
+    storage: impl Storage<TYPES>,
+    epoch: u64,
+) -> Result<DrbInput> {
+    storage.load_drb_input(epoch).await
+}
+
+pub type LoadDrbProgressFn =
+    std::sync::Arc<dyn Fn(u64) -> BoxFuture<'static, Result<DrbInput>> + Send + Sync>;
+
+pub fn load_drb_progress_fn<TYPES: NodeType>(
+    storage: impl Storage<TYPES> + 'static,
+) -> LoadDrbProgressFn {
+    Arc::new(move |epoch| {
+        let storage = storage.clone();
+        Box::pin(load_drb_input_impl(storage, epoch))
+    })
+}
+
+pub fn null_load_drb_progress_fn() -> LoadDrbProgressFn {
+    Arc::new(move |_drb_input| {
+        Box::pin(async { Err(anyhow!("Using null implementation of load_drb_input")) })
+    })
+}
+
+pub async fn store_drb_input_impl<TYPES: NodeType>(
+    storage: impl Storage<TYPES>,
+    drb_input: DrbInput,
+) -> Result<()> {
+    storage.store_drb_input(drb_input).await
+}
+
+pub type StoreDrbProgressFn =
+    std::sync::Arc<dyn Fn(DrbInput) -> BoxFuture<'static, Result<()>> + Send + Sync>;
+
+pub fn store_drb_progress_fn<TYPES: NodeType>(
+    storage: impl Storage<TYPES> + 'static,
+) -> StoreDrbProgressFn {
+    Arc::new(move |drb_input| {
+        let storage = storage.clone();
+        Box::pin(store_drb_input_impl(storage, drb_input))
+    })
+}
+
+pub fn null_store_drb_progress_fn() -> StoreDrbProgressFn {
+    Arc::new(move |_drb_input| Box::pin(async { Ok(()) }))
+}
+
+pub type StoreDrbResultFn<TYPES> = Arc<
+    Box<
+        dyn Fn(<TYPES as NodeType>::Epoch, DrbResult) -> BoxFuture<'static, Result<()>>
+            + Send
+            + Sync
+            + 'static,
+    >,
+>;
+
+async fn store_drb_result_impl<TYPES: NodeType>(
+    storage: impl Storage<TYPES>,
+    epoch: TYPES::Epoch,
+    drb_result: DrbResult,
+) -> Result<()> {
+    storage.store_drb_result(epoch, drb_result).await
+}
+
+/// Helper function to create a callback to add a drb result to storage
+pub fn store_drb_result_fn<TYPES: NodeType>(
+    storage: impl Storage<TYPES> + 'static,
+) -> StoreDrbResultFn<TYPES> {
+    Arc::new(Box::new(move |epoch, drb_result| {
+        let st = storage.clone();
+        Box::pin(store_drb_result_impl(st, epoch, drb_result))
+    }))
 }

@@ -18,20 +18,20 @@ use hotshot_types::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
-    drb::DrbResult,
+    drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
     message::{convert_proposal, Proposal},
     simple_certificate::{
         LightClientStateUpdateCertificate, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
     },
+    stake_table::HSStakeTable,
     traits::{
         node_implementation::{ConsensusTime, NodeType, Versions},
         storage::Storage,
         ValidatedState as HotShotState,
     },
     utils::genesis_epoch_from_version,
-    PeerConfig,
 };
 use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
@@ -43,7 +43,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
 };
 use crate::{
-    v0::impls::ValidatedState, v0_99::ChainConfig, BlockMerkleTree, Event, FeeAccount,
+    v0::impls::ValidatedState, v0_3::ChainConfig, BlockMerkleTree, Event, FeeAccount,
     FeeAccountProof, FeeMerkleCommitment, Leaf2, NetworkConfig, SeqTypes,
 };
 
@@ -54,7 +54,7 @@ pub trait StateCatchup: Send + Sync {
         &self,
         retry: usize,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2>;
 
@@ -62,7 +62,7 @@ pub trait StateCatchup: Send + Sync {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         self.backoff()
@@ -233,7 +233,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         &self,
         retry: usize,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         (**self)
@@ -244,7 +244,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: Vec<PeerConfig<SeqTypes>>,
+        stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         (**self)
@@ -381,6 +381,14 @@ pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     async fn reset(self) -> anyhow::Result<()>;
 }
 
+/// Determine the read state based on the queried block range.
+// - If the persistence returned events up to the requested block, the read is complete.
+/// - Otherwise, indicate that the read is up to the last processed block.
+pub enum EventsPersistenceRead {
+    Complete,
+    UntilL1Block(u64),
+}
+
 #[async_trait]
 /// Trait used by `Memberships` implementations to interact with persistence layer.
 pub trait MembershipPersistence: Send + Sync + 'static {
@@ -402,10 +410,16 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
     async fn store_events(
         &self,
-        l1_block: u64,
+        l1_finalized: u64,
         events: Vec<(EventKey, StakeTableEvent)>,
     ) -> anyhow::Result<()>;
-    async fn load_events(&self) -> anyhow::Result<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>>;
+    async fn load_events(
+        &self,
+        l1_finalized: u64,
+    ) -> anyhow::Result<(
+        Option<EventsPersistenceRead>,
+        Vec<(EventKey, StakeTableEvent)>,
+    )>;
 }
 
 #[async_trait]
@@ -741,12 +755,14 @@ pub trait SequencerPersistence:
         self.append_quorum_proposal2(proposal).await
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         drb_result: DrbResult,
     ) -> anyhow::Result<()>;
-    async fn add_epoch_root(
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
+    async fn store_epoch_root(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -858,20 +874,28 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
             .await
     }
 
-    async fn add_drb_result(
+    async fn store_drb_result(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         drb_result: DrbResult,
     ) -> anyhow::Result<()> {
-        (**self).add_drb_result(epoch, drb_result).await
+        (**self).store_drb_result(epoch, drb_result).await
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: <SeqTypes as NodeType>::Epoch,
         block_header: <SeqTypes as NodeType>::BlockHeader,
     ) -> anyhow::Result<()> {
-        (**self).add_epoch_root(epoch, block_header).await
+        (**self).store_epoch_root(epoch, block_header).await
+    }
+
+    async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
+        (**self).store_drb_input(drb_input).await
+    }
+
+    async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
+        (**self).load_drb_input(epoch).await
     }
 
     async fn update_state_cert(
