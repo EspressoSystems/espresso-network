@@ -397,6 +397,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             self.config.epoch_start_block,
             self.config.epoch_height,
         );
+        // `start_epoch` comes from the initializer, it might be the last seen epoch before restart
+        // `first_epoch` is the first epoch after the transition to the epoch version
+        // `initial_view_change_epoch` is the greater of the two, we use it with the initial view change
         let initial_view_change_epoch = self.start_epoch.max(first_epoch);
         #[allow(clippy::panic)]
         self.internal_event_stream
