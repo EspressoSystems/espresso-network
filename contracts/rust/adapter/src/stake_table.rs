@@ -132,15 +132,11 @@ fn authenticate_stake_table_validator_event(
     Ok(())
 }
 
-/// Stake-table related error from the contract
+/// Errors encountered when processing stake table events
 #[derive(Debug, thiserror::Error)]
 pub enum StakeTableSolError {
     #[error("Failed to deserialize Schnorr signature")]
     SchnorrSigDeserializationError(#[from] ark_serialize::SerializationError),
-    #[error("v1 err: {0:?}")]
-    V1(StakeTable::StakeTableErrors),
-    #[error("v2 err: {0:?}")]
-    V2(StakeTableV2::StakeTableV2Errors),
     #[error("BLS signature invalid")]
     InvalidBlsSignature,
     #[error("Schnorr signature invalid")]
