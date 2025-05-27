@@ -444,13 +444,15 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 continue;
             };
 
-            // Check that network state is not disastrously broken.
             for leaf in leaf_chain.iter() {
                 let height = leaf.leaf.height();
                 let local_commitment = leaf.leaf.commitment();
 
-                tracing::debug!("checking state");
+                // Check that network state is not disastrously broken.
                 let reader = self.state.upgradable_read().await;
+                // Note that not all nodes will be at the same height, so in
+                // some cases nothing happens. But there is generally enough
+                // overlap that this will fail.
                 if let Some(known_commitment) = reader.get(&height) {
                     tracing::info!(node_id, height, "Comparing commitments across nodes");
                     assert_eq!(
