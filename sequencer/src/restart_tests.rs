@@ -2,7 +2,10 @@
 
 use std::{collections::HashSet, path::Path, time::Duration};
 
-use alloy::node_bindings::{Anvil, AnvilInstance};
+use alloy::{
+    node_bindings::{Anvil, AnvilInstance},
+    primitives::map::HashMap,
+};
 use anyhow::bail;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
@@ -10,10 +13,11 @@ use cdn_broker::{
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
+use committable::Commitment;
 use derivative::Derivative;
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
-    MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
+    Leaf2, MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -21,6 +25,7 @@ use futures::{
 };
 use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_orchestrator::run_orchestrator;
+use hotshot_query_service::Resolvable;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
     test_builder::BuilderChange,
@@ -228,6 +233,9 @@ impl NodeParams {
     }
 }
 
+/// State to enable comparison between nodes.
+type ReferenceState = Arc<RwLock<HashMap<u64, Commitment<Leaf2>>>>;
+
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
@@ -241,11 +249,12 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    state: ReferenceState,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
     #[tracing::instrument]
-    async fn new(network: NetworkParams<'_>, node: &NodeParams) -> Self {
+    async fn new(network: NetworkParams<'_>, node: &NodeParams, state: ReferenceState) -> Self {
         tracing::info!(?network, ?node, "creating node",);
 
         let opts = api::Options::from(api::options::Http::with_port(node.api_port));
@@ -312,6 +321,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             opt,
             num_nodes: network.peer_ports.len(),
             context: None,
+            state,
         }
     }
 
@@ -432,18 +442,32 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
+            // TODO evaluate if this is the correct pace for this check
             for leaf in leaf_chain.iter() {
-                if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
-                    tracing::info!(
-                        node_id,
-                        height = leaf.leaf.height(),
-                        "got leaf proposed by this node"
+                let height = leaf.leaf.height();
+                let local_commitment = leaf.leaf.commitment();
+                // let v = leaf.state.clone();
+                // let block_commitment = v.block_merkle_tree.commitment();
+                // let fee_commitment = v.fee_merkle_tree.commitment();
+
+                if let Some(known_commitment) = self.state.read().await.get(&height) {
+                    tracing::error!(
+                        "known commitment: {}, local_commitment: {}",
+                        &known_commitment,
+                        &local_commitment
                     );
+                    assert_eq!(known_commitment, &local_commitment);
+                } else {
+                    self.state.write().await.insert(height, local_commitment);
+                }
+
+                if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
+                    tracing::info!(node_id, height, "got leaf proposed by this node");
                     return Ok(());
                 }
                 tracing::info!(
                     node_id,
-                    height = leaf.leaf.height(),
+                    height,
                     view = leaf.leaf.view_number().u64(),
                     "leaf not proposed by this node"
                 );
@@ -601,23 +625,26 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
-        let mut network = Self {
-            da_nodes: join_all(
-                (0..da_nodes).map(|i| TestNode::new(network_params, &node_params[i])),
-            )
-            .await,
-            regular_nodes: join_all(
-                (0..regular_nodes)
-                    .map(|i| TestNode::new(network_params, &node_params[i + da_nodes])),
-            )
-            .await,
-            tmp,
-            builder_port,
-            orchestrator_task,
-            broker_task,
-            marshal_task,
-            _anvil: anvil,
-        };
+        let state = Arc::new(RwLock::new(HashMap::new()));
+
+        let mut network =
+            Self {
+                da_nodes: join_all(
+                    (0..da_nodes)
+                        .map(|i| TestNode::new(network_params, &node_params[i], state.clone())),
+                )
+                .await,
+                regular_nodes: join_all((0..regular_nodes).map(|i| {
+                    TestNode::new(network_params, &node_params[i + da_nodes], state.clone())
+                }))
+                .await,
+                tmp,
+                builder_port,
+                orchestrator_task,
+                broker_task,
+                marshal_task,
+                _anvil: anvil,
+            };
 
         join_all(
             network
