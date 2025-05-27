@@ -1773,13 +1773,8 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use alloy::{
-        network::EthereumWallet, primitives::Address, providers::ProviderBuilder, rpc::types::Log,
-    };
-    use hotshot_contract_adapter::{
-        sol_types::{PlonkVerifier::deploy_builder, PlonkVerifierV2::deploy},
-        stake_table::StakeTableContractVersion,
-    };
+    use alloy::{primitives::Address, rpc::types::Log};
+    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use sequencer_utils::test_utils::setup_test;
 
     use super::*;

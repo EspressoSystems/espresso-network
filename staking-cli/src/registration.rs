@@ -137,12 +137,11 @@ pub async fn deregister_validator(
 #[cfg(test)]
 mod test {
     use alloy::providers::WalletProvider as _;
-    use espresso_contract_deployer::{build_provider, build_random_provider};
+    use espresso_contract_deployer::build_provider;
     use espresso_types::{
         v0_3::{StakeTableEvent, StakeTableFetcher},
-        validators_from_l1_events, L1Client,
+        L1Client,
     };
-    use hotshot_contract_adapter::stake_table;
     use rand::{rngs::StdRng, SeedableRng as _};
 
     use super::*;
