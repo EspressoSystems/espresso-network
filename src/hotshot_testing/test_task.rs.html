@@ -147,78 +147,80 @@
 <a href=#147 id=147 data-nosnippet>147</a>                    <span class="kw">break </span><span class="self">self</span>.state.check().<span class="kw">await</span>;
 <a href=#148 id=148 data-nosnippet>148</a>                }
 <a href=#149 id=149 data-nosnippet>149</a>
-<a href=#150 id=150 data-nosnippet>150</a>                <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
+<a href=#150 id=150 data-nosnippet>150</a>                <span class="self">self</span>.receivers.retain(|receiver| !receiver.is_closed());
 <a href=#151 id=151 data-nosnippet>151</a>
-<a href=#152 id=152 data-nosnippet>152</a>                <span class="kw">for </span>receiver <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.receivers {
-<a href=#153 id=153 data-nosnippet>153</a>                    messages.push(receiver.recv());
-<a href=#154 id=154 data-nosnippet>154</a>                }
-<a href=#155 id=155 data-nosnippet>155</a>
-<a href=#156 id=156 data-nosnippet>156</a>                <span class="kw">match </span>timeout(Duration::from_millis(<span class="number">2500</span>), select_all(messages)).<span class="kw">await </span>{
-<a href=#157 id=157 data-nosnippet>157</a>                    <span class="prelude-val">Ok</span>((<span class="prelude-val">Ok</span>(input), id, <span class="kw">_</span>)) =&gt; {
-<a href=#158 id=158 data-nosnippet>158</a>                        <span class="kw">let _ </span>= S::handle_event(<span class="kw-2">&amp;mut </span><span class="self">self</span>.state, (input, id))
-<a href=#159 id=159 data-nosnippet>159</a>                            .<span class="kw">await
-<a href=#160 id=160 data-nosnippet>160</a>                            </span>.inspect_err(|e| <span class="macro">tracing::error!</span>(<span class="string">"{e}"</span>));
-<a href=#161 id=161 data-nosnippet>161</a>                    },
-<a href=#162 id=162 data-nosnippet>162</a>                    <span class="prelude-val">Ok</span>((<span class="prelude-val">Err</span>(e), _id, <span class="kw">_</span>)) =&gt; {
-<a href=#163 id=163 data-nosnippet>163</a>                        <span class="macro">error!</span>(<span class="string">"Error from one channel in test task {:?}"</span>, e);
-<a href=#164 id=164 data-nosnippet>164</a>                        sleep(Duration::from_millis(<span class="number">4000</span>)).<span class="kw">await</span>;
-<a href=#165 id=165 data-nosnippet>165</a>                    },
-<a href=#166 id=166 data-nosnippet>166</a>                    <span class="kw">_ </span>=&gt; {},
-<a href=#167 id=167 data-nosnippet>167</a>                };
-<a href=#168 id=168 data-nosnippet>168</a>            }
-<a href=#169 id=169 data-nosnippet>169</a>        })
-<a href=#170 id=170 data-nosnippet>170</a>    }
-<a href=#171 id=171 data-nosnippet>171</a>}
-<a href=#172 id=172 data-nosnippet>172</a>
-<a href=#173 id=173 data-nosnippet>173</a><span class="doccomment">/// Add the network task to handle messages and publish events.
-<a href=#174 id=174 data-nosnippet>174</a></span><span class="kw">pub async fn </span>add_network_message_test_task&lt;
-<a href=#175 id=175 data-nosnippet>175</a>    TYPES: NodeType,
-<a href=#176 id=176 data-nosnippet>176</a>    V: Versions,
-<a href=#177 id=177 data-nosnippet>177</a>    NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
-<a href=#178 id=178 data-nosnippet>178</a>&gt;(
-<a href=#179 id=179 data-nosnippet>179</a>    internal_event_stream: Sender&lt;Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;&gt;,
-<a href=#180 id=180 data-nosnippet>180</a>    external_event_stream: Sender&lt;Event&lt;TYPES&gt;&gt;,
-<a href=#181 id=181 data-nosnippet>181</a>    upgrade_lock: UpgradeLock&lt;TYPES, V&gt;,
-<a href=#182 id=182 data-nosnippet>182</a>    channel: Arc&lt;NET&gt;,
-<a href=#183 id=183 data-nosnippet>183</a>    public_key: TYPES::SignatureKey,
-<a href=#184 id=184 data-nosnippet>184</a>    id: u64,
-<a href=#185 id=185 data-nosnippet>185</a>) -&gt; JoinHandle&lt;()&gt; {
-<a href=#186 id=186 data-nosnippet>186</a>    <span class="kw">let </span>net = Arc::clone(<span class="kw-2">&amp;</span>channel);
-<a href=#187 id=187 data-nosnippet>187</a>    <span class="kw">let </span>network_state: NetworkMessageTaskState&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt; = NetworkMessageTaskState {
-<a href=#188 id=188 data-nosnippet>188</a>        internal_event_stream: internal_event_stream.clone(),
-<a href=#189 id=189 data-nosnippet>189</a>        external_event_stream: external_event_stream.clone(),
-<a href=#190 id=190 data-nosnippet>190</a>        public_key,
-<a href=#191 id=191 data-nosnippet>191</a>        transactions_cache: lru::LruCache::new(NonZeroUsize::new(<span class="number">100_000</span>).unwrap()),
-<a href=#192 id=192 data-nosnippet>192</a>        upgrade_lock: upgrade_lock.clone(),
-<a href=#193 id=193 data-nosnippet>193</a>        id,
-<a href=#194 id=194 data-nosnippet>194</a>    };
-<a href=#195 id=195 data-nosnippet>195</a>
-<a href=#196 id=196 data-nosnippet>196</a>    <span class="kw">let </span>network = Arc::clone(<span class="kw-2">&amp;</span>net);
-<a href=#197 id=197 data-nosnippet>197</a>    <span class="kw">let </span><span class="kw-2">mut </span>state = network_state.clone();
-<a href=#198 id=198 data-nosnippet>198</a>
-<a href=#199 id=199 data-nosnippet>199</a>    spawn(<span class="kw">async move </span>{
-<a href=#200 id=200 data-nosnippet>200</a>        <span class="kw">loop </span>{
-<a href=#201 id=201 data-nosnippet>201</a>            <span class="comment">// Get the next message from the network
-<a href=#202 id=202 data-nosnippet>202</a>            </span><span class="kw">let </span>message = <span class="kw">match </span>network.recv_message().<span class="kw">await </span>{
-<a href=#203 id=203 data-nosnippet>203</a>                <span class="prelude-val">Ok</span>(message) =&gt; message,
-<a href=#204 id=204 data-nosnippet>204</a>                <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#205 id=205 data-nosnippet>205</a>                    <span class="macro">error!</span>(<span class="string">"Failed to receive message: {:?}"</span>, e);
-<a href=#206 id=206 data-nosnippet>206</a>                    <span class="kw">continue</span>;
-<a href=#207 id=207 data-nosnippet>207</a>                },
-<a href=#208 id=208 data-nosnippet>208</a>            };
-<a href=#209 id=209 data-nosnippet>209</a>
-<a href=#210 id=210 data-nosnippet>210</a>            <span class="comment">// Deserialize the message
-<a href=#211 id=211 data-nosnippet>211</a>            </span><span class="kw">let </span>deserialized_message: Message&lt;TYPES&gt; =
-<a href=#212 id=212 data-nosnippet>212</a>                <span class="kw">match </span>upgrade_lock.deserialize(<span class="kw-2">&amp;</span>message).<span class="kw">await </span>{
-<a href=#213 id=213 data-nosnippet>213</a>                    <span class="prelude-val">Ok</span>(message) =&gt; message,
-<a href=#214 id=214 data-nosnippet>214</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#215 id=215 data-nosnippet>215</a>                        <span class="macro">tracing::error!</span>(<span class="string">"Failed to deserialize message: {:?}"</span>, e);
-<a href=#216 id=216 data-nosnippet>216</a>                        <span class="kw">continue</span>;
-<a href=#217 id=217 data-nosnippet>217</a>                    },
-<a href=#218 id=218 data-nosnippet>218</a>                };
-<a href=#219 id=219 data-nosnippet>219</a>
-<a href=#220 id=220 data-nosnippet>220</a>            <span class="comment">// Handle the message
-<a href=#221 id=221 data-nosnippet>221</a>            </span>state.handle_message(deserialized_message).<span class="kw">await</span>;
-<a href=#222 id=222 data-nosnippet>222</a>        }
-<a href=#223 id=223 data-nosnippet>223</a>    })
-<a href=#224 id=224 data-nosnippet>224</a>}</code></pre></div></section></main></body></html>
+<a href=#152 id=152 data-nosnippet>152</a>                <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
+<a href=#153 id=153 data-nosnippet>153</a>
+<a href=#154 id=154 data-nosnippet>154</a>                <span class="kw">for </span>receiver <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.receivers {
+<a href=#155 id=155 data-nosnippet>155</a>                    messages.push(receiver.recv());
+<a href=#156 id=156 data-nosnippet>156</a>                }
+<a href=#157 id=157 data-nosnippet>157</a>
+<a href=#158 id=158 data-nosnippet>158</a>                <span class="kw">match </span>timeout(Duration::from_millis(<span class="number">2500</span>), select_all(messages)).<span class="kw">await </span>{
+<a href=#159 id=159 data-nosnippet>159</a>                    <span class="prelude-val">Ok</span>((<span class="prelude-val">Ok</span>(input), id, <span class="kw">_</span>)) =&gt; {
+<a href=#160 id=160 data-nosnippet>160</a>                        <span class="kw">let _ </span>= S::handle_event(<span class="kw-2">&amp;mut </span><span class="self">self</span>.state, (input, id))
+<a href=#161 id=161 data-nosnippet>161</a>                            .<span class="kw">await
+<a href=#162 id=162 data-nosnippet>162</a>                            </span>.inspect_err(|e| <span class="macro">tracing::error!</span>(<span class="string">"{e}"</span>));
+<a href=#163 id=163 data-nosnippet>163</a>                    },
+<a href=#164 id=164 data-nosnippet>164</a>                    <span class="prelude-val">Ok</span>((<span class="prelude-val">Err</span>(e), _id, <span class="kw">_</span>)) =&gt; {
+<a href=#165 id=165 data-nosnippet>165</a>                        <span class="macro">error!</span>(<span class="string">"Error from one channel in test task {:?}"</span>, e);
+<a href=#166 id=166 data-nosnippet>166</a>                        sleep(Duration::from_millis(<span class="number">4000</span>)).<span class="kw">await</span>;
+<a href=#167 id=167 data-nosnippet>167</a>                    },
+<a href=#168 id=168 data-nosnippet>168</a>                    <span class="kw">_ </span>=&gt; {},
+<a href=#169 id=169 data-nosnippet>169</a>                };
+<a href=#170 id=170 data-nosnippet>170</a>            }
+<a href=#171 id=171 data-nosnippet>171</a>        })
+<a href=#172 id=172 data-nosnippet>172</a>    }
+<a href=#173 id=173 data-nosnippet>173</a>}
+<a href=#174 id=174 data-nosnippet>174</a>
+<a href=#175 id=175 data-nosnippet>175</a><span class="doccomment">/// Add the network task to handle messages and publish events.
+<a href=#176 id=176 data-nosnippet>176</a></span><span class="kw">pub async fn </span>add_network_message_test_task&lt;
+<a href=#177 id=177 data-nosnippet>177</a>    TYPES: NodeType,
+<a href=#178 id=178 data-nosnippet>178</a>    V: Versions,
+<a href=#179 id=179 data-nosnippet>179</a>    NET: ConnectedNetwork&lt;TYPES::SignatureKey&gt;,
+<a href=#180 id=180 data-nosnippet>180</a>&gt;(
+<a href=#181 id=181 data-nosnippet>181</a>    internal_event_stream: Sender&lt;Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;&gt;,
+<a href=#182 id=182 data-nosnippet>182</a>    external_event_stream: Sender&lt;Event&lt;TYPES&gt;&gt;,
+<a href=#183 id=183 data-nosnippet>183</a>    upgrade_lock: UpgradeLock&lt;TYPES, V&gt;,
+<a href=#184 id=184 data-nosnippet>184</a>    channel: Arc&lt;NET&gt;,
+<a href=#185 id=185 data-nosnippet>185</a>    public_key: TYPES::SignatureKey,
+<a href=#186 id=186 data-nosnippet>186</a>    id: u64,
+<a href=#187 id=187 data-nosnippet>187</a>) -&gt; JoinHandle&lt;()&gt; {
+<a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">let </span>net = Arc::clone(<span class="kw-2">&amp;</span>channel);
+<a href=#189 id=189 data-nosnippet>189</a>    <span class="kw">let </span>network_state: NetworkMessageTaskState&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt; = NetworkMessageTaskState {
+<a href=#190 id=190 data-nosnippet>190</a>        internal_event_stream: internal_event_stream.clone(),
+<a href=#191 id=191 data-nosnippet>191</a>        external_event_stream: external_event_stream.clone(),
+<a href=#192 id=192 data-nosnippet>192</a>        public_key,
+<a href=#193 id=193 data-nosnippet>193</a>        transactions_cache: lru::LruCache::new(NonZeroUsize::new(<span class="number">100_000</span>).unwrap()),
+<a href=#194 id=194 data-nosnippet>194</a>        upgrade_lock: upgrade_lock.clone(),
+<a href=#195 id=195 data-nosnippet>195</a>        id,
+<a href=#196 id=196 data-nosnippet>196</a>    };
+<a href=#197 id=197 data-nosnippet>197</a>
+<a href=#198 id=198 data-nosnippet>198</a>    <span class="kw">let </span>network = Arc::clone(<span class="kw-2">&amp;</span>net);
+<a href=#199 id=199 data-nosnippet>199</a>    <span class="kw">let </span><span class="kw-2">mut </span>state = network_state.clone();
+<a href=#200 id=200 data-nosnippet>200</a>
+<a href=#201 id=201 data-nosnippet>201</a>    spawn(<span class="kw">async move </span>{
+<a href=#202 id=202 data-nosnippet>202</a>        <span class="kw">loop </span>{
+<a href=#203 id=203 data-nosnippet>203</a>            <span class="comment">// Get the next message from the network
+<a href=#204 id=204 data-nosnippet>204</a>            </span><span class="kw">let </span>message = <span class="kw">match </span>network.recv_message().<span class="kw">await </span>{
+<a href=#205 id=205 data-nosnippet>205</a>                <span class="prelude-val">Ok</span>(message) =&gt; message,
+<a href=#206 id=206 data-nosnippet>206</a>                <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#207 id=207 data-nosnippet>207</a>                    <span class="macro">error!</span>(<span class="string">"Failed to receive message: {:?}"</span>, e);
+<a href=#208 id=208 data-nosnippet>208</a>                    <span class="kw">continue</span>;
+<a href=#209 id=209 data-nosnippet>209</a>                },
+<a href=#210 id=210 data-nosnippet>210</a>            };
+<a href=#211 id=211 data-nosnippet>211</a>
+<a href=#212 id=212 data-nosnippet>212</a>            <span class="comment">// Deserialize the message
+<a href=#213 id=213 data-nosnippet>213</a>            </span><span class="kw">let </span>deserialized_message: Message&lt;TYPES&gt; =
+<a href=#214 id=214 data-nosnippet>214</a>                <span class="kw">match </span>upgrade_lock.deserialize(<span class="kw-2">&amp;</span>message).<span class="kw">await </span>{
+<a href=#215 id=215 data-nosnippet>215</a>                    <span class="prelude-val">Ok</span>(message) =&gt; message,
+<a href=#216 id=216 data-nosnippet>216</a>                    <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#217 id=217 data-nosnippet>217</a>                        <span class="macro">tracing::error!</span>(<span class="string">"Failed to deserialize message: {:?}"</span>, e);
+<a href=#218 id=218 data-nosnippet>218</a>                        <span class="kw">continue</span>;
+<a href=#219 id=219 data-nosnippet>219</a>                    },
+<a href=#220 id=220 data-nosnippet>220</a>                };
+<a href=#221 id=221 data-nosnippet>221</a>
+<a href=#222 id=222 data-nosnippet>222</a>            <span class="comment">// Handle the message
+<a href=#223 id=223 data-nosnippet>223</a>            </span>state.handle_message(deserialized_message).<span class="kw">await</span>;
+<a href=#224 id=224 data-nosnippet>224</a>        }
+<a href=#225 id=225 data-nosnippet>225</a>    })
+<a href=#226 id=226 data-nosnippet>226</a>}</code></pre></div></section></main></body></html>

@@ -1061,7 +1061,7 @@
 <a href=#1061 id=1061 data-nosnippet>1061</a>                <span class="prelude-val">Some</span>((sender, message, TransmitType::Broadcast))
 <a href=#1062 id=1062 data-nosnippet>1062</a>            },
 <a href=#1063 id=1063 data-nosnippet>1063</a>            HotShotEvent::TimeoutVoteSend(vote) =&gt; {
-<a href=#1064 id=1064 data-nosnippet>1064</a>                <span class="kw-2">*</span>maybe_action = <span class="prelude-val">Some</span>(HotShotAction::Vote);
+<a href=#1064 id=1064 data-nosnippet>1064</a>                <span class="kw-2">*</span>maybe_action = <span class="prelude-val">Some</span>(HotShotAction::TimeoutVote);
 <a href=#1065 id=1065 data-nosnippet>1065</a>                <span class="kw">let </span>view_number = vote.view_number() + <span class="number">1</span>;
 <a href=#1066 id=1066 data-nosnippet>1066</a>                <span class="kw">let </span>leader = <span class="kw">match </span><span class="self">self
 <a href=#1067 id=1067 data-nosnippet>1067</a>                    </span>.membership_coordinator
