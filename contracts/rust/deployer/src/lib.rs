@@ -525,98 +525,124 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     params: LightClientV2UpgradeParams,
 ) -> Result<(String, bool)> {
     let dry_run = params.dry_run.unwrap_or(false);
-    match contracts.address(Contract::LightClientProxy) {
-        // check if proxy already exists
-        None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
-        Some(proxy_addr) => {
-            let proxy = LightClient::new(proxy_addr, &provider);
-            let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
-            assert_eq!(
-                owner_addr, params.multisig_address,
-                "Proxy is not owned by the multisig"
-            );
-            // TODO: check if owner is a multisig
-            // first deploy PlonkVerifierV2.sol
-            let pv2_addr = contracts
-                .deploy(
-                    Contract::PlonkVerifierV2,
-                    PlonkVerifierV2::deploy_builder(&provider),
-                )
-                .await?;
-            // then deploy LightClientV2.sol
-            let target_lcv2_bytecode = if params.is_mock {
-                LightClientV2Mock::BYTECODE.encode_hex()
-            } else {
-                LightClientV2::BYTECODE.encode_hex()
-            };
-            let lcv2_linked_bytecode = {
-                match target_lcv2_bytecode
-                    .matches(LIBRARY_PLACEHOLDER_ADDRESS)
-                    .count()
-                {
-                    0 => return Err(anyhow!("lib placeholder not found")),
-                    1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
-                        LIBRARY_PLACEHOLDER_ADDRESS,
-                        &pv2_addr.encode_hex(),
-                        1,
-                    ))?,
-                    _ => {
-                        return Err(anyhow!(
+    if dry_run {
+        tracing::info!("Dry run mode enabled");
+        let result = call_upgrade_proxy_script(
+            Address::random(),
+            Address::random(),
+            "0x".to_string(),
+            params.rpc_url,
+            Address::random(),
+            Some(dry_run),
+        )
+        .await;
+        // Check the result directly
+        if let Err(ref err) = result {
+            tracing::error!("LightClientProxy upgrade failed in dry run: {:?}", err);
+        } else {
+            tracing::info!("LightClientProxy upgrade proposal sent in dry run");
+            // IDEA: add a function to wait for the proposal to be executed
+        }
+
+        match result {
+            Ok(r) => Ok(r),
+            Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
+        }
+    } else {
+        tracing::info!("Real run mode enabled");
+        match contracts.address(Contract::LightClientProxy) {
+            // check if proxy already exists
+            None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
+            Some(proxy_addr) => {
+                let proxy = LightClient::new(proxy_addr, &provider);
+                let owner = proxy.owner().call().await?;
+                let owner_addr = owner._0;
+                assert_eq!(
+                    owner_addr, params.multisig_address,
+                    "Proxy is not owned by the multisig"
+                );
+                // TODO: check if owner is a multisig
+                // first deploy PlonkVerifierV2.sol
+                let pv2_addr = contracts
+                    .deploy(
+                        Contract::PlonkVerifierV2,
+                        PlonkVerifierV2::deploy_builder(&provider),
+                    )
+                    .await?;
+                // then deploy LightClientV2.sol
+                let target_lcv2_bytecode = if params.is_mock {
+                    LightClientV2Mock::BYTECODE.encode_hex()
+                } else {
+                    LightClientV2::BYTECODE.encode_hex()
+                };
+                let lcv2_linked_bytecode = {
+                    match target_lcv2_bytecode
+                        .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                        .count()
+                    {
+                        0 => return Err(anyhow!("lib placeholder not found")),
+                        1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
+                            LIBRARY_PLACEHOLDER_ADDRESS,
+                            &pv2_addr.encode_hex(),
+                            1,
+                        ))?,
+                        _ => {
+                            return Err(anyhow!(
                             "more than one lib placeholder found, consider using a different value"
                         ))
-                    },
+                        },
+                    }
+                };
+                let lcv2_addr = if params.is_mock {
+                    let addr = LightClientV2Mock::deploy_builder(&provider)
+                        .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
+                        .deploy()
+                        .await?;
+                    tracing::info!("deployed LightClientV2Mock at {addr:#x}");
+                    addr
+                } else {
+                    contracts
+                        .deploy(
+                            Contract::LightClientV2,
+                            LightClientV2::deploy_builder(&provider)
+                                .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
+                        )
+                        .await?
+                };
+
+                // prepare init calldata
+                let lcv2 = LightClientV2::new(lcv2_addr, &provider);
+                let init_data = lcv2
+                    .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
+                    .calldata()
+                    .to_owned();
+
+                tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+                // invoke upgrade on proxy via the safeSDK
+                let result = call_upgrade_proxy_script(
+                    proxy_addr,
+                    lcv2_addr,
+                    init_data.to_string(),
+                    params.rpc_url,
+                    owner_addr,
+                    Some(dry_run),
+                )
+                .await;
+
+                // Check the result directly
+                if let Err(ref err) = result {
+                    tracing::error!("LightClientProxy upgrade failed: {:?}", err);
+                } else {
+                    tracing::info!("LightClientProxy upgrade proposal sent");
+                    // IDEA: add a function to wait for the proposal to be executed
                 }
-            };
-            let lcv2_addr = if params.is_mock {
-                let addr = LightClientV2Mock::deploy_builder(&provider)
-                    .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
-                    .deploy()
-                    .await?;
-                tracing::info!("deployed LightClientV2Mock at {addr:#x}");
-                addr
-            } else {
-                contracts
-                    .deploy(
-                        Contract::LightClientV2,
-                        LightClientV2::deploy_builder(&provider)
-                            .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
-                    )
-                    .await?
-            };
 
-            // prepare init calldata
-            let lcv2 = LightClientV2::new(lcv2_addr, &provider);
-            let init_data = lcv2
-                .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
-                .calldata()
-                .to_owned();
-
-            tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
-            // invoke upgrade on proxy via the safeSDK
-            let result = call_upgrade_proxy_script(
-                proxy_addr,
-                lcv2_addr,
-                init_data.to_string(),
-                params.rpc_url,
-                owner_addr,
-                Some(dry_run),
-            )
-            .await;
-
-            // Check the result directly
-            if let Err(ref err) = result {
-                tracing::error!("LightClientProxy upgrade failed: {:?}", err);
-            } else {
-                tracing::info!("LightClientProxy upgrade proposal sent");
-                // IDEA: add a function to wait for the proposal to be executed
-            }
-
-            match result {
-                Ok(r) => Ok(r),
-                Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
-            }
-        },
+                match result {
+                    Ok(r) => Ok(r),
+                    Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
+                }
+            },
+        }
     }
 }
 

@@ -99,21 +99,12 @@ struct Options {
     #[clap(long, default_value = "false")]
     deploy_light_client_v1: bool,
     /// Option to upgrade to LightClient V2
-    #[clap(
-        long,
-        default_value = "false",
-        conflicts_with = "upgrade_light_client_v2_multisig_owner"
-    )]
+    #[clap(long, default_value = "false")]
     upgrade_light_client_v2: bool,
-    /// Option to upgrade to LightClient V2 with multisig ownership
-    #[clap(
-        long,
-        default_value = "false",
-        conflicts_with = "upgrade_light_client_v2"
-    )]
-    upgrade_light_client_v2_multisig_owner: bool,
+    /// Option to deploy esp token
     #[clap(long, default_value = "false")]
     deploy_esp_token: bool,
+    /// Option to deploy stake table
     #[clap(long, default_value = "false")]
     deploy_stake_table: bool,
 
@@ -130,6 +121,14 @@ struct Options {
     /// Applies to both V1 and V2 of LightClient.
     #[clap(short, long)]
     pub use_mock: bool,
+
+    /// Option to deploy contracts owned by multisig
+    #[clap(long, default_value = "false")]
+    pub use_multisig: bool,
+
+    /// Option to test upgrade stake table v2 multisig owner dry run
+    #[clap(long, default_value = "false")]
+    pub dry_run: bool,
 
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
@@ -176,13 +175,16 @@ async fn main() -> anyhow::Result<()> {
     opt.logging.init();
 
     let mut contracts = Contracts::from(opt.contracts);
-    let provider = build_provider(opt.mnemonic, opt.account_index, opt.rpc_url);
+    let provider = build_provider(opt.mnemonic, opt.account_index, opt.rpc_url.clone());
 
     // First use builder to build constructor input arguments
     let mut args_builder = DeployerArgsBuilder::default();
     args_builder
         .deployer(provider)
-        .mock_light_client(opt.use_mock);
+        .mock_light_client(opt.use_mock)
+        .owned_by_multisig(opt.use_multisig)
+        .dry_run(opt.dry_run)
+        .rpc_url(opt.rpc_url.to_string());
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);
     }
@@ -208,49 +210,28 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     if opt.upgrade_light_client_v2 {
-        // fetch epoch length from HotShot config
-        // Request the configuration until it is successful
-        let (blocks_per_epoch, epoch_start_block) = loop {
-            match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                opt.sequencer_url.clone(),
-            )
-            .get::<PublicNetworkConfig>("config/hotshot")
-            .send()
-            .await
-            {
-                Ok(resp) => {
-                    let config = resp.hotshot_config();
-                    break (config.blocks_per_epoch(), config.epoch_start_block());
-                },
-                Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5));
-                },
-            }
-        };
-        args_builder.blocks_per_epoch(blocks_per_epoch);
-        args_builder.epoch_start_block(epoch_start_block);
-    }
-
-    if opt.upgrade_light_client_v2_multisig_owner {
-        // fetch epoch length from HotShot config
-        // Request the configuration until it is successful
-        let (blocks_per_epoch, epoch_start_block) = loop {
-            match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                opt.sequencer_url.clone(),
-            )
-            .get::<PublicNetworkConfig>("config/hotshot")
-            .send()
-            .await
-            {
-                Ok(resp) => {
-                    let config = resp.hotshot_config();
-                    break (config.blocks_per_epoch(), config.epoch_start_block());
-                },
-                Err(e) => {
-                    tracing::error!("Failed to fetch the network config: {e}");
-                    sleep(Duration::from_secs(5));
-                },
+        let (blocks_per_epoch, epoch_start_block) = if opt.dry_run && opt.use_multisig {
+            (10, 22)
+        } else {
+            // fetch epoch length from HotShot config
+            // Request the configuration until it is successful
+            loop {
+                match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                    opt.sequencer_url.clone(),
+                )
+                .get::<PublicNetworkConfig>("config/hotshot")
+                .send()
+                .await
+                {
+                    Ok(resp) => {
+                        let config = resp.hotshot_config();
+                        break (config.blocks_per_epoch(), config.epoch_start_block());
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to fetch the network config: {e}");
+                        sleep(Duration::from_secs(5));
+                    },
+                }
             }
         };
         args_builder.blocks_per_epoch(blocks_per_epoch);
@@ -277,9 +258,6 @@ async fn main() -> anyhow::Result<()> {
             .await?;
     }
     if opt.upgrade_light_client_v2 {
-        args.deploy(&mut contracts, Contract::LightClientV2).await?;
-    }
-    if opt.upgrade_light_client_v2_multisig_owner {
         args.deploy(&mut contracts, Contract::LightClientV2).await?;
     }
     if opt.deploy_stake_table {

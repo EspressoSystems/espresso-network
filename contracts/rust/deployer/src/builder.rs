@@ -30,6 +30,12 @@ pub struct DeployerArgs {
     #[builder(default)]
     mock_light_client: bool,
     #[builder(default)]
+    owned_by_multisig: bool,
+    #[builder(default)]
+    dry_run: bool,
+    #[builder(default)]
+    rpc_url: String,
+    #[builder(default)]
     genesis_lc_state: Option<LightClientStateSol>,
     #[builder(default)]
     genesis_st_state: Option<StakeTableStateSol>,
@@ -99,8 +105,11 @@ impl DeployerArgs {
                 );
 
                 let use_mock = self.mock_light_client;
+                let dry_run = self.dry_run;
+                let owned_by_multisig = self.owned_by_multisig;
                 let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
                 let epoch_start_block = self.epoch_start_block.unwrap();
+                let rpc_url = self.rpc_url.clone();
 
                 // TEST-ONLY: if this config is not yet set, we use a large default value
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
@@ -109,27 +118,43 @@ impl DeployerArgs {
                 if use_mock && blocks_per_epoch == 0 {
                     blocks_per_epoch = u64::MAX;
                 }
-                tracing::info!(%blocks_per_epoch, "Upgrading LightClientV2 with ");
-                crate::upgrade_light_client_v2(
-                    provider,
-                    contracts,
-                    use_mock,
-                    blocks_per_epoch,
-                    epoch_start_block,
-                )
-                .await?;
-
-                if let Some(multisig) = self.multisig {
-                    let lc_proxy = contracts
-                        .address(Contract::LightClientProxy)
-                        .expect("fail to get LightClientProxy address");
-                    crate::transfer_ownership(
+                tracing::info!(%blocks_per_epoch, ?dry_run, ?owned_by_multisig, "Upgrading LightClientV2 with ");
+                if owned_by_multisig {
+                    crate::upgrade_light_client_v2_multisig_owner(
                         provider,
-                        Contract::LightClientProxy,
-                        lc_proxy,
-                        multisig,
+                        contracts,
+                        crate::LightClientV2UpgradeParams {
+                            is_mock: use_mock,
+                            blocks_per_epoch,
+                            epoch_start_block,
+                            rpc_url,
+                            multisig_address: Address::random(),
+                            dry_run: Some(dry_run),
+                        },
                     )
                     .await?;
+                } else {
+                    crate::upgrade_light_client_v2(
+                        provider,
+                        contracts,
+                        use_mock,
+                        blocks_per_epoch,
+                        epoch_start_block,
+                    )
+                    .await?;
+
+                    if let Some(multisig) = self.multisig {
+                        let lc_proxy = contracts
+                            .address(Contract::LightClientProxy)
+                            .expect("fail to get LightClientProxy address");
+                        crate::transfer_ownership(
+                            provider,
+                            Contract::LightClientProxy,
+                            lc_proxy,
+                            multisig,
+                        )
+                        .await?;
+                    }
                 }
             },
             Contract::StakeTableProxy => {

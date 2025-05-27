@@ -20,6 +20,8 @@ async function main() {
 
   try {
     const [upgradeData, dryRun] = processCommandLineArguments();
+    console.log("Upgrade Data : ", JSON.stringify(upgradeData));
+    console.error("Upgrade Data : ", JSON.stringify(upgradeData));
     if (!upgradeData.rpcUrl) {
       upgradeData.rpcUrl = getEnvVar("RPC_URL");
     }
@@ -53,7 +55,7 @@ async function main() {
       );
     }
   } catch (error) {
-    throw new Error("An error occurred: " + error);
+    throw new Error("An error occurred in upgradeProxy: " + error);
   }
 }
 
@@ -90,7 +92,9 @@ export function processRustCommandLineArguments(args: string[]): [UpgradeData, b
   dryRun = map["dry-run"] === "true";
   // if any of the arguments are not provided, throw an error
   if (!proxyAddress || !implementationAddress || !initData || !rpcUrl || !safeAddress) {
-    throw new Error("All arguments are required, --proxy, --impl, --init-data, --rpc-url, --safe-address");
+    throw new Error(
+      "All arguments are required, --proxy, --impl, --init-data, --rpc-url, --safe-address " + JSON.stringify(map),
+    );
   }
   validateEthereumAddress(proxyAddress);
   validateEthereumAddress(implementationAddress);
