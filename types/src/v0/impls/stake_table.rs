@@ -2,7 +2,6 @@ use std::{
     cmp::{max, min},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
-    pin::Pin,
     sync::Arc,
 };
 
@@ -1504,52 +1503,40 @@ impl Membership<SeqTypes> for EpochCommittees {
         max(higher_threshold, normal_threshold)
     }
 
-    fn add_epoch_root(
-        &self,
+    async fn add_epoch_root(
+        membership: Arc<RwLock<Self>>,
         epoch: Epoch,
         block_header: Header,
-    ) -> anyhow::Result<
-        Option<
-            Box<
-                dyn FnOnce() -> Pin<
-                        Box<
-                            dyn std::future::Future<
-                                    Output = Option<Box<dyn FnOnce(&mut Self) + Send>>,
-                                > + Send,
-                        >,
-                    > + Send,
-            >,
-        >,
-    > {
-        if self.state.contains_key(&epoch) {
+    ) -> anyhow::Result<()> {
+        let membership_reader = membership.read().await;
+        if membership_reader.state.contains_key(&epoch) {
             tracing::info!(
                 "We already have the stake table for epoch {}. Skipping L1 fetching.",
                 epoch
             );
-            return Ok(None);
+            return Ok(());
+        }
+        let fetcher = Arc::clone(&membership_reader.fetcher);
+        drop(membership_reader);
+
+        let Some(stake_tables) = fetcher.fetch(epoch, block_header).await else {
+            return Ok(());
+        };
+
+        // Store stake table in persistence
+        {
+            let persistence_lock = fetcher.persistence.lock().await;
+            if let Err(e) = persistence_lock
+                .store_stake(epoch, stake_tables.clone())
+                .await
+            {
+                tracing::error!(?e, "`add_epoch_root`, error storing stake table");
+            }
         }
 
-        let fetcher = Arc::clone(&self.fetcher);
-
-        Ok(Some(Box::new(move || {
-            Box::pin(async move {
-                let stake_tables = fetcher.fetch(epoch, block_header).await?;
-                // Store stake table in persistence
-                {
-                    let persistence_lock = fetcher.persistence.lock().await;
-                    if let Err(e) = persistence_lock
-                        .store_stake(epoch, stake_tables.clone())
-                        .await
-                    {
-                        tracing::error!(?e, "`add_epoch_root`, error storing stake table");
-                    }
-                }
-
-                Some(Box::new(move |committee: &mut Self| {
-                    committee.update_stake_table(epoch, stake_tables);
-                }) as Box<dyn FnOnce(&mut Self) + Send>)
-            })
-        })))
+        let mut membership_writer = membership.write().await;
+        membership_writer.update_stake_table(epoch, stake_tables);
+        Ok(())
     }
 
     fn has_stake_table(&self, epoch: Epoch) -> bool {

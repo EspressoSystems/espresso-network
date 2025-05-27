@@ -385,19 +385,12 @@ where
             ));
         };
 
-        let add_epoch_root_worker = {
-            let membership_reader = self.membership.read().await;
-            membership_reader.add_epoch_root(epoch, root_leaf.block_header().clone())
-        };
-
-        if let Ok(Some(worker)) = add_epoch_root_worker {
-            let add_epoch_root_updater = worker().await;
-
-            if let Some(updater) = add_epoch_root_updater {
-                let mut membership_writer = self.membership.write().await;
-                updater(&mut *membership_writer);
-            };
-        };
+        Membership::add_epoch_root(
+            Arc::clone(&self.membership),
+            epoch,
+            root_leaf.block_header().clone(),
+        )
+        .await;
 
         Ok(root_leaf)
     }
