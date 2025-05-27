@@ -77,6 +77,7 @@ pub fn sign_address_schnorr(schnorr_key_pair: &StateKeyPair, address: Address) -
     buf.into()
 }
 
+// Helper function useful for unit tests.
 fn authenticate_schnorr_sig(
     schnorr_vk: &StateVerKey,
     address: Address,
@@ -85,6 +86,25 @@ fn authenticate_schnorr_sig(
     let msg = [hash_bytes_to_field(&address.abi_encode()).expect("hash to field works")];
     let sig = schnorr::Signature::<EdwardsConfig>::deserialize_compressed(schnorr_sig)?;
     schnorr_vk.verify(&msg, &sig, CS_ID_SCHNORR)?;
+    Ok(())
+}
+
+// Helper function useful for unit tests.
+fn authenticate_bls_sig(
+    bls_vk: &BLSPubKey,
+    address: Address,
+    bls_sig: &G1PointSol,
+) -> Result<(), StakeTableSolError> {
+    let msg = address.abi_encode();
+    let sig = {
+        let sigma_affine: ark_bn254::G1Affine = (*bls_sig).into();
+        BLSSignature {
+            sigma: sigma_affine.into_group(),
+        }
+    };
+    if !bls_vk.validate(&sig, &msg) {
+        return Err(StakeTableSolError::InvalidBlsSignature);
+    }
     Ok(())
 }
 
@@ -105,16 +125,7 @@ fn authenticate_stake_table_validator_event(
         bls_vk_inner.serialize_uncompressed(&mut ser_bytes).unwrap();
         BLSPubKey::deserialize_uncompressed(&ser_bytes[..]).unwrap()
     };
-    let msg = account.abi_encode();
-    let sig = {
-        let sigma_affine: ark_bn254::G1Affine = bls_sig.into();
-        BLSSignature {
-            sigma: sigma_affine.into_group(),
-        }
-    };
-    if !bls_vk.validate(&sig, &msg) {
-        return Err(StakeTableSolError::InvalidBlsSignature);
-    }
+    authenticate_bls_sig(&bls_vk, account, &bls_sig)?;
 
     let schnorr_vk: StateVerKey = schnorr_vk.into();
     authenticate_schnorr_sig(&schnorr_vk, account, schnorr_sig)?;
@@ -166,13 +177,15 @@ impl ConsensusKeysUpdatedV2 {
 
 #[cfg(test)]
 mod test {
-    use alloy::primitives::Address;
+    use alloy::primitives::{Address, U256};
     use hotshot_types::{
         light_client::StateKeyPair,
-        signature_key::{BLSPrivKey, BLSPubKey},
+        signature_key::{BLSKeyPair, BLSPrivKey, BLSPubKey},
     };
 
-    use super::{authenticate_schnorr_sig, sign_address_schnorr};
+    use super::{
+        authenticate_bls_sig, authenticate_schnorr_sig, sign_address_bls, sign_address_schnorr,
+    };
     use crate::sol_types::G2PointSol;
 
     fn check_round_trip(pk: BLSPubKey) {
@@ -215,5 +228,26 @@ mod test {
             bad_sig[0] = bad_sig[0].wrapping_add(1);
             assert!(authenticate_schnorr_sig(key_pair.ver_key_ref(), address, &bad_sig).is_err());
         }
+    }
+
+    #[test]
+    fn test_bls_sigs() {
+        let key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
+        let address = Address::random();
+        let sig = sign_address_bls(&key_pair, address);
+        authenticate_bls_sig(key_pair.ver_key_ref(), address, &sig).unwrap();
+
+        // signed with wrong key
+        assert!(authenticate_bls_sig(
+            key_pair.ver_key_ref(),
+            address,
+            &sign_address_bls(&BLSKeyPair::generate(&mut rand::thread_rng()), address)
+        )
+        .is_err());
+
+        // tamper with the signature
+        let mut sig = sig;
+        sig.x = sig.x.wrapping_add(U256::from(1));
+        assert!(authenticate_bls_sig(key_pair.ver_key_ref(), address, &sig).is_err());
     }
 }
