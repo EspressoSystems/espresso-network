@@ -664,9 +664,8 @@ async fn upgrade_stake_table_v2(
     assert!(is_contract(&provider, v2_addr).await?);
 
     // invoke upgrade on proxy
-    // TODO: MA check if really nothing to initialize and if that's done correctly.
     let receipt = proxy
-        .upgradeToAndCall(v2_addr, vec![].into())
+        .upgradeToAndCall(v2_addr, vec![].into() /* no new init data for V2 */)
         .send()
         .await?
         .get_receipt()
