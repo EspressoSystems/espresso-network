@@ -7,7 +7,7 @@ use espresso_contract_deployer::{
     Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
-use hotshot_types::light_client::STAKE_TABLE_CAPACITY;
+use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use tide_disco::error::ServerError;
 use url::Url;
@@ -121,7 +121,7 @@ struct Options {
     pub use_mock: bool,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
     ///
     /// If the light client contract is being deployed and this is set, the prover will be
@@ -146,6 +146,18 @@ struct Options {
     /// If unset the tokens will be minted to the deployer account.
     #[clap(long, env = "ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS")]
     initial_token_grant_recipient: Option<Address>,
+
+    /// The initial supply of the tokens.
+    #[clap(long, env = "ESP_TOKEN_INITIAL_SUPPLY", default_value_t = U256::from(3590000000u64))]
+    initial_token_supply: U256,
+
+    /// The name of the tokens.
+    #[clap(long, env = "ESP_TOKEN_NAME", default_value = "Espresso")]
+    token_name: String,
+
+    /// The symbol of the tokens.
+    #[clap(long, env = "ESP_TOKEN_SYMBOL", default_value = "ESP")]
+    token_symbol: String,
 
     #[clap(flatten)]
     logging: logging::Config,

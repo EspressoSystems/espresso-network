@@ -16,7 +16,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_example_types::{
-    auction_results_provider_types::{TestAuctionResult, TestAuctionResultsProvider},
+    
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     node_types::TestVersions,
     state_types::{TestInstanceState, TestValidatedState},
@@ -52,7 +52,6 @@ use tracing::{instrument, trace};
 pub struct Test;
 
 impl NodeType for Test {
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -72,7 +71,6 @@ pub struct TestImpl {}
 impl NodeImplementation<Test> for TestImpl {
     type Network = MemoryNetwork<<Test as NodeType>::SignatureKey>;
     type Storage = TestStorage<Test>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<Test>;
 }
 
 /// fake Eq

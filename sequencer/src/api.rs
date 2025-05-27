@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{bail, Context};
@@ -7,7 +7,8 @@ use async_once_cell::Lazy;
 use async_trait::async_trait;
 use committable::Commitment;
 use data_source::{
-    CatchupDataSource, StakeTableDataSource, StakeTableWithEpochNumber, SubmitDataSource,
+    CatchupDataSource, RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
+    SubmitDataSource,
 };
 use derivative::Derivative;
 use espresso_types::{
@@ -15,8 +16,7 @@ use espresso_types::{
     retain_accounts,
     v0::traits::SequencerPersistence,
     v0_1::{RewardAccount, RewardMerkleTree},
-    v0_3::Validator,
-    v0_99::ChainConfig,
+    v0_3::{ChainConfig, Validator},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
 };
@@ -28,28 +28,37 @@ use hotshot::types::BLSPubKey;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
-use hotshot_query_service::data_source::ExtensibleDataSource;
+use hotshot_query_service::{
+    availability::VidCommonQueryData, data_source::ExtensibleDataSource, VidCommon,
+};
 use hotshot_types::{
-    data::ViewNumber,
-    event::Event,
+    data::{VidCommitment, VidShare, ViewNumber},
+    event::{Event, LegacyEvent},
     light_client::StateSignatureRequestBody,
     network::NetworkConfig,
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeType, Versions},
     },
+    vid::avidm::{init_avidm_param, AvidMScheme},
     vote::HasViewNumber,
     PeerConfig,
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree::MerkleTreeScheme;
+use rand::Rng;
+use request_response::RequestType;
+use tokio::time::timeout;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
 use crate::{
     catchup::{add_fee_accounts_to_state, add_reward_accounts_to_state, CatchupStorage},
     context::Consensus,
-    request_response::data_source::retain_reward_accounts,
+    request_response::{
+        data_source::retain_reward_accounts,
+        request::{Request, Response},
+    },
     state_signature::StateSigner,
     SeqTypes, SequencerApiVersion, SequencerContext,
 };
@@ -69,18 +78,15 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-struct ConsensusState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> {
+struct ConsensusState {
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
     node_state: NodeState,
     network_config: NetworkConfig<SeqTypes>,
-
-    #[derivative(Debug = "ignore")]
-    handle: Arc<RwLock<Consensus<N, P, V>>>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
-    From<&SequencerContext<N, P, V>> for ConsensusState<N, P, V>
+    From<&SequencerContext<N, P, V>> for ConsensusState
 {
     fn from(ctx: &SequencerContext<N, P, V>) -> Self {
         Self {
@@ -88,7 +94,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions>
             event_streamer: ctx.event_streamer(),
             node_state: ctx.node_state(),
             network_config: ctx.network_config(),
-            handle: ctx.consensus(),
         }
     }
 }
@@ -101,36 +106,50 @@ struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Version
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    consensus: BoxLazy<ConsensusState<N, P, V>>,
+    sequencer_context: BoxLazy<SequencerContext<N, P, V>>,
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> ApiState<N, P, V> {
-    fn new(init: impl Future<Output = ConsensusState<N, P, V>> + Send + 'static) -> Self {
+    fn new(context_init: impl Future<Output = SequencerContext<N, P, V>> + Send + 'static) -> Self {
         Self {
-            consensus: Arc::pin(Lazy::from_future(init.boxed())),
+            sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
         }
     }
 
-    async fn state_signer(&self) -> &Arc<RwLock<StateSigner<SequencerApiVersion>>> {
-        &self.consensus.as_ref().get().await.get_ref().state_signer
-    }
-
-    async fn event_streamer(&self) -> &RwLock<EventsStreamer<SeqTypes>> {
-        &self.consensus.as_ref().get().await.get_ref().event_streamer
-    }
-
-    async fn consensus(&self) -> Arc<RwLock<Consensus<N, P, V>>> {
-        Arc::clone(&self.consensus.as_ref().get().await.get_ref().handle)
-    }
-
-    async fn network_config(&self) -> NetworkConfig<SeqTypes> {
-        self.consensus
+    async fn state_signer(&self) -> Arc<RwLock<StateSigner<SequencerApiVersion>>> {
+        self.sequencer_context
             .as_ref()
             .get()
             .await
             .get_ref()
-            .network_config
-            .clone()
+            .state_signer()
+    }
+
+    async fn event_streamer(&self) -> Arc<RwLock<EventsStreamer<SeqTypes>>> {
+        self.sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .get_ref()
+            .event_streamer()
+    }
+
+    async fn consensus(&self) -> Arc<RwLock<Consensus<N, P, V>>> {
+        self.sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .get_ref()
+            .consensus()
+    }
+
+    async fn network_config(&self) -> NetworkConfig<SeqTypes> {
+        self.sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .get_ref()
+            .network_config()
     }
 }
 
@@ -141,6 +160,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
     for ApiState<N, P, V>
 {
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
+    type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
 
     async fn get_event_stream(
         &self,
@@ -153,6 +173,19 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, V: Versions> EventsSo
             .get_event_stream(None)
             .await
     }
+
+    async fn get_legacy_event_stream(
+        &self,
+        _filter: Option<EventFilterSet<SeqTypes>>,
+    ) -> Self::LegacyEventStream {
+        self.event_streamer()
+            .await
+            .read()
+            .await
+            .get_legacy_event_stream(None)
+            .await
+    }
+
     async fn get_startup_info(&self) -> StartupInfo<SeqTypes> {
         self.event_streamer()
             .await
@@ -261,6 +294,124 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
     }
 }
 
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
+    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D, V>
+{
+    async fn request_vid_shares(
+        &self,
+        block_number: u64,
+        vid_common_data: VidCommonQueryData<SeqTypes>,
+        timeout_duration: Duration,
+    ) -> anyhow::Result<Vec<VidShare>> {
+        self.as_ref()
+            .request_vid_shares(block_number, vid_common_data, timeout_duration)
+            .await
+    }
+}
+
+#[async_trait]
+impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
+    RequestResponseDataSource<SeqTypes> for ApiState<N, P, V>
+{
+    async fn request_vid_shares(
+        &self,
+        block_number: u64,
+        vid_common_data: VidCommonQueryData<SeqTypes>,
+        duration: Duration,
+    ) -> anyhow::Result<Vec<VidShare>> {
+        // Get a handle to the request response protocol
+        let request_response_protocol = self
+            .sequencer_context
+            .as_ref()
+            .get()
+            .await
+            .request_response_protocol
+            .clone();
+
+        // Get the total VID weight based on the VID common data
+        let total_weight = match vid_common_data.common() {
+            VidCommon::V0(_) => {
+                // TODO: This needs to be done via the stake table
+                return Err(anyhow::anyhow!(
+                    "V0 total weight calculation not supported yet"
+                ));
+            },
+            VidCommon::V1(v1) => v1.total_weights,
+        };
+
+        // Create the AvidM parameters from the total weight
+        let avidm_param =
+            init_avidm_param(total_weight).with_context(|| "failed to initialize avidm param")?;
+
+        // Get the payload hash for verification
+        let VidCommitment::V1(local_payload_hash) = vid_common_data.payload_hash() else {
+            bail!("V0 share verification not supported yet");
+        };
+
+        // Create a random request id
+        let request_id = rand::thread_rng().gen();
+
+        // Request and verify the shares from all other nodes, timing out after `duration` seconds
+        let received_shares = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let received_shares_clone = received_shares.clone();
+        let request_result: anyhow::Result<_, _> = timeout(
+            duration,
+            request_response_protocol.request_indefinitely::<_, _, _>(
+                Request::VidShare(block_number, request_id),
+                RequestType::Broadcast,
+                move |_request, response| {
+                    let avidm_param = avidm_param.clone();
+                    let received_shares = received_shares_clone.clone();
+                    async move {
+                        // Make sure the response was a V1 share
+                        let Response::VidShare(VidShare::V1(received_share)) = response else {
+                            bail!("V0 share verification not supported yet");
+                        };
+
+                        // Verify the share
+                        let Ok(Ok(_)) = AvidMScheme::verify_share(
+                            &avidm_param,
+                            &local_payload_hash,
+                            &received_share,
+                        ) else {
+                            bail!("share verification failed");
+                        };
+
+                        // Add the share to the list of received shares
+                        received_shares.lock().push(received_share);
+
+                        bail!("waiting for more shares");
+
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    }
+                },
+            ),
+        )
+        .await;
+
+        // If the request timed out, return the shares we have collected so far
+        match request_result {
+            Err(_) => {
+                // If it timed out, this was successful. Return the shares we have collected so far
+                Ok(received_shares
+                    .lock()
+                    .clone()
+                    .into_iter()
+                    .map(VidShare::V1)
+                    .collect())
+            },
+
+            // If it was an error from the inner request, return that error
+            Ok(Err(e)) => Err(e).with_context(|| "failed to request vid shares"),
+
+            // If it was successful, this was unexpected.
+            Ok(Ok(_)) => bail!("this should not be possible"),
+        }
+    }
+}
+
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence> SubmitDataSource<N, P>
     for ApiState<N, P, V>
 {
@@ -306,7 +457,7 @@ where
     P: SequencerPersistence,
     D: Sync,
 {
-    async fn node_state(&self) -> &NodeState {
+    async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
     }
 }
@@ -466,8 +617,8 @@ where
     V: Versions,
     P: SequencerPersistence,
 {
-    async fn node_state(&self) -> &NodeState {
-        &self.consensus.as_ref().get().await.get_ref().node_state
+    async fn node_state(&self) -> NodeState {
+        self.sequencer_context.as_ref().get().await.node_state()
     }
 }
 
@@ -1855,8 +2006,8 @@ mod test {
         traits::NullEventConsumer,
         v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::StakeTableFetcher,
-        validators_from_l1_events, EpochVersion, FeeAmount, Header, L1ClientOptions,
-        MarketplaceVersion, MockSequencerVersions, SequencerVersions, ValidatedState,
+        validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
+        MockSequencerVersions, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -1877,6 +2028,7 @@ mod test {
     };
     use jf_merkle_tree::prelude::{MerkleProof, Sha3Node};
     use portpicker::pick_unused_port;
+    use rand::seq::SliceRandom;
     use sequencer_utils::test_utils::setup_test;
     use staking_cli::demo::DelegationConfig;
     use surf_disco::Client;
@@ -2637,18 +2789,10 @@ mod test {
         drop(network);
     }
 
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_marketplace_upgrade_view_based() {
-        type MarketplaceUpgrade = SequencerVersions<EpochVersion, MarketplaceVersion>;
-        test_upgrade_helper::<MarketplaceUpgrade>(MarketplaceUpgrade::new()).await;
-    }
-
-    #[ignore]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_marketplace_upgrade_time_based() {
-        type MarketplaceUpgrade = SequencerVersions<EpochVersion, MarketplaceVersion>;
-        test_upgrade_helper::<MarketplaceUpgrade>(MarketplaceUpgrade::new()).await;
+    async fn test_pos_upgrade_view_based() {
+        type PosUpgrade = SequencerVersions<FeeVersion, EpochVersion>;
+        test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
     }
 
     async fn test_upgrade_helper<V: Versions>(version: V) {
@@ -3797,6 +3941,151 @@ mod test {
             if membership_for_epoch.is_err() {
                 coordinator.wait_for_catchup(epoch).await.unwrap();
             }
+
+            println!("have stake table for epoch = {epoch_num}");
+
+            let node_stake_table = coordinator
+                .membership()
+                .read()
+                .await
+                .stake_table(Some(epoch));
+            let stake_table = server_coordinator
+                .membership()
+                .read()
+                .await
+                .stake_table(Some(epoch));
+
+            println!("asserting stake table for epoch = {epoch_num}");
+
+            assert_eq!(
+                node_stake_table, stake_table,
+                "Stake table mismatch for epoch {epoch_num}",
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_epoch_stake_table_catchup_stress() {
+        setup_test();
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 6;
+
+        let port = pick_unused_port().expect("No ports free");
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // setup catchup peers
+        let catchup_peers = std::array::from_fn(|_| {
+            StatePeers::<StaticVersion<0, 1>>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                &NoMetrics,
+            )
+        });
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .catchups(catchup_peers)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .await
+            .unwrap()
+            .build();
+
+        let state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
+
+        // Wait for the peer 0 (node 1) to advance past three epochs
+        let mut events = network.peers[0].event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Node 0 decided at height: {}", height);
+                if height > EPOCH_HEIGHT * 3 {
+                    break;
+                }
+            }
+        }
+
+        // Shutdown and remove node 1 to simulate falling behind
+        tracing::info!("Shutting down peer 0");
+        network.peers.remove(0);
+
+        // Wait for epochs to progress with node 1 offline
+        let mut events = network.server.event_stream().await;
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("Server decided at height: {}", height);
+                //  until 7 epochs
+                if height > EPOCH_HEIGHT * 7 {
+                    break;
+                }
+            }
+        }
+
+        // add node 1 to the network with fresh storage
+        let storage = SqlDataSource::create_storage().await;
+        let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        tracing::info!("Restarting peer 0");
+        let node = network
+            .cfg
+            .init_node(
+                1,
+                state,
+                options,
+                Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )),
+                None,
+                &NoMetrics,
+                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                EpochsTestVersions {},
+                Default::default(),
+            )
+            .await;
+
+        let coordinator = node.node_state().coordinator;
+
+        let server_node_state = network.server.node_state();
+        let server_coordinator = server_node_state.coordinator;
+
+        // Trigger catchup for all epochs in quick succession and in random order
+        let mut rand_epochs: Vec<_> = (1..=7).collect();
+        rand_epochs.shuffle(&mut rand::thread_rng());
+        println!("trigger catchup in this order: {rand_epochs:?}");
+        for epoch_num in rand_epochs {
+            let epoch = EpochNumber::new(epoch_num);
+            let _ = coordinator.membership_for_epoch(Some(epoch)).await;
+        }
+
+        // Verify that the restarted node catches up for each epoch
+        for epoch_num in 1..=7 {
+            println!("getting stake table for epoch = {epoch_num}");
+            let epoch = EpochNumber::new(epoch_num);
+            let _ = coordinator.wait_for_catchup(epoch).await.unwrap();
 
             println!("have stake table for epoch = {epoch_num}");
 

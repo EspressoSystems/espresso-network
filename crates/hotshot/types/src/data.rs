@@ -1872,7 +1872,6 @@ pub mod null_block {
     pub fn builder_fee<TYPES: NodeType, V: Versions>(
         num_storage_nodes: usize,
         version: vbs::version::Version,
-        view_number: u64,
     ) -> Option<BuilderFee<TYPES>> {
         /// Arbitrary fee amount, this block doesn't actually come from a builder
         const FEE_AMOUNT: u64 = 0;
@@ -1882,20 +1881,7 @@ pub mod null_block {
                 [0_u8; 32], 0,
             );
 
-        if version >= V::Marketplace::VERSION {
-            match TYPES::BuilderSignatureKey::sign_sequencing_fee_marketplace(
-                &priv_key,
-                FEE_AMOUNT,
-                view_number,
-            ) {
-                Ok(sig) => Some(BuilderFee {
-                    fee_amount: FEE_AMOUNT,
-                    fee_account: pub_key,
-                    fee_signature: sig,
-                }),
-                Err(_) => None,
-            }
-        } else if version >= V::Epochs::VERSION {
+        if version >= V::Epochs::VERSION {
             let (_null_block, null_block_metadata) =
                 <TYPES::BlockPayload as BlockPayload<TYPES>>::empty();
 
@@ -1946,9 +1932,6 @@ pub struct PackedBundle<TYPES: NodeType> {
 
     /// The sequencing fee for submitting bundles.
     pub sequencing_fees: Vec1<BuilderFee<TYPES>>,
-
-    /// The auction results for the block, if it was produced as the result of an auction
-    pub auction_result: Option<TYPES::AuctionResult>,
 }
 
 impl<TYPES: NodeType> PackedBundle<TYPES> {
@@ -1959,7 +1942,6 @@ impl<TYPES: NodeType> PackedBundle<TYPES> {
         view_number: TYPES::View,
         epoch_number: Option<TYPES::Epoch>,
         sequencing_fees: Vec1<BuilderFee<TYPES>>,
-        auction_result: Option<TYPES::AuctionResult>,
     ) -> Self {
         Self {
             encoded_transactions,
@@ -1967,7 +1949,6 @@ impl<TYPES: NodeType> PackedBundle<TYPES> {
             view_number,
             epoch_number,
             sequencing_fees,
-            auction_result,
         }
     }
 }

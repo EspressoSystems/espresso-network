@@ -188,7 +188,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
 
 #[async_trait]
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for TransactionTaskState<TYPES, I, V>
+    for TransactionTaskState<TYPES, V>
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
         Self {
@@ -211,14 +211,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
                 .map(BuilderClient::new)
                 .collect(),
             upgrade_lock: handle.hotshot.upgrade_lock.clone(),
-            auction_results_provider: Arc::clone(
-                &handle.hotshot.marketplace_config.auction_results_provider,
-            ),
-            fallback_builder_url: handle
-                .hotshot
-                .marketplace_config
-                .fallback_builder_url
-                .clone(),
             epoch_height: handle.epoch_height,
         }
     }
@@ -251,6 +243,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState
             epoch_height: handle.hotshot.config.epoch_height,
             consensus_metrics,
             first_epoch: None,
+            stake_table_capacity: handle.hotshot.config.stake_table_capacity,
         }
     }
 }

@@ -17,10 +17,9 @@ use hotshot_builder_api::{
         builder::{Error, Options},
     },
     v0_2::block_info::AvailableBlockHeaderInputV1,
-    v0_99,
 };
 use hotshot_types::{
-    constants::{LEGACY_BUILDER_MODULE, MARKETPLACE_BUILDER_MODULE},
+    constants::LEGACY_BUILDER_MODULE,
     traits::{
         block_contents::EncodeBytes, node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
@@ -80,10 +79,7 @@ pub fn run_builder_source<TYPES, Source>(
     TYPES: NodeType,
     <TYPES as NodeType>::InstanceState: Default,
     Source: Clone + Send + Sync + tide_disco::method::ReadState + 'static,
-    <Source as ReadState>::State: Sync
-        + Send
-        + v0_1::data_source::BuilderDataSource<TYPES>
-        + v0_99::data_source::BuilderDataSource<TYPES>,
+    <Source as ReadState>::State: Sync + Send + v0_1::data_source::BuilderDataSource<TYPES>,
 {
     spawn(async move {
         let start_builder = |url: Url, source: Source| -> _ {
@@ -91,15 +87,10 @@ pub fn run_builder_source<TYPES, Source>(
                 &Options::default(),
             )
             .expect("Failed to construct the builder API");
-            let builder_api_0_3 = hotshot_builder_api::v0_99::builder::define_api::<Source, TYPES>(
-                &Options::default(),
-            )
-            .expect("Failed to construct the builder API");
+
             let mut app: App<Source, Error> = App::with_state(source);
             app.register_module(LEGACY_BUILDER_MODULE, builder_api_0_1)
-                .expect("Failed to register the builder API 0.1")
-                .register_module(MARKETPLACE_BUILDER_MODULE, builder_api_0_3)
-                .expect("Failed to register the builder API 0.3");
+                .expect("Failed to register the builder API 0.1");
             spawn(app.serve(url, hotshot_builder_api::v0_1::Version::instance()))
         };
 

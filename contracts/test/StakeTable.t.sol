@@ -31,8 +31,9 @@ import { TimelockController } from "@openzeppelin/contracts/governance/TimelockC
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
 
-// Target contract
+// Target contracts
 import { StakeTable as S } from "../src/StakeTable.sol";
+import { StakeTableV2 } from "../src/StakeTableV2.sol";
 
 contract StakeTable_register_Test is LightClientCommonTest {
     S public stakeTable;
@@ -46,6 +47,9 @@ contract StakeTable_register_Test is LightClientCommonTest {
     address public validator;
     string seed1 = "1";
     string seed2 = "255";
+    string public constant NAME = "Espresso";
+    string public constant SYMBOL = "ESP";
+    uint256 public constant INITIAL_SUPPLY = 3_590_000_000;
 
     function genClientWallet(address sender, string memory _seed)
         private
@@ -101,8 +105,14 @@ contract StakeTable_register_Test is LightClientCommonTest {
 
         // deploy EspToken and its proxy
         EspToken tokenImpl = new EspToken();
-        bytes memory initData =
-            abi.encodeWithSignature("initialize(address,address)", admin, tokenGrantRecipient);
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,string,string)",
+            admin,
+            tokenGrantRecipient,
+            INITIAL_SUPPLY,
+            NAME,
+            SYMBOL
+        );
         ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
         token = EspToken(payable(address(proxy)));
 
@@ -1126,6 +1136,8 @@ contract StakeTable_register_Test is LightClientCommonTest {
         vm.expectRevert(S.ValidatorAlreadyExited.selector);
         stakeTable.updateConsensusKeys(postExitBlsVK, postExitSchnorrVK, postExitSig);
         vm.stopPrank();
+
+        // TODO test the v2 events
     }
 
     function test_ValidatorSelfDelegation() public {
@@ -1317,6 +1329,19 @@ contract StakeTableUpgradeTest is Test {
         assertEq(result, "true");
     }
 
+    function test_StorageLayoutIsCompatibleWithStakeTableV2() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableV2";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "true");
+    }
+
     function test_StorageLayout_IsIncompatibleIfFieldIsMissing() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
@@ -1356,6 +1381,19 @@ contract StakeTableUpgradeTest is Test {
         assertEq(result, "false");
     }
 
+    function test_RevertWhen_StakeTableV2InitializationAttempted() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,address)", address(0), address(0), 0, address(0)
+        );
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+    }
+
     function test_ReinitializeSucceedsOnlyOnce() public {
         vm.startPrank(stakeTableRegisterTest.admin());
         S proxy = stakeTableRegisterTest.stakeTable();
@@ -1370,6 +1408,65 @@ contract StakeTableUpgradeTest is Test {
         proxyV2.initializeV2(3);
 
         vm.stopPrank();
+    }
+
+    function test_updateExitEscrowPeriod() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.expectEmit(false, false, false, true, address(proxy));
+        emit StakeTableV2.ExitEscrowPeriodUpdated(200 seconds);
+        StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_NotOwner() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.stopPrank();
+        address notAdmin = makeAddr("notAdmin");
+        vm.startPrank(notAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, notAdmin)
+        );
+        StakeTableV2(proxy).updateExitEscrowPeriod(200 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ExitEscrowPeriodTooShort() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+
+        vm.expectRevert(StakeTableV2.ExitEscrowPeriodInvalid.selector);
+        StakeTableV2(proxy).updateExitEscrowPeriod(100 seconds);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_ExitEscrowPeriodTooLong() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxy = address(stakeTableRegisterTest.stakeTable());
+        S(proxy).upgradeToAndCall(address(new StakeTableV2()), "");
+        vm.expectRevert(StakeTableV2.ExitEscrowPeriodInvalid.selector);
+        StakeTableV2(proxy).updateExitEscrowPeriod(100 days);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_DeprecatedFunctionsAreCalled() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = stakeTableRegisterTest.stakeTable();
+
+        StakeTableV2 newImpl = new StakeTableV2();
+        bytes memory initData = "";
+        proxy.upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
     }
 }
 
@@ -1389,11 +1486,20 @@ contract StakeTableTimelockTest is Test {
     uint256 public constant INITIAL_BALANCE = 5 ether;
     uint256 public constant ESCROW_PERIOD = 1 weeks;
     uint256 public constant DELAY = 15 seconds;
+    string public constant NAME = "Espresso";
+    string public constant SYMBOL = "ESP";
+    uint256 public constant INITIAL_SUPPLY = 3_590_000_000;
 
     function deployEspToken(address _admin, address _tokenGrantRecipient) public {
         EspToken tokenImpl = new EspToken();
-        bytes memory initData =
-            abi.encodeWithSignature("initialize(address,address)", _admin, _tokenGrantRecipient);
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address,uint256,string,string)",
+            _admin,
+            _tokenGrantRecipient,
+            INITIAL_SUPPLY,
+            NAME,
+            SYMBOL
+        );
         ERC1967Proxy _proxy = new ERC1967Proxy(address(tokenImpl), initData);
         token = EspToken(payable(address(_proxy)));
     }

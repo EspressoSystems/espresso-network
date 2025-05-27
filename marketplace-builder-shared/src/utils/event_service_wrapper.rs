@@ -147,7 +147,11 @@ mod tests {
         events_source::{EventFilterSet, EventsSource, StartupInfo},
     };
     use hotshot_example_types::node_types::TestTypes;
-    use hotshot_types::{data::ViewNumber, traits::node_implementation::ConsensusTime};
+    use hotshot_types::{
+        data::ViewNumber,
+        event::{LegacyEvent, LegacyEventType},
+        traits::node_implementation::ConsensusTime,
+    };
     use tide_disco::{method::ReadState, App};
     use tokio::{spawn, task::JoinHandle, time::timeout};
     use tracing::debug;
@@ -165,6 +169,8 @@ mod tests {
     #[async_trait]
     impl EventsSource<TestTypes> for MockEventsSource {
         type EventStream = futures::stream::Iter<std::vec::IntoIter<Arc<Event<TestTypes>>>>;
+        type LegacyEventStream =
+            futures::stream::Iter<std::vec::IntoIter<Arc<LegacyEvent<TestTypes>>>>;
 
         async fn get_event_stream(
             &self,
@@ -174,6 +180,19 @@ mod tests {
             let test_event = Arc::new(Event {
                 view_number: view,
                 event: EventType::ViewFinished { view_number: view },
+            });
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            stream::iter(vec![test_event])
+        }
+
+        async fn get_legacy_event_stream(
+            &self,
+            _filter: Option<EventFilterSet<TestTypes>>,
+        ) -> Self::LegacyEventStream {
+            let view = ViewNumber::new(self.counter.load(Ordering::SeqCst));
+            let test_event = Arc::new(LegacyEvent {
+                view_number: view,
+                event: LegacyEventType::ViewFinished { view_number: view },
             });
             self.counter.fetch_add(1, Ordering::SeqCst);
             stream::iter(vec![test_event])
@@ -205,7 +224,7 @@ mod tests {
         };
         let api = define_api::<MockEventsSource, _, MockVersion>(
             &Default::default(),
-            "0.0.1".parse().unwrap(),
+            "1.0.0".parse().unwrap(),
         )
         .unwrap();
 

@@ -54,8 +54,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         EdOnBN254.EdOnBN254Point schnorrVk,
         uint16 commission
     );
-    // TODO: emit the BLS signature so GCL can verify it.
-    // TODO: emit the Schnorr signature so GCL can verify it.
 
     /// @notice A validator initiated an exit from stake table
     ///
@@ -93,8 +91,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     event ConsensusKeysUpdated(
         address indexed account, BN254.G2Point blsVK, EdOnBN254.EdOnBN254Point schnorrVK
     );
-    // TODO: emit the BLS signature so GCL can verify it.
-    // TODO: emit the Schnorr signature so GCL can verify it.
 
     /// @notice A delegator claims unlocked funds.
     ///
@@ -207,7 +203,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     // @dev these are stored indexed by validator so we can keep track of them for slashing later
     mapping(address validator => mapping(address delegator => Undelegation)) public undelegations;
 
-    /// The time the contract will hold funds after undelegations are requested.
+    /// The time (seconds) the contract will hold funds after undelegations are requested.
     ///
     /// Must allow ample time for node to exit active validator set and slashing
     /// evidence to be submitted.
@@ -337,8 +333,6 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
         // Verify that the validator can sign for that blsVK. This prevents rogue public-key
         // attacks.
-        //
-        // TODO: we will move this check to the GCL to save gas.
         bytes memory message = abi.encode(validator);
         BLSSig.verifyBlsSig(message, blsSig, blsVK);
 

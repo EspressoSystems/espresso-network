@@ -31,7 +31,6 @@ use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
 use crate::{
-    auction_results_provider_types::{TestAuctionResult, TestAuctionResultsProvider},
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
@@ -56,7 +55,6 @@ pub struct TestTypes;
 impl NodeType for TestTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -89,7 +87,6 @@ pub struct TestTypesRandomizedLeader;
 impl NodeType for TestTypesRandomizedLeader {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -120,7 +117,6 @@ pub struct TestTypesEpochCatchupTypes;
 impl NodeType for TestTypesEpochCatchupTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -156,7 +152,6 @@ pub struct TestTypesRandomizedCommitteeMembers<CONFIG: QuorumFilterConfig> {
 impl<CONFIG: QuorumFilterConfig> NodeType for TestTypesRandomizedCommitteeMembers<CONFIG> {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -190,7 +185,6 @@ pub struct TestConsecutiveLeaderTypes;
 impl NodeType for TestConsecutiveLeaderTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -223,7 +217,6 @@ pub struct TestTwoStakeTablesTypes;
 impl NodeType for TestTwoStakeTablesTypes {
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
-    type AuctionResult = TestAuctionResult;
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = TestBlockHeader;
@@ -263,25 +256,21 @@ pub type StaticMembership = StaticCommittee<TestTypes>;
 impl<TYPES: NodeType> NodeImplementation<TYPES> for PushCdnImpl {
     type Network = PushCdnNetwork<TYPES::SignatureKey>;
     type Storage = TestStorage<TYPES>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TYPES>;
 }
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for MemoryImpl {
     type Network = MemoryNetwork<TYPES::SignatureKey>;
     type Storage = TestStorage<TYPES>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TYPES>;
 }
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for CombinedImpl {
     type Network = CombinedNetworks<TYPES>;
     type Storage = TestStorage<TYPES>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TYPES>;
 }
 
 impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
     type Network = Libp2pNetwork<TYPES>;
     type Storage = TestStorage<TYPES>;
-    type AuctionResultsProvider = TestAuctionResultsProvider<TYPES>;
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -294,40 +283,6 @@ impl Versions for TestVersions {
         1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
         0, 0,
     ];
-
-    type Marketplace = StaticVersion<0, 3>;
-
-    type Epochs = StaticVersion<0, 4>;
-}
-
-#[derive(Clone, Debug, Copy)]
-pub struct MarketplaceUpgradeTestVersions {}
-
-impl Versions for MarketplaceUpgradeTestVersions {
-    type Base = StaticVersion<0, 2>;
-    type Upgrade = StaticVersion<0, 3>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Marketplace = StaticVersion<0, 3>;
-
-    type Epochs = StaticVersion<0, 4>;
-}
-
-#[derive(Clone, Debug, Copy)]
-pub struct MarketplaceTestVersions {}
-
-impl Versions for MarketplaceTestVersions {
-    type Base = StaticVersion<0, 3>;
-    type Upgrade = StaticVersion<0, 3>;
-    const UPGRADE_HASH: [u8; 32] = [
-        1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    type Marketplace = StaticVersion<0, 3>;
 
     type Epochs = StaticVersion<0, 4>;
 }
@@ -343,8 +298,6 @@ impl Versions for EpochsTestVersions {
         0, 0,
     ];
 
-    type Marketplace = StaticVersion<0, 5>;
-
     type Epochs = StaticVersion<0, 3>;
 }
 
@@ -358,8 +311,6 @@ impl Versions for EpochUpgradeTestVersions {
         1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
         0, 0,
     ];
-
-    type Marketplace = StaticVersion<0, 5>;
 
     type Epochs = StaticVersion<0, 4>;
 }
@@ -376,9 +327,7 @@ mod tests {
     };
     use serde::{Deserialize, Serialize};
 
-    use crate::node_types::{
-        EpochsTestVersions, MarketplaceTestVersions, NodeType, TestTypes, TestVersions,
-    };
+    use crate::node_types::{EpochsTestVersions, NodeType, TestTypes, TestVersions};
     #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
     /// Dummy data used for test
     struct TestData<TYPES: NodeType> {
@@ -409,20 +358,22 @@ mod tests {
         let view_0 = <TestTypes as NodeType>::View::new(0);
         let view_1 = <TestTypes as NodeType>::View::new(1);
 
-        let versioned_data_0 = VersionedVoteData::<
-            TestTypes,
-            TestData<TestTypes>,
-            MarketplaceTestVersions,
-        >::new(data, view_0, &upgrade_lock)
-        .await
-        .unwrap();
-        let versioned_data_1 = VersionedVoteData::<
-            TestTypes,
-            TestData<TestTypes>,
-            MarketplaceTestVersions,
-        >::new(data, view_1, &upgrade_lock)
-        .await
-        .unwrap();
+        let versioned_data_0 =
+            VersionedVoteData::<TestTypes, TestData<TestTypes>, TestVersions>::new(
+                data,
+                view_0,
+                &upgrade_lock,
+            )
+            .await
+            .unwrap();
+        let versioned_data_1 =
+            VersionedVoteData::<TestTypes, TestData<TestTypes>, TestVersions>::new(
+                data,
+                view_1,
+                &upgrade_lock,
+            )
+            .await
+            .unwrap();
 
         let versioned_data_commitment_0: [u8; 32] = versioned_data_0.commit().into();
         let versioned_data_commitment_1: [u8; 32] = versioned_data_1.commit().into();
