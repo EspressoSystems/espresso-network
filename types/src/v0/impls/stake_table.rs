@@ -50,6 +50,23 @@ use crate::traits::EventsPersistenceRead;
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 
+/// Format the alloy Log RPC type in a way to make it easy to find the event in an explorer.
+trait DisplayLog {
+    fn display(&self) -> String;
+}
+
+impl DisplayLog for Log {
+    fn display(&self) -> String {
+        // These values are all unlikely to be missing because we only create Log variables by
+        // fetching them from the RPC, so for simplicity we use defaults if the any of the values
+        // are missing.
+        let block = self.block_number.unwrap_or_default();
+        let index = self.log_index.unwrap_or_default();
+        let hash = self.transaction_hash.unwrap_or_default();
+        format!("Log(block={block},index={index},transaction_hash={hash})")
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct StakeTableEvents {
     registrations: Vec<(ValidatorRegistered, Log)>,
@@ -193,10 +210,11 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 };
             },
             StakeTableEvent::RegisterV2(event) => {
-                if let Err(e) = event.authenticate() {
-                    tracing::warn!("Failed to authenticate event with error {e:#}");
-                    continue;
-                }
+                // Signature authentication is performed right after fetching, if we get an
+                // unauthenticated event here, something went wrong, we abort early.
+                event
+                    .authenticate()
+                    .context("Failed to authenticate event: {event:?}")?;
                 let ValidatorRegisteredV2 {
                     account,
                     blsVK,
@@ -320,10 +338,12 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
                 validator.state_ver_key = state_ver_key;
             },
             StakeTableEvent::KeyUpdateV2(update) => {
-                if let Err(e) = update.authenticate() {
-                    tracing::warn!("Failed to authenticate event with error {e:#}");
-                    continue;
-                }
+                // Signature authentication is performed right after fetching, if we get an
+                // unauthenticated event here, something went wrong, we abort early.
+                update
+                    .authenticate()
+                    .context("Failed to authenticate event: {event:?}")?;
+
                 let ConsensusKeysUpdatedV2 {
                     account,
                     blsVK,
@@ -702,7 +722,15 @@ impl StakeTableFetcher {
                         .query()
                         .await
                     {
-                        Ok(events) => break stream::iter(events),
+                        Ok(events) => {
+                            break stream::iter(events.into_iter().filter(|(event, log)| {
+                                if let Err(e) = event.authenticate() {
+                                    tracing::warn!(%e, "Failed to authenticate ValidatorRegisteredV2 event: {}", log.display());
+                                    return false;
+                                }
+                                true
+                            }));
+                        },
                         Err(err) => {
                             tracing::warn!(from, to, %err, "ValidatorRegisteredV2 Error");
                             sleep(retry_delay).await;
@@ -821,7 +849,15 @@ impl StakeTableFetcher {
                         .query()
                         .await
                     {
-                        Ok(events) => break stream::iter(events),
+                        Ok(events) => {
+                            break stream::iter(events.into_iter().filter(|(event, log)| {
+                                if let Err(e) = event.authenticate() {
+                                    tracing::warn!(%e, "Failed to authenticate ConsensusKeysUpdatedV2 event {}", log.display());
+                                    return false;
+                                }
+                                true
+                            }));
+                        },
                         Err(err) => {
                             tracing::warn!(from, to, %err, "ConsensusKeysUpdatedV2 Error");
                             sleep(retry_delay).await;
@@ -1685,7 +1721,7 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::Address;
+    use alloy::{primitives::Address, rpc::types::Log};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use sequencer_utils::test_utils::setup_test;
 
@@ -1899,5 +1935,15 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("bls key already used"));
+    }
+
+    #[test]
+    fn test_display_log() {
+        let serialized = r#"{"address":"0x0000000000000000000000000000000000000069","topics":["0x0000000000000000000000000000000000000000000000000000000000000069"],"data":"0x69","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000069","blockNumber":"0x69","blockTimestamp":"0x69","transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000069","transactionIndex":"0x69","logIndex":"0x70","removed":false}"#;
+        let log: Log = serde_json::from_str(serialized).unwrap();
+        assert_eq!(
+            log.display(),
+            "Log(block=105,index=112,transaction_hash=0x0000000000000000000000000000000000000000000000000000000000000069)"
+        )
     }
 }
