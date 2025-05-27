@@ -1,9 +1,9 @@
 (function() {
-    var implementors = Object.fromEntries([["hotshot_libp2p_networking",[]]]);
+    var implementors = Object.fromEntries([["hotshot_libp2p_networking",[]],["sequencer",[["impl <a class=\"trait\" href=\"hotshot_libp2p_networking/network/behaviours/dht/store/persistent/trait.DhtPersistentStorage.html\" title=\"trait hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage\">DhtPersistentStorage</a> for <a class=\"struct\" href=\"sequencer/persistence/fs/struct.Persistence.html\" title=\"struct sequencer::persistence::fs::Persistence\">Persistence</a>"],["impl <a class=\"trait\" href=\"hotshot_libp2p_networking/network/behaviours/dht/store/persistent/trait.DhtPersistentStorage.html\" title=\"trait hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage\">DhtPersistentStorage</a> for <a class=\"struct\" href=\"sequencer/persistence/no_storage/struct.NoStorage.html\" title=\"struct sequencer::persistence::no_storage::NoStorage\">NoStorage</a>"],["impl <a class=\"trait\" href=\"hotshot_libp2p_networking/network/behaviours/dht/store/persistent/trait.DhtPersistentStorage.html\" title=\"trait hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage\">DhtPersistentStorage</a> for <a class=\"struct\" href=\"sequencer/persistence/sql/struct.Persistence.html\" title=\"struct sequencer::persistence::sql::Persistence\">Persistence</a>"]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
         window.pending_implementors = implementors;
     }
 })()
-//{"start":57,"fragment_lengths":[32]}
+//{"start":57,"fragment_lengths":[32,1300]}
