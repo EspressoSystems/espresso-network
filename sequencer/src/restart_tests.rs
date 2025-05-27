@@ -7,6 +7,7 @@ use alloy::{
     primitives::map::HashMap,
 };
 use anyhow::bail;
+use async_lock::RwLockUpgradableReadGuard;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
@@ -442,25 +443,27 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
-            // TODO evaluate if this is the correct pace for this check
+
+            // Check that network state is not disastrously broken.
             for leaf in leaf_chain.iter() {
                 let height = leaf.leaf.height();
                 let local_commitment = leaf.leaf.commitment();
-                // let v = leaf.state.clone();
-                // let block_commitment = v.block_merkle_tree.commitment();
-                // let fee_commitment = v.fee_merkle_tree.commitment();
 
-                if let Some(known_commitment) = self.state.read().await.get(&height) {
-                    tracing::error!(
-                        "known commitment: {}, local_commitment: {}",
-                        &known_commitment,
-                        &local_commitment
+                tracing::debug!("checking state");
+                let reader = self.state.upgradable_read().await;
+                if let Some(known_commitment) = reader.get(&height) {
+                    tracing::info!(node_id, height, "Comparing commitments across nodes");
+                    assert_eq!(
+                        known_commitment, &local_commitment,
+                        "commitments do not match"
                     );
-                    assert_eq!(known_commitment, &local_commitment);
                 } else {
-                    self.state.write().await.insert(height, local_commitment);
+                    tracing::debug!("Upgrading test state lock");
+                    let mut writer = RwLockUpgradableReadGuard::upgrade(reader).await;
+                    writer.insert(height, local_commitment);
                 }
 
+                // Check that this nodes proposals are decided
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
                     tracing::info!(node_id, height, "got leaf proposed by this node");
                     return Ok(());
