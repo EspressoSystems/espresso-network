@@ -136,6 +136,13 @@ pub async fn deregister_validator(
 
 #[cfg(test)]
 mod test {
+    use alloy::providers::WalletProvider as _;
+    use espresso_contract_deployer::{build_provider, build_random_provider};
+    use espresso_types::{
+        v0_3::{StakeTableEvent, StakeTableFetcher},
+        validators_from_l1_events, L1Client,
+    };
+    use hotshot_contract_adapter::stake_table;
     use rand::{rngs::StdRng, SeedableRng as _};
 
     use super::*;
@@ -217,6 +224,131 @@ mod test {
         assert_eq!(event.schnorrVK, schnorr_vk_sol);
 
         event.data.authenticate()?;
+
+        Ok(())
+    }
+
+    /// The GCL must remove stake table events with incorrect signatures. This test verifies that a
+    /// validator registered event with incorrect schnorr signature is removed before the stake
+    /// table is computed.
+    #[tokio::test]
+    async fn test_integration_unauthenticated_validator_registered_events_removed() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+
+        // register a validator with correct signature
+        system.register_validator().await?;
+
+        // NOTE: we can't register a validator with a bad BLS signature because the contract will revert
+
+        let provider = build_provider(
+            "test test test test test test test test test test test junk".to_string(),
+            1,
+            system.rpc_url.clone(),
+        );
+        let validator_address = provider.default_signer_address();
+        let (_, bls_key_pair, schnorr_key_pair) =
+            TestSystem::gen_keys(&mut StdRng::from_seed([1u8; 32]));
+        let (_, _, other_schnorr_key_pair) =
+            TestSystem::gen_keys(&mut StdRng::from_seed([2u8; 32]));
+
+        let (bls_vk, bls_sig) = prepare_bls_payload(&bls_key_pair, validator_address);
+        let (schnorr_vk, _) = prepare_schnorr_payload(&schnorr_key_pair, validator_address);
+
+        // create a valid schnorr signature with the *wrong* key
+        let (_, schnorr_sig_other_key) =
+            prepare_schnorr_payload(&other_schnorr_key_pair, validator_address);
+
+        let stake_table = StakeTableV2::new(system.stake_table, provider);
+
+        let receipt = stake_table
+            .registerValidatorV2(
+                bls_vk,
+                schnorr_vk,
+                bls_sig.into(),
+                schnorr_sig_other_key.clone(),
+                Commission::try_from("12.34")?.to_evm(),
+            )
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        let l1 = L1Client::new(vec![system.rpc_url])?;
+        let events = StakeTableFetcher::fetch_events_from_contract(
+            l1,
+            system.stake_table,
+            Some(0),
+            receipt.block_number.unwrap(),
+        )
+        .await?
+        .sort_events()?;
+        assert_eq!(events.len(), 1);
+        match events[0].1.clone() {
+            StakeTableEvent::RegisterV2(event) => {
+                assert_eq!(event.account, system.deployer_address);
+            },
+            _ => panic!("expected RegisterV2 event"),
+        }
+        Ok(())
+    }
+
+    /// The GCL must remove stake table events with incorrect signatures. This test verifies that a
+    /// consensus keys update event with incorrect schnorr signature is removed before the stake
+    /// table is computed.
+    #[tokio::test]
+    async fn test_integration_unauthenticated_update_consensus_keys_events_removed() -> Result<()> {
+        let system = TestSystem::deploy().await?;
+
+        // register a validator with correct signature
+        system.register_validator().await?;
+        let validator_address = system.deployer_address;
+
+        // NOTE: we can't register a validator with a bad BLS signature because the contract will revert
+
+        let (_, new_bls_key_pair, new_schnorr_key_pair) =
+            TestSystem::gen_keys(&mut StdRng::from_seed([1u8; 32]));
+        let (_, _, other_schnorr_key_pair) =
+            TestSystem::gen_keys(&mut StdRng::from_seed([2u8; 32]));
+
+        let (bls_vk, bls_sig) = prepare_bls_payload(&new_bls_key_pair, validator_address);
+        let (schnorr_vk, _) = prepare_schnorr_payload(&new_schnorr_key_pair, validator_address);
+
+        // create a valid schnorr signature with the *wrong* key
+        let (_, schnorr_sig_other_key) =
+            prepare_schnorr_payload(&other_schnorr_key_pair, validator_address);
+
+        let stake_table = StakeTableV2::new(system.stake_table, system.provider);
+
+        // perform an update consensus keys event with the wrong schnorr key
+        let receipt = stake_table
+            .updateConsensusKeysV2(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig_other_key)
+            .send()
+            .await
+            .maybe_decode_revert::<StakeTableV2Errors>()?
+            .get_receipt()
+            .await?;
+        assert!(receipt.status());
+
+        let l1 = L1Client::new(vec![system.rpc_url])?;
+        let events = StakeTableFetcher::fetch_events_from_contract(
+            l1,
+            system.stake_table,
+            Some(0),
+            receipt.block_number.unwrap(),
+        )
+        .await?
+        .sort_events()?;
+        assert_eq!(events.len(), 1);
+        match events[0].1.clone() {
+            StakeTableEvent::RegisterV2(event) => {
+                assert_eq!(event.account, system.deployer_address);
+            },
+            _ => panic!("expected RegisterV2 event"),
+        }
+
+        println!("Events: {events:?}");
 
         Ok(())
     }
