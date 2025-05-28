@@ -10,3 +10,4 @@ impl Copy for crate::sol_types::StakeTableV2::ConsensusKeysUpdated {}
 // schnorr sig in ConsensusKeysUpdatedV2 Bytes, cannot implement copy
 impl Copy for crate::sol_types::StakeTableV2::Delegated {}
 impl Copy for crate::sol_types::StakeTableV2::Undelegated {}
+impl Copy for crate::sol_types::staketablev2::BN254::G1Point {}
