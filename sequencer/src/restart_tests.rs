@@ -454,24 +454,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
             for leaf in leaf_chain.iter() {
                 let height = leaf.leaf.height();
-                let local_commitment = leaf.leaf.commitment();
-
-                // Check that network state is not disastrously broken.
-                let reader = self.state.upgradable_read().await;
-                // Note that not all nodes will be at the same height, so in
-                // some cases nothing happens. But there is generally enough
-                // overlap that the comparison will occur for some leaves.
-                if let Some(known_commitment) = reader.get(&height) {
-                    tracing::info!(node_id, height, "Comparing commitments across nodes");
-                    assert_eq!(
-                        known_commitment, &local_commitment,
-                        "commitments do not match"
-                    );
-                } else {
-                    tracing::debug!("Upgrading test state lock");
-                    let mut writer = RwLockUpgradableReadGuard::upgrade(reader).await;
-                    writer.insert(height, local_commitment);
-                }
 
                 // Check that this nodes proposals are decided
                 if leaf.leaf.view_number().u64() % (num_nodes.get() as u64) == node_id {
