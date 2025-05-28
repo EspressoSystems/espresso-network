@@ -26,7 +26,7 @@ use espresso_types::{
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -192,7 +192,10 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versions>(
+pub async fn init_node<
+    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
+    V: Versions,
+>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
@@ -550,7 +553,7 @@ where
     let network = {
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
-            DhtNoPersistence,
+            persistence.clone(),
             coordinator.membership().clone(),
             gossip_config,
             request_response_config,
@@ -800,6 +803,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        l1_opt: L1ClientOptions,
         anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
@@ -852,6 +856,12 @@ pub mod testing {
             self.l1_url = l1_url;
             self
         }
+
+        pub fn l1_opt(mut self, opt: L1ClientOptions) -> Self {
+            self.l1_opt = opt;
+            self
+        }
+
         pub fn signer(mut self, signer: LocalSigner<SigningKey>) -> Self {
             self.signer = signer;
             self
@@ -947,6 +957,7 @@ pub mod testing {
                 state_key_pairs: self.state_key_pairs,
                 master_map: self.master_map,
                 l1_url: self.l1_url,
+                l1_opt: self.l1_opt,
                 signer: self.signer,
                 state_relay_url: self.state_relay_url,
                 builder_port: self.builder_port,
@@ -1027,6 +1038,13 @@ pub mod testing {
                 state_key_pairs,
                 master_map,
                 l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
+                l1_opt: L1ClientOptions {
+                    stake_table_update_interval: Duration::from_secs(5),
+                    l1_events_max_block_range: 1000,
+                    l1_polling_interval: Duration::from_secs(1),
+                    subscription_timeout: Duration::from_secs(5),
+                    ..Default::default()
+                },
                 anvil_provider: Some(anvil_provider),
                 signer,
                 state_relay_url: None,
@@ -1043,6 +1061,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        l1_opt: L1ClientOptions,
         anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
         state_relay_url: Option<Url>,
@@ -1189,14 +1208,9 @@ pub mod testing {
                 },
             };
 
-            let l1_opt = L1ClientOptions {
-                stake_table_update_interval: Duration::from_secs(5),
-                l1_events_max_block_range: 1000,
-                l1_polling_interval: Duration::from_secs(1),
-                subscription_timeout: Duration::from_secs(5),
-                ..Default::default()
-            };
-            let l1_client = l1_opt
+            let l1_client = self
+                .l1_opt
+                .clone()
                 .connect(vec![self.l1_url.clone()])
                 .expect("failed to create L1 client");
             l1_client.spawn_tasks().await;

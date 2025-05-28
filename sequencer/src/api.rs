@@ -809,6 +809,7 @@ pub mod test_helpers {
         stream::StreamExt,
     };
     use hotshot::types::{Event, EventType};
+    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo,
         traits::{metrics::NoMetrics, node_implementation::ConsensusTime},
@@ -956,6 +957,7 @@ pub mod test_helpers {
         pub async fn pos_hook<V: Versions>(
             self,
             delegation_config: DelegationConfig,
+            stake_table_version: StakeTableContractVersion,
         ) -> anyhow::Result<Self> {
             if <V as Versions>::Upgrade::VERSION < EpochVersion::VERSION
                 && <V as Versions>::Base::VERSION < EpochVersion::VERSION
@@ -992,9 +994,14 @@ pub mod test_helpers {
                 .epoch_start_block(epoch_start_block)
                 .build()
                 .unwrap();
-            args.deploy_all(&mut contracts)
-                .await
-                .expect("failed to deploy all contracts");
+
+            match stake_table_version {
+                StakeTableContractVersion::V1 => {
+                    args.deploy_to_stake_table_v1(&mut contracts).await
+                },
+                StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+            }
+            .context("failed to deploy contracts")?;
 
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
@@ -2006,8 +2013,8 @@ mod test {
         traits::NullEventConsumer,
         v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
         v0_3::StakeTableFetcher,
-        validators_from_l1_events, FeeAmount, Header, L1ClientOptions, MockSequencerVersions,
-        SequencerVersions, ValidatedState,
+        validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
+        MockSequencerVersions, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -2038,7 +2045,7 @@ mod test {
     };
     use tide_disco::{app::AppHealth, error::ServerError, healthcheck::HealthStatus};
     use tokio::time::sleep;
-    use vbs::version::StaticVersion;
+    use vbs::version::{StaticVersion, StaticVersionType};
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -2790,6 +2797,102 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_pos_upgrade_view_based() {
+        type PosUpgrade = SequencerVersions<FeeVersion, EpochVersion>;
+        test_upgrade_helper::<PosUpgrade>(PosUpgrade::new()).await;
+    }
+
+    async fn test_upgrade_helper<V: Versions>(version: V) {
+        setup_test();
+        // wait this number of views beyond the configured first view
+        // before asserting anything.
+        let wait_extra_views = 10;
+        // Number of nodes running in the test network.
+        const NUM_NODES: usize = 5;
+        let upgrade_version = <V as Versions>::Upgrade::VERSION;
+        let port = pick_unused_port().expect("No ports free");
+
+        let test_config = TestConfigBuilder::default()
+            .epoch_height(200)
+            .epoch_start_block(321)
+            .set_upgrades(upgrade_version)
+            .await
+            .build();
+
+        let chain_config_upgrade = test_config.get_upgrade_map().chain_config(upgrade_version);
+        tracing::debug!(?chain_config_upgrade);
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(Options::from(options::Http {
+                port,
+                max_connections: None,
+            }))
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let mut network = TestNetwork::new(config, version).await;
+        let mut events = network.server.event_stream().await;
+
+        // First loop to get an `UpgradeProposal`. Note that the
+        // actual upgrade will take several to many subsequent views for
+        // voting and finally the actual upgrade.
+        let upgrade = loop {
+            let event = events.next().await.unwrap();
+            match event.event {
+                EventType::UpgradeProposal { proposal, .. } => {
+                    tracing::info!(?proposal, "proposal");
+                    let upgrade = proposal.data.upgrade_proposal;
+                    let new_version = upgrade.new_version;
+                    tracing::info!(?new_version, "upgrade proposal new version");
+                    assert_eq!(new_version, <V as Versions>::Upgrade::VERSION);
+                    break upgrade;
+                },
+                _ => continue,
+            }
+        };
+
+        let wanted_view = upgrade.new_version_first_view + wait_extra_views;
+        // Loop until we get the `new_version_first_view`, then test the upgrade.
+        loop {
+            let event = events.next().await.unwrap();
+            let view_number = event.view_number;
+
+            tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
+            if view_number > wanted_view {
+                let states: Vec<_> = network
+                    .peers
+                    .iter()
+                    .map(|peer| async { peer.consensus().read().await.decided_state().await })
+                    .collect();
+
+                let configs: Option<Vec<ChainConfig>> = join_all(states)
+                    .await
+                    .iter()
+                    .map(|state| state.chain_config.resolve())
+                    .collect();
+
+                tracing::debug!(?configs, "`ChainConfig`s for nodes");
+                if let Some(configs) = configs {
+                    for config in configs {
+                        assert_eq!(config, chain_config_upgrade);
+                    }
+                    break; // if assertion did not panic, the test was successful, so we exit the loop
+                }
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        network.server.shut_down().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     pub(crate) async fn test_restart() {
         setup_test();
 
@@ -3059,7 +3162,7 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config.clone())
-            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts)
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
             .await
             .expect("Pos Deployment")
             .build();
@@ -3158,7 +3261,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts)
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
             .await
             .unwrap()
             .build();
@@ -3250,7 +3353,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3369,7 +3472,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3482,7 +3585,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3693,7 +3796,7 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3770,7 +3873,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
@@ -3909,7 +4012,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators, Default::default())
             .await
             .unwrap()
             .build();
