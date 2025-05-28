@@ -561,7 +561,9 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         tracing::info!("Real run mode enabled");
         match contracts.address(Contract::LightClientProxy) {
             // check if proxy already exists
-            None => Err(anyhow!("LightClientProxy not found, can't upgrade")),
+            None => Err(anyhow!(
+                "LightClientProxy (multisig owner) not found, can't upgrade"
+            )),
             Some(proxy_addr) => {
                 let proxy = LightClient::new(proxy_addr, &provider);
                 let owner = proxy.owner().call().await?;
