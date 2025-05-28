@@ -33,5 +33,6 @@ COPY --from=builder /usr/local/share /usr/local/share
 COPY --from=builder /app/ /app/
 COPY --from=builder /bin/deploy /bin/deploy
 COPY --from=builder /bin/multisig-upgrade-entrypoint /bin/multisig-upgrade-entrypoint
+ENV MULTISIG_UPGRADE_ENTRYPOINT_PATH=/bin/multisig-upgrade-entrypoint
 
 CMD [ "/bin/deploy"]

@@ -880,8 +880,12 @@ pub async fn call_upgrade_proxy_script(
     let dry_run = dry_run.unwrap_or(false);
     tracing::info!("Dry run: {}", dry_run);
 
-    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../scripts/multisig-upgrade-entrypoint");
+    let script_path = if let Ok(env_path) = std::env::var("MULTISIG_UPGRADE_ENTRYPOINT_PATH") {
+        PathBuf::from(env_path)
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../scripts/multisig-upgrade-entrypoint")
+    };
 
     assert!(
         script_path.exists(),
