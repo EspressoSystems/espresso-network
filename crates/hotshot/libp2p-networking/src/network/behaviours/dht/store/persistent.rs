@@ -49,6 +49,17 @@ impl DhtPersistentStorage for DhtNoPersistence {
     }
 }
 
+#[async_trait]
+impl<D: DhtPersistentStorage> DhtPersistentStorage for Arc<D> {
+    async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
+        self.as_ref().save(records).await
+    }
+
+    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
+        self.as_ref().load().await
+    }
+}
+
 /// A `PersistentStorage` that persists the DHT to a file on disk. Used mostly for
 /// testing.
 #[derive(Clone)]

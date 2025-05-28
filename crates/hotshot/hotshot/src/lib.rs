@@ -70,7 +70,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
         states::ValidatedState,
     },
-    utils::genesis_epoch_from_version,
+    utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     HotShotConfig,
 };
 /// Reexport rand crate
@@ -392,18 +392,27 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         debug!("Starting Consensus");
         let consensus = self.consensus.read().await;
 
+        let first_epoch = option_epoch_from_block_number::<TYPES>(
+            V::Base::VERSION >= V::Epochs::VERSION,
+            self.config.epoch_start_block,
+            self.config.epoch_height,
+        );
+        // `start_epoch` comes from the initializer, it might be the last seen epoch before restart
+        // `first_epoch` is the first epoch after the transition to the epoch version
+        // `initial_view_change_epoch` is the greater of the two, we use it with the initial view change
+        let initial_view_change_epoch = self.start_epoch.max(first_epoch);
         #[allow(clippy::panic)]
         self.internal_event_stream
             .0
             .broadcast_direct(Arc::new(HotShotEvent::ViewChange(
                 self.start_view,
-                self.start_epoch,
+                initial_view_change_epoch,
             )))
             .await
             .unwrap_or_else(|_| {
                 panic!(
-                    "Genesis Broadcast failed; event = ViewChange({:?})",
-                    self.start_view
+                    "Genesis Broadcast failed; event = ViewChange({:?}, {:?})",
+                    self.start_view, initial_view_change_epoch,
                 )
             });
 
@@ -419,10 +428,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             async move {
                 sleep(Duration::from_millis(next_view_timeout)).await;
                 broadcast_event(
-                    Arc::new(HotShotEvent::Timeout(
-                        start_view + 1,
-                        start_epoch.map(|x| x + 1),
-                    )),
+                    Arc::new(HotShotEvent::Timeout(start_view, start_epoch)),
                     &event_stream,
                 )
                 .await;
@@ -1158,6 +1164,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             QuorumCertificate2<TYPES>,
             Option<NextEpochQuorumCertificate2<TYPES>>,
         ),
+        last_actioned_view: TYPES::View,
         saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
@@ -1178,7 +1185,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             high_qc,
             start_view,
             start_epoch,
-            last_actioned_view: start_view,
+            last_actioned_view,
             saved_proposals,
             saved_vid_shares,
             next_epoch_high_qc,

@@ -29,6 +29,7 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true }
+hotshot-libp2p-networking = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 indexmap = { workspace = true }

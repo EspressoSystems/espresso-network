@@ -1388,31 +1388,60 @@ impl Membership<SeqTypes> for EpochCommittees {
             .unwrap_or_default()
     }
 
-    /// Index the vector of public keys with the current view number
+    /// Returns the leader's public key for a given view number and epoch.
+    ///
+    /// If an epoch is provided and a randomized committee exists for that epoch,
+    /// the leader is selected from the randomized committee. Otherwise, the leader
+    /// is selected from the non-epoch committee.
+    ///
+    /// # Arguments
+    /// * `view_number` - The view number to index into the committee.
+    /// * `epoch` - The epoch for which to determine the leader. If `None`, uses the non-epoch committee.
+    ///
+    /// # Errors
+    /// Returns `LeaderLookupError` if the epoch is before the first epoch or if the committee is missing.
     fn lookup_leader(
         &self,
         view_number: <SeqTypes as NodeType>::View,
         epoch: Option<Epoch>,
     ) -> Result<PubKey, Self::Error> {
-        if let Some(epoch) = epoch {
-            let Some(randomized_committee) = self.randomized_committees.get(&epoch) else {
+        match (self.first_epoch(), epoch) {
+            (Some(first_epoch), Some(epoch)) => {
+                if epoch < first_epoch {
+                    tracing::error!(
+                        "lookup_leader called with epoch {} before first epoch {}",
+                        epoch,
+                        first_epoch,
+                    );
+                    return Err(LeaderLookupError);
+                }
+                let Some(randomized_committee) = self.randomized_committees.get(&epoch) else {
+                    tracing::error!(
+                        "We are missing the randomized committee for epoch {}",
+                        epoch
+                    );
+                    return Err(LeaderLookupError);
+                };
+
+                Ok(PubKey::public_key(&select_randomized_leader(
+                    randomized_committee,
+                    *view_number,
+                )))
+            },
+            (_, None) => {
+                let leaders = &self.non_epoch_committee.eligible_leaders;
+
+                let index = *view_number as usize % leaders.len();
+                let res = leaders[index].clone();
+                Ok(PubKey::public_key(&res.stake_table_entry))
+            },
+            (None, Some(epoch)) => {
                 tracing::error!(
-                    "We are missing the randomized committee for epoch {}",
-                    epoch
+                    "lookup_leader called with epoch {} but we don't have a first epoch",
+                    epoch,
                 );
-                return Err(LeaderLookupError);
-            };
-
-            Ok(PubKey::public_key(&select_randomized_leader(
-                randomized_committee,
-                *view_number,
-            )))
-        } else {
-            let leaders = &self.non_epoch_committee.eligible_leaders;
-
-            let index = *view_number as usize % leaders.len();
-            let res = leaders[index].clone();
-            Ok(PubKey::public_key(&res.stake_table_entry))
+                Err(LeaderLookupError)
+            },
         }
     }
 
@@ -1513,17 +1542,31 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.state.contains_key(&epoch)
     }
 
-    fn has_randomized_stake_table(&self, epoch: Epoch) -> bool {
-        match self.first_epoch {
-            None => true,
-            Some(first_epoch) => {
-                if epoch < first_epoch {
-                    self.state.contains_key(&epoch)
-                } else {
-                    self.randomized_committees.contains_key(&epoch)
-                }
-            },
-        }
+    /// Checks if the randomized stake table is available for the given epoch.
+    ///
+    /// Returns `Ok(true)` if a randomized committee exists for the specified epoch and
+    /// the epoch is not before the first epoch. Returns an error if `first_epoch` is `None`
+    /// or if the provided epoch is before the first epoch.
+    ///
+    /// # Arguments
+    /// * `epoch` - The epoch for which to check the presence of a randomized stake table.
+    ///
+    /// # Errors
+    /// Returns an error if `first_epoch` is `None` or if `epoch` is before `first_epoch`.
+    fn has_randomized_stake_table(&self, epoch: Epoch) -> anyhow::Result<bool> {
+        let Some(first_epoch) = self.first_epoch else {
+            bail!(
+                "Called has_randomized_stake_table with epoch {} but first_epoch is None",
+                epoch
+            );
+        };
+        ensure!(
+            epoch >= first_epoch,
+            "Called has_randomized_stake_table with epoch {} but first_epoch is {}",
+            epoch,
+            first_epoch
+        );
+        Ok(self.randomized_committees.contains_key(&epoch))
     }
 
     async fn get_epoch_root(
