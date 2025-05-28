@@ -480,7 +480,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         };
 
         let node_id = context.node_id();
-        tracing::error!(node_id, "checking state for node");
+        tracing::info!(node_id, "verifying state of node");
 
         let mut events = context.event_stream().await;
         while let Some(event) = events.next().await {
@@ -488,8 +488,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 continue;
             };
 
-            // TODO assert validated nodes against number of nodes at the end
-            // (possible one level up, on the caller)
             for leaf in leaf_chain.iter() {
                 let height = leaf.leaf.height();
                 let local_commitment = leaf.leaf.commitment();
@@ -500,7 +498,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 // overlap that the comparison will occur for some leaves.
                 let map_reader = self.state.map.upgradable_read().await;
                 if let Some((verified_node, known_commitment)) = map_reader.get(&height) {
-                    tracing::error!(node_id, height, "Comparing commitments across nodes");
+                    tracing::info!(node_id, height, "Comparing commitments across nodes");
                     assert_eq!(known_commitment, &local_commitment, "invalid commitment");
                     tracing::info!(node_id, height, "verified leaf commitment");
 
@@ -508,7 +506,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     nodes_writer.insert(*verified_node);
                     nodes_writer.insert(node_id);
                 } else {
-                    tracing::error!("Upgrading test state lock");
+                    tracing::debug!("Upgrading test state lock");
                     let mut writer = RwLockUpgradableReadGuard::upgrade(map_reader).await;
                     writer.insert(height, (node_id, local_commitment));
                 }
@@ -732,7 +730,7 @@ impl TestNetwork {
         // Check that all the nodes were validated.
         let num_nodes = self.da_nodes.len() + self.regular_nodes.len();
         let num_validated_nodes = self.state.nodes.read().await.len();
-        tracing::error!(
+        tracing::info!(
             "total number of nodes: {}, number of validated nodes: {}",
             num_nodes,
             num_validated_nodes,
