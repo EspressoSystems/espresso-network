@@ -223,7 +223,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     if opt.upgrade_light_client_v2 {
-        let (blocks_per_epoch, epoch_start_block) = if opt.dry_run && opt.use_multisig {
+        let (blocks_per_epoch, epoch_start_block) = if opt.dry_run || opt.use_multisig {
             (10, 22)
         } else {
             // fetch epoch length from HotShot config

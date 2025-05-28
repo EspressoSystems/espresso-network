@@ -150,7 +150,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             blocks_per_epoch,
                             epoch_start_block,
                             rpc_url,
-                            multisig_address: Address::random(),
                             dry_run: Some(dry_run),
                         },
                     )

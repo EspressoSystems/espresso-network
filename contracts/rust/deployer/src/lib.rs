@@ -514,7 +514,6 @@ pub struct LightClientV2UpgradeParams {
     pub blocks_per_epoch: u64,
     pub epoch_start_block: u64,
     pub rpc_url: String,
-    pub multisig_address: Address,
     pub dry_run: Option<bool>,
 }
 
@@ -565,13 +564,10 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 "LightClientProxy (multisig owner) not found, can't upgrade"
             )),
             Some(proxy_addr) => {
+                tracing::info!("LightClientProxy found at {proxy_addr:#x}");
                 let proxy = LightClient::new(proxy_addr, &provider);
                 let owner = proxy.owner().call().await?;
                 let owner_addr = owner._0;
-                assert_eq!(
-                    owner_addr, params.multisig_address,
-                    "Proxy is not owned by the multisig"
-                );
                 // TODO: check if owner is a multisig
                 // first deploy PlonkVerifierV2.sol
                 let pv2_addr = contracts
@@ -925,7 +921,7 @@ pub async fn call_upgrade_proxy_script(
     new_impl_addr: Address,
     init_data: String,
     rpc_url: String,
-    safe_address: Address,
+    safe_addr: Address,
     dry_run: Option<bool>,
 ) -> Result<(String, bool), anyhow::Error> {
     let dry_run = dry_run.unwrap_or(false);
@@ -954,7 +950,7 @@ pub async fn call_upgrade_proxy_script(
         .arg("--rpc-url")
         .arg(rpc_url)
         .arg("--safe-address")
-        .arg(safe_address.to_string())
+        .arg(safe_addr.to_string())
         .arg("--dry-run")
         .arg(dry_run.to_string())
         .stdout(Stdio::piped())
@@ -1403,7 +1399,6 @@ mod tests {
                 blocks_per_epoch,
                 epoch_start_block,
                 rpc_url: sepolia_rpc_url,
-                multisig_address: multisig_admin,
                 dry_run: Some(dry_run),
             },
         )
