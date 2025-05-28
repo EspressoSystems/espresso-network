@@ -1,11 +1,12 @@
 #![cfg(test)]
 
-use std::{collections::HashSet, path::Path, time::Duration};
-
-use alloy::{
-    node_bindings::{Anvil, AnvilInstance},
-    primitives::map::HashMap,
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    time::Duration,
 };
+
+use alloy::node_bindings::{Anvil, AnvilInstance};
 use anyhow::bail;
 use async_lock::RwLockUpgradableReadGuard;
 use cdn_broker::{
