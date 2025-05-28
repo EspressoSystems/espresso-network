@@ -386,7 +386,7 @@
 <a href=#386 id=386 data-nosnippet>386</a>                .<span class="kw">await
 <a href=#387 id=387 data-nosnippet>387</a>        </span>};
 <a href=#388 id=388 data-nosnippet>388</a>
-<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(updater) = add_epoch_root_updater {
+<a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(updater)) = add_epoch_root_updater {
 <a href=#390 id=390 data-nosnippet>390</a>            <span class="kw">let </span><span class="kw-2">mut </span>membership_write = <span class="self">self</span>.membership.write().<span class="kw">await</span>;
 <a href=#391 id=391 data-nosnippet>391</a>            updater(<span class="kw-2">&amp;mut *</span>(membership_write));
 <a href=#392 id=392 data-nosnippet>392</a>        };

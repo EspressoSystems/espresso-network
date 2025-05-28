@@ -1225,7 +1225,7 @@
 <a href=#1225 id=1225 data-nosnippet>1225</a>                    .<span class="kw">await
 <a href=#1226 id=1226 data-nosnippet>1226</a>            </span>};
 <a href=#1227 id=1227 data-nosnippet>1227</a>
-<a href=#1228 id=1228 data-nosnippet>1228</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(write_callback) = write_callback {
+<a href=#1228 id=1228 data-nosnippet>1228</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(write_callback)) = write_callback {
 <a href=#1229 id=1229 data-nosnippet>1229</a>                <span class="kw">let </span><span class="kw-2">mut </span>membership_writer = membership.write().<span class="kw">await</span>;
 <a href=#1230 id=1230 data-nosnippet>1230</a>                write_callback(<span class="kw-2">&amp;mut *</span>membership_writer);
 <a href=#1231 id=1231 data-nosnippet>1231</a>            }
