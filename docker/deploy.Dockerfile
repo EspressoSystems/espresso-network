@@ -1,4 +1,4 @@
-FROM ghcr.io/espressosystems/ubuntu-base:main
+FROM ghcr.io/espressosystems/ubuntu-base:main AS builder
 
 ARG TARGETARCH
 
@@ -31,4 +31,4 @@ COPY --from=builder /app/ /app/
 COPY --from=builder /bin/deploy /bin/deploy
 COPY --from=builder /bin/multisig-upgrade-entrypoint /bin/multisig-upgrade-entrypoint
 
-CMD ["/bin/deploy"]
+CMD [ "/bin/deploy"]
