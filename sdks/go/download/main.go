@@ -215,6 +215,10 @@ func getFileName() string {
 		panic(fmt.Sprintf("unsupported architecture: %s", arch))
 	}
 
+	if fileName == "" {
+		panic(fmt.Sprintf("unsupported os: %s", os))
+	}
+
 	return fmt.Sprintf("libespresso_crypto_helper-%s%s", fileName, extension)
 }
 

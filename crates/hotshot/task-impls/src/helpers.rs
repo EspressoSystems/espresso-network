@@ -34,7 +34,7 @@ use hotshot_types::{
         election::Membership,
         node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
         signature_key::{SignatureKey, StakeTableEntryType, StateSignatureKey},
-        storage::{store_drb_progress_fn, Storage},
+        storage::{load_drb_progress_fn, store_drb_progress_fn, Storage},
         BlockPayload, ValidatedState,
     },
     utils::{
@@ -178,6 +178,7 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     let membership = membership.clone();
     let storage = storage.clone();
     let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
+    let load_drb_progress_fn = load_drb_progress_fn(storage.clone());
     let consensus = consensus.clone();
     let drb_input = DrbInput {
         epoch: *epoch,
@@ -185,11 +186,12 @@ fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         value: seed,
     };
     tokio::spawn(async move {
-        let drb_result = tokio::task::spawn_blocking(move || {
-            hotshot_types::drb::compute_drb_result(drb_input, store_drb_progress_fn)
-        })
-        .await
-        .unwrap();
+        let drb_result = hotshot_types::drb::compute_drb_result(
+            drb_input,
+            store_drb_progress_fn,
+            load_drb_progress_fn,
+        )
+        .await;
 
         handle_drb_result::<TYPES, I>(&membership, epoch, &storage, &consensus, drb_result).await;
         drb_result
@@ -212,7 +214,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 
         let mut start = Instant::now();
         if let Err(e) = storage
-            .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
+            .store_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
             .await
         {
             tracing::error!("Failed to store epoch root for epoch {next_epoch_number}: {e}");

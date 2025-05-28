@@ -15,6 +15,9 @@ use espresso_types::{
 };
 use futures::stream::StreamExt;
 use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
+    DhtPersistentStorage, SerializableRecord,
+};
 use hotshot_query_service::{
     availability::LeafQueryData,
     data_source::{
@@ -1085,6 +1088,19 @@ impl SequencerPersistence for Persistence {
             }))
     }
 
+    async fn load_restart_view(&self) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(self
+            .db
+            .read()
+            .await?
+            .fetch_optional(query("SELECT view FROM restart_view WHERE id = 0"))
+            .await?
+            .map(|row| {
+                let view: i64 = row.get("view");
+                ViewNumber::new(view as u64)
+            }))
+    }
+
     async fn load_anchor_leaf(
         &self,
     ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
@@ -1275,6 +1291,17 @@ impl SequencerPersistence for Persistence {
 
         let mut tx = self.db.write().await?;
         tx.execute(query(&stmt).bind(view.u64() as i64)).await?;
+
+        if matches!(action, HotShotAction::Vote) {
+            let restart_view = view + 1;
+            let stmt = format!(
+                "INSERT INTO restart_view (id, view) VALUES (0, $1)
+                ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, excluded.view)"
+            );
+            tx.execute(query(&stmt).bind(restart_view.u64() as i64))
+                .await?;
+        }
+
         tx.commit().await
     }
 
@@ -1921,7 +1948,7 @@ impl SequencerPersistence for Persistence {
         tx.commit().await
     }
 
-    async fn add_epoch_root(
+    async fn store_epoch_root(
         &self,
         epoch: EpochNumber,
         block_header: <SeqTypes as NodeType>::BlockHeader,
@@ -2279,6 +2306,62 @@ impl MembershipPersistence for Persistence {
                 events,
             ))
         }
+    }
+}
+
+#[async_trait]
+impl DhtPersistentStorage for Persistence {
+    /// Save the DHT to the database
+    ///
+    /// # Errors
+    /// - If we fail to serialize the records
+    /// - If we fail to write the serialized records to the DB
+    async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
+        // Bincode-serialize the records
+        let to_save =
+            bincode::serialize(&records).with_context(|| "failed to serialize records")?;
+
+        // Prepare the statement
+        let stmt = "INSERT INTO libp2p_dht (id, serialized_records) VALUES (0, $1) ON CONFLICT (id) DO UPDATE SET serialized_records = $1";
+
+        // Execute the query
+        let mut tx = self
+            .db
+            .write()
+            .await
+            .with_context(|| "failed to start an atomic DB transaction")?;
+        tx.execute(query(stmt).bind(to_save))
+            .await
+            .with_context(|| "failed to execute DB query")?;
+
+        // Commit the state
+        tx.commit().await.with_context(|| "failed to commit to DB")
+    }
+
+    /// Load the DHT from the database
+    ///
+    /// # Errors
+    /// - If we fail to read from the DB
+    /// - If we fail to deserialize the records
+    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
+        // Fetch the results from the DB
+        let result = self
+            .db
+            .read()
+            .await
+            .with_context(|| "failed to start a DB read transaction")?
+            .fetch_one("SELECT * FROM libp2p_dht where id = 0")
+            .await
+            .with_context(|| "failed to fetch from DB")?;
+
+        // Get the `serialized_records` row
+        let serialied_records: Vec<u8> = result.get("serialized_records");
+
+        // Deserialize it
+        let records: Vec<SerializableRecord> = bincode::deserialize(&serialied_records)
+            .with_context(|| "Failed to deserialize records")?;
+
+        Ok(records)
     }
 }
 

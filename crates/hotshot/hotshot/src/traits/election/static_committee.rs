@@ -259,4 +259,8 @@ impl<TYPES: NodeType> Membership<TYPES> for StaticCommittee<TYPES> {
     fn set_first_epoch(&mut self, epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {
         self.first_epoch = Some(epoch);
     }
+
+    fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        self.first_epoch
+    }
 }

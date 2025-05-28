@@ -189,14 +189,74 @@ mod persistence_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    pub async fn test_store_drb_input<P: TestablePersistence>() {
-        use hotshot_types::drb::DrbInput;
-
+    pub async fn test_restart_view<P: TestablePersistence>() {
         setup_test();
 
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
+        // Initially, there is no saved view.
+        assert_eq!(storage.load_restart_view().await.unwrap(), None);
+
+        // Store a view.
+        let view1 = ViewNumber::genesis();
+        storage
+            .record_action(view1, None, HotShotAction::Vote)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_restart_view().await.unwrap().unwrap(),
+            view1 + 1
+        );
+
+        // Store a newer view, make sure storage gets updated.
+        let view2 = view1 + 1;
+        storage
+            .record_action(view2, None, HotShotAction::Vote)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_restart_view().await.unwrap().unwrap(),
+            view2 + 1
+        );
+
+        // Store an old view, make sure storage is unchanged.
+        storage
+            .record_action(view1, None, HotShotAction::Vote)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_restart_view().await.unwrap().unwrap(),
+            view2 + 1
+        );
+
+        // store a higher proposed view, make sure storage is unchanged.
+        storage
+            .record_action(view2 + 1, None, HotShotAction::Propose)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_restart_view().await.unwrap().unwrap(),
+            view2 + 1
+        );
+
+        // store a higher timeout vote view, make sure storage is unchanged.
+        storage
+            .record_action(view2 + 1, None, HotShotAction::TimeoutVote)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_restart_view().await.unwrap().unwrap(),
+            view2 + 1
+        );
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    pub async fn test_store_drb_input<P: TestablePersistence>() {
+        use hotshot_types::drb::DrbInput;
+        setup_test();
+
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
         // Initially, there is no saved info.
         if storage.load_drb_input(10).await.is_ok() {
             panic!("unexpected nonempty drb_input");
@@ -238,7 +298,6 @@ mod persistence_tests {
     #[tokio::test(flavor = "multi_thread")]
     pub async fn test_epoch_info<P: TestablePersistence>() {
         setup_test();
-
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
 
@@ -290,7 +349,7 @@ mod persistence_tests {
 
         // Test storing the header
         storage
-            .add_epoch_root(EpochNumber::new(1), header.clone())
+            .store_epoch_root(EpochNumber::new(1), header.clone())
             .await
             .unwrap();
         assert_eq!(

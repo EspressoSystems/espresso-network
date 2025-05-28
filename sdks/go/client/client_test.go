@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	types "github.com/EspressoSystems/espresso-network-go/types"
+	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	"github.com/ethereum/go-ethereum/log"
 )
 

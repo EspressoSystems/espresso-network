@@ -184,5 +184,10 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
     /// when this is called. The value of initial_drb_result should be used for DRB
     /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult);
+    fn set_first_epoch(&mut self, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {}
+
+    /// Get first epoch if epochs are enabled, `None` otherwise
+    fn first_epoch(&self) -> Option<TYPES::Epoch> {
+        None
+    }
 }

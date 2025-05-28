@@ -14,7 +14,7 @@ use futures::{
 };
 use hotshot_events_service::events::Error as EventStreamingError;
 use hotshot_query_service::{
-    data_source::{storage::SqlStorage, ExtensibleDataSource, MetricsDataSource},
+    data_source::{ExtensibleDataSource, MetricsDataSource},
     fetching::provider::QueryServiceProvider,
     status::{self, UpdateStatusData},
     ApiState as AppState, Error,
@@ -40,6 +40,7 @@ use crate::{
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     persistence,
+    request_response::data_source::Storage as RequestResponseStorage,
     state::update_state_storage_loop,
     SequencerApiVersion,
 };
@@ -151,7 +152,7 @@ impl Options {
         F: FnOnce(
             Box<dyn Metrics>,
             Box<dyn EventConsumer>,
-            Option<Arc<SqlStorage>>,
+            Option<RequestResponseStorage>,
         ) -> BoxFuture<'static, anyhow::Result<SequencerContext<N, P, V>>>,
     {
         // Create a channel to send the context to the web server after it is initialized. This
@@ -171,7 +172,7 @@ impl Options {
         let (metrics, consumer, storage): (
             Box<dyn Metrics>,
             Box<dyn EventConsumer>,
-            Option<Arc<SqlStorage>>,
+            Option<RequestResponseStorage>,
         ) = if let Some(query_opt) = self.query.take() {
             if let Some(opt) = self.storage_sql.take() {
                 self.init_with_query_module_sql(
@@ -246,9 +247,9 @@ impl Options {
             (Box::new(NoMetrics), Box::new(NullEventConsumer), None)
         };
 
-        let ctx = init_context(metrics, consumer, storage).await?;
+        let ctx = init_context(metrics, consumer, storage.clone()).await?;
         send_ctx
-            .send(super::ConsensusState::from(&ctx))
+            .send(ctx.clone())
             .ok()
             .context("API server exited without receiving context")?;
         Ok(ctx.with_task_list(tasks))
@@ -331,7 +332,7 @@ impl Options {
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
         Box<dyn EventConsumer>,
-        Option<Arc<SqlStorage>>,
+        Option<RequestResponseStorage>,
     )>
     where
         N: ConnectedNetwork<PubKey>,
@@ -344,6 +345,9 @@ impl Options {
         )
         .await?;
 
+        // Get the inner storage from the data source
+        let inner_storage = ds.inner();
+
         let (metrics, ds, app) = self
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;
@@ -353,7 +357,11 @@ impl Options {
         }
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
-        Ok((metrics, Box::new(ApiEventConsumer::from(ds)), None))
+        Ok((
+            metrics,
+            Box::new(ApiEventConsumer::from(ds)),
+            Some(RequestResponseStorage::Fs(inner_storage)),
+        ))
     }
 
     async fn init_with_query_module_sql<N, P, V: Versions + 'static>(
@@ -366,7 +374,7 @@ impl Options {
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
         Box<dyn EventConsumer>,
-        Option<Arc<SqlStorage>>,
+        Option<RequestResponseStorage>,
     )>
     where
         N: ConnectedNetwork<PubKey>,
@@ -432,7 +440,7 @@ impl Options {
         Ok((
             metrics,
             Box::new(ApiEventConsumer::from(ds)),
-            Some(inner_storage),
+            Some(RequestResponseStorage::Sql(inner_storage)),
         ))
     }
 

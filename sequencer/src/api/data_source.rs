@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use alloy::primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -12,14 +14,14 @@ use espresso_types::{
 use futures::future::Future;
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
-    availability::AvailabilityDataSource,
+    availability::{AvailabilityDataSource, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
     fetching::provider::{AnyProvider, QueryServiceProvider},
     node::NodeDataSource,
     status::StatusDataSource,
 };
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, VidShare, ViewNumber},
     light_client::StateSignatureRequestBody,
     traits::{
         network::ConnectedNetwork,
@@ -109,7 +111,7 @@ pub(crate) trait StateSignatureDataSource<N: ConnectedNetwork<PubKey>> {
 }
 
 pub(crate) trait NodeStateDataSource {
-    fn node_state(&self) -> impl Send + Future<Output = &NodeState>;
+    fn node_state(&self) -> impl Send + Future<Output = NodeState>;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -232,6 +234,16 @@ pub(crate) trait CatchupDataSource: Sync {
         view: ViewNumber,
         accounts: &[RewardAccount],
     ) -> impl Send + Future<Output = anyhow::Result<RewardMerkleTree>>;
+}
+
+#[async_trait]
+pub trait RequestResponseDataSource<Types: NodeType> {
+    async fn request_vid_shares(
+        &self,
+        block_number: u64,
+        vid_common_data: VidCommonQueryData<Types>,
+        duration: Duration,
+    ) -> anyhow::Result<Vec<VidShare>>;
 }
 
 #[cfg(any(test, feature = "testing"))]

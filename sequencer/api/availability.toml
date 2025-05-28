@@ -3,3 +3,8 @@ PATH = ["block/:height/namespace/:namespace"]
 ":height" = "Integer"
 ":namespace" = "Integer"
 DOC = "Get the transactions in a namespace of the given block, along with a proof."
+
+[route.incorrect_encoding_proof]
+PATH = ["incorrect-encoding-proof/:block_number"]
+":block_number" = "Integer"
+DOC = "Generate a proof of incorrect encoding for the given block number."

@@ -6,6 +6,7 @@ use espresso_types::{
     v0_3::ChainConfig,
     FeeAccount, FeeMerkleTree, Leaf2,
 };
+use hotshot_types::data::VidShare;
 use request_response::{request::Request as RequestTrait, Serializable};
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +15,7 @@ use crate::api::BlocksFrontier;
 // Some type aliases for readability
 type Height = u64;
 type ViewNumber = u64;
+type RequestId = u64;
 
 /// The outermost request type. This an enum that contains all the possible requests that the
 /// sequencer can make.
@@ -29,6 +31,8 @@ pub enum Request {
     BlocksFrontier(Height, ViewNumber),
     /// A request for the reward accounts at a given height and view
     RewardAccounts(Height, ViewNumber, Vec<RewardAccount>),
+    /// A request for the VID share at the given block height
+    VidShare(Height, RequestId),
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the
@@ -45,6 +49,8 @@ pub enum Response {
     BlocksFrontier(BlocksFrontier),
     /// A response for the reward accounts at a given height and view
     RewardAccounts(RewardMerkleTree),
+    /// A response for a VID share at the given block height
+    VidShare(VidShare),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response

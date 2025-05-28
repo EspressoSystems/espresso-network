@@ -13,7 +13,7 @@ RUN npm install -g yarn \
   && yarn global add typescript ts-node \
   && yarn \
   && rm -rf /usr/local/share/.cache
-
+  
 COPY target/$TARGETARCH/release/deploy /bin/deploy
 COPY scripts/multisig-upgrade-entrypoint /bin/multisig-upgrade-entrypoint
 COPY contracts/script/multisigTransactionProposals/safeSDK ./contracts/script/multisigTransactionProposals/safeSDK/

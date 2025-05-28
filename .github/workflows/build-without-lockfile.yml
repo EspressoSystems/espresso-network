@@ -28,11 +28,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Enable Rust Caching
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # NOTE: no rust cache, this isn't a time critical job
 
       - name: Build without committed Cargo.lock
         run: |

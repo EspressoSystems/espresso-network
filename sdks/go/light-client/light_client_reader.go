@@ -4,7 +4,7 @@ import (
 	"context"
 	"math/big"
 
-	common_types "github.com/EspressoSystems/espresso-network-go/types/common"
+	common_types "github.com/EspressoSystems/espresso-network/sdks/go/types/common"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 )

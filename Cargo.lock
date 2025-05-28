@@ -4167,6 +4167,7 @@ dependencies = [
  "hotshot",
  "hotshot-contract-adapter",
  "hotshot-example-types",
+ "hotshot-libp2p-networking",
  "hotshot-query-service",
  "hotshot-types",
  "indexmap 2.9.0",
@@ -10563,6 +10564,7 @@ dependencies = [
  "vbs",
  "vec1",
  "vergen",
+ "vid",
 ]
 
 [[package]]
