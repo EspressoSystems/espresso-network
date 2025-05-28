@@ -55,7 +55,7 @@ services:
       deploy-sequencer-contracts:
         condition: service_completed_successfully
 
-   upgrade-prover-contracts:
+  upgrade-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
     command: deploy --use-mock --upgrade-light-client-v2 --use-multisig
     environment:
@@ -77,6 +77,8 @@ services:
         condition: service_healthy
       # Make sure this doesn't start until the other contracts have been deployed, since we use the same mnemonic.
       deploy-sequencer-contracts:
+        condition: service_completed_successfully
+      deploy-prover-contracts:
         condition: service_completed_successfully
 
   fund-builder:
@@ -269,6 +271,8 @@ services:
       demo-l1-network:
         condition: service_healthy
       deploy-prover-contracts:
+        condition: service_completed_successfully
+      upgrade-prover-contracts:
         condition: service_completed_successfully
 
   sequencer0:
