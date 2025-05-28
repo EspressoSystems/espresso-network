@@ -16,6 +16,9 @@ RUN npm install -g yarn \
   
 COPY target/$TARGETARCH/release/deploy /bin/deploy
 COPY scripts/multisig-upgrade-entrypoint /bin/multisig-upgrade-entrypoint
+
+RUN chmod +x /bin/deploy /bin/multisig-upgrade-entrypoint
+
 COPY contracts/script/multisigTransactionProposals/safeSDK ./contracts/script/multisigTransactionProposals/safeSDK/
 
 # Runner image: deploy binary, ts-node, multisig upgrade script
