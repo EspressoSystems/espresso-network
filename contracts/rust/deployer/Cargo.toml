@@ -23,3 +23,6 @@ vbs = { workspace = true }
 
 [features]
 safesdk = []
+
+[dev-dependencies]
+sequencer-utils = { version = "0.1.0", path = "../../../utils" }

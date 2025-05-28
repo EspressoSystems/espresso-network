@@ -143,7 +143,7 @@ pub async fn setup_stake_table_contract_for_test(
             commission,
             validator_address,
             bls_key_pair,
-            state_key_pair.ver_key(),
+            state_key_pair,
         )
         .await?;
         assert!(receipt.status());
