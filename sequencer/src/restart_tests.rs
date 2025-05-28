@@ -731,9 +731,12 @@ impl TestNetwork {
 
         // Check that all the nodes were validated.
         let num_nodes = self.da_nodes.len() + self.regular_nodes.len();
-        tracing::error!(num_nodes, "total nodes");
         let num_validated_nodes = self.state.nodes.read().await.len();
-        tracing::error!(num_validated_nodes, "number of validated nodes");
+        tracing::error!(
+            "total number of nodes: {}, number of validated nodes: {}",
+            num_nodes,
+            num_validated_nodes,
+        );
         assert!(num_validated_nodes >= num_nodes);
     }
 
