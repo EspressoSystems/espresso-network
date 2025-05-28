@@ -33,7 +33,7 @@ services:
 
   deploy-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2 --use-multisig
+    command: deploy --use-mock --deploy-light-client-v1 --upgrade-light-client-v2 --upgrade-light-client-v2 --use-multisig
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_L1_PROVIDER
