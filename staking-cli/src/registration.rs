@@ -48,15 +48,14 @@ pub async fn register_validator(
     // NOTE: the StakeTableV2 ABI is a superset of the V1 ABI because the V2 inherits from V1 so we
     // can always use the V2 bindings for calling functions and decoding events, even if we are
     // connected to the V1 contract.
-    //
-    // There is a race-condition here if the contract is upgraded while this transactions is waiting
-    // to be mined. We're very unlikely to hit this in practice, and since we only perform the
-    // upgrade on decaf this is acceptable.
     let stake_table = StakeTableV2::new(stake_table_addr, &provider);
     let (bls_vk, bls_sig) = prepare_bls_payload(&bls_key_pair, validator_address);
     let (schnorr_vk, schnorr_sig) = prepare_schnorr_payload(&schnorr_key_pair, validator_address);
 
     let version = stake_table.getVersion().call().await?.try_into()?;
+    // There is a race-condition here if the contract is upgraded while this transactions is waiting
+    // to be mined. We're very unlikely to hit this in practice, and since we only perform the
+    // upgrade on decaf this is acceptable.
     Ok(match version {
         StakeTableContractVersion::V1 => {
             stake_table
@@ -95,14 +94,13 @@ pub async fn update_consensus_keys(
     // NOTE: the StakeTableV2 ABI is a superset of the V1 ABI because the V2 inherits from V1 so we
     // can always use the V2 bindings for calling functions and decoding events, even if we are
     // connected to the V1 contract.
-    //
-    // There is a race-condition here if the contract is upgraded while this transactions is waiting
-    // to be mined. We're very unlikely to hit this in practice, and since we only perform the
-    // upgrade on decaf this is acceptable.
     let stake_table = StakeTableV2::new(stake_table_addr, &provider);
     let (bls_vk, bls_sig) = prepare_bls_payload(&bls_key_pair, validator_address);
     let (schnorr_vk, schnorr_sig) = prepare_schnorr_payload(&schnorr_key_pair, validator_address);
 
+    // There is a race-condition here if the contract is upgraded while this transactions is waiting
+    // to be mined. We're very unlikely to hit this in practice, and since we only perform the
+    // upgrade on decaf this is acceptable.
     let version = stake_table.getVersion().call().await?.try_into()?;
     Ok(match version {
         StakeTableContractVersion::V1 => {
