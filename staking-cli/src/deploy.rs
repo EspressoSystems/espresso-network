@@ -102,7 +102,7 @@ impl TestSystem {
             .unwrap();
 
         match stake_table_contract_version {
-            StakeTableContractVersion::V1 => args.deploy_stake_table_v1(&mut contracts).await?,
+            StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await?,
             StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await?,
         };
 
