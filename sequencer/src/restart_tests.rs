@@ -234,8 +234,16 @@ impl NodeParams {
     }
 }
 
+type Commit = (u64, Commitment<Leaf2>);
+
+#[derive(Debug, Default, Clone)]
 /// State to enable comparison between nodes.
-type ReferenceState = Arc<RwLock<HashMap<u64, Commitment<Leaf2>>>>;
+struct ReferenceState {
+    /// Map of height to commitment.
+    map: Arc<RwLock<HashMap<u64, Commit>>>,
+    /// Nodes that have been verified against another node.
+    nodes: Arc<RwLock<HashSet<u64>>>,
+}
 
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
@@ -482,6 +490,54 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         bail!("node {node_id} event stream ended unexpectedly");
     }
 
+    /// Check state is progressing and has not regressed due to a quorum of restarted nodes.
+    async fn check_state(&self) -> anyhow::Result<()> {
+        let Some(context) = &self.context else {
+            tracing::info!("skipping state check on stopped node");
+            return Ok(());
+        };
+
+        let node_id = context.node_id();
+        tracing::error!(node_id, "checking state for node");
+
+        let mut events = context.event_stream().await;
+        while let Some(event) = events.next().await {
+            let EventType::Decide { leaf_chain, .. } = event.event else {
+                continue;
+            };
+
+            // TODO assert validated nodes against number of nodes at the end
+            // (possible one level up, on the caller)
+            for leaf in leaf_chain.iter() {
+                let height = leaf.leaf.height();
+                let local_commitment = leaf.leaf.commitment();
+
+                // Check that network state is not disastrously broken.
+                // Note that not all nodes will be at the same height, so in
+                // some iterations nothing happens. But there is generally enough
+                // overlap that the comparison will occur for some leaves.
+                let map_reader = self.state.map.upgradable_read().await;
+                if let Some((verified_node, known_commitment)) = map_reader.get(&height) {
+                    tracing::error!(node_id, height, "Comparing commitments across nodes");
+                    assert_eq!(known_commitment, &local_commitment, "invalid commitment");
+                    tracing::info!(node_id, height, "verified leaf commitment");
+
+                    let mut nodes_writer = self.state.nodes.write().await;
+                    nodes_writer.insert(*verified_node);
+                    nodes_writer.insert(node_id);
+                } else {
+                    tracing::error!("Upgrading test state lock");
+                    let mut writer = RwLockUpgradableReadGuard::upgrade(map_reader).await;
+                    writer.insert(height, (node_id, local_commitment));
+                }
+            }
+
+            return Ok(());
+        }
+
+        bail!("node {node_id} event stream ended unexpectedly");
+    }
+
     async fn check_builder(&self, port: u16) {
         tracing::info!("testing builder liveness");
 
@@ -538,6 +594,7 @@ struct TestNetwork {
     orchestrator_task: Option<JoinHandle<()>>,
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
+    state: ReferenceState,
     #[derivative(Debug = "ignore")]
     _anvil: AnvilInstance,
 }
@@ -630,7 +687,7 @@ impl TestNetwork {
             peer_ports: &peer_ports,
         };
 
-        let state = Arc::new(RwLock::new(HashMap::new()));
+        let state = ReferenceState::default();
 
         let mut network =
             Self {
@@ -648,6 +705,7 @@ impl TestNetwork {
                 orchestrator_task,
                 broker_task,
                 marshal_task,
+                state,
                 _anvil: anvil,
             };
 
@@ -678,6 +736,25 @@ impl TestNetwork {
         .unwrap();
     }
 
+    async fn check_state(&self) {
+        // Check that every node agrees w/ some other node about a commitment at some height.
+        try_join_all(
+            self.da_nodes
+                .iter()
+                .map(TestNode::check_state)
+                .chain(self.regular_nodes.iter().map(TestNode::check_state)),
+        )
+        .await
+        .unwrap();
+
+        // Check that all the nodes were validated.
+        let num_nodes = self.da_nodes.len() + self.regular_nodes.len();
+        tracing::error!(num_nodes, "total nodes");
+        let num_validated_nodes = self.state.nodes.read().await.len();
+        tracing::error!(num_validated_nodes, "number of validated nodes");
+        assert!(num_validated_nodes >= num_nodes);
+    }
+
     async fn check_builder(&self) {
         self.da_nodes[0].check_builder(self.builder_port).await;
     }
@@ -691,6 +768,7 @@ impl TestNetwork {
         self.restart_helper(0..da_nodes, 0..regular_nodes, false)
             .await;
         self.check_progress().await;
+        self.check_state().await;
     }
 
     /// Restart indicated nodes, ensuring progress is maintained at all times.
