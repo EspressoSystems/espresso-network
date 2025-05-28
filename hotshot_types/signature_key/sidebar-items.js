@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"type":["BLSKeyPair","BLSPrivKey","BLSPubKey","BLSPublicParam","BuilderKey","SchnorrPrivKey","SchnorrPubKey","SchnorrSignatureScheme"]};
+window.SIDEBAR_ITEMS = {"type":["BLSKeyPair","BLSPrivKey","BLSPubKey","BLSPublicParam","BLSSignature","BuilderKey","SchnorrPrivKey","SchnorrPubKey","SchnorrSignatureScheme"]};
