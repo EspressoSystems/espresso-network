@@ -18,6 +18,9 @@ use espresso_types::{
     Leaf, Leaf2, NetworkConfig, Payload, SeqTypes,
 };
 use hotshot::{types::BLSPubKey, InitializerEpochInfo};
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
+    DhtPersistentStorage, SerializableRecord,
+};
 use hotshot_types::{
     data::{
         vid_disperse::{ADVZDisperseShare, VidDisperseShare2},
@@ -153,6 +156,10 @@ impl Inner {
         self.path.join("highest_voted_view")
     }
 
+    fn restart_view_path(&self) -> PathBuf {
+        self.path.join("restart_view")
+    }
+
     /// Path to a directory containing decided leaves.
     fn decided_leaf_path(&self) -> PathBuf {
         self.path.join("decided_leaves")
@@ -207,6 +214,9 @@ impl Inner {
         self.path.join("next_epoch_quorum_certificate")
     }
 
+    fn libp2p_dht_path(&self) -> PathBuf {
+        self.path.join("libp2p_dht")
+    }
     fn epoch_drb_result_dir_path(&self) -> PathBuf {
         self.path.join("epoch_drb_result")
     }
@@ -593,6 +603,18 @@ impl SequencerPersistence for Persistence {
         Ok(Some(ViewNumber::new(u64::from_le_bytes(bytes))))
     }
 
+    async fn load_restart_view(&self) -> anyhow::Result<Option<ViewNumber>> {
+        let inner = self.inner.read().await;
+        let path = inner.restart_view_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(path)?
+            .try_into()
+            .map_err(|bytes| anyhow!("malformed restart view file: {bytes:?}"))?;
+        Ok(Some(ViewNumber::new(u64::from_le_bytes(bytes))))
+    }
+
     async fn append_decided_leaves(
         &self,
         view: ViewNumber,
@@ -797,7 +819,31 @@ impl SequencerPersistence for Persistence {
                 file.write_all(&view.u64().to_le_bytes())?;
                 Ok(())
             },
-        )
+        )?;
+
+        if matches!(action, HotShotAction::Vote) {
+            let restart_view_path = &inner.restart_view_path();
+            let restart_view = view + 1;
+            inner.replace(
+                restart_view_path,
+                |mut file| {
+                    let mut bytes = vec![];
+                    file.read_to_end(&mut bytes)?;
+                    let bytes = bytes
+                        .try_into()
+                        .map_err(|bytes| anyhow!("malformed voted view file: {bytes:?}"))?;
+                    let saved_view = ViewNumber::new(u64::from_le_bytes(bytes));
+
+                    // Overwrite the file if the saved view is older than the new view.
+                    Ok(saved_view < restart_view)
+                },
+                |mut file| {
+                    file.write_all(&restart_view.u64().to_le_bytes())?;
+                    Ok(())
+                },
+            )?;
+        }
+        Ok(())
     }
 
     async fn append_quorum_proposal2(
@@ -1671,6 +1717,64 @@ impl MembershipPersistence for Persistence {
     }
 }
 
+#[async_trait]
+impl DhtPersistentStorage for Persistence {
+    /// Save the DHT to the file on disk
+    ///
+    /// # Errors
+    /// - If we fail to serialize the records
+    /// - If we fail to write the serialized records to the file
+    async fn save(&self, records: Vec<SerializableRecord>) -> anyhow::Result<()> {
+        // Bincode-serialize the records
+        let to_save =
+            bincode::serialize(&records).with_context(|| "failed to serialize records")?;
+
+        // Get the path to save the file to
+        let path = self.inner.read().await.libp2p_dht_path();
+
+        // Create the directory if it doesn't exist
+        fs::create_dir_all(path.parent().with_context(|| "directory had no parent")?)
+            .with_context(|| "failed to create directory")?;
+
+        // Get a write lock on the inner struct
+        let mut inner = self.inner.write().await;
+
+        // Save the file, replacing the previous one if it exists
+        inner
+            .replace(
+                &path,
+                |_| {
+                    // Always overwrite the previous file
+                    Ok(true)
+                },
+                |mut file| {
+                    file.write_all(&to_save)
+                        .with_context(|| "failed to write records to file")?;
+                    Ok(())
+                },
+            )
+            .with_context(|| "failed to save records to file")?;
+
+        Ok(())
+    }
+
+    /// Load the DHT from the file on disk
+    ///
+    /// # Errors
+    /// - If we fail to read the file
+    /// - If we fail to deserialize the records
+    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
+        // Read the contents of the file
+        let contents = std::fs::read(self.inner.read().await.libp2p_dht_path())
+            .with_context(|| "Failed to read records from file")?;
+
+        // Deserialize the contents
+        let records: Vec<SerializableRecord> =
+            bincode::deserialize(&contents).with_context(|| "Failed to deserialize records")?;
+
+        Ok(records)
+    }
+}
 /// Update a `NetworkConfig` that may have originally been persisted with an old version.
 fn migrate_network_config(
     mut network_config: serde_json::Value,

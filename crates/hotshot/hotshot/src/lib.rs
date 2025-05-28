@@ -419,10 +419,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             async move {
                 sleep(Duration::from_millis(next_view_timeout)).await;
                 broadcast_event(
-                    Arc::new(HotShotEvent::Timeout(
-                        start_view + 1,
-                        start_epoch.map(|x| x + 1),
-                    )),
+                    Arc::new(HotShotEvent::Timeout(start_view, start_epoch)),
                     &event_stream,
                 )
                 .await;
@@ -1158,6 +1155,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             QuorumCertificate2<TYPES>,
             Option<NextEpochQuorumCertificate2<TYPES>>,
         ),
+        last_actioned_view: TYPES::View,
         saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
@@ -1178,7 +1176,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
             high_qc,
             start_view,
             start_epoch,
-            last_actioned_view: start_view,
+            last_actioned_view,
             saved_proposals,
             saved_vid_shares,
             next_epoch_high_qc,
