@@ -218,9 +218,9 @@
 <a href=#218 id=218 data-nosnippet>218</a>    <span class="kw">fn </span>has_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _epoch: TYPES::Epoch) -&gt; bool {
 <a href=#219 id=219 data-nosnippet>219</a>        <span class="bool-val">true
 <a href=#220 id=220 data-nosnippet>220</a>    </span>}
-<a href=#221 id=221 data-nosnippet>221</a>    <span class="kw">fn </span>has_randomized_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _epoch: TYPES::Epoch) -&gt; bool {
-<a href=#222 id=222 data-nosnippet>222</a>        <span class="bool-val">true
-<a href=#223 id=223 data-nosnippet>223</a>    </span>}
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="kw">fn </span>has_randomized_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, _epoch: TYPES::Epoch) -&gt; anyhow::Result&lt;bool&gt; {
+<a href=#222 id=222 data-nosnippet>222</a>        <span class="prelude-val">Ok</span>(<span class="bool-val">true</span>)
+<a href=#223 id=223 data-nosnippet>223</a>    }
 <a href=#224 id=224 data-nosnippet>224</a>
 <a href=#225 id=225 data-nosnippet>225</a>    <span class="kw">fn </span>add_drb_result(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _epoch: &lt;TYPES <span class="kw">as </span>NodeType&gt;::Epoch, _drb_result: DrbResult) {}
 <a href=#226 id=226 data-nosnippet>226</a>}</code></pre></div></section></main></body></html>

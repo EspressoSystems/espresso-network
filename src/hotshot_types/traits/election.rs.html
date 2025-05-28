@@ -141,7 +141,7 @@
 <a href=#141 id=141 data-nosnippet>141</a>    </span><span class="kw">fn </span>has_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: TYPES::Epoch) -&gt; bool;
 <a href=#142 id=142 data-nosnippet>142</a>
 <a href=#143 id=143 data-nosnippet>143</a>    <span class="doccomment">/// Returns if the randomized stake table is available for the given epoch
-<a href=#144 id=144 data-nosnippet>144</a>    </span><span class="kw">fn </span>has_randomized_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: TYPES::Epoch) -&gt; bool;
+<a href=#144 id=144 data-nosnippet>144</a>    </span><span class="kw">fn </span>has_randomized_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: TYPES::Epoch) -&gt; anyhow::Result&lt;bool&gt;;
 <a href=#145 id=145 data-nosnippet>145</a>
 <a href=#146 id=146 data-nosnippet>146</a>    <span class="doccomment">/// Gets the validated block header and epoch number of the epoch root
 <a href=#147 id=147 data-nosnippet>147</a>    /// at the given block height
