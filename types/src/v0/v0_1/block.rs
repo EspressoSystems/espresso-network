@@ -191,11 +191,7 @@ pub struct Payload {
 #[derive(Clone, Debug, Display, Eq, Hash, PartialEq)]
 pub struct PayloadByteLen(pub(crate) usize);
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Index {
-    pub(crate) ns_index: NsIndex,
-    pub(crate) tx_index: TxIndex,
-}
+pub use hotshot_query_service::availability::TransactionIndex as Index;
 
 /// Cartesian product of [`NsIter`], [`TxIter`].
 pub struct Iter<'a> {
