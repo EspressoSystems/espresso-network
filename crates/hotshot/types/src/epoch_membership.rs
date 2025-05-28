@@ -386,7 +386,7 @@ where
                 .await
         };
 
-        if let Some(updater) = add_epoch_root_updater {
+        if let Ok(Some(updater)) = add_epoch_root_updater {
             let mut membership_write = self.membership.write().await;
             updater(&mut *(membership_write));
         };

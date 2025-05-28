@@ -172,8 +172,9 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> impl std::future::Future<Output = Option<Box<dyn FnOnce(&mut Self) + Send>>> + Send {
-        async { None }
+    ) -> impl std::future::Future<Output = anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>>>
+           + Send {
+        async { Ok(None) }
     }
 
     /// Called to notify the Membership when a new DRB result has been calculated.

@@ -722,19 +722,17 @@ impl StakeTableFetcher {
         &self,
         epoch: Epoch,
         header: Header,
-    ) -> Option<IndexMap<Address, Validator<BLSPubKey>>> {
-        let chain_config = self.get_chain_config(&header).await.ok()?;
+    ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
+        let chain_config = self.get_chain_config(&header).await?;
         // update chain config
         *self.chain_config.lock().await = chain_config;
 
         let Some(address) = chain_config.stake_table_contract else {
-            tracing::error!("No stake table contract address found in Chain config");
-            return None;
+            bail!("No stake table contract address found in Chain config");
         };
 
         let Some(l1_finalized_block_info) = header.l1_finalized() else {
-            tracing::error!("The epoch root for epoch {} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.", epoch);
-            return None;
+            bail!("The epoch root for epoch {} is missing the L1 finalized block info. This is a fatal error. Consensus is blocked and will not recover.", epoch);
         };
 
         let events = match self
@@ -744,16 +742,14 @@ impl StakeTableFetcher {
         {
             Ok(events) => events,
             Err(e) => {
-                tracing::error!("failed to fetch stake table events {e:?}");
-                return None;
+                bail!("failed to fetch stake table events {e:?}");
             },
         };
 
         match active_validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
-            Ok(validators) => Some(validators),
+            Ok(validators) => Ok(validators),
             Err(e) => {
-                tracing::error!("failed to construct stake table {e:?}");
-                None
+                bail!("failed to construct stake table {e:?}");
             },
         }
     }
@@ -1255,13 +1251,13 @@ impl Membership<SeqTypes> for EpochCommittees {
         &self,
         epoch: Epoch,
         block_header: Header,
-    ) -> Option<Box<dyn FnOnce(&mut Self) + Send>> {
+    ) -> anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>> {
         if self.state.contains_key(&epoch) {
             tracing::info!(
-                "We already have a the stake table for epoch {}. Skipping L1 fetching.",
+                "We already have the stake table for epoch {}. Skipping L1 fetching.",
                 epoch
             );
-            return None;
+            return Ok(None);
         }
 
         let stake_tables = self.fetcher.fetch(epoch, block_header).await?;
@@ -1276,9 +1272,9 @@ impl Membership<SeqTypes> for EpochCommittees {
             }
         }
 
-        Some(Box::new(move |committee: &mut Self| {
+        Ok(Some(Box::new(move |committee: &mut Self| {
             committee.update_stake_table(epoch, stake_tables);
-        }))
+        })))
     }
 
     fn has_stake_table(&self, epoch: Epoch) -> bool {
