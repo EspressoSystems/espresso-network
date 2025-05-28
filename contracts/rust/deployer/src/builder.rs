@@ -33,7 +33,7 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     mock_light_client: bool,
     #[builder(default)]
-    owned_by_multisig: bool,
+    use_multisig: bool,
     #[builder(default)]
     dry_run: bool,
     #[builder(default)]
@@ -128,7 +128,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
                 let use_mock = self.mock_light_client;
                 let dry_run = self.dry_run;
-                let owned_by_multisig = self.owned_by_multisig;
+                let use_multisig = self.use_multisig;
                 let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
                 let epoch_start_block = self.epoch_start_block.unwrap();
                 let rpc_url = self.rpc_url.clone();
@@ -140,8 +140,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 if use_mock && blocks_per_epoch == 0 {
                     blocks_per_epoch = u64::MAX;
                 }
-                tracing::info!(%blocks_per_epoch, ?dry_run, ?owned_by_multisig, "Upgrading LightClientV2 with ");
-                if owned_by_multisig {
+                tracing::info!(%blocks_per_epoch, ?dry_run, ?use_multisig, "Upgrading LightClientV2 with ");
+                if use_multisig {
                     crate::upgrade_light_client_v2_multisig_owner(
                         provider,
                         contracts,

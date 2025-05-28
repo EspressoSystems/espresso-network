@@ -28,6 +28,12 @@ pub async fn light_client_genesis(
     light_client_genesis_from_stake_table(&st, stake_table_capacity)
 }
 
+/// Returns both genesis light client state and stake table state
+pub async fn light_client_genesis_zero_state(
+) -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
+    light_client_genesis_zero()
+}
+
 /// Fetch the stake table from a sequencer node given the epoch number
 ///
 /// Does not error, runs until the stake table is provided.
@@ -89,6 +95,22 @@ pub fn light_client_genesis_from_stake_table(
             schnorrKeyComm: field_to_u256(st_state.schnorr_key_comm),
             amountComm: field_to_u256(st_state.amount_comm),
             threshold: field_to_u256(st_state.threshold),
+        },
+    ))
+}
+
+pub fn light_client_genesis_zero() -> anyhow::Result<(LightClientStateSol, StakeTableStateSol)> {
+    Ok((
+        LightClientStateSol {
+            viewNum: 0,
+            blockHeight: 0,
+            blockCommRoot: U256::from(0u32),
+        },
+        StakeTableStateSol {
+            blsKeyComm: U256::from(0u32),
+            schnorrKeyComm: U256::from(0u32),
+            amountComm: U256::from(0u32),
+            threshold: U256::from(0u32),
         },
     ))
 }

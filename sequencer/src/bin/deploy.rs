@@ -3,10 +3,13 @@ use std::{fs::File, io::stdout, path::PathBuf, thread::sleep, time::Duration};
 use alloy::primitives::{Address, U256};
 use clap::Parser;
 use espresso_contract_deployer::{
-    build_provider, builder::DeployerArgsBuilder, network_config::light_client_genesis, Contract,
-    Contracts, DeployedContracts,
+    build_provider,
+    builder::DeployerArgsBuilder,
+    network_config::{light_client_genesis, light_client_genesis_from_stake_table},
+    Contract, Contracts, DeployedContracts,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
+use hotshot_state_prover::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
 use sequencer_utils::logging;
 use tide_disco::error::ServerError;
@@ -132,6 +135,10 @@ struct Options {
     #[clap(long, default_value = "false")]
     pub dry_run: bool,
 
+    /// Option to test locally but with a real eth network
+    #[clap(long, default_value = "false")]
+    pub local_eth_testing: bool,
+
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
@@ -195,7 +202,7 @@ async fn main() -> anyhow::Result<()> {
     args_builder
         .deployer(provider)
         .mock_light_client(opt.use_mock)
-        .owned_by_multisig(opt.use_multisig)
+        .use_multisig(opt.use_multisig)
         .dry_run(opt.dry_run)
         .rpc_url(opt.rpc_url.to_string());
     if let Some(multisig) = opt.multisig_address {
@@ -213,8 +220,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if opt.deploy_light_client_v1 {
-        let (genesis_state, genesis_stake) =
-            light_client_genesis(&opt.sequencer_url, opt.stake_table_capacity).await?;
+        let (genesis_state, genesis_stake) = if opt.local_eth_testing {
+            light_client_genesis_from_stake_table(&Default::default(), DEFAULT_STAKE_TABLE_CAPACITY)
+                .unwrap()
+        } else {
+            light_client_genesis(&opt.sequencer_url, opt.stake_table_capacity).await?
+        };
         args_builder
             .genesis_lc_state(genesis_state)
             .genesis_st_state(genesis_stake);
@@ -223,30 +234,31 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     if opt.upgrade_light_client_v2 {
-        let (blocks_per_epoch, epoch_start_block) = if opt.dry_run || opt.use_multisig {
-            (10, 22)
-        } else {
-            // fetch epoch length from HotShot config
-            // Request the configuration until it is successful
-            loop {
-                match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                    opt.sequencer_url.clone(),
-                )
-                .get::<PublicNetworkConfig>("config/hotshot")
-                .send()
-                .await
-                {
-                    Ok(resp) => {
-                        let config = resp.hotshot_config();
-                        break (config.blocks_per_epoch(), config.epoch_start_block());
-                    },
-                    Err(e) => {
-                        tracing::error!("Failed to fetch the network config: {e}");
-                        sleep(Duration::from_secs(5));
-                    },
+        let (blocks_per_epoch, epoch_start_block) =
+            if (opt.dry_run && opt.use_multisig) || opt.local_eth_testing {
+                (10, 22)
+            } else {
+                // fetch epoch length from HotShot config
+                // Request the configuration until it is successful
+                loop {
+                    match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
+                        opt.sequencer_url.clone(),
+                    )
+                    .get::<PublicNetworkConfig>("config/hotshot")
+                    .send()
+                    .await
+                    {
+                        Ok(resp) => {
+                            let config = resp.hotshot_config();
+                            break (config.blocks_per_epoch(), config.epoch_start_block());
+                        },
+                        Err(e) => {
+                            tracing::error!("Failed to fetch the network config: {e}");
+                            sleep(Duration::from_secs(5));
+                        },
+                    }
                 }
-            }
-        };
+            };
         args_builder.blocks_per_epoch(blocks_per_epoch);
         args_builder.epoch_start_block(epoch_start_block);
     }

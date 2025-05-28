@@ -641,6 +641,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                     tracing::error!("LightClientProxy upgrade failed: {:?}", err);
                 } else {
                     tracing::info!("LightClientProxy upgrade proposal sent");
+                    tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", owner_addr);
                     // IDEA: add a function to wait for the proposal to be executed
                 }
 
@@ -926,6 +927,7 @@ pub async fn call_upgrade_proxy_script(
 ) -> Result<(String, bool), anyhow::Error> {
     let dry_run = dry_run.unwrap_or(false);
     tracing::info!("Dry run: {}", dry_run);
+    tracing::info!("Sending the upgrade proposal to multisig: {}", safe_addr);
 
     let script_path = if let Ok(env_path) = std::env::var("MULTISIG_UPGRADE_ENTRYPOINT_PATH") {
         PathBuf::from(env_path)
