@@ -1,4 +1,4 @@
-FROM ubuntu:24.04 AS builder
+FROM ghcr.io/espressosystems/ubuntu-base:main
 
 ARG TARGETARCH
 
