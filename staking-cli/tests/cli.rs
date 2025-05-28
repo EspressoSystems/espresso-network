@@ -18,7 +18,7 @@ use crate::deploy::TestSystem;
 #[rstest_reuse::template]
 #[rstest::rstest]
 #[case::v1(StakeTableContractVersion::V1)]
-#[case::v2(StakeTableContractVersion::V1)]
+#[case::v2(StakeTableContractVersion::V2)]
 #[tokio::test]
 async fn stake_table_versions(#[case] _version: StakeTableContractVersion) {}
 
