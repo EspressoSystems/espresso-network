@@ -498,7 +498,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 // iterations nothing happens. The caller checks that all
                 // nodes were verified in this way.
                 let map_reader = self.state.map.upgradable_read().await;
-                if let Some((verified_node, known_commitment)) = map_reader.get(&height) {
+                if let Some((known_node, known_commitment)) = map_reader.get(&height) {
                     tracing::info!(node_id, height, "Comparing commitments across nodes");
                     assert_eq!(known_commitment, &local_commitment, "invalid commitment");
                     tracing::info!(node_id, height, "verified leaf commitment");
@@ -506,7 +506,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     let mut nodes_writer = self.state.nodes.write().await;
                     // Both the node that originally stored the commitment and
                     // the one that just verified against it are now validated.
-                    nodes_writer.insert(*verified_node);
+                    nodes_writer.insert(*known_node);
                     nodes_writer.insert(node_id);
                 } else {
                     tracing::debug!("Upgrading test state lock");
