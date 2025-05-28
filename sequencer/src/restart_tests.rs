@@ -233,7 +233,7 @@ impl NodeParams {
         }
     }
 }
-
+/// (Node Id, Commitment)
 type Commit = (u64, Commitment<Leaf2>);
 
 #[derive(Debug, Default, Clone)]
@@ -472,7 +472,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         bail!("node {node_id} event stream ended unexpectedly");
     }
 
-    /// Check state is progressing and has not regressed due to a quorum of restarted nodes.
+    /// Check that this node agrees w/ some other node(s) about some commitment(s)
+    /// at some height(s)
     async fn check_state(&self) -> anyhow::Result<()> {
         let Some(context) = &self.context else {
             tracing::info!("skipping state check on stopped node");
@@ -492,10 +493,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 let height = leaf.leaf.height();
                 let local_commitment = leaf.leaf.commitment();
 
-                // Check that network state is not disastrously broken.
-                // Note that not all nodes will be at the same height, so in
-                // some iterations nothing happens. But there is generally enough
-                // overlap that the comparison will occur for some leaves.
+                // Check that network state is not disastrously broken. Note
+                // that not all nodes will be at the same height, so in some
+                // iterations nothing happens. The caller checks that all
+                // nodes were verified in this way.
                 let map_reader = self.state.map.upgradable_read().await;
                 if let Some((verified_node, known_commitment)) = map_reader.get(&height) {
                     tracing::info!(node_id, height, "Comparing commitments across nodes");
@@ -503,6 +504,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     tracing::info!(node_id, height, "verified leaf commitment");
 
                     let mut nodes_writer = self.state.nodes.write().await;
+                    // Both the node that originally stored the commitment and
+                    // the one that just verified against it are now validated.
                     nodes_writer.insert(*verified_node);
                     nodes_writer.insert(node_id);
                 } else {
@@ -716,6 +719,9 @@ impl TestNetwork {
         .unwrap();
     }
 
+    /// Check that state has not diverged between nodes and that all nodes were
+    /// checked. Mostly useful in tests that do not restart all nodes, as those
+    /// cases confirm that state has not regressed.
     async fn check_state(&self) {
         // Check that every node agrees w/ some other node about a commitment at some height.
         try_join_all(
