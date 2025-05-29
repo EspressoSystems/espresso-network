@@ -934,13 +934,13 @@ mod test {
             // transaction.
             for (j, txn_from_block) in block.enumerate() {
                 let txn: TransactionQueryData<MockTypes> = client
-                    .get(&format!("transaction/{}/{}", i, j))
+                    .get(&format!("transaction/{}/{}", i, j.position))
                     .send()
                     .await
                     .unwrap();
                 assert_eq!(txn.block_height(), i);
                 assert_eq!(txn.block_hash(), block.hash());
-                assert_eq!(txn.index(), j as u64);
+                assert_eq!(txn.index(), j.position as u64);
                 assert_eq!(txn.hash(), txn_from_block.commit());
                 assert_eq!(txn.transaction(), &txn_from_block);
                 // We should be able to look up the transaction by hash. Note that for duplicate
@@ -1257,13 +1257,13 @@ mod test {
             // transaction.
             for (j, txn_from_block) in block.enumerate() {
                 let txn: TransactionQueryData<MockTypes> = client
-                    .get(&format!("transaction/{}/{}", i, j))
+                    .get(&format!("transaction/{}/{}", i, j.position))
                     .send()
                     .await
                     .unwrap();
                 assert_eq!(txn.block_height(), i);
                 assert_eq!(txn.block_hash(), block.hash());
-                assert_eq!(txn.index(), j as u64);
+                assert_eq!(txn.index(), j.position as u64);
                 assert_eq!(txn.hash(), txn_from_block.commit());
                 assert_eq!(txn.transaction(), &txn_from_block);
                 // We should be able to look up the transaction by hash. Note that for duplicate
