@@ -4,9 +4,18 @@ ARG TARGETARCH
 
 # Install system dependencies and Node.js via NodeSource
 RUN apt-get update && \
-    apt-get install -y curl gnupg libcurl4 libusb-1.0-0 tini && \
+    apt-get install -y \
+        curl \
+        gnupg \
+        libcurl4 \
+        libusb-1.0-0 \
+        tini \
+        python3 \
+        make \
+        g++ && \
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
     apt-get install -y nodejs && \
+    npm install -g yarn && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -14,8 +23,7 @@ WORKDIR /app
 # Copy project metadata and install JS deps
 COPY package.json yarn.lock ./
 
-RUN npm install -g yarn && \
-    yarn global add typescript ts-node && \
+RUN yarn global add typescript ts-node && \
     yarn && \
     rm -rf /usr/local/share/.cache ~/.cache node_modules/.cache
 
@@ -29,4 +37,4 @@ RUN chmod +x /bin/deploy /bin/multisig-upgrade-entrypoint
 # Setup runtime
 ENTRYPOINT ["tini", "--"]
 ENV MULTISIG_UPGRADE_ENTRYPOINT_PATH=/bin/multisig-upgrade-entrypoint
-CMD [ "/bin/deploy" ]
+CMD ["/bin/deploy"]
