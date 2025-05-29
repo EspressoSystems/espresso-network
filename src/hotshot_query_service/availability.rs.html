@@ -934,13 +934,13 @@
 <a href=#934 id=934 data-nosnippet>934</a>            // transaction.
 <a href=#935 id=935 data-nosnippet>935</a>            </span><span class="kw">for </span>(j, txn_from_block) <span class="kw">in </span>block.enumerate() {
 <a href=#936 id=936 data-nosnippet>936</a>                <span class="kw">let </span>txn: TransactionQueryData&lt;MockTypes&gt; = client
-<a href=#937 id=937 data-nosnippet>937</a>                    .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"transaction/{}/{}"</span>, i, j))
+<a href=#937 id=937 data-nosnippet>937</a>                    .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"transaction/{}/{}"</span>, i, j.position))
 <a href=#938 id=938 data-nosnippet>938</a>                    .send()
 <a href=#939 id=939 data-nosnippet>939</a>                    .<span class="kw">await
 <a href=#940 id=940 data-nosnippet>940</a>                    </span>.unwrap();
 <a href=#941 id=941 data-nosnippet>941</a>                <span class="macro">assert_eq!</span>(txn.block_height(), i);
 <a href=#942 id=942 data-nosnippet>942</a>                <span class="macro">assert_eq!</span>(txn.block_hash(), block.hash());
-<a href=#943 id=943 data-nosnippet>943</a>                <span class="macro">assert_eq!</span>(txn.index(), j <span class="kw">as </span>u64);
+<a href=#943 id=943 data-nosnippet>943</a>                <span class="macro">assert_eq!</span>(txn.index(), j.position <span class="kw">as </span>u64);
 <a href=#944 id=944 data-nosnippet>944</a>                <span class="macro">assert_eq!</span>(txn.hash(), txn_from_block.commit());
 <a href=#945 id=945 data-nosnippet>945</a>                <span class="macro">assert_eq!</span>(txn.transaction(), <span class="kw-2">&amp;</span>txn_from_block);
 <a href=#946 id=946 data-nosnippet>946</a>                <span class="comment">// We should be able to look up the transaction by hash. Note that for duplicate
@@ -1257,13 +1257,13 @@
 <a href=#1257 id=1257 data-nosnippet>1257</a>            // transaction.
 <a href=#1258 id=1258 data-nosnippet>1258</a>            </span><span class="kw">for </span>(j, txn_from_block) <span class="kw">in </span>block.enumerate() {
 <a href=#1259 id=1259 data-nosnippet>1259</a>                <span class="kw">let </span>txn: TransactionQueryData&lt;MockTypes&gt; = client
-<a href=#1260 id=1260 data-nosnippet>1260</a>                    .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"transaction/{}/{}"</span>, i, j))
+<a href=#1260 id=1260 data-nosnippet>1260</a>                    .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"transaction/{}/{}"</span>, i, j.position))
 <a href=#1261 id=1261 data-nosnippet>1261</a>                    .send()
 <a href=#1262 id=1262 data-nosnippet>1262</a>                    .<span class="kw">await
 <a href=#1263 id=1263 data-nosnippet>1263</a>                    </span>.unwrap();
 <a href=#1264 id=1264 data-nosnippet>1264</a>                <span class="macro">assert_eq!</span>(txn.block_height(), i);
 <a href=#1265 id=1265 data-nosnippet>1265</a>                <span class="macro">assert_eq!</span>(txn.block_hash(), block.hash());
-<a href=#1266 id=1266 data-nosnippet>1266</a>                <span class="macro">assert_eq!</span>(txn.index(), j <span class="kw">as </span>u64);
+<a href=#1266 id=1266 data-nosnippet>1266</a>                <span class="macro">assert_eq!</span>(txn.index(), j.position <span class="kw">as </span>u64);
 <a href=#1267 id=1267 data-nosnippet>1267</a>                <span class="macro">assert_eq!</span>(txn.hash(), txn_from_block.commit());
 <a href=#1268 id=1268 data-nosnippet>1268</a>                <span class="macro">assert_eq!</span>(txn.transaction(), <span class="kw-2">&amp;</span>txn_from_block);
 <a href=#1269 id=1269 data-nosnippet>1269</a>                <span class="comment">// We should be able to look up the transaction by hash. Note that for duplicate

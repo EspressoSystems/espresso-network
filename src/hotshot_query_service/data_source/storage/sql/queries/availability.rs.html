@@ -348,12 +348,12 @@
 <a href=#348 id=348 data-nosnippet>348</a>        <span class="comment">// ORDER BY ASC ensures that if there are duplicate transactions, we return the first
 <a href=#349 id=349 data-nosnippet>349</a>        // one.
 <a href=#350 id=350 data-nosnippet>350</a>        </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
-<a href=#351 id=351 data-nosnippet>351</a>            <span class="string">"SELECT {BLOCK_COLUMNS}, t.idx AS tx_index
+<a href=#351 id=351 data-nosnippet>351</a>            <span class="string">"SELECT {BLOCK_COLUMNS}
 <a href=#352 id=352 data-nosnippet>352</a>                FROM header AS h
 <a href=#353 id=353 data-nosnippet>353</a>                JOIN payload AS p ON h.height = p.height
 <a href=#354 id=354 data-nosnippet>354</a>                JOIN transactions AS t ON t.block_height = h.height
 <a href=#355 id=355 data-nosnippet>355</a>                WHERE t.hash = {hash_param}
-<a href=#356 id=356 data-nosnippet>356</a>                ORDER BY t.block_height, t.idx
+<a href=#356 id=356 data-nosnippet>356</a>                ORDER BY t.block_height, t.namespace, t.position
 <a href=#357 id=357 data-nosnippet>357</a>                LIMIT 1"
 <a href=#358 id=358 data-nosnippet>358</a>        </span>);
 <a href=#359 id=359 data-nosnippet>359</a>        <span class="kw">let </span>row = query.query(<span class="kw-2">&amp;</span>sql).fetch_one(<span class="self">self</span>.as_mut()).<span class="kw">await</span><span class="question-mark">?</span>;

@@ -255,7 +255,7 @@
 <a href=#255 id=255 data-nosnippet>255</a>            }
 <a href=#256 id=256 data-nosnippet>256</a>
 <a href=#257 id=257 data-nosnippet>257</a>            <span class="kw">for </span>(j, txn) <span class="kw">in </span>block.enumerate() {
-<a href=#258 id=258 data-nosnippet>258</a>                <span class="macro">tracing::info!</span>(<span class="string">"looking up transaction {i},{j}"</span>);
+<a href=#258 id=258 data-nosnippet>258</a>                <span class="macro">tracing::info!</span>(<span class="string">"looking up transaction {i},{j:?}"</span>);
 <a href=#259 id=259 data-nosnippet>259</a>
 <a href=#260 id=260 data-nosnippet>260</a>                <span class="comment">// We should be able to look up the transaction by hash unless it is a duplicate.
 <a href=#261 id=261 data-nosnippet>261</a>                // For duplicate transactions, this function returns the index of the first
@@ -270,10 +270,10 @@
 <a href=#270 id=270 data-nosnippet>270</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(tx_data) = ds.get_transaction(txn.commit()).<span class="kw">await</span>.try_resolve() {
 <a href=#271 id=271 data-nosnippet>271</a>                    <span class="macro">assert_eq!</span>(tx_data.transaction(), <span class="kw-2">&amp;</span>txn);
 <a href=#272 id=272 data-nosnippet>272</a>                    <span class="macro">assert_eq!</span>(tx_data.block_height(), ix.<span class="number">0</span>);
-<a href=#273 id=273 data-nosnippet>273</a>                    <span class="macro">assert_eq!</span>(tx_data.index(), ix.<span class="number">1 </span><span class="kw">as </span>u64);
+<a href=#273 id=273 data-nosnippet>273</a>                    <span class="macro">assert_eq!</span>(tx_data.index(), ix.<span class="number">1</span>.position <span class="kw">as </span>u64);
 <a href=#274 id=274 data-nosnippet>274</a>                } <span class="kw">else </span>{
 <a href=#275 id=275 data-nosnippet>275</a>                    <span class="macro">tracing::warn!</span>(
-<a href=#276 id=276 data-nosnippet>276</a>                        <span class="string">"skipping transaction index check for missing transaction {j} {txn:?}"
+<a href=#276 id=276 data-nosnippet>276</a>                        <span class="string">"skipping transaction index check for missing transaction {j:?} {txn:?}"
 <a href=#277 id=277 data-nosnippet>277</a>                    </span>);
 <a href=#278 id=278 data-nosnippet>278</a>                    <span class="comment">// At least check that _some_ transaction can be fetched.
 <a href=#279 id=279 data-nosnippet>279</a>                    </span>ds.get_transaction(txn.commit()).<span class="kw">await</span>.<span class="kw">await</span>;
