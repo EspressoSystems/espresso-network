@@ -24,6 +24,7 @@ pos = []
 
 [[bin]]
 name = "espresso-dev-node"
+path = "src/bin/espresso-dev-node.rs"
 required-features = ["testing", "embedded-db"]
 
 [dev-dependencies]
