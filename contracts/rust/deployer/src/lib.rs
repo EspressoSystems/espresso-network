@@ -962,12 +962,11 @@ pub async fn call_upgrade_proxy_script(
     let output = output.unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if !output.status.success() {
-        Ok((stderr.to_string(), false))
-    } else {
-        Ok((stdout.to_string(), true))
+    // if stderr is not empty, return the stderr
+    if !stderr.is_empty() {
+        return Err(anyhow!("Upgrade script failed: {}", stderr));
     }
+    Ok((stdout.to_string(), true))
 }
 /// Deploy and initialize a Timelock contract
 ///
