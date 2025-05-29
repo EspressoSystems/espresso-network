@@ -1,8 +1,13 @@
 #![cfg(test)]
 
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{collections::HashSet, path::Path, str::FromStr, time::Duration};
 
-use alloy::node_bindings::{Anvil, AnvilInstance};
+use alloy::{
+    network::EthereumWallet,
+    node_bindings::{Anvil, AnvilInstance},
+    providers::ProviderBuilder,
+    signers::local::LocalSigner,
+};
 use anyhow::bail;
 use cdn_broker::{
     reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
@@ -11,6 +16,10 @@ use cdn_broker::{
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use derivative::Derivative;
+use espresso_contract_deployer::{
+    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
+    Contracts,
+};
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
     FeeAccount, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
@@ -20,6 +29,7 @@ use futures::{
     stream::{BoxStream, StreamExt},
 };
 use hotshot::traits::implementations::derive_libp2p_peer_id;
+use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
@@ -27,15 +37,17 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     event::{Event, EventType},
-    light_client::StateKeyPair,
+    light_client::{StateKeyPair, StateVerKey},
     network::{Libp2pConfig, NetworkConfig},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
+    PeerConfig,
 };
 use itertools::Itertools;
 use options::Modules;
 use portpicker::pick_unused_port;
 use run::init_with_storage;
 use sequencer_utils::test_utils::setup_test;
+use staking_cli::demo::{setup_stake_table_contract_for_test, DelegationConfig};
 use surf_disco::{error::ClientError, Url};
 use tempfile::TempDir;
 use tokio::{
@@ -47,10 +59,13 @@ use vec1::vec1;
 
 use super::*;
 use crate::{
-    api::{self, data_source::testing::TestableSequencerDataSource, options::Query},
+    api::{
+        self, data_source::testing::TestableSequencerDataSource, options::Query,
+        test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+    },
     genesis::{L1Finalized, StakeTableConfig},
     network::cdn::{TestingDef, WrappedSignatureKey},
-    testing::wait_for_decide_on_handle,
+    testing::{staking_priv_keys, wait_for_decide_on_handle},
     SequencerApiVersion,
 };
 
@@ -512,7 +527,7 @@ struct TestNetwork {
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
     #[derivative(Debug = "ignore")]
-    _anvil: AnvilInstance,
+    anvil: AnvilInstance,
 }
 
 impl Drop for TestNetwork {
@@ -622,8 +637,10 @@ impl TestNetwork {
             orchestrator_task,
             broker_task,
             marshal_task,
-            _anvil: anvil,
+            anvil,
         };
+
+        network.deploy(genesis).await.unwrap();
 
         join_all(
             network
@@ -635,6 +652,93 @@ impl TestNetwork {
         .await;
 
         network
+    }
+
+    async fn deploy(&self, genesis: Genesis) -> anyhow::Result<()> {
+        let stake_table_version = StakeTableContractVersion::V2;
+        let delegation_config = DelegationConfig::EqualAmounts; // TODO configurable?
+
+        let l1_url = Url::from_str(&self.anvil.endpoint()).unwrap();
+        // TODO anvil
+        // self.anvil
+        //     .anvil_set_interval_mining(1)
+        //     .await
+        //     .expect("interval mining");
+
+        let l1_signer_key = self.anvil.keys()[0].clone();
+        let signer = LocalSigner::from(l1_signer_key);
+
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(signer.clone()))
+            .on_http(l1_url.clone());
+
+        let blocks_per_epoch = genesis.epoch_height;
+        let epoch_start_block = genesis.epoch_start_block;
+
+        let staking_keys: Vec<(BLSPrivKey, StateKeyPair)> = self
+            .da_nodes
+            .iter()
+            .chain(self.regular_nodes.iter())
+            .map(|node| {
+                let keys = node.opt.private_keys().unwrap();
+                (keys.0, StateKeyPair::from_sign_key(keys.1))
+            })
+            .collect();
+
+        let (bls, state): (Vec<BLSPrivKey>, Vec<StateKeyPair>) =
+            staking_keys.clone().into_iter().unzip();
+        let staking_priv_keys = staking_priv_keys(&bls, &state, staking_keys.len());
+
+        let hss_staking: Vec<PeerConfig<SeqTypes>> = staking_keys
+            .iter()
+            .map(|(bls, state)| PeerConfig {
+                stake_table_entry: BLSPubKey::from_private(bls).stake_table_entry(U256::from(1)),
+                state_ver_key: state.ver_key(),
+            })
+            .collect();
+
+        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
+            &hss_staking.into(),
+            STAKE_TABLE_CAPACITY_FOR_TEST,
+        )
+        .unwrap();
+
+        let mut contracts = Contracts::new();
+        let args = DeployerArgsBuilder::default()
+            .deployer(deployer.clone())
+            .mock_light_client(true)
+            .genesis_lc_state(genesis_state)
+            .genesis_st_state(genesis_stake)
+            .blocks_per_epoch(blocks_per_epoch.unwrap())
+            .epoch_start_block(epoch_start_block.unwrap())
+            .build()
+            .unwrap();
+
+        match stake_table_version {
+            StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await,
+            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+        }
+        .context("failed to deploy contracts")?;
+
+        let stake_table_address = contracts
+            .address(Contract::StakeTableProxy)
+            .expect("StakeTableProxy address not found");
+        let token_addr = contracts
+            .address(Contract::EspTokenProxy)
+            .expect("EspTokenProxy address not found");
+
+        setup_stake_table_contract_for_test(
+            l1_url.clone(),
+            &deployer,
+            stake_table_address,
+            token_addr,
+            staking_priv_keys,
+            delegation_config,
+        )
+        .await
+        .expect("stake table setup failed");
+
+        Ok(())
     }
 
     async fn check_progress(&self) {
