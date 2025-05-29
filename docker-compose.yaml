@@ -57,7 +57,7 @@ services:
 
   upgrade-prover-contracts:
     image: ghcr.io/espressosystems/espresso-sequencer/deploy:${DOCKER_TAG:-main}
-    command: deploy --use-mock --upgrade-light-client-v2 --use-multisig
+    command: deploy --use-mock --upgrade-light-client-v2 --use-multisig --dry-run
     environment:
       - ESPRESSO_SEQUENCER_ORCHESTRATOR_URL
       - ESPRESSO_SEQUENCER_L1_PROVIDER
