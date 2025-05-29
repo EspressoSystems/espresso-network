@@ -75,6 +75,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
         ))),
         10,
         &storage,
+        10,
     );
     let upgrade_data = UpgradeProposalData {
         old_version: Version { major: 0, minor: 1 },
