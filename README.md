@@ -150,6 +150,8 @@ To additionally verify the contract on etherscan set the `ETHERSCAN_API_KEY` env
 
 Running the script will save a file with details about the deployment in `contracts/broadcast/$CHAIN_ID`.
 
+#### Deployment via Rust
+
 #### Folder Structure Rationale
 
 - code for demo purposes goes into the `contracts/demo` folder
