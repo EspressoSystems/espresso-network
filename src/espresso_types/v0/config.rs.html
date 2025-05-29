@@ -75,284 +75,294 @@
 <a href=#75 id=75 data-nosnippet>75</a>    epoch_start_block: u64,
 <a href=#76 id=76 data-nosnippet>76</a>    <span class="attr">#[serde(default = <span class="string">"default_stake_table_capacity"</span>)]
 <a href=#77 id=77 data-nosnippet>77</a>    </span>stake_table_capacity: usize,
-<a href=#78 id=78 data-nosnippet>78</a>}
-<a href=#79 id=79 data-nosnippet>79</a>
-<a href=#80 id=80 data-nosnippet>80</a><span class="kw">fn </span>default_stake_table_capacity() -&gt; usize {
-<a href=#81 id=81 data-nosnippet>81</a>    hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY
-<a href=#82 id=82 data-nosnippet>82</a>}
-<a href=#83 id=83 data-nosnippet>83</a>
-<a href=#84 id=84 data-nosnippet>84</a><span class="kw">impl </span>From&lt;HotShotConfig&lt;SeqTypes&gt;&gt; <span class="kw">for </span>PublicHotShotConfig {
-<a href=#85 id=85 data-nosnippet>85</a>    <span class="kw">fn </span>from(v: HotShotConfig&lt;SeqTypes&gt;) -&gt; <span class="self">Self </span>{
-<a href=#86 id=86 data-nosnippet>86</a>        <span class="comment">// Destructure all fields from HotShotConfig to return an error
-<a href=#87 id=87 data-nosnippet>87</a>        // if new fields are added to HotShotConfig. This makes sure that we handle
-<a href=#88 id=88 data-nosnippet>88</a>        // all fields appropriately and do not miss any updates.
-<a href=#89 id=89 data-nosnippet>89</a>        </span><span class="kw">let </span>HotShotConfig::&lt;SeqTypes&gt; {
-<a href=#90 id=90 data-nosnippet>90</a>            start_threshold,
-<a href=#91 id=91 data-nosnippet>91</a>            num_nodes_with_stake,
-<a href=#92 id=92 data-nosnippet>92</a>            known_nodes_with_stake,
-<a href=#93 id=93 data-nosnippet>93</a>            known_da_nodes,
-<a href=#94 id=94 data-nosnippet>94</a>            da_staked_committee_size,
-<a href=#95 id=95 data-nosnippet>95</a>            fixed_leader_for_gpuvid,
-<a href=#96 id=96 data-nosnippet>96</a>            next_view_timeout,
-<a href=#97 id=97 data-nosnippet>97</a>            view_sync_timeout,
-<a href=#98 id=98 data-nosnippet>98</a>            num_bootstrap,
-<a href=#99 id=99 data-nosnippet>99</a>            builder_timeout,
-<a href=#100 id=100 data-nosnippet>100</a>            data_request_delay,
-<a href=#101 id=101 data-nosnippet>101</a>            builder_urls,
-<a href=#102 id=102 data-nosnippet>102</a>            start_proposing_view,
-<a href=#103 id=103 data-nosnippet>103</a>            stop_proposing_view,
-<a href=#104 id=104 data-nosnippet>104</a>            start_voting_view,
-<a href=#105 id=105 data-nosnippet>105</a>            stop_voting_view,
-<a href=#106 id=106 data-nosnippet>106</a>            start_proposing_time,
-<a href=#107 id=107 data-nosnippet>107</a>            stop_proposing_time,
-<a href=#108 id=108 data-nosnippet>108</a>            start_voting_time,
-<a href=#109 id=109 data-nosnippet>109</a>            stop_voting_time,
-<a href=#110 id=110 data-nosnippet>110</a>            epoch_height,
-<a href=#111 id=111 data-nosnippet>111</a>            epoch_start_block,
-<a href=#112 id=112 data-nosnippet>112</a>            stake_table_capacity,
-<a href=#113 id=113 data-nosnippet>113</a>        } = v;
-<a href=#114 id=114 data-nosnippet>114</a>
-<a href=#115 id=115 data-nosnippet>115</a>        <span class="self">Self </span>{
-<a href=#116 id=116 data-nosnippet>116</a>            start_threshold,
-<a href=#117 id=117 data-nosnippet>117</a>            num_nodes_with_stake,
-<a href=#118 id=118 data-nosnippet>118</a>            known_nodes_with_stake,
-<a href=#119 id=119 data-nosnippet>119</a>            known_da_nodes,
-<a href=#120 id=120 data-nosnippet>120</a>            da_staked_committee_size,
-<a href=#121 id=121 data-nosnippet>121</a>            fixed_leader_for_gpuvid,
-<a href=#122 id=122 data-nosnippet>122</a>            next_view_timeout,
-<a href=#123 id=123 data-nosnippet>123</a>            view_sync_timeout,
-<a href=#124 id=124 data-nosnippet>124</a>            num_bootstrap,
-<a href=#125 id=125 data-nosnippet>125</a>            builder_timeout,
-<a href=#126 id=126 data-nosnippet>126</a>            data_request_delay,
-<a href=#127 id=127 data-nosnippet>127</a>            builder_urls,
-<a href=#128 id=128 data-nosnippet>128</a>            start_proposing_view,
-<a href=#129 id=129 data-nosnippet>129</a>            stop_proposing_view,
-<a href=#130 id=130 data-nosnippet>130</a>            start_voting_view,
-<a href=#131 id=131 data-nosnippet>131</a>            stop_voting_view,
-<a href=#132 id=132 data-nosnippet>132</a>            start_proposing_time,
-<a href=#133 id=133 data-nosnippet>133</a>            stop_proposing_time,
-<a href=#134 id=134 data-nosnippet>134</a>            start_voting_time,
-<a href=#135 id=135 data-nosnippet>135</a>            stop_voting_time,
-<a href=#136 id=136 data-nosnippet>136</a>            epoch_height,
-<a href=#137 id=137 data-nosnippet>137</a>            epoch_start_block,
-<a href=#138 id=138 data-nosnippet>138</a>            stake_table_capacity,
-<a href=#139 id=139 data-nosnippet>139</a>        }
-<a href=#140 id=140 data-nosnippet>140</a>    }
-<a href=#141 id=141 data-nosnippet>141</a>}
-<a href=#142 id=142 data-nosnippet>142</a>
-<a href=#143 id=143 data-nosnippet>143</a><span class="kw">impl </span>PublicHotShotConfig {
-<a href=#144 id=144 data-nosnippet>144</a>    <span class="kw">pub fn </span>into_hotshot_config(<span class="self">self</span>) -&gt; HotShotConfig&lt;SeqTypes&gt; {
-<a href=#145 id=145 data-nosnippet>145</a>        HotShotConfig {
-<a href=#146 id=146 data-nosnippet>146</a>            start_threshold: <span class="self">self</span>.start_threshold,
-<a href=#147 id=147 data-nosnippet>147</a>            num_nodes_with_stake: <span class="self">self</span>.num_nodes_with_stake,
-<a href=#148 id=148 data-nosnippet>148</a>            known_nodes_with_stake: <span class="self">self</span>.known_nodes_with_stake,
-<a href=#149 id=149 data-nosnippet>149</a>            known_da_nodes: <span class="self">self</span>.known_da_nodes,
-<a href=#150 id=150 data-nosnippet>150</a>            da_staked_committee_size: <span class="self">self</span>.da_staked_committee_size,
-<a href=#151 id=151 data-nosnippet>151</a>            fixed_leader_for_gpuvid: <span class="self">self</span>.fixed_leader_for_gpuvid,
-<a href=#152 id=152 data-nosnippet>152</a>            next_view_timeout: <span class="self">self</span>.next_view_timeout,
-<a href=#153 id=153 data-nosnippet>153</a>            view_sync_timeout: <span class="self">self</span>.view_sync_timeout,
-<a href=#154 id=154 data-nosnippet>154</a>            num_bootstrap: <span class="self">self</span>.num_bootstrap,
-<a href=#155 id=155 data-nosnippet>155</a>            builder_timeout: <span class="self">self</span>.builder_timeout,
-<a href=#156 id=156 data-nosnippet>156</a>            data_request_delay: <span class="self">self</span>.data_request_delay,
-<a href=#157 id=157 data-nosnippet>157</a>            builder_urls: <span class="self">self</span>.builder_urls,
-<a href=#158 id=158 data-nosnippet>158</a>            start_proposing_view: <span class="self">self</span>.start_proposing_view,
-<a href=#159 id=159 data-nosnippet>159</a>            stop_proposing_view: <span class="self">self</span>.stop_proposing_view,
-<a href=#160 id=160 data-nosnippet>160</a>            start_voting_view: <span class="self">self</span>.start_voting_view,
-<a href=#161 id=161 data-nosnippet>161</a>            stop_voting_view: <span class="self">self</span>.stop_voting_view,
-<a href=#162 id=162 data-nosnippet>162</a>            start_proposing_time: <span class="self">self</span>.start_proposing_time,
-<a href=#163 id=163 data-nosnippet>163</a>            stop_proposing_time: <span class="self">self</span>.stop_proposing_time,
-<a href=#164 id=164 data-nosnippet>164</a>            start_voting_time: <span class="self">self</span>.start_voting_time,
-<a href=#165 id=165 data-nosnippet>165</a>            stop_voting_time: <span class="self">self</span>.stop_voting_time,
-<a href=#166 id=166 data-nosnippet>166</a>            epoch_height: <span class="self">self</span>.epoch_height,
-<a href=#167 id=167 data-nosnippet>167</a>            epoch_start_block: <span class="self">self</span>.epoch_start_block,
-<a href=#168 id=168 data-nosnippet>168</a>            stake_table_capacity: <span class="self">self</span>.stake_table_capacity,
-<a href=#169 id=169 data-nosnippet>169</a>        }
-<a href=#170 id=170 data-nosnippet>170</a>    }
-<a href=#171 id=171 data-nosnippet>171</a>
-<a href=#172 id=172 data-nosnippet>172</a>    <span class="kw">pub fn </span>known_nodes_with_stake(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;PeerConfig&lt;SeqTypes&gt;&gt; {
-<a href=#173 id=173 data-nosnippet>173</a>        <span class="self">self</span>.known_nodes_with_stake.clone()
-<a href=#174 id=174 data-nosnippet>174</a>    }
-<a href=#175 id=175 data-nosnippet>175</a>
-<a href=#176 id=176 data-nosnippet>176</a>    <span class="kw">pub fn </span>known_da_nodes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;PeerConfig&lt;SeqTypes&gt;&gt; {
-<a href=#177 id=177 data-nosnippet>177</a>        <span class="self">self</span>.known_da_nodes.clone()
-<a href=#178 id=178 data-nosnippet>178</a>    }
-<a href=#179 id=179 data-nosnippet>179</a>    <span class="kw">pub fn </span>blocks_per_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-<a href=#180 id=180 data-nosnippet>180</a>        <span class="self">self</span>.epoch_height
-<a href=#181 id=181 data-nosnippet>181</a>    }
-<a href=#182 id=182 data-nosnippet>182</a>    <span class="kw">pub fn </span>epoch_start_block(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
-<a href=#183 id=183 data-nosnippet>183</a>        <span class="self">self</span>.epoch_start_block
+<a href=#78 id=78 data-nosnippet>78</a>    <span class="attr">#[serde(default = <span class="string">"default_drb_difficulty"</span>)]
+<a href=#79 id=79 data-nosnippet>79</a>    </span>drb_difficulty: u64,
+<a href=#80 id=80 data-nosnippet>80</a>}
+<a href=#81 id=81 data-nosnippet>81</a>
+<a href=#82 id=82 data-nosnippet>82</a><span class="kw">fn </span>default_stake_table_capacity() -&gt; usize {
+<a href=#83 id=83 data-nosnippet>83</a>    hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY
+<a href=#84 id=84 data-nosnippet>84</a>}
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a><span class="doccomment">/// Default DRB difficulty, set to 0 (intended to be overwritten)
+<a href=#87 id=87 data-nosnippet>87</a></span><span class="kw">fn </span>default_drb_difficulty() -&gt; u64 {
+<a href=#88 id=88 data-nosnippet>88</a>    <span class="number">0
+<a href=#89 id=89 data-nosnippet>89</a></span>}
+<a href=#90 id=90 data-nosnippet>90</a>
+<a href=#91 id=91 data-nosnippet>91</a><span class="kw">impl </span>From&lt;HotShotConfig&lt;SeqTypes&gt;&gt; <span class="kw">for </span>PublicHotShotConfig {
+<a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">fn </span>from(v: HotShotConfig&lt;SeqTypes&gt;) -&gt; <span class="self">Self </span>{
+<a href=#93 id=93 data-nosnippet>93</a>        <span class="comment">// Destructure all fields from HotShotConfig to return an error
+<a href=#94 id=94 data-nosnippet>94</a>        // if new fields are added to HotShotConfig. This makes sure that we handle
+<a href=#95 id=95 data-nosnippet>95</a>        // all fields appropriately and do not miss any updates.
+<a href=#96 id=96 data-nosnippet>96</a>        </span><span class="kw">let </span>HotShotConfig::&lt;SeqTypes&gt; {
+<a href=#97 id=97 data-nosnippet>97</a>            start_threshold,
+<a href=#98 id=98 data-nosnippet>98</a>            num_nodes_with_stake,
+<a href=#99 id=99 data-nosnippet>99</a>            known_nodes_with_stake,
+<a href=#100 id=100 data-nosnippet>100</a>            known_da_nodes,
+<a href=#101 id=101 data-nosnippet>101</a>            da_staked_committee_size,
+<a href=#102 id=102 data-nosnippet>102</a>            fixed_leader_for_gpuvid,
+<a href=#103 id=103 data-nosnippet>103</a>            next_view_timeout,
+<a href=#104 id=104 data-nosnippet>104</a>            view_sync_timeout,
+<a href=#105 id=105 data-nosnippet>105</a>            num_bootstrap,
+<a href=#106 id=106 data-nosnippet>106</a>            builder_timeout,
+<a href=#107 id=107 data-nosnippet>107</a>            data_request_delay,
+<a href=#108 id=108 data-nosnippet>108</a>            builder_urls,
+<a href=#109 id=109 data-nosnippet>109</a>            start_proposing_view,
+<a href=#110 id=110 data-nosnippet>110</a>            stop_proposing_view,
+<a href=#111 id=111 data-nosnippet>111</a>            start_voting_view,
+<a href=#112 id=112 data-nosnippet>112</a>            stop_voting_view,
+<a href=#113 id=113 data-nosnippet>113</a>            start_proposing_time,
+<a href=#114 id=114 data-nosnippet>114</a>            stop_proposing_time,
+<a href=#115 id=115 data-nosnippet>115</a>            start_voting_time,
+<a href=#116 id=116 data-nosnippet>116</a>            stop_voting_time,
+<a href=#117 id=117 data-nosnippet>117</a>            epoch_height,
+<a href=#118 id=118 data-nosnippet>118</a>            epoch_start_block,
+<a href=#119 id=119 data-nosnippet>119</a>            stake_table_capacity,
+<a href=#120 id=120 data-nosnippet>120</a>            drb_difficulty,
+<a href=#121 id=121 data-nosnippet>121</a>        } = v;
+<a href=#122 id=122 data-nosnippet>122</a>
+<a href=#123 id=123 data-nosnippet>123</a>        <span class="self">Self </span>{
+<a href=#124 id=124 data-nosnippet>124</a>            start_threshold,
+<a href=#125 id=125 data-nosnippet>125</a>            num_nodes_with_stake,
+<a href=#126 id=126 data-nosnippet>126</a>            known_nodes_with_stake,
+<a href=#127 id=127 data-nosnippet>127</a>            known_da_nodes,
+<a href=#128 id=128 data-nosnippet>128</a>            da_staked_committee_size,
+<a href=#129 id=129 data-nosnippet>129</a>            fixed_leader_for_gpuvid,
+<a href=#130 id=130 data-nosnippet>130</a>            next_view_timeout,
+<a href=#131 id=131 data-nosnippet>131</a>            view_sync_timeout,
+<a href=#132 id=132 data-nosnippet>132</a>            num_bootstrap,
+<a href=#133 id=133 data-nosnippet>133</a>            builder_timeout,
+<a href=#134 id=134 data-nosnippet>134</a>            data_request_delay,
+<a href=#135 id=135 data-nosnippet>135</a>            builder_urls,
+<a href=#136 id=136 data-nosnippet>136</a>            start_proposing_view,
+<a href=#137 id=137 data-nosnippet>137</a>            stop_proposing_view,
+<a href=#138 id=138 data-nosnippet>138</a>            start_voting_view,
+<a href=#139 id=139 data-nosnippet>139</a>            stop_voting_view,
+<a href=#140 id=140 data-nosnippet>140</a>            start_proposing_time,
+<a href=#141 id=141 data-nosnippet>141</a>            stop_proposing_time,
+<a href=#142 id=142 data-nosnippet>142</a>            start_voting_time,
+<a href=#143 id=143 data-nosnippet>143</a>            stop_voting_time,
+<a href=#144 id=144 data-nosnippet>144</a>            epoch_height,
+<a href=#145 id=145 data-nosnippet>145</a>            epoch_start_block,
+<a href=#146 id=146 data-nosnippet>146</a>            stake_table_capacity,
+<a href=#147 id=147 data-nosnippet>147</a>            drb_difficulty,
+<a href=#148 id=148 data-nosnippet>148</a>        }
+<a href=#149 id=149 data-nosnippet>149</a>    }
+<a href=#150 id=150 data-nosnippet>150</a>}
+<a href=#151 id=151 data-nosnippet>151</a>
+<a href=#152 id=152 data-nosnippet>152</a><span class="kw">impl </span>PublicHotShotConfig {
+<a href=#153 id=153 data-nosnippet>153</a>    <span class="kw">pub fn </span>into_hotshot_config(<span class="self">self</span>) -&gt; HotShotConfig&lt;SeqTypes&gt; {
+<a href=#154 id=154 data-nosnippet>154</a>        HotShotConfig {
+<a href=#155 id=155 data-nosnippet>155</a>            start_threshold: <span class="self">self</span>.start_threshold,
+<a href=#156 id=156 data-nosnippet>156</a>            num_nodes_with_stake: <span class="self">self</span>.num_nodes_with_stake,
+<a href=#157 id=157 data-nosnippet>157</a>            known_nodes_with_stake: <span class="self">self</span>.known_nodes_with_stake,
+<a href=#158 id=158 data-nosnippet>158</a>            known_da_nodes: <span class="self">self</span>.known_da_nodes,
+<a href=#159 id=159 data-nosnippet>159</a>            da_staked_committee_size: <span class="self">self</span>.da_staked_committee_size,
+<a href=#160 id=160 data-nosnippet>160</a>            fixed_leader_for_gpuvid: <span class="self">self</span>.fixed_leader_for_gpuvid,
+<a href=#161 id=161 data-nosnippet>161</a>            next_view_timeout: <span class="self">self</span>.next_view_timeout,
+<a href=#162 id=162 data-nosnippet>162</a>            view_sync_timeout: <span class="self">self</span>.view_sync_timeout,
+<a href=#163 id=163 data-nosnippet>163</a>            num_bootstrap: <span class="self">self</span>.num_bootstrap,
+<a href=#164 id=164 data-nosnippet>164</a>            builder_timeout: <span class="self">self</span>.builder_timeout,
+<a href=#165 id=165 data-nosnippet>165</a>            data_request_delay: <span class="self">self</span>.data_request_delay,
+<a href=#166 id=166 data-nosnippet>166</a>            builder_urls: <span class="self">self</span>.builder_urls,
+<a href=#167 id=167 data-nosnippet>167</a>            start_proposing_view: <span class="self">self</span>.start_proposing_view,
+<a href=#168 id=168 data-nosnippet>168</a>            stop_proposing_view: <span class="self">self</span>.stop_proposing_view,
+<a href=#169 id=169 data-nosnippet>169</a>            start_voting_view: <span class="self">self</span>.start_voting_view,
+<a href=#170 id=170 data-nosnippet>170</a>            stop_voting_view: <span class="self">self</span>.stop_voting_view,
+<a href=#171 id=171 data-nosnippet>171</a>            start_proposing_time: <span class="self">self</span>.start_proposing_time,
+<a href=#172 id=172 data-nosnippet>172</a>            stop_proposing_time: <span class="self">self</span>.stop_proposing_time,
+<a href=#173 id=173 data-nosnippet>173</a>            start_voting_time: <span class="self">self</span>.start_voting_time,
+<a href=#174 id=174 data-nosnippet>174</a>            stop_voting_time: <span class="self">self</span>.stop_voting_time,
+<a href=#175 id=175 data-nosnippet>175</a>            epoch_height: <span class="self">self</span>.epoch_height,
+<a href=#176 id=176 data-nosnippet>176</a>            epoch_start_block: <span class="self">self</span>.epoch_start_block,
+<a href=#177 id=177 data-nosnippet>177</a>            stake_table_capacity: <span class="self">self</span>.stake_table_capacity,
+<a href=#178 id=178 data-nosnippet>178</a>            drb_difficulty: <span class="self">self</span>.drb_difficulty,
+<a href=#179 id=179 data-nosnippet>179</a>        }
+<a href=#180 id=180 data-nosnippet>180</a>    }
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a>    <span class="kw">pub fn </span>known_nodes_with_stake(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;PeerConfig&lt;SeqTypes&gt;&gt; {
+<a href=#183 id=183 data-nosnippet>183</a>        <span class="self">self</span>.known_nodes_with_stake.clone()
 <a href=#184 id=184 data-nosnippet>184</a>    }
-<a href=#185 id=185 data-nosnippet>185</a>}
-<a href=#186 id=186 data-nosnippet>186</a>
-<a href=#187 id=187 data-nosnippet>187</a><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
-<a href=#188 id=188 data-nosnippet>188</a></span><span class="kw">pub struct </span>PublicNetworkConfig {
-<a href=#189 id=189 data-nosnippet>189</a>    rounds: usize,
-<a href=#190 id=190 data-nosnippet>190</a>    indexed_da: bool,
-<a href=#191 id=191 data-nosnippet>191</a>    transactions_per_round: usize,
-<a href=#192 id=192 data-nosnippet>192</a>    manual_start_password: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#193 id=193 data-nosnippet>193</a>    num_bootrap: usize,
-<a href=#194 id=194 data-nosnippet>194</a>    next_view_timeout: u64,
-<a href=#195 id=195 data-nosnippet>195</a>    view_sync_timeout: Duration,
-<a href=#196 id=196 data-nosnippet>196</a>    builder_timeout: Duration,
-<a href=#197 id=197 data-nosnippet>197</a>    data_request_delay: Duration,
-<a href=#198 id=198 data-nosnippet>198</a>    node_index: u64,
-<a href=#199 id=199 data-nosnippet>199</a>    seed: [u8; <span class="number">32</span>],
-<a href=#200 id=200 data-nosnippet>200</a>    transaction_size: usize,
-<a href=#201 id=201 data-nosnippet>201</a>    key_type_name: String,
-<a href=#202 id=202 data-nosnippet>202</a>    libp2p_config: <span class="prelude-ty">Option</span>&lt;Libp2pConfig&gt;,
-<a href=#203 id=203 data-nosnippet>203</a>    config: PublicHotShotConfig,
-<a href=#204 id=204 data-nosnippet>204</a>    cdn_marshal_address: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#205 id=205 data-nosnippet>205</a>    combined_network_config: <span class="prelude-ty">Option</span>&lt;CombinedNetworkConfig&gt;,
-<a href=#206 id=206 data-nosnippet>206</a>    commit_sha: String,
-<a href=#207 id=207 data-nosnippet>207</a>    builder: BuilderType,
-<a href=#208 id=208 data-nosnippet>208</a>    random_builder: <span class="prelude-ty">Option</span>&lt;RandomBuilderConfig&gt;,
-<a href=#209 id=209 data-nosnippet>209</a>}
-<a href=#210 id=210 data-nosnippet>210</a>
-<a href=#211 id=211 data-nosnippet>211</a><span class="kw">impl </span>From&lt;NetworkConfig&lt;SeqTypes&gt;&gt; <span class="kw">for </span>PublicNetworkConfig {
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">fn </span>from(cfg: NetworkConfig&lt;SeqTypes&gt;) -&gt; <span class="self">Self </span>{
-<a href=#213 id=213 data-nosnippet>213</a>        <span class="self">Self </span>{
-<a href=#214 id=214 data-nosnippet>214</a>            rounds: cfg.rounds,
-<a href=#215 id=215 data-nosnippet>215</a>            indexed_da: cfg.indexed_da,
-<a href=#216 id=216 data-nosnippet>216</a>            transactions_per_round: cfg.transactions_per_round,
-<a href=#217 id=217 data-nosnippet>217</a>            manual_start_password: <span class="prelude-val">Some</span>(<span class="string">"*****"</span>.into()),
-<a href=#218 id=218 data-nosnippet>218</a>            num_bootrap: cfg.num_bootrap,
-<a href=#219 id=219 data-nosnippet>219</a>            next_view_timeout: cfg.next_view_timeout,
-<a href=#220 id=220 data-nosnippet>220</a>            view_sync_timeout: cfg.view_sync_timeout,
-<a href=#221 id=221 data-nosnippet>221</a>            builder_timeout: cfg.builder_timeout,
-<a href=#222 id=222 data-nosnippet>222</a>            data_request_delay: cfg.data_request_delay,
-<a href=#223 id=223 data-nosnippet>223</a>            node_index: cfg.node_index,
-<a href=#224 id=224 data-nosnippet>224</a>            seed: cfg.seed,
-<a href=#225 id=225 data-nosnippet>225</a>            transaction_size: cfg.transaction_size,
-<a href=#226 id=226 data-nosnippet>226</a>            key_type_name: cfg.key_type_name,
-<a href=#227 id=227 data-nosnippet>227</a>            libp2p_config: cfg.libp2p_config,
-<a href=#228 id=228 data-nosnippet>228</a>            config: cfg.config.into(),
-<a href=#229 id=229 data-nosnippet>229</a>            cdn_marshal_address: cfg.cdn_marshal_address,
-<a href=#230 id=230 data-nosnippet>230</a>            combined_network_config: cfg.combined_network_config,
-<a href=#231 id=231 data-nosnippet>231</a>            commit_sha: cfg.commit_sha,
-<a href=#232 id=232 data-nosnippet>232</a>            builder: cfg.builder,
-<a href=#233 id=233 data-nosnippet>233</a>            random_builder: cfg.random_builder,
-<a href=#234 id=234 data-nosnippet>234</a>        }
-<a href=#235 id=235 data-nosnippet>235</a>    }
-<a href=#236 id=236 data-nosnippet>236</a>}
-<a href=#237 id=237 data-nosnippet>237</a>
-<a href=#238 id=238 data-nosnippet>238</a><span class="kw">impl </span>PublicNetworkConfig {
-<a href=#239 id=239 data-nosnippet>239</a>    <span class="kw">pub fn </span>into_network_config(
-<a href=#240 id=240 data-nosnippet>240</a>        <span class="self">self</span>,
-<a href=#241 id=241 data-nosnippet>241</a>        my_own_validator_config: ValidatorConfig&lt;SeqTypes&gt;,
-<a href=#242 id=242 data-nosnippet>242</a>    ) -&gt; anyhow::Result&lt;NetworkConfig&lt;SeqTypes&gt;&gt; {
-<a href=#243 id=243 data-nosnippet>243</a>        <span class="kw">let </span>node_index = <span class="self">self
-<a href=#244 id=244 data-nosnippet>244</a>            </span>.config
-<a href=#245 id=245 data-nosnippet>245</a>            .known_nodes_with_stake
-<a href=#246 id=246 data-nosnippet>246</a>            .iter()
-<a href=#247 id=247 data-nosnippet>247</a>            .position(|peer| peer.stake_table_entry.stake_key == my_own_validator_config.public_key)
-<a href=#248 id=248 data-nosnippet>248</a>            .unwrap_or(<span class="number">0</span>) <span class="kw">as </span>u64;
-<a href=#249 id=249 data-nosnippet>249</a>
-<a href=#250 id=250 data-nosnippet>250</a>        <span class="prelude-val">Ok</span>(NetworkConfig {
-<a href=#251 id=251 data-nosnippet>251</a>            rounds: <span class="self">self</span>.rounds,
-<a href=#252 id=252 data-nosnippet>252</a>            indexed_da: <span class="self">self</span>.indexed_da,
-<a href=#253 id=253 data-nosnippet>253</a>            transactions_per_round: <span class="self">self</span>.transactions_per_round,
-<a href=#254 id=254 data-nosnippet>254</a>            manual_start_password: <span class="self">self</span>.manual_start_password,
-<a href=#255 id=255 data-nosnippet>255</a>            num_bootrap: <span class="self">self</span>.num_bootrap,
-<a href=#256 id=256 data-nosnippet>256</a>            next_view_timeout: <span class="self">self</span>.next_view_timeout,
-<a href=#257 id=257 data-nosnippet>257</a>            view_sync_timeout: <span class="self">self</span>.view_sync_timeout,
-<a href=#258 id=258 data-nosnippet>258</a>            builder_timeout: <span class="self">self</span>.builder_timeout,
-<a href=#259 id=259 data-nosnippet>259</a>            data_request_delay: <span class="self">self</span>.data_request_delay,
-<a href=#260 id=260 data-nosnippet>260</a>            node_index,
-<a href=#261 id=261 data-nosnippet>261</a>            seed: <span class="self">self</span>.seed,
-<a href=#262 id=262 data-nosnippet>262</a>            transaction_size: <span class="self">self</span>.transaction_size,
-<a href=#263 id=263 data-nosnippet>263</a>            key_type_name: <span class="self">self</span>.key_type_name,
-<a href=#264 id=264 data-nosnippet>264</a>            libp2p_config: <span class="self">self</span>.libp2p_config,
-<a href=#265 id=265 data-nosnippet>265</a>            config: <span class="self">self</span>.config.into_hotshot_config(),
-<a href=#266 id=266 data-nosnippet>266</a>            cdn_marshal_address: <span class="self">self</span>.cdn_marshal_address,
-<a href=#267 id=267 data-nosnippet>267</a>            combined_network_config: <span class="self">self</span>.combined_network_config,
-<a href=#268 id=268 data-nosnippet>268</a>            commit_sha: <span class="self">self</span>.commit_sha,
-<a href=#269 id=269 data-nosnippet>269</a>            builder: <span class="self">self</span>.builder,
-<a href=#270 id=270 data-nosnippet>270</a>            random_builder: <span class="self">self</span>.random_builder,
-<a href=#271 id=271 data-nosnippet>271</a>            public_keys: Vec::new(),
-<a href=#272 id=272 data-nosnippet>272</a>        })
-<a href=#273 id=273 data-nosnippet>273</a>    }
-<a href=#274 id=274 data-nosnippet>274</a>
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">pub fn </span>hotshot_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PublicHotShotConfig {
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="self">self</span>.config.clone()
-<a href=#277 id=277 data-nosnippet>277</a>    }
-<a href=#278 id=278 data-nosnippet>278</a>}
-<a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a><span class="attr">#[cfg(test)]
-<a href=#281 id=281 data-nosnippet>281</a></span><span class="kw">mod </span>tests {
-<a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">use </span><span class="kw">super</span>::PublicNetworkConfig;
-<a href=#283 id=283 data-nosnippet>283</a>
-<a href=#284 id=284 data-nosnippet>284</a>    <span class="attr">#[test]
-<a href=#285 id=285 data-nosnippet>285</a>    </span><span class="kw">fn </span>test_deserialize_from_old_config() {
-<a href=#286 id=286 data-nosnippet>286</a>        <span class="comment">// pulled from decaf node
-<a href=#287 id=287 data-nosnippet>287</a>        </span><span class="kw">let </span>json_str = <span class="string">r#"
-<a href=#288 id=288 data-nosnippet>288</a>        {
-<a href=#289 id=289 data-nosnippet>289</a>  "rounds": 100,
-<a href=#290 id=290 data-nosnippet>290</a>  "indexed_da": false,
-<a href=#291 id=291 data-nosnippet>291</a>  "transactions_per_round": 10,
-<a href=#292 id=292 data-nosnippet>292</a>  "manual_start_password": "*****",
-<a href=#293 id=293 data-nosnippet>293</a>  "num_bootrap": 5,
-<a href=#294 id=294 data-nosnippet>294</a>  "next_view_timeout": 10,
-<a href=#295 id=295 data-nosnippet>295</a>  "view_sync_timeout": {
-<a href=#296 id=296 data-nosnippet>296</a>    "secs": 2,
-<a href=#297 id=297 data-nosnippet>297</a>    "nanos": 0
-<a href=#298 id=298 data-nosnippet>298</a>  },
-<a href=#299 id=299 data-nosnippet>299</a>  "builder_timeout": {
-<a href=#300 id=300 data-nosnippet>300</a>    "secs": 10,
-<a href=#301 id=301 data-nosnippet>301</a>    "nanos": 0
-<a href=#302 id=302 data-nosnippet>302</a>  },
-<a href=#303 id=303 data-nosnippet>303</a>  "data_request_delay": {
-<a href=#304 id=304 data-nosnippet>304</a>    "secs": 2,
-<a href=#305 id=305 data-nosnippet>305</a>    "nanos": 500000000
-<a href=#306 id=306 data-nosnippet>306</a>  },
-<a href=#307 id=307 data-nosnippet>307</a>  "node_index": 1,
-<a href=#308 id=308 data-nosnippet>308</a>  "seed": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-<a href=#309 id=309 data-nosnippet>309</a>  "transaction_size": 100,
-<a href=#310 id=310 data-nosnippet>310</a>  "key_type_name": "jf_signature::bls_over_bn254::VerKey",
-<a href=#311 id=311 data-nosnippet>311</a>  "libp2p_config": {
-<a href=#312 id=312 data-nosnippet>312</a>    "bootstrap_nodes": []
-<a href=#313 id=313 data-nosnippet>313</a>  },
-<a href=#314 id=314 data-nosnippet>314</a>  "config": {
-<a href=#315 id=315 data-nosnippet>315</a>    "start_threshold": [100, 100],
-<a href=#316 id=316 data-nosnippet>316</a>    "num_nodes_with_stake": 100,
-<a href=#317 id=317 data-nosnippet>317</a>    "known_nodes_with_stake": [],
-<a href=#318 id=318 data-nosnippet>318</a>    "known_da_nodes": [],
-<a href=#319 id=319 data-nosnippet>319</a>    "da_staked_committee_size": 100,
-<a href=#320 id=320 data-nosnippet>320</a>    "fixed_leader_for_gpuvid": 1,
-<a href=#321 id=321 data-nosnippet>321</a>    "next_view_timeout": 12000,
-<a href=#322 id=322 data-nosnippet>322</a>    "view_sync_timeout": {
-<a href=#323 id=323 data-nosnippet>323</a>      "secs": 1,
-<a href=#324 id=324 data-nosnippet>324</a>      "nanos": 0
-<a href=#325 id=325 data-nosnippet>325</a>    },
-<a href=#326 id=326 data-nosnippet>326</a>    "num_bootstrap": 5,
-<a href=#327 id=327 data-nosnippet>327</a>    "builder_timeout": {
-<a href=#328 id=328 data-nosnippet>328</a>      "secs": 8,
-<a href=#329 id=329 data-nosnippet>329</a>      "nanos": 0
-<a href=#330 id=330 data-nosnippet>330</a>    },
-<a href=#331 id=331 data-nosnippet>331</a>    "data_request_delay": {
-<a href=#332 id=332 data-nosnippet>332</a>      "secs": 5,
-<a href=#333 id=333 data-nosnippet>333</a>      "nanos": 0
-<a href=#334 id=334 data-nosnippet>334</a>    },
-<a href=#335 id=335 data-nosnippet>335</a>    "builder_urls": [
-<a href=#336 id=336 data-nosnippet>336</a>      "https://builder.decaf.testnet.espresso.network/"
-<a href=#337 id=337 data-nosnippet>337</a>    ],
-<a href=#338 id=338 data-nosnippet>338</a>    "start_proposing_view": 0,
-<a href=#339 id=339 data-nosnippet>339</a>    "stop_proposing_view": 0,
-<a href=#340 id=340 data-nosnippet>340</a>    "start_voting_view": 0,
-<a href=#341 id=341 data-nosnippet>341</a>    "stop_voting_view": 0,
-<a href=#342 id=342 data-nosnippet>342</a>    "start_proposing_time": 0,
-<a href=#343 id=343 data-nosnippet>343</a>    "stop_proposing_time": 0,
-<a href=#344 id=344 data-nosnippet>344</a>    "start_voting_time": 0,
-<a href=#345 id=345 data-nosnippet>345</a>    "stop_voting_time": 0,
-<a href=#346 id=346 data-nosnippet>346</a>    "epoch_height": 3000,
-<a href=#347 id=347 data-nosnippet>347</a>    "epoch_start_block": 3160636
-<a href=#348 id=348 data-nosnippet>348</a>  },
-<a href=#349 id=349 data-nosnippet>349</a>  "cdn_marshal_address": null,
-<a href=#350 id=350 data-nosnippet>350</a>  "combined_network_config": null,
-<a href=#351 id=351 data-nosnippet>351</a>  "commit_sha": "",
-<a href=#352 id=352 data-nosnippet>352</a>  "builder": "Simple",
-<a href=#353 id=353 data-nosnippet>353</a>  "random_builder": null
-<a href=#354 id=354 data-nosnippet>354</a>}
-<a href=#355 id=355 data-nosnippet>355</a>        "#</span>;
-<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>_public_config: PublicNetworkConfig = serde_json::from_str(json_str).unwrap();
-<a href=#357 id=357 data-nosnippet>357</a>    }
-<a href=#358 id=358 data-nosnippet>358</a>}</code></pre></div></section></main></body></html>
+<a href=#185 id=185 data-nosnippet>185</a>
+<a href=#186 id=186 data-nosnippet>186</a>    <span class="kw">pub fn </span>known_da_nodes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;PeerConfig&lt;SeqTypes&gt;&gt; {
+<a href=#187 id=187 data-nosnippet>187</a>        <span class="self">self</span>.known_da_nodes.clone()
+<a href=#188 id=188 data-nosnippet>188</a>    }
+<a href=#189 id=189 data-nosnippet>189</a>    <span class="kw">pub fn </span>blocks_per_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+<a href=#190 id=190 data-nosnippet>190</a>        <span class="self">self</span>.epoch_height
+<a href=#191 id=191 data-nosnippet>191</a>    }
+<a href=#192 id=192 data-nosnippet>192</a>    <span class="kw">pub fn </span>epoch_start_block(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+<a href=#193 id=193 data-nosnippet>193</a>        <span class="self">self</span>.epoch_start_block
+<a href=#194 id=194 data-nosnippet>194</a>    }
+<a href=#195 id=195 data-nosnippet>195</a>}
+<a href=#196 id=196 data-nosnippet>196</a>
+<a href=#197 id=197 data-nosnippet>197</a><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
+<a href=#198 id=198 data-nosnippet>198</a></span><span class="kw">pub struct </span>PublicNetworkConfig {
+<a href=#199 id=199 data-nosnippet>199</a>    rounds: usize,
+<a href=#200 id=200 data-nosnippet>200</a>    indexed_da: bool,
+<a href=#201 id=201 data-nosnippet>201</a>    transactions_per_round: usize,
+<a href=#202 id=202 data-nosnippet>202</a>    manual_start_password: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#203 id=203 data-nosnippet>203</a>    num_bootrap: usize,
+<a href=#204 id=204 data-nosnippet>204</a>    next_view_timeout: u64,
+<a href=#205 id=205 data-nosnippet>205</a>    view_sync_timeout: Duration,
+<a href=#206 id=206 data-nosnippet>206</a>    builder_timeout: Duration,
+<a href=#207 id=207 data-nosnippet>207</a>    data_request_delay: Duration,
+<a href=#208 id=208 data-nosnippet>208</a>    node_index: u64,
+<a href=#209 id=209 data-nosnippet>209</a>    seed: [u8; <span class="number">32</span>],
+<a href=#210 id=210 data-nosnippet>210</a>    transaction_size: usize,
+<a href=#211 id=211 data-nosnippet>211</a>    key_type_name: String,
+<a href=#212 id=212 data-nosnippet>212</a>    libp2p_config: <span class="prelude-ty">Option</span>&lt;Libp2pConfig&gt;,
+<a href=#213 id=213 data-nosnippet>213</a>    config: PublicHotShotConfig,
+<a href=#214 id=214 data-nosnippet>214</a>    cdn_marshal_address: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#215 id=215 data-nosnippet>215</a>    combined_network_config: <span class="prelude-ty">Option</span>&lt;CombinedNetworkConfig&gt;,
+<a href=#216 id=216 data-nosnippet>216</a>    commit_sha: String,
+<a href=#217 id=217 data-nosnippet>217</a>    builder: BuilderType,
+<a href=#218 id=218 data-nosnippet>218</a>    random_builder: <span class="prelude-ty">Option</span>&lt;RandomBuilderConfig&gt;,
+<a href=#219 id=219 data-nosnippet>219</a>}
+<a href=#220 id=220 data-nosnippet>220</a>
+<a href=#221 id=221 data-nosnippet>221</a><span class="kw">impl </span>From&lt;NetworkConfig&lt;SeqTypes&gt;&gt; <span class="kw">for </span>PublicNetworkConfig {
+<a href=#222 id=222 data-nosnippet>222</a>    <span class="kw">fn </span>from(cfg: NetworkConfig&lt;SeqTypes&gt;) -&gt; <span class="self">Self </span>{
+<a href=#223 id=223 data-nosnippet>223</a>        <span class="self">Self </span>{
+<a href=#224 id=224 data-nosnippet>224</a>            rounds: cfg.rounds,
+<a href=#225 id=225 data-nosnippet>225</a>            indexed_da: cfg.indexed_da,
+<a href=#226 id=226 data-nosnippet>226</a>            transactions_per_round: cfg.transactions_per_round,
+<a href=#227 id=227 data-nosnippet>227</a>            manual_start_password: <span class="prelude-val">Some</span>(<span class="string">"*****"</span>.into()),
+<a href=#228 id=228 data-nosnippet>228</a>            num_bootrap: cfg.num_bootrap,
+<a href=#229 id=229 data-nosnippet>229</a>            next_view_timeout: cfg.next_view_timeout,
+<a href=#230 id=230 data-nosnippet>230</a>            view_sync_timeout: cfg.view_sync_timeout,
+<a href=#231 id=231 data-nosnippet>231</a>            builder_timeout: cfg.builder_timeout,
+<a href=#232 id=232 data-nosnippet>232</a>            data_request_delay: cfg.data_request_delay,
+<a href=#233 id=233 data-nosnippet>233</a>            node_index: cfg.node_index,
+<a href=#234 id=234 data-nosnippet>234</a>            seed: cfg.seed,
+<a href=#235 id=235 data-nosnippet>235</a>            transaction_size: cfg.transaction_size,
+<a href=#236 id=236 data-nosnippet>236</a>            key_type_name: cfg.key_type_name,
+<a href=#237 id=237 data-nosnippet>237</a>            libp2p_config: cfg.libp2p_config,
+<a href=#238 id=238 data-nosnippet>238</a>            config: cfg.config.into(),
+<a href=#239 id=239 data-nosnippet>239</a>            cdn_marshal_address: cfg.cdn_marshal_address,
+<a href=#240 id=240 data-nosnippet>240</a>            combined_network_config: cfg.combined_network_config,
+<a href=#241 id=241 data-nosnippet>241</a>            commit_sha: cfg.commit_sha,
+<a href=#242 id=242 data-nosnippet>242</a>            builder: cfg.builder,
+<a href=#243 id=243 data-nosnippet>243</a>            random_builder: cfg.random_builder,
+<a href=#244 id=244 data-nosnippet>244</a>        }
+<a href=#245 id=245 data-nosnippet>245</a>    }
+<a href=#246 id=246 data-nosnippet>246</a>}
+<a href=#247 id=247 data-nosnippet>247</a>
+<a href=#248 id=248 data-nosnippet>248</a><span class="kw">impl </span>PublicNetworkConfig {
+<a href=#249 id=249 data-nosnippet>249</a>    <span class="kw">pub fn </span>into_network_config(
+<a href=#250 id=250 data-nosnippet>250</a>        <span class="self">self</span>,
+<a href=#251 id=251 data-nosnippet>251</a>        my_own_validator_config: ValidatorConfig&lt;SeqTypes&gt;,
+<a href=#252 id=252 data-nosnippet>252</a>    ) -&gt; anyhow::Result&lt;NetworkConfig&lt;SeqTypes&gt;&gt; {
+<a href=#253 id=253 data-nosnippet>253</a>        <span class="kw">let </span>node_index = <span class="self">self
+<a href=#254 id=254 data-nosnippet>254</a>            </span>.config
+<a href=#255 id=255 data-nosnippet>255</a>            .known_nodes_with_stake
+<a href=#256 id=256 data-nosnippet>256</a>            .iter()
+<a href=#257 id=257 data-nosnippet>257</a>            .position(|peer| peer.stake_table_entry.stake_key == my_own_validator_config.public_key)
+<a href=#258 id=258 data-nosnippet>258</a>            .unwrap_or(<span class="number">0</span>) <span class="kw">as </span>u64;
+<a href=#259 id=259 data-nosnippet>259</a>
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="prelude-val">Ok</span>(NetworkConfig {
+<a href=#261 id=261 data-nosnippet>261</a>            rounds: <span class="self">self</span>.rounds,
+<a href=#262 id=262 data-nosnippet>262</a>            indexed_da: <span class="self">self</span>.indexed_da,
+<a href=#263 id=263 data-nosnippet>263</a>            transactions_per_round: <span class="self">self</span>.transactions_per_round,
+<a href=#264 id=264 data-nosnippet>264</a>            manual_start_password: <span class="self">self</span>.manual_start_password,
+<a href=#265 id=265 data-nosnippet>265</a>            num_bootrap: <span class="self">self</span>.num_bootrap,
+<a href=#266 id=266 data-nosnippet>266</a>            next_view_timeout: <span class="self">self</span>.next_view_timeout,
+<a href=#267 id=267 data-nosnippet>267</a>            view_sync_timeout: <span class="self">self</span>.view_sync_timeout,
+<a href=#268 id=268 data-nosnippet>268</a>            builder_timeout: <span class="self">self</span>.builder_timeout,
+<a href=#269 id=269 data-nosnippet>269</a>            data_request_delay: <span class="self">self</span>.data_request_delay,
+<a href=#270 id=270 data-nosnippet>270</a>            node_index,
+<a href=#271 id=271 data-nosnippet>271</a>            seed: <span class="self">self</span>.seed,
+<a href=#272 id=272 data-nosnippet>272</a>            transaction_size: <span class="self">self</span>.transaction_size,
+<a href=#273 id=273 data-nosnippet>273</a>            key_type_name: <span class="self">self</span>.key_type_name,
+<a href=#274 id=274 data-nosnippet>274</a>            libp2p_config: <span class="self">self</span>.libp2p_config,
+<a href=#275 id=275 data-nosnippet>275</a>            config: <span class="self">self</span>.config.into_hotshot_config(),
+<a href=#276 id=276 data-nosnippet>276</a>            cdn_marshal_address: <span class="self">self</span>.cdn_marshal_address,
+<a href=#277 id=277 data-nosnippet>277</a>            combined_network_config: <span class="self">self</span>.combined_network_config,
+<a href=#278 id=278 data-nosnippet>278</a>            commit_sha: <span class="self">self</span>.commit_sha,
+<a href=#279 id=279 data-nosnippet>279</a>            builder: <span class="self">self</span>.builder,
+<a href=#280 id=280 data-nosnippet>280</a>            random_builder: <span class="self">self</span>.random_builder,
+<a href=#281 id=281 data-nosnippet>281</a>            public_keys: Vec::new(),
+<a href=#282 id=282 data-nosnippet>282</a>        })
+<a href=#283 id=283 data-nosnippet>283</a>    }
+<a href=#284 id=284 data-nosnippet>284</a>
+<a href=#285 id=285 data-nosnippet>285</a>    <span class="kw">pub fn </span>hotshot_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PublicHotShotConfig {
+<a href=#286 id=286 data-nosnippet>286</a>        <span class="self">self</span>.config.clone()
+<a href=#287 id=287 data-nosnippet>287</a>    }
+<a href=#288 id=288 data-nosnippet>288</a>}
+<a href=#289 id=289 data-nosnippet>289</a>
+<a href=#290 id=290 data-nosnippet>290</a><span class="attr">#[cfg(test)]
+<a href=#291 id=291 data-nosnippet>291</a></span><span class="kw">mod </span>tests {
+<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">use </span><span class="kw">super</span>::PublicNetworkConfig;
+<a href=#293 id=293 data-nosnippet>293</a>
+<a href=#294 id=294 data-nosnippet>294</a>    <span class="attr">#[test]
+<a href=#295 id=295 data-nosnippet>295</a>    </span><span class="kw">fn </span>test_deserialize_from_old_config() {
+<a href=#296 id=296 data-nosnippet>296</a>        <span class="comment">// pulled from decaf node
+<a href=#297 id=297 data-nosnippet>297</a>        </span><span class="kw">let </span>json_str = <span class="string">r#"
+<a href=#298 id=298 data-nosnippet>298</a>        {
+<a href=#299 id=299 data-nosnippet>299</a>  "rounds": 100,
+<a href=#300 id=300 data-nosnippet>300</a>  "indexed_da": false,
+<a href=#301 id=301 data-nosnippet>301</a>  "transactions_per_round": 10,
+<a href=#302 id=302 data-nosnippet>302</a>  "manual_start_password": "*****",
+<a href=#303 id=303 data-nosnippet>303</a>  "num_bootrap": 5,
+<a href=#304 id=304 data-nosnippet>304</a>  "next_view_timeout": 10,
+<a href=#305 id=305 data-nosnippet>305</a>  "view_sync_timeout": {
+<a href=#306 id=306 data-nosnippet>306</a>    "secs": 2,
+<a href=#307 id=307 data-nosnippet>307</a>    "nanos": 0
+<a href=#308 id=308 data-nosnippet>308</a>  },
+<a href=#309 id=309 data-nosnippet>309</a>  "builder_timeout": {
+<a href=#310 id=310 data-nosnippet>310</a>    "secs": 10,
+<a href=#311 id=311 data-nosnippet>311</a>    "nanos": 0
+<a href=#312 id=312 data-nosnippet>312</a>  },
+<a href=#313 id=313 data-nosnippet>313</a>  "data_request_delay": {
+<a href=#314 id=314 data-nosnippet>314</a>    "secs": 2,
+<a href=#315 id=315 data-nosnippet>315</a>    "nanos": 500000000
+<a href=#316 id=316 data-nosnippet>316</a>  },
+<a href=#317 id=317 data-nosnippet>317</a>  "node_index": 1,
+<a href=#318 id=318 data-nosnippet>318</a>  "seed": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+<a href=#319 id=319 data-nosnippet>319</a>  "transaction_size": 100,
+<a href=#320 id=320 data-nosnippet>320</a>  "key_type_name": "jf_signature::bls_over_bn254::VerKey",
+<a href=#321 id=321 data-nosnippet>321</a>  "libp2p_config": {
+<a href=#322 id=322 data-nosnippet>322</a>    "bootstrap_nodes": []
+<a href=#323 id=323 data-nosnippet>323</a>  },
+<a href=#324 id=324 data-nosnippet>324</a>  "config": {
+<a href=#325 id=325 data-nosnippet>325</a>    "start_threshold": [100, 100],
+<a href=#326 id=326 data-nosnippet>326</a>    "num_nodes_with_stake": 100,
+<a href=#327 id=327 data-nosnippet>327</a>    "known_nodes_with_stake": [],
+<a href=#328 id=328 data-nosnippet>328</a>    "known_da_nodes": [],
+<a href=#329 id=329 data-nosnippet>329</a>    "da_staked_committee_size": 100,
+<a href=#330 id=330 data-nosnippet>330</a>    "fixed_leader_for_gpuvid": 1,
+<a href=#331 id=331 data-nosnippet>331</a>    "next_view_timeout": 12000,
+<a href=#332 id=332 data-nosnippet>332</a>    "view_sync_timeout": {
+<a href=#333 id=333 data-nosnippet>333</a>      "secs": 1,
+<a href=#334 id=334 data-nosnippet>334</a>      "nanos": 0
+<a href=#335 id=335 data-nosnippet>335</a>    },
+<a href=#336 id=336 data-nosnippet>336</a>    "num_bootstrap": 5,
+<a href=#337 id=337 data-nosnippet>337</a>    "builder_timeout": {
+<a href=#338 id=338 data-nosnippet>338</a>      "secs": 8,
+<a href=#339 id=339 data-nosnippet>339</a>      "nanos": 0
+<a href=#340 id=340 data-nosnippet>340</a>    },
+<a href=#341 id=341 data-nosnippet>341</a>    "data_request_delay": {
+<a href=#342 id=342 data-nosnippet>342</a>      "secs": 5,
+<a href=#343 id=343 data-nosnippet>343</a>      "nanos": 0
+<a href=#344 id=344 data-nosnippet>344</a>    },
+<a href=#345 id=345 data-nosnippet>345</a>    "builder_urls": [
+<a href=#346 id=346 data-nosnippet>346</a>      "https://builder.decaf.testnet.espresso.network/"
+<a href=#347 id=347 data-nosnippet>347</a>    ],
+<a href=#348 id=348 data-nosnippet>348</a>    "start_proposing_view": 0,
+<a href=#349 id=349 data-nosnippet>349</a>    "stop_proposing_view": 0,
+<a href=#350 id=350 data-nosnippet>350</a>    "start_voting_view": 0,
+<a href=#351 id=351 data-nosnippet>351</a>    "stop_voting_view": 0,
+<a href=#352 id=352 data-nosnippet>352</a>    "start_proposing_time": 0,
+<a href=#353 id=353 data-nosnippet>353</a>    "stop_proposing_time": 0,
+<a href=#354 id=354 data-nosnippet>354</a>    "start_voting_time": 0,
+<a href=#355 id=355 data-nosnippet>355</a>    "stop_voting_time": 0,
+<a href=#356 id=356 data-nosnippet>356</a>    "epoch_height": 3000,
+<a href=#357 id=357 data-nosnippet>357</a>    "epoch_start_block": 3160636
+<a href=#358 id=358 data-nosnippet>358</a>  },
+<a href=#359 id=359 data-nosnippet>359</a>  "cdn_marshal_address": null,
+<a href=#360 id=360 data-nosnippet>360</a>  "combined_network_config": null,
+<a href=#361 id=361 data-nosnippet>361</a>  "commit_sha": "",
+<a href=#362 id=362 data-nosnippet>362</a>  "builder": "Simple",
+<a href=#363 id=363 data-nosnippet>363</a>  "random_builder": null
+<a href=#364 id=364 data-nosnippet>364</a>}
+<a href=#365 id=365 data-nosnippet>365</a>        "#</span>;
+<a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>_public_config: PublicNetworkConfig = serde_json::from_str(json_str).unwrap();
+<a href=#367 id=367 data-nosnippet>367</a>    }
+<a href=#368 id=368 data-nosnippet>368</a>}</code></pre></div></section></main></body></html>

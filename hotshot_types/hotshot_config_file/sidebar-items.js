@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["default_builder_urls","default_stake_table_capacity"],"struct":["HotShotConfigFile"]};
+window.SIDEBAR_ITEMS = {"fn":["default_builder_urls","default_drb_difficulty","default_stake_table_capacity"],"struct":["HotShotConfigFile"]};

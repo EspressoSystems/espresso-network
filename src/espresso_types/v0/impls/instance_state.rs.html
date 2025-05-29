@@ -149,7 +149,7 @@
 <a href=#149 id=149 data-nosnippet>149</a>        )));
 <a href=#150 id=150 data-nosnippet>150</a>
 <a href=#151 id=151 data-nosnippet>151</a>        <span class="kw">let </span>storage = TestStorage::default();
-<a href=#152 id=152 data-nosnippet>152</a>        <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(membership, <span class="number">100</span>, <span class="kw-2">&amp;</span>storage);
+<a href=#152 id=152 data-nosnippet>152</a>        <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(membership, <span class="number">100</span>, <span class="kw-2">&amp;</span>storage, <span class="number">10</span>);
 <a href=#153 id=153 data-nosnippet>153</a>        <span class="self">Self</span>::new(
 <a href=#154 id=154 data-nosnippet>154</a>            <span class="number">0</span>,
 <a href=#155 id=155 data-nosnippet>155</a>            chain_config,
@@ -177,7 +177,7 @@
 <a href=#177 id=177 data-nosnippet>177</a>            StakeTableFetcher::mock(),
 <a href=#178 id=178 data-nosnippet>178</a>        )));
 <a href=#179 id=179 data-nosnippet>179</a>        <span class="kw">let </span>storage = TestStorage::default();
-<a href=#180 id=180 data-nosnippet>180</a>        <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(membership, <span class="number">100</span>, <span class="kw-2">&amp;</span>storage);
+<a href=#180 id=180 data-nosnippet>180</a>        <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(membership, <span class="number">100</span>, <span class="kw-2">&amp;</span>storage, <span class="number">10</span>);
 <a href=#181 id=181 data-nosnippet>181</a>
 <a href=#182 id=182 data-nosnippet>182</a>        <span class="self">Self</span>::new(
 <a href=#183 id=183 data-nosnippet>183</a>            <span class="number">0</span>,
@@ -205,7 +205,7 @@
 <a href=#205 id=205 data-nosnippet>205</a>        )));
 <a href=#206 id=206 data-nosnippet>206</a>
 <a href=#207 id=207 data-nosnippet>207</a>        <span class="kw">let </span>storage = TestStorage::default();
-<a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(membership, <span class="number">100</span>, <span class="kw-2">&amp;</span>storage);
+<a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(membership, <span class="number">100</span>, <span class="kw-2">&amp;</span>storage, <span class="number">10</span>);
 <a href=#209 id=209 data-nosnippet>209</a>        <span class="self">Self</span>::new(
 <a href=#210 id=210 data-nosnippet>210</a>            <span class="number">0</span>,
 <a href=#211 id=211 data-nosnippet>211</a>            ChainConfig::default(),
@@ -286,7 +286,7 @@
 <a href=#286 id=286 data-nosnippet>286</a>            StakeTableFetcher::mock(),
 <a href=#287 id=287 data-nosnippet>287</a>        )));
 <a href=#288 id=288 data-nosnippet>288</a>        <span class="kw">let </span>storage = TestStorage::default();
-<a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(membership, <span class="number">100</span>, <span class="kw-2">&amp;</span>storage);
+<a href=#289 id=289 data-nosnippet>289</a>        <span class="kw">let </span>coordinator = EpochMembershipCoordinator::new(membership, <span class="number">100</span>, <span class="kw-2">&amp;</span>storage, <span class="number">10</span>);
 <a href=#290 id=290 data-nosnippet>290</a>
 <a href=#291 id=291 data-nosnippet>291</a>        <span class="self">Self</span>::new(
 <a href=#292 id=292 data-nosnippet>292</a>            <span class="number">1u64</span>,
