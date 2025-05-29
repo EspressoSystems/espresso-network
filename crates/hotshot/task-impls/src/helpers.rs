@@ -229,7 +229,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
                 .add_epoch_root(next_epoch_number, decided_leaf.block_header().clone())
                 .await
         };
-        if let Some(write_callback) = write_callback {
+        if let Ok(Some(write_callback)) = write_callback {
             let mut membership_writer = membership.write().await;
             write_callback(&mut *membership_writer);
         }

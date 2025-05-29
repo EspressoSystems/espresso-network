@@ -70,7 +70,7 @@ use hotshot_types::{
         signature_key::SignatureKey,
         states::ValidatedState,
     },
-    utils::genesis_epoch_from_version,
+    utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     HotShotConfig,
 };
 /// Reexport rand crate
@@ -392,18 +392,27 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         debug!("Starting Consensus");
         let consensus = self.consensus.read().await;
 
+        let first_epoch = option_epoch_from_block_number::<TYPES>(
+            V::Base::VERSION >= V::Epochs::VERSION,
+            self.config.epoch_start_block,
+            self.config.epoch_height,
+        );
+        // `start_epoch` comes from the initializer, it might be the last seen epoch before restart
+        // `first_epoch` is the first epoch after the transition to the epoch version
+        // `initial_view_change_epoch` is the greater of the two, we use it with the initial view change
+        let initial_view_change_epoch = self.start_epoch.max(first_epoch);
         #[allow(clippy::panic)]
         self.internal_event_stream
             .0
             .broadcast_direct(Arc::new(HotShotEvent::ViewChange(
                 self.start_view,
-                self.start_epoch,
+                initial_view_change_epoch,
             )))
             .await
             .unwrap_or_else(|_| {
                 panic!(
-                    "Genesis Broadcast failed; event = ViewChange({:?})",
-                    self.start_view
+                    "Genesis Broadcast failed; event = ViewChange({:?}, {:?})",
+                    self.start_view, initial_view_change_epoch,
                 )
             });
 
@@ -1216,7 +1225,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
                     .await
             };
 
-            if let Some(write_callback) = write_callback {
+            if let Ok(Some(write_callback)) = write_callback {
                 let mut membership_writer = membership.write().await;
                 write_callback(&mut *membership_writer);
             }

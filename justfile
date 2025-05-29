@@ -15,14 +15,20 @@ demo-native *args: (build "test")
 fmt:
     cargo fmt --all
 
-lint:
+fix *args:
+    just clippy --fix {{args}}
+
+lint *args:
+    just clippy -- -D warnings
+
+clippy *args:
     #!/usr/bin/env bash
     set -euxo pipefail
     # Use the same target dir for both `clippy` invocations
     export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
-    cargo clippy --workspace --features testing --all-targets -- -D warnings
-    cargo clippy --workspace --features "embedded-db testing" --all-targets -- -D warnings
-    cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml -- -D warnings
+    cargo clippy --workspace --features testing --all-targets {{args}}
+    cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
+    cargo clippy --workspace --all-targets --manifest-path sequencer-sqlite/Cargo.toml {{args}}
 
 build profile="dev" features="":
     #!/usr/bin/env bash
@@ -83,11 +89,6 @@ test-all:
 
 test-integration: (build "test" "--features fee")
 	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
-
-clippy:
-    @echo 'features: "embedded-db"'
-    cargo clippy --workspace --features embedded-db --all-targets -- -D warnings
-    cargo clippy --workspace -- -D warnings
 
 check-features *args:
     cargo hack check --each-feature {{args}}
