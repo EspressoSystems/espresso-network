@@ -80,7 +80,7 @@ hotshot-types = { workspace = true }
 
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { version = "0.7", optional = true }
-itertools = "0.12.1"
+itertools = "0.14.0"
 jf-merkle-tree = { version = "0.1.0", git = "https://github.com/EspressoSystems/jellyfish", tag = "0.4.5", features = [
     "std",
 ] }

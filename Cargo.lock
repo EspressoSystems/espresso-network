@@ -1988,7 +1988,7 @@ dependencies = [
  "bitflags 2.9.1",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "lazy_static",
  "lazycell",
  "proc-macro2",
@@ -3566,7 +3566,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d162beedaa69905488a8da94f5ac3edb4dd4788b732fadb7bd120b2625c1976"
 dependencies = [
  "data-encoding",
- "syn 2.0.101",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4171,7 +4171,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-types",
  "indexmap 2.9.0",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-merkle-tree 0.1.0",
  "jf-utils",
  "jf-vid",
@@ -5737,7 +5737,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "include_dir",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-merkle-tree 0.1.0",
  "jf-vid",
  "lazy_static",
@@ -5788,7 +5788,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-query-service",
  "hotshot-types",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-crhf 0.1.0",
  "jf-pcs",
  "jf-plonk",
@@ -9251,7 +9251,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.101",
@@ -10573,7 +10573,7 @@ dependencies = [
  "hotshot-types",
  "include_dir",
  "indexmap 2.9.0",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "jf-crhf 0.1.0",
  "jf-merkle-tree 0.1.0",
  "jf-rescue",
