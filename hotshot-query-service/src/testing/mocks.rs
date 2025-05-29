@@ -50,6 +50,15 @@ impl QueryableHeader<MockTypes> for MockHeader {
     fn timestamp(&self) -> u64 {
         self.timestamp
     }
+
+    fn namespace_size(&self, id: u32, payload_size: usize) -> u64 {
+        // Test types only support a single namespace.
+        if id == 0 {
+            payload_size as u64
+        } else {
+            0
+        }
+    }
 }
 
 impl ExplorerHeader<MockTypes> for MockHeader {

@@ -256,6 +256,9 @@ where
             num_transactions: row
                 .try_get::<Option<i32>, _>("num_transactions")?
                 .ok_or(sqlx::Error::RowNotFound)? as u64,
+
+            // Per-namespace info must be loaded in a separate query.
+            namespaces: Default::default(),
         })
     }
 }
