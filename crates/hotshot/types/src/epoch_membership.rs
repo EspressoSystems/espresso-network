@@ -390,7 +390,14 @@ where
             epoch,
             root_leaf.block_header().clone(),
         )
-        .await;
+        .await
+        .map_err(|e| {
+            anytrace::error!(
+                "Failed to add epoch root for epoch {:?} to membership: {}",
+                epoch,
+                e
+            )
+        })?;
 
         Ok(root_leaf)
     }
