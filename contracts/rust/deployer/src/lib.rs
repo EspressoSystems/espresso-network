@@ -532,7 +532,10 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     contracts: &mut Contracts,
     params: LightClientV2UpgradeParams,
 ) -> Result<(String, bool)> {
-    let dry_run = params.dry_run.unwrap_or(false);
+    let dry_run = params.dry_run.unwrap_or_else(|| {
+        tracing::warn!("Dry run not specified, defaulting to false");
+        false
+    });
     if dry_run {
         tracing::info!("Dry run mode enabled (uses dummy data)");
         let result = call_upgrade_proxy_script(
