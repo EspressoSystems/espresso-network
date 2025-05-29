@@ -23,7 +23,7 @@
 <a href=#23 id=23 data-nosnippet>23</a>    <span class="macro">tracing::warn!</span>(<span class="question-mark">?</span>modules, <span class="string">"sequencer starting up"</span>);
 <a href=#24 id=24 data-nosnippet>24</a>
 <a href=#25 id=25 data-nosnippet>25</a>    <span class="kw">let </span>genesis = Genesis::from_file(<span class="kw-2">&amp;</span>opt.genesis_file)<span class="question-mark">?</span>;
-<a href=#26 id=26 data-nosnippet>26</a>    <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>genesis, <span class="string">"genesis"</span>);
+<a href=#26 id=26 data-nosnippet>26</a>    <span class="macro">tracing::warn!</span>(<span class="question-mark">?</span>genesis, <span class="string">"genesis"</span>);
 <a href=#27 id=27 data-nosnippet>27</a>
 <a href=#28 id=28 data-nosnippet>28</a>    <span class="kw">let </span>base = genesis.base_version;
 <a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">let </span>upgrade = genesis.upgrade_version;
