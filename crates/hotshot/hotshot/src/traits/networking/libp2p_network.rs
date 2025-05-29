@@ -655,6 +655,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
                     error!("Failed to connect to peers: {:?}", e);
                     return Err::<(), NetworkError>(e);
                 }
+                info!("Connected to required number of peers");
 
                 // Set the network as ready
                 is_ready.store(true, Ordering::Relaxed);
@@ -756,7 +757,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
 impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     #[instrument(name = "Libp2pNetwork::ready_blocking", skip_all)]
     async fn wait_for_ready(&self) {
-        self.wait_for_ready().await;
+        self.wait_for_peers().await;
     }
 
     fn pause(&self) {
