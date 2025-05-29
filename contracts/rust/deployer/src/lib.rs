@@ -9,7 +9,7 @@ use alloy::{
     contract::RawCallBuilder,
     hex::{FromHex, ToHexExt},
     network::{Ethereum, EthereumWallet, TransactionBuilder},
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, B256, U256},
     providers::{
         fillers::{FillProvider, JoinFill, WalletFiller},
         utils::JoinedRecommendedFillers,
@@ -617,14 +617,30 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                         .await?
                 };
 
-                // prepare init calldata
-                let lcv2 = LightClientV2::new(lcv2_addr, &provider);
-                let init_data = lcv2
-                    .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
-                    .calldata()
-                    .to_owned();
+                // get initialized version number from proxy
+                let proxy_addr = contracts.address(Contract::LightClientProxy).unwrap();
+                let initialized =
+                    get_proxy_initialized_version(&provider, proxy_addr.clone()).await?;
 
-                tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+                // get contract version from proxy
+                let lcv2_proxy = LightClientV2::new(proxy_addr, &provider);
+                let lcv2_version = lcv2_proxy.getVersion().call().await?;
+
+                // only set the init data if the proxy was not initialized (when initialized the version number is the same as the contract version number)
+                let init_data = if initialized == lcv2_version.majorVersion
+                    && lcv2_version.majorVersion >= 1
+                {
+                    tracing::info!("Proxy was already initialized");
+                    vec![].into()
+                } else {
+                    tracing::info!("Proxy was not initialized");
+                    tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+                    LightClientV2::new(lcv2_addr, &provider)
+                        .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
+                        .calldata()
+                        .to_owned()
+                };
+
                 // invoke upgrade on proxy via the safeSDK
                 let result = call_upgrade_proxy_script(
                     proxy_addr,
@@ -914,6 +930,19 @@ pub async fn is_contract(provider: impl Provider, address: Address) -> Result<bo
     }
 
     Ok(true)
+}
+
+pub async fn get_proxy_initialized_version(
+    provider: impl Provider,
+    proxy_addr: Address,
+) -> Result<u8> {
+    // From openzeppelin Initializable.sol, the initialized version slot is keccak256("openzeppelin.storage.Initializable");
+    let slot: B256 = "0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00"
+        .parse()
+        .unwrap();
+    let value = provider.get_storage_at(proxy_addr, slot.into()).await?;
+    let initialized = value.as_le_bytes()[0]; // `_initialized` is u8 stored in the last byte
+    Ok(initialized)
 }
 
 /// this depends on upgradeProxy.ts which has to be ran on a real network supported by the safeSDK

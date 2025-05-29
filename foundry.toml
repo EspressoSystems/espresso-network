@@ -12,7 +12,7 @@ cache_path = "contracts/cache"
 
 # Version should match the solc installed via flake, otherwise the contract
 # artifacts may differ slightly.
-solc = "0.8.23"
+solc = "0.8.28"
 # The bytecode hash is no longer deterministic and prevents us from generating
 # deterministic bindings. The "none" setting prevents solc from appending the
 # IPFS hash to the bytecode.
