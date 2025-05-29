@@ -24,7 +24,7 @@ RUN chmod +x /bin/deploy /bin/multisig-upgrade-entrypoint
 # Runner image: deploy binary, ts-node, multisig upgrade script
 FROM ubuntu:24.04
 
-RUN apt-get update && apt-get install -y tini libcurl4 nodejs npm libusb-1.0-0 && \
+RUN apt-get update && apt-get install -y --fix-missing tini libcurl4 nodejs npm libusb-1.0-0 && \
     npm install -g yarn ts-node && \
     rm -rf /var/lib/apt/lists/*
 ENTRYPOINT ["tini", "--"]
