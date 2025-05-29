@@ -12,8 +12,8 @@ use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use derivative::Derivative;
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, FeeAccount,
-    MockSequencerVersions, PrivKey, PubKey, SeqTypes, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
+    FeeAccount, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -53,6 +53,8 @@ use crate::{
     testing::wait_for_decide_on_handle,
     SequencerApiVersion,
 };
+
+type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
 
 async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
     setup_test();
@@ -533,21 +535,24 @@ impl TestNetwork {
 
         let tmp = TempDir::new().unwrap();
         let genesis_file = tmp.path().join("genesis.toml");
+        tracing::info!(?genesis_file, "genesis_file");
+
         let genesis = Genesis {
             chain_config: ChainConfig {
-                base_fee: 1.into(),
+                base_fee: 0.into(),
                 ..Default::default()
             },
-            stake_table: StakeTableConfig { capacity: 10 },
+            // TODO we apparently have two `capacity` configurations
+            stake_table: StakeTableConfig { capacity: 200 },
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),
             upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 1 },
-            upgrade_version: Version { major: 0, minor: 2 },
-            epoch_height: None,
+            base_version: Version { major: 0, minor: 3 },
+            upgrade_version: Version { major: 0, minor: 3 },
+            epoch_height: Some(10),
             drb_difficulty: None,
-            epoch_start_block: None,
-            stake_table_capacity: None,
+            epoch_start_block: Some(1),
+            stake_table_capacity: Some(200),
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
