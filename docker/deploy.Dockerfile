@@ -1,39 +1,32 @@
-FROM ghcr.io/espressosystems/ubuntu-base:main AS builder
+FROM ghcr.io/espressosystems/ubuntu-base:main
 
 ARG TARGETARCH
 
-RUN apt-get update \
-    && apt-get install -y --fix-missing curl libcurl4 nodejs npm libusb-1.0.0 \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies and Node.js via NodeSource
+RUN apt-get update && \
+    apt-get install -y curl gnupg libcurl4 libusb-1.0-0 tini && \
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Copy project metadata and install JS deps
 COPY package.json yarn.lock ./
 
-RUN npm install -g yarn \
-  && yarn global add typescript ts-node \
-  && yarn \
-  && rm -rf /usr/local/share/.cache
-  
+RUN npm install -g yarn && \
+    yarn global add typescript ts-node && \
+    yarn && \
+    rm -rf /usr/local/share/.cache ~/.cache node_modules/.cache
+
+# Copy binaries and scripts
 COPY target/$TARGETARCH/release/deploy /bin/deploy
 COPY scripts/multisig-upgrade-entrypoint /bin/multisig-upgrade-entrypoint
 COPY contracts/script/multisigTransactionProposals/safeSDK ./contracts/script/multisigTransactionProposals/safeSDK/
 
 RUN chmod +x /bin/deploy /bin/multisig-upgrade-entrypoint
 
-
-# Runner image: deploy binary, ts-node, multisig upgrade script
-FROM ubuntu:24.04
-
-RUN apt-get update && apt-get install -y --fix-missing tini libcurl4 nodejs npm libusb-1.0-0 && \
-    npm install -g yarn ts-node && \
-    rm -rf /var/lib/apt/lists/*
+# Setup runtime
 ENTRYPOINT ["tini", "--"]
-
-COPY --from=builder /usr/local/bin /usr/local/bin
-COPY --from=builder /usr/local/share /usr/local/share
-COPY --from=builder /app/ /app/
-COPY --from=builder /bin/deploy /bin/deploy
-COPY --from=builder /bin/multisig-upgrade-entrypoint /bin/multisig-upgrade-entrypoint
 ENV MULTISIG_UPGRADE_ENTRYPOINT_PATH=/bin/multisig-upgrade-entrypoint
-
-CMD [ "/bin/deploy"]
+CMD [ "/bin/deploy" ]
