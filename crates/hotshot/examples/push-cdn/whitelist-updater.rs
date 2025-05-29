@@ -8,7 +8,7 @@
 //! all brokers. Right now, we do this by asking the orchestrator for the list of
 //! allowed public keys. In the future, we will pull the stake table from the L1.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use cdn_broker::reexports::discovery::{DiscoveryClient, Embedded, Redis};
@@ -79,13 +79,13 @@ async fn main() -> Result<()> {
     }
 
     // Collect the stake tables and epoch numbers from each query node
-    let mut all_results = Vec::new();
+    let mut all_results = BTreeMap::new();
     while let Some(result) = join_set.join_next().await {
         // Extract the task's result
         match result {
             Ok(Ok((query_node_url, stake_table, epoch_number))) => {
                 // Add the stake table, epoch number, and query node URL to the list
-                all_results.push((query_node_url, stake_table, epoch_number));
+                all_results.insert(epoch_number, (query_node_url, stake_table));
             },
             Ok(Err(e)) => {
                 warn!("Failed to fetch stake table from query node: {:?}", e);
@@ -104,11 +104,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Sort the results by epoch number
-    all_results.sort_by_key(|stake_table_and_epoch| stake_table_and_epoch.2);
-
     // Get the result from the node to respond with the highest epoch number
-    let (query_node_url, mut stake_table, epoch_number) = all_results.remove(all_results.len() - 1);
+    let (epoch_number, (query_node_url, mut stake_table)) = all_results.pop_last().unwrap();
 
     // If there is an epoch number, we should fetch the next epoch and combine the two lists. If not,
     // epochs are not enabled yet, so just use the list we got
