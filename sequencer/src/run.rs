@@ -23,7 +23,7 @@ pub async fn main() -> anyhow::Result<()> {
     tracing::warn!(?modules, "sequencer starting up");
 
     let genesis = Genesis::from_file(&opt.genesis_file)?;
-    tracing::info!(?genesis, "genesis");
+    tracing::warn!(?genesis, "genesis");
 
     let base = genesis.base_version;
     let upgrade = genesis.upgrade_version;

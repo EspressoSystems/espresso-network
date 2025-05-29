@@ -2520,7 +2520,8 @@ async fn fetch_leaf_from_proposals<Mode: TransactionMode>(
 mod testing {
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
 
-    use super::{super::testing::TestablePersistence, *};
+    use super::*;
+    use crate::persistence::tests::TestablePersistence;
 
     #[async_trait]
     impl TestablePersistence for Persistence {
@@ -2556,16 +2557,6 @@ mod testing {
 }
 
 #[cfg(test)]
-mod generic_tests {
-    use super::{super::persistence_tests, Persistence};
-    // For some reason this is the only way to import the macro defined in another module of this
-    // crate.
-    use crate::*;
-
-    instantiate_persistence_tests!(Persistence);
-}
-
-#[cfg(test)]
 mod test {
 
     use committable::{Commitment, CommitmentBoundsArkless};
@@ -2595,7 +2586,7 @@ mod test {
     use vbs::version::StaticVersionType;
 
     use super::*;
-    use crate::{persistence::testing::TestablePersistence, BLSPubKey, PubKey};
+    use crate::{persistence::tests::TestablePersistence as _, BLSPubKey, PubKey};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_quorum_proposals_leaf_hash_migration() {
