@@ -3,7 +3,7 @@ FROM ghcr.io/espressosystems/ubuntu-base:main AS builder
 ARG TARGETARCH
 
 RUN apt-get update \
-    && apt-get install -y curl libcurl4 nodejs npm libusb-1.0.0 \
+    && apt-get install -y --fix-missing curl libcurl4 nodejs npm libusb-1.0.0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
