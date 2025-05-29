@@ -1519,9 +1519,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         let fetcher = Arc::clone(&membership_reader.fetcher);
         drop(membership_reader);
 
-        let Some(stake_tables) = fetcher.fetch(epoch, block_header).await else {
-            return Ok(());
-        };
+        let stake_tables = fetcher.fetch(epoch, block_header).await?;
 
         // Store stake table in persistence
         {

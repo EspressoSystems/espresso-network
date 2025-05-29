@@ -1225,7 +1225,15 @@ async fn load_start_epoch_info<TYPES: NodeType>(
                 epoch_info.epoch,
                 block_header.clone(),
             )
-            .await;
+            .await
+            .unwrap_or_else(|err| {
+                // REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
+                tracing::error!(
+                    "Failed to add epoch root for epoch {:?}: {}",
+                    epoch_info.epoch,
+                    err
+                );
+            });
         }
     }
 
