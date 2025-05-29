@@ -534,7 +534,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
 ) -> Result<(String, bool)> {
     let dry_run = params.dry_run.unwrap_or(false);
     if dry_run {
-        tracing::info!("Dry run mode enabled");
+        tracing::info!("Dry run mode enabled (uses dummy data)");
         let result = call_upgrade_proxy_script(
             Address::random(),
             Address::random(),
@@ -568,8 +568,12 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 let proxy = LightClient::new(proxy_addr, &provider);
                 let owner = proxy.owner().call().await?;
                 let owner_addr = owner._0;
-                // TODO: check if owner is a multisig
-                // first deploy PlonkVerifierV2.sol
+                assert!(
+                    is_contract(&provider, owner_addr).await?,
+                    "Owner is not a contract so not a multisig wallet"
+                );
+
+                // first deploy PlonkVerifierV2.sol (if not already deployed)
                 let pv2_addr = contracts
                     .deploy(
                         Contract::PlonkVerifierV2,
