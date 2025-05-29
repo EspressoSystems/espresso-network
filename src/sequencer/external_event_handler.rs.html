@@ -118,7 +118,7 @@
 <a href=#118 id=118 data-nosnippet>118</a>
 <a href=#119 id=119 data-nosnippet>119</a>                    <span class="comment">// Send the message to the recipient
 <a href=#120 id=120 data-nosnippet>120</a>                    </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = network.direct_message(message_bytes, recipient).<span class="kw">await </span>{
-<a href=#121 id=121 data-nosnippet>121</a>                        <span class="macro">tracing::error!</span>(<span class="string">"Failed to send message: {:?}"</span>, err);
+<a href=#121 id=121 data-nosnippet>121</a>                        <span class="macro">tracing::warn!</span>(<span class="string">"Failed to send message: {:?}"</span>, err);
 <a href=#122 id=122 data-nosnippet>122</a>                    };
 <a href=#123 id=123 data-nosnippet>123</a>                },
 <a href=#124 id=124 data-nosnippet>124</a>
