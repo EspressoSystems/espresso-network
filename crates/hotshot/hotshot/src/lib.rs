@@ -1225,7 +1225,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
                     .await
             };
 
-            if let Some(write_callback) = write_callback {
+            if let Ok(Some(write_callback)) = write_callback {
                 let mut membership_writer = membership.write().await;
                 write_callback(&mut *membership_writer);
             }
