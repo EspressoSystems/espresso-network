@@ -619,8 +619,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
 
                 // get initialized version number from proxy
                 let proxy_addr = contracts.address(Contract::LightClientProxy).unwrap();
-                let initialized =
-                    get_proxy_initialized_version(&provider, proxy_addr.clone()).await?;
+                let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
 
                 // get contract version from proxy
                 let lcv2_proxy = LightClientV2::new(proxy_addr, &provider);
