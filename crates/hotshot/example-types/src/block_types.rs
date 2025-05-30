@@ -13,10 +13,13 @@ use std::{
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{
-    data::{BlockError, Leaf2, VidCommitment},
+    data::{vid_commitment, BlockError, Leaf2, VidCommitment},
     light_client::LightClientState,
     traits::{
-        block_contents::{BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction},
+        block_contents::{
+            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
+            GENESIS_VID_NUM_STORAGE_NODES,
+        },
         node_implementation::{ConsensusTime, NodeType, Versions},
         BlockPayload, ValidatedState,
     },
@@ -345,19 +348,27 @@ impl<
 
     fn genesis<V: Versions>(
         _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
-        _payload: TYPES::BlockPayload,
-        _metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        _genesis_version: Version,
+        payload: TYPES::BlockPayload,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        genesis_version: Version,
     ) -> Self {
-        let metadata = TestMetadata {
-            num_transactions: 0,
-        };
+        let builder_commitment =
+            <TestBlockPayload as BlockPayload<TYPES>>::builder_commitment(&payload, metadata);
+
+        let payload_bytes = payload.encode();
+
+        let payload_commitment = vid_commitment::<V>(
+            &payload_bytes,
+            &metadata.encode(),
+            GENESIS_VID_NUM_STORAGE_NODES,
+            genesis_version,
+        );
 
         Self {
             block_number: 0,
-            payload_commitment: Default::default(),
-            builder_commitment: Default::default(),
-            metadata,
+            payload_commitment,
+            builder_commitment,
+            metadata: *metadata,
             timestamp: 0,
             random: 0,
         }
