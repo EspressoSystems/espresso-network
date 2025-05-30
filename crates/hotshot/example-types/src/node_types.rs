@@ -125,7 +125,7 @@ impl NodeType for TestTypesEpochCatchupTypes {
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = DummyCatchupCommittee<TestTypesEpochCatchupTypes>;
+    type Membership = DummyCatchupCommittee<TestTypesEpochCatchupTypes, EpochsTestVersions>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }
