@@ -34,6 +34,7 @@ import { EspToken } from "../src/EspToken.sol";
 // Target contracts
 import { StakeTable as S } from "../src/StakeTable.sol";
 import { StakeTableV2 } from "../src/StakeTableV2.sol";
+import { StakeTableV3 } from "../src/StakeTableV3.sol";
 
 contract StakeTable_register_Test is LightClientCommonTest {
     S public stakeTable;
@@ -50,6 +51,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
     string public constant NAME = "Espresso";
     string public constant SYMBOL = "ESP";
     uint256 public constant INITIAL_SUPPLY = 3_590_000_000;
+    ERC1967Proxy public proxy;
 
     function genClientWallet(address sender, string memory _seed)
         private
@@ -78,21 +80,21 @@ contract StakeTable_register_Test is LightClientCommonTest {
     }
 
     function registerValidatorOnStakeTable(
-        address validator,
-        string memory seed,
-        uint16 commission,
-        S stakeTable
+        address _validator,
+        string memory _seed,
+        uint16 _commission,
+        S _stakeTable
     ) public {
         (
             BN254.G2Point memory blsVK,
             EdOnBN254.EdOnBN254Point memory schnorrVK,
             BN254.G1Point memory sig
-        ) = genClientWallet(validator, seed);
+        ) = genClientWallet(_validator, _seed);
 
-        vm.startPrank(validator);
-        vm.expectEmit(false, false, false, true, address(stakeTable));
-        emit S.ValidatorRegistered(validator, blsVK, schnorrVK, commission);
-        stakeTable.registerValidator(blsVK, schnorrVK, sig, commission);
+        vm.startPrank(_validator);
+        vm.expectEmit(false, false, false, true, address(_stakeTable));
+        emit S.ValidatorRegistered(_validator, blsVK, schnorrVK, _commission);
+        _stakeTable.registerValidator(blsVK, schnorrVK, sig, _commission);
         vm.stopPrank();
     }
 
@@ -113,7 +115,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
             NAME,
             SYMBOL
         );
-        ERC1967Proxy proxy = new ERC1967Proxy(address(tokenImpl), initData);
+        proxy = new ERC1967Proxy(address(tokenImpl), initData);
         token = EspToken(payable(address(proxy)));
 
         // transfer minted coin
@@ -1253,15 +1255,15 @@ contract StakeTableFieldsReorderedTest is Test {
     LightClient public lightClient; //re-ordered field
 }
 
-contract StakeTableUpgradeTest is Test {
+contract StakeTableUpgradeV2Test is Test {
     StakeTable_register_Test stakeTableRegisterTest;
 
-    function setUp() public {
+    function setUp() public virtual {
         stakeTableRegisterTest = new StakeTable_register_Test();
         stakeTableRegisterTest.setUp();
     }
 
-    function test_UpgradeSucceeds() public {
+    function test_UpgradeToV2Succeeds() public {
         (uint8 majorVersion,,) = S(stakeTableRegisterTest.stakeTable()).getVersion();
         assertEq(majorVersion, 1);
 
@@ -1299,7 +1301,7 @@ contract StakeTableUpgradeTest is Test {
         vm.stopPrank();
     }
 
-    function test_InitializeFunction_IsProtected() public {
+    function test_InitializeFunction_IsProtected() public virtual {
         S proxy = stakeTableRegisterTest.stakeTable();
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         proxy.initialize(address(0), address(0), 0, address(0));
@@ -1833,6 +1835,207 @@ contract StakeTableTimelockTest is Test {
         vm.startPrank(executors[0]);
         vm.expectRevert();
         timelockController.execute(address(proxyAddress), 0, invalidData, bytes32(0), bytes32(0));
+        vm.stopPrank();
+    }
+}
+
+contract StakeTableV3Test is StakeTableUpgradeV2Test {
+    S public stakeTable;
+    address public pauser;
+
+    function setUp() public override {
+        super.setUp();
+        stakeTable = S(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion) = stakeTable.getVersion();
+        assertEq(majorVersion, 1);
+        assertEq(minorVersion, 0);
+        assertEq(patchVersion, 0);
+    }
+
+    function test_UpgradeToV3Succeeds() public {
+        super.test_UpgradeToV2Succeeds();
+        address proxyAddress = address(stakeTableRegisterTest.proxy());
+        StakeTableV2 proxy = StakeTableV2(proxyAddress);
+
+        (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion) = proxy.getVersion();
+        assertEq(majorVersion, 2);
+        assertEq(minorVersion, 0);
+        assertEq(patchVersion, 0);
+
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address admin = proxy.owner();
+        pauser = makeAddr("pauser");
+        bytes memory initData =
+            abi.encodeWithSelector(StakeTableV3.initializeV3.selector, pauser, admin);
+        proxy.upgradeToAndCall(address(new StakeTableV3()), initData);
+
+        StakeTableV3 proxyV3 = StakeTableV3(address(proxy));
+
+        (uint8 majorVersionNew,,) = proxyV3.getVersion();
+        assertEq(majorVersionNew, 3);
+        assertNotEq(majorVersion, majorVersionNew);
+
+        assertEq(proxyV3.owner(), admin);
+        assertEq(proxyV3.hasRole(proxyV3.PAUSER_ROLE(), pauser), true);
+        assertEq(proxyV3.hasRole(proxyV3.DEFAULT_ADMIN_ROLE(), admin), true);
+
+        vm.stopPrank();
+    }
+
+    function test_InitializeFunction_IsProtected_InV3() public {
+        test_UpgradeToV3Succeeds();
+        address proxyAddress = address(stakeTableRegisterTest.proxy());
+        StakeTableV3 stakeTableV3 = StakeTableV3(proxyAddress);
+        (uint8 majorVersionNew,,) = stakeTableV3.getVersion();
+        assertEq(majorVersionNew, 3);
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        stakeTableV3.initialize(address(0), address(0), 0, address(0));
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        stakeTableV3.initializeV3(address(0), address(0));
+    }
+
+    function test_StorageLayout_IsCompatible_V1V3() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTable";
+        cmds[3] = "StakeTableV3";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "true");
+    }
+
+    function test_StorageLayout_IsCompatible_V2V3() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTableV2";
+        cmds[3] = "StakeTableV3";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "true");
+    }
+
+    function test_StorageLayout_IsIncompatibleIfFieldIsMissingV3() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTableV3";
+        cmds[3] = "StakeTableMissingFieldTest";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_StorageLayout_IsIncompatibleIfFieldsAreReorderedV3() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTableV3";
+        cmds[3] = "StakeTableFieldsReorderedTest";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_StorageLayout_IsIncompatibleBetweenDiffContractsV3() public {
+        string[] memory cmds = new string[](4);
+        cmds[0] = "node";
+        cmds[1] = "contracts/test/script/compare-storage-layout.js";
+        cmds[2] = "StakeTableV3";
+        cmds[3] = "LightClient";
+
+        bytes memory output = vm.ffi(cmds);
+        string memory result = string(output);
+
+        assertEq(result, "false");
+    }
+
+    function test_RevertWhen_DeprecatedFunctionsAreCalledV3() public {
+        vm.startPrank(stakeTableRegisterTest.admin());
+        address proxyAddress = address(stakeTableRegisterTest.proxy());
+
+        StakeTableV3 newImpl = new StakeTableV3();
+        bytes memory initData = "";
+        S(proxyAddress).upgradeToAndCall(address(newImpl), initData);
+        vm.stopPrank();
+
+        StakeTableV3 proxy = StakeTableV3(proxyAddress);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+    }
+
+    // pausability tests
+    function test_addingPauserAndPausingContractSucceeds() public {
+        test_UpgradeToV3Succeeds();
+        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 3);
+
+        vm.startPrank(proxy.owner());
+        proxy.grantRole(proxy.PAUSER_ROLE(), pauser);
+        vm.stopPrank();
+
+        vm.startPrank(pauser);
+        proxy.pause();
+        assertTrue(proxy.paused());
+        proxy.unpause();
+        assertFalse(proxy.paused());
+        vm.stopPrank();
+    }
+
+    function test_revertWhen_InvalidAccountTriesToPauseOrUnpause() public {
+        test_addingPauserAndPausingContractSucceeds();
+        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 3);
+
+        address admin = proxy.owner();
+        vm.startPrank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, admin, proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.pause();
+        vm.stopPrank();
+
+        address randomAccount = makeAddr("randomAccount");
+        vm.startPrank(randomAccount);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                randomAccount,
+                proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.pause();
+        vm.stopPrank();
+
+        // tests that a paused contract can't be unpaused by an invalid account
+        vm.prank(pauser);
+        proxy.pause();
+        vm.startPrank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, admin, proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.unpause();
         vm.stopPrank();
     }
 }

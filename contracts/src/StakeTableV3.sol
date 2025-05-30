@@ -39,6 +39,13 @@ contract StakeTableV3 is StakeTableV2, PausableUpgradeable, AccessControlUpgrade
         _disableInitializers();
     }
 
+    function initializeV3(address pauser, address admin) public reinitializer(3) {
+        __AccessControl_init();
+
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(PAUSER_ROLE, pauser);
+    }
+
     function getVersion()
         public
         pure
