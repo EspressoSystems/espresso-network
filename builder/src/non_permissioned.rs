@@ -147,6 +147,7 @@ impl BuilderConfig {
                 &genesis_ns_table.encode(),
                 GENESIS_VID_NUM_STORAGE_NODES,
                 V::Base::VERSION,
+                0,
             )
         };
 

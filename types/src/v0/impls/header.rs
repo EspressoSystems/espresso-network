@@ -891,7 +891,7 @@ impl BlockHeader<SeqTypes> for Header {
         genesis_version: Version,
     ) -> Self {
         let payload_bytes = payload.encode();
-        let builder_commitment = payload.builder_commitment(&metadata);
+        let builder_commitment = payload.builder_commitment(metadata);
 
         let payload_commitment = vid_commitment::<V>(
             &payload_bytes,
