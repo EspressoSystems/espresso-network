@@ -562,7 +562,7 @@ impl TestNetwork {
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 3 },
             upgrade_version: Version { major: 0, minor: 3 },
-            epoch_height: Some(10),
+            epoch_height: Some(25),
             drb_difficulty: None,
             epoch_start_block: Some(1),
             stake_table_capacity: Some(200),
