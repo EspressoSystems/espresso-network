@@ -540,6 +540,7 @@ where
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
+        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
     };
 
     // Initialize the Libp2p network
@@ -1238,6 +1239,7 @@ pub mod testing {
                 Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
+                0,
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
