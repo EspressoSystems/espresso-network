@@ -4170,14 +4170,21 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
         let mut network = TestNetwork::new(config, PosVersion::new()).await;
-        network.peers.remove(0);
 
+        // Remove peer 0 and restart it with the query module enabled.
+        // Adding an additional node to the test network is not straight forward,
+        // as the keys have already been initialized in the config above.
+        // So, we remove this node and re-add it using the same index.
+        network.peers.remove(0);
         let node_0_storage = &storage[1];
         let node_0_persistence = persistence[1].clone();
         let node_0_port = pick_unused_port().expect("No ports free for query service");
@@ -4187,7 +4194,7 @@ mod test {
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
             },
-            tmp_options(node_0_storage),
+            tmp_options(&node_0_storage),
         );
 
         // start the query node so that it builds the merklized state
@@ -4223,28 +4230,14 @@ mod test {
             .unwrap();
 
         let mut events = network.peers[2].event_stream().await;
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
-                if height > EPOCH_HEIGHT {
-                    break;
-                }
-            }
-        }
+        // wait for 1 epoch
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
 
         // shutdown the node for 3 epochs
         drop(node_0);
 
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
-                if height > EPOCH_HEIGHT * 4 {
-                    break;
-                }
-            }
-        }
+        // wait for 4 epochs
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
         // start the node again.
         let node_0 = opt
@@ -4256,7 +4249,11 @@ mod test {
                             1,
                             state,
                             node_0_persistence,
-                            None::<NullStateCatchup>,
+                            Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                                Default::default(),
+                                &NoMetrics,
+                            )),
                             storage,
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -4275,10 +4272,25 @@ mod test {
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(None).await;
 
-        // assert that the restarted node has caught up
-
         let epoch_6_block = EPOCH_HEIGHT * 6 + 1;
 
+        // check that the node's state has reward accounts
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            let state = node_0.decided_state().await;
+            let reward_accounts = state
+                .reward_merkle_tree
+                .clone()
+                .into_iter()
+                .collect::<Vec<_>>();
+
+            if !reward_accounts.is_empty() {
+                tracing::info!("Node's state has reward accounts. {reward_accounts:?}");
+                break;
+            }
+        }
+
+        // check that the node has stored atleast 6 epochs merklized state in persistence
         loop {
             sleep(Duration::from_secs(1)).await;
 
@@ -4294,18 +4306,18 @@ mod test {
             }
         }
 
-        for block in 0..epoch_6_block {
-            client
-                .get::<<BlockMerkleTree as MerkleTreeScheme>::MembershipProof>(&format!(
-                    "block-state/{block}/{block}",
-                ))
-                .send()
-                .await
-                .expect("block merkle tree path not found");
-        }
-
+        // shutdown consensus to freeze the state
+        node_0.shutdown_consensus().await;
+        // wait few seconds to be sure that the node has shutdown all the tasks
+        sleep(Duration::from_secs(3)).await;
         let decided_leaf = node_0.decided_leaf().await;
-        assert!(decided_leaf.height() >= epoch_6_block);
+        let state = node_0.decided_state().await;
+
+        state
+            .block_merkle_tree
+            .lookup(decided_leaf.height() - 1)
+            .expect_ok()
+            .expect("block state not found");
 
         Ok(())
     }
@@ -4363,12 +4375,19 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook::<PosVersion>(DelegationConfig::MultipleDelegators)
+            .pos_hook::<PosVersion>(
+                DelegationConfig::MultipleDelegators,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+            )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
         let mut network = TestNetwork::new(config, PosVersion::new()).await;
+        // Remove peer 0 and restart it with the query module enabled.
+        // Adding an additional node to the test network is not straight forward,
+        // as the keys have already been initialized in the config above.
+        // So, we remove this node and re-add it using the same index.
         network.peers.remove(0);
 
         let node_0_storage = &storage[1];
@@ -4414,15 +4433,8 @@ mod test {
 
         let mut events = network.peers[2].event_stream().await;
         // Wait until at least 3 epochs have passed
-        while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
-                let height = leaf_chain[0].leaf.height();
-                tracing::info!("Node 0 decided at height: {}", height);
-                if height > EPOCH_HEIGHT * 3 {
-                    break;
-                }
-            }
-        }
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
+
         tracing::warn!("shutting down node 0");
 
         node_0.shutdown_consensus().await;
@@ -4579,5 +4591,29 @@ mod test {
         }
 
         Ok(())
+    }
+
+    /// Waits until a node has reached the given target epoch (exclusive).
+    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    async fn wait_for_epochs(
+        events: &mut (impl futures::Stream<Item = Event<SeqTypes>> + std::marker::Unpin),
+        epoch_height: u64,
+        target_epoch: u64,
+    ) {
+        while let Some(event) = events.next().await {
+            if let EventType::Decide { leaf_chain, .. } = event.event {
+                let leaf = &leaf_chain[0].leaf;
+                let epoch = leaf.epoch(epoch_height);
+                tracing::info!(
+                    "Node decided at height: {}, epoch: {:?}",
+                    leaf.height(),
+                    epoch
+                );
+
+                if epoch > Some(EpochNumber::new(target_epoch)) {
+                    break;
+                }
+            }
+        }
     }
 }
