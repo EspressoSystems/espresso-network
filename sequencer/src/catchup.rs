@@ -691,7 +691,6 @@ where
             .get_reward_accounts(instance, block_height, view, accounts)
             .await
             .with_context(|| "failed to get reward accounts from DB")?;
-
         // Verify the accounts
         let mut proofs = Vec::new();
         for account in accounts {
