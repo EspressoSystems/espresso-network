@@ -6,7 +6,12 @@ use alloy::{
     network::EthereumWallet,
     node_bindings::{Anvil, AnvilInstance},
     primitives::Address,
-    providers::ProviderBuilder,
+    providers::{
+        ext::AnvilApi,
+        fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
+        layers::AnvilProvider,
+        ProviderBuilder, RootProvider,
+    },
     signers::local::LocalSigner,
 };
 use anyhow::bail;
@@ -23,7 +28,7 @@ use espresso_contract_deployer::{
 };
 use espresso_types::{
     eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
-    FeeAccount, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
+    FeeAccount, L1Client, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
 };
 use futures::{
     future::{join_all, try_join_all, BoxFuture, FutureExt},
@@ -545,6 +550,16 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     }
 }
 
+type AnvilFillProvider = AnvilProvider<
+    FillProvider<
+        JoinFill<
+            alloy::providers::Identity,
+            JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
+        >,
+        RootProvider,
+    >,
+>;
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 struct TestNetwork {
@@ -556,7 +571,7 @@ struct TestNetwork {
     broker_task: Option<JoinHandle<()>>,
     marshal_task: Option<JoinHandle<()>>,
     #[derivative(Debug = "ignore")]
-    anvil: AnvilInstance,
+    anvil: AnvilFillProvider,
 }
 
 impl Drop for TestNetwork {
@@ -629,6 +644,9 @@ impl TestNetwork {
         let anvil = Anvil::new().port(anvil_port).block_time(1u64).spawn();
         let anvil_endpoint = anvil.endpoint();
 
+        let l1_client = L1Client::anvil(&anvil).expect("create l1 client");
+        let anvil = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
+
         let api_ports = node_params
             .iter()
             .take(da_nodes)
@@ -691,14 +709,10 @@ impl TestNetwork {
         let stake_table_version = StakeTableContractVersion::V2;
         let delegation_config = DelegationConfig::EqualAmounts; // TODO configurable?
 
-        let l1_url = Url::from_str(&self.anvil.endpoint()).unwrap();
-        // TODO anvil
-        // self.anvil
-        //     .anvil_set_interval_mining(1)
-        //     .await
-        //     .expect("interval mining");
+        let anvil_instance = &self.anvil.anvil();
+        let l1_url: reqwest::Url = anvil_instance.endpoint().parse().unwrap();
 
-        let l1_signer_key = self.anvil.keys()[0].clone();
+        let l1_signer_key = anvil_instance.keys()[0].clone();
         let signer = LocalSigner::from(l1_signer_key);
 
         let deployer = ProviderBuilder::new()
@@ -773,6 +787,11 @@ impl TestNetwork {
         )
         .await
         .expect("stake table setup failed");
+
+        self.anvil
+            .anvil_set_interval_mining(1)
+            .await
+            .expect("interval mining");
 
         Ok(stake_table_address)
     }
