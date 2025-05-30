@@ -25,9 +25,7 @@ use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::U256;
 use committable::Committable;
-use hotshot_query_service::{
-    availability::QueryablePayload, testing::mocks::MockVersions, VidCommon,
-};
+use hotshot_query_service::{testing::mocks::MockVersions, VidCommon};
 use hotshot_types::{
     data::vid_commitment,
     traits::{signature_key::BuilderSignatureKey, BlockPayload, EncodeBytes},
@@ -49,7 +47,7 @@ use vbs::{
 use crate::{
     v0_1::{self, ADVZNsProof},
     v0_2, ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
-    NamespaceProofQueryData, NsProof, NsTable, Payload, SeqTypes, Transaction, ValidatedState,
+    NamespaceProofQueryData, NsProof, NsTable, Payload, Transaction, ValidatedState,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -237,11 +235,6 @@ where
 
 const REFERENCE_TRANSACTION_COMMITMENT: &str = "TX~EikfLslj3g6sIWRZYpN6ZuU1gadN77AHXmRA56yNnPrQ";
 
-async fn reference_tx_index() -> <Payload as QueryablePayload<SeqTypes>>::TransactionIndex {
-    let payload = reference_payload().await;
-    payload.iter(payload.ns_table()).last().unwrap()
-}
-
 fn reference_test_without_committable<T: Serialize + DeserializeOwned + Eq + Debug>(
     version: &str,
     name: &str,
@@ -382,11 +375,6 @@ Actual: {actual}
 #[tokio::test(flavor = "multi_thread")]
 async fn test_reference_payload() {
     reference_test_without_committable("v1", "payload", &reference_payload().await);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_reference_tx_index() {
-    reference_test_without_committable("v1", "tx_index", &reference_tx_index().await);
 }
 
 #[tokio::test(flavor = "multi_thread")]

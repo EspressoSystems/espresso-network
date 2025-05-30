@@ -9,6 +9,26 @@ import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { BLSSig } from "./libraries/BLSSig.sol";
 
+/// @title Ethereum L1 component of the Espresso Global Confirmation Layer (GCL) stake table.
+///
+/// @dev All functions are marked as virtual so that future upgrades can override them.
+///
+/// @notice This contract is an upgrade to the original StakeTable contract. On Espresso mainnet we
+/// will only use the V2 contract. On decaf the V2 is used to upgrade the V1 that was first deployed
+/// with the original proof of stake release.
+///
+/// @notice The V2 contract contains the following changes:
+///
+/// 1. The functions to register validators and update consensus keys are updated to require both a
+/// BLS signature and a Schnorr signature and emit the signatures via events so that the GCL can
+/// verify them. The new functions and events have a V2 postfix. After the upgrade components that
+/// support registration and key updates must use the V2 functions and listen to the V2 events. The
+/// original functions revert with a `DeprecatedFunction` error in V2.
+///
+/// 2. The exit escrow period can be updated by the owner of the contract.
+///
+/// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
+/// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
 contract StakeTableV2 is StakeTable {
     // === Events ===
 
@@ -16,11 +36,11 @@ contract StakeTableV2 is StakeTable {
     /// @notice the blsSig and schnorrSig are validated by the Espresso Network
     event ValidatorRegisteredV2(
         address indexed account,
-        BN254.G2Point blsVk,
-        EdOnBN254.EdOnBN254Point schnorrVk,
+        BN254.G2Point blsVK,
+        EdOnBN254.EdOnBN254Point schnorrVK,
         uint16 commission,
         BN254.G1Point blsSig,
-        EdOnBN254.EdOnBN254Point schnorrSig
+        bytes schnorrSig
     );
 
     /// @notice A validator updates their consensus keys
@@ -30,7 +50,7 @@ contract StakeTableV2 is StakeTable {
         BN254.G2Point blsVK,
         EdOnBN254.EdOnBN254Point schnorrVK,
         BN254.G1Point blsSig,
-        EdOnBN254.EdOnBN254Point schnorrSig
+        bytes schnorrSig
     );
 
     /// @notice The exit escrow period is updated
@@ -65,11 +85,11 @@ contract StakeTableV2 is StakeTable {
     /// @param blsSig The BLS signature that authenticates the BLS VK
     /// @param schnorrSig The Schnorr signature that authenticates the Schnorr VK
     /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
-    function registerValidator(
+    function registerValidatorV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
-        EdOnBN254.EdOnBN254Point memory schnorrSig,
+        bytes memory schnorrSig,
         uint16 commission
     ) external virtual {
         address validator = msg.sender;
@@ -99,11 +119,11 @@ contract StakeTableV2 is StakeTable {
     /// @param schnorrVK The new Schnorr verification key
     /// @param blsSig The BLS signature that authenticates the blsVK
     /// @param schnorrSig The Schnorr signature that authenticates the schnorrVK
-    function updateConsensusKeys(
+    function updateConsensusKeysV2(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
-        EdOnBN254.EdOnBN254Point memory schnorrSig
+        bytes memory schnorrSig
     ) external virtual {
         address validator = msg.sender;
 

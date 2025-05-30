@@ -2,13 +2,13 @@
 
 use alloy::{
     primitives::{Address, U256},
-    providers::WalletProvider,
+    providers::{Provider, WalletProvider},
 };
 use anyhow::{Context, Result};
 use derive_builder::Builder;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 
-use crate::{Contract, Contracts, HttpProviderWithWallet};
+use crate::{Contract, Contracts};
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
 /// - `deployer`: deployer's wallet provider
@@ -26,8 +26,8 @@ use crate::{Contract, Contracts, HttpProviderWithWallet};
 /// - `token_symbol`: symbol of the token
 #[derive(Builder, Clone)]
 #[builder(setter(strip_option))]
-pub struct DeployerArgs {
-    deployer: HttpProviderWithWallet,
+pub struct DeployerArgs<P: Provider + WalletProvider> {
+    deployer: P,
     #[builder(default)]
     token_recipient: Option<Address>,
     #[builder(default)]
@@ -54,11 +54,11 @@ pub struct DeployerArgs {
     token_symbol: Option<String>,
 }
 
-impl DeployerArgs {
+impl<P: Provider + WalletProvider> DeployerArgs<P> {
     /// deploy target contracts
     pub async fn deploy(&self, contracts: &mut Contracts, target: Contract) -> Result<()> {
         let provider = &self.deployer;
-        let admin = <HttpProviderWithWallet as WalletProvider>::default_signer_address(provider);
+        let admin = provider.default_signer_address();
         match target {
             Contract::FeeContractProxy => {
                 let addr = crate::deploy_fee_contract_proxy(provider, contracts, admin).await?;
@@ -162,7 +162,7 @@ impl DeployerArgs {
                     .address(Contract::LightClientProxy)
                     .context("no LightClient proxy address")?;
                 let escrow_period = self.exit_escrow_period.unwrap_or(U256::from(300));
-                let addr = crate::deploy_stake_table_proxy(
+                crate::deploy_stake_table_proxy(
                     provider,
                     contracts,
                     token_addr,
@@ -172,8 +172,22 @@ impl DeployerArgs {
                 )
                 .await?;
 
+                // NOTE: we don't transfer ownership to multisig, we only do so after V2 upgrade
+            },
+            Contract::StakeTableV2 => {
+                crate::upgrade_stake_table_v2(provider, contracts).await?;
+
                 if let Some(multisig) = self.multisig {
-                    crate::transfer_ownership(provider, target, addr, multisig).await?;
+                    let stake_table_proxy = contracts
+                        .address(Contract::StakeTableProxy)
+                        .expect("fail to get StakeTableProxy address");
+                    crate::transfer_ownership(
+                        provider,
+                        Contract::StakeTableProxy,
+                        stake_table_proxy,
+                        multisig,
+                    )
+                    .await?;
                 }
             },
             _ => {
@@ -183,13 +197,20 @@ impl DeployerArgs {
         Ok(())
     }
 
-    /// Deploy all contracts
-    pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
+    /// Deploy all contracts up to and including stake table v1
+    pub async fn deploy_to_stake_table_v1(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy(contracts, Contract::FeeContractProxy).await?;
         self.deploy(contracts, Contract::EspTokenProxy).await?;
         self.deploy(contracts, Contract::LightClientProxy).await?;
         self.deploy(contracts, Contract::LightClientV2).await?;
         self.deploy(contracts, Contract::StakeTableProxy).await?;
+        Ok(())
+    }
+
+    /// Deploy all contracts
+    pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
+        self.deploy_to_stake_table_v1(contracts).await?;
+        self.deploy(contracts, Contract::StakeTableV2).await?;
         Ok(())
     }
 }

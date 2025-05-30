@@ -26,7 +26,7 @@ use espresso_types::{
     BackoffParams, EpochCommittees, L1ClientOptions, NodeState, PubKey, SeqTypes, ValidatedState,
 };
 use genesis::L1Finalized;
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtNoPersistence;
+use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use libp2p::Multiaddr;
 use network::libp2p::split_off_peer_id;
 use options::Identity;
@@ -192,7 +192,10 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<P: SequencerPersistence + MembershipPersistence, V: Versions>(
+pub async fn init_node<
+    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
+    V: Versions,
+>(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: &dyn Metrics,
@@ -368,15 +371,18 @@ where
     }
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
+    let drb_difficulty = genesis.drb_difficulty.unwrap_or_default();
     let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
     let stake_table_capacity = genesis
         .stake_table_capacity
         .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
     tracing::info!("setting epoch_height={epoch_height:?}");
+    tracing::info!("setting drb_difficulty={drb_difficulty:?}");
     tracing::info!("setting epoch_start_block={epoch_start_block:?}");
     tracing::info!("setting stake_table_capacity={stake_table_capacity:?}");
     network_config.config.epoch_height = epoch_height;
+    network_config.config.drb_difficulty = drb_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
 
@@ -526,6 +532,7 @@ where
         membership,
         network_config.config.epoch_height,
         &persistence.clone(),
+        network_config.config.drb_difficulty,
     );
 
     let instance_state = NodeState {
@@ -547,7 +554,7 @@ where
     let network = {
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
-            DhtNoPersistence,
+            persistence.clone(),
             coordinator.membership().clone(),
             gossip_config,
             request_response_config,
@@ -1015,6 +1022,7 @@ pub mod testing {
                 epoch_height: 30,
                 epoch_start_block: 1,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+                drb_difficulty: 10,
             };
 
             let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
@@ -1230,6 +1238,7 @@ pub mod testing {
                 membership,
                 config.epoch_height,
                 &persistence.clone(),
+                config.drb_difficulty,
             );
 
             let node_state = NodeState::new(

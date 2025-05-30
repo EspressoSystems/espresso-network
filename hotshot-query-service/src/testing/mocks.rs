@@ -10,8 +10,6 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::ops::Range;
-
 use hotshot::traits::{
     election::static_committee::StaticCommittee, implementations::MemoryNetwork, NodeImplementation,
 };
@@ -34,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
 use crate::{
-    availability::{QueryableHeader, QueryablePayload},
+    availability::{QueryableHeader, QueryablePayload, TransactionIndex},
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
     merklized_state::MerklizedState,
     types::HeightIndexed,
@@ -100,8 +98,7 @@ impl HeightIndexed for MockHeader {
 }
 
 impl<Types: NodeType> QueryablePayload<Types> for MockPayload {
-    type TransactionIndex = usize;
-    type Iter<'a> = Range<usize>;
+    type Iter<'a> = <Vec<TransactionIndex> as IntoIterator>::IntoIter;
     type InclusionProof = ();
 
     fn len(&self, _meta: &Self::Metadata) -> usize {
@@ -109,15 +106,24 @@ impl<Types: NodeType> QueryablePayload<Types> for MockPayload {
     }
 
     fn iter(&self, meta: &Self::Metadata) -> Self::Iter<'_> {
-        0..<TestBlockPayload as QueryablePayload<Types>>::len(self, meta)
+        (0..<TestBlockPayload as QueryablePayload<Types>>::len(self, meta))
+            .map(|i| TransactionIndex {
+                namespace: 0,
+                position: i as u32,
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     fn transaction_with_proof(
         &self,
         _meta: &Self::Metadata,
-        index: &Self::TransactionIndex,
+        index: &TransactionIndex,
     ) -> Option<(Self::Transaction, Self::InclusionProof)> {
-        self.transactions.get(*index).cloned().map(|tx| (tx, ()))
+        self.transactions
+            .get(index.position as usize)
+            .cloned()
+            .map(|tx| (tx, ()))
     }
 }
 

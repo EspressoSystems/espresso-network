@@ -118,7 +118,7 @@ impl<V: Versions> ExternalEventHandler<V> {
 
                     // Send the message to the recipient
                     if let Err(err) = network.direct_message(message_bytes, recipient).await {
-                        tracing::error!("Failed to send message: {:?}", err);
+                        tracing::warn!("Failed to send message: {:?}", err);
                     };
                 },
 

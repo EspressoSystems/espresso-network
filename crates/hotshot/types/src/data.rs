@@ -61,11 +61,11 @@ use crate::{
 /// Implements `ConsensusTime`, `Display`, `Add`, `AddAssign`, `Deref` and `Sub`
 /// for the given thing wrapper type around u64.
 macro_rules! impl_u64_wrapper {
-    ($t:ty) => {
+    ($t:ty, $genesis_val:expr) => {
         impl ConsensusTime for $t {
-            /// Create a genesis number (0)
+            /// Create a genesis number
             fn genesis() -> Self {
-                Self(0)
+                Self($genesis_val)
             }
             /// Create a new number with the given value.
             fn new(n: u64) -> Self {
@@ -125,7 +125,7 @@ impl Committable for ViewNumber {
     }
 }
 
-impl_u64_wrapper!(ViewNumber);
+impl_u64_wrapper!(ViewNumber, 0u64);
 
 /// Type-safe wrapper around `u64` so we know the thing we're talking about is a epoch number.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -138,15 +138,7 @@ impl Committable for EpochNumber {
     }
 }
 
-impl_u64_wrapper!(EpochNumber);
-
-impl EpochNumber {
-    /// Create a genesis number (1)
-    #[allow(dead_code)]
-    fn genesis() -> Self {
-        Self(1)
-    }
-}
+impl_u64_wrapper!(EpochNumber, 1u64);
 
 /// A proposal to start providing data availability for a block.
 #[derive(derive_more::Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]

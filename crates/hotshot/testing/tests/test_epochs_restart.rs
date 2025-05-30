@@ -232,3 +232,68 @@ cross_tests!(
       metadata
     },
 );
+
+fn create_node_change(
+    idx: usize,
+    view: u64,
+    view_up: u64,
+    change: &mut Vec<(u64, Vec<ChangeNode>)>,
+) {
+    assert!(view_up >= view);
+    let views_down = view_up - view;
+    change.push((
+        view,
+        vec![ChangeNode {
+            idx,
+            updown: NodeAction::RestartDown(views_down),
+        }],
+    ));
+}
+cross_tests!(
+    TestName: test_staggered_restart_double_restart,
+    Impls: [CombinedImpl],
+    Types: [TestTypes],
+    Versions: [EpochsTestVersions],
+    Ignore: false,
+    Metadata: {
+      let mut metadata = TestDescription::default().set_num_nodes(10,1);
+
+      let mut node_changes = vec![];
+      // idx, down view, up view
+      create_node_change(1, 6, 7, &mut node_changes);
+      create_node_change(2, 6, 7, &mut node_changes);
+      create_node_change(3, 7, 7, &mut node_changes);
+      create_node_change(4, 10, 10, &mut node_changes);
+      create_node_change(5, 7, 7, &mut node_changes);
+      create_node_change(6, 7, 7, &mut node_changes);
+      // KILL 3 NODES until well after view sync
+      create_node_change(7, 1, 15, &mut node_changes);
+      create_node_change(8, 1, 15, &mut node_changes);
+      create_node_change(9, 1, 15, &mut node_changes);
+
+
+      metadata.spinning_properties = SpinningTaskDescription {
+          node_changes,
+      };
+      metadata.view_sync_properties =
+          hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 50);
+
+      // Give the test some extra time because we are purposely timing out views
+      metadata.completion_task_description =
+          CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+              TimeBasedCompletionTaskDescription {
+                  duration: Duration::from_secs(240),
+              },
+          );
+      metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
+          // Make sure we keep committing rounds after the catchup, but not the full 50.
+          num_successful_views: 22,
+          expected_view_failures: vec![8,9],
+          possible_view_failures: vec![5,6,7,10,11,12,13,14,15,16,17, 18, 19],
+          decide_timeout: Duration::from_secs(60),
+          ..Default::default()
+      };
+
+      metadata
+    },
+);
