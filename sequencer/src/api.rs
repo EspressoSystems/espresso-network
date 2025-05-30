@@ -4194,7 +4194,7 @@ mod test {
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
             },
-            tmp_options(&node_0_storage),
+            tmp_options(node_0_storage),
         );
 
         // start the query node so that it builds the merklized state
@@ -4602,7 +4602,7 @@ mod test {
     ) {
         while let Some(event) = events.next().await {
             if let EventType::Decide { leaf_chain, .. } = event.event {
-                let leaf = &leaf_chain[0].leaf;
+                let leaf = leaf_chain[0].leaf.clone();
                 let epoch = leaf.epoch(epoch_height);
                 tracing::info!(
                     "Node decided at height: {}, epoch: {:?}",
