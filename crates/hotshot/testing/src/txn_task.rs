@@ -9,7 +9,10 @@ use std::{sync::Arc, time::Duration};
 use async_broadcast::Receiver;
 use async_lock::RwLock;
 use hotshot::traits::TestableNodeImplementation;
-use hotshot_types::traits::node_implementation::{NodeType, Versions};
+use hotshot_types::{
+    error::HotShotError,
+    traits::node_implementation::{NodeType, Versions},
+};
 use rand::thread_rng;
 use tokio::{spawn, task::JoinHandle, time::sleep};
 
@@ -60,10 +63,16 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> TxnTask
                     // it should be caught by an assertion (and the txn will be rejected anyway)
                     let leaf = node.handle.decided_leaf().await;
                     let txn = I::leaf_create_random_transaction(&leaf, &mut thread_rng(), 0);
-                    node.handle
-                        .submit_transaction(txn.clone())
-                        .await
-                        .expect("Could not send transaction");
+
+                    let res = node.handle.submit_transaction(txn.clone()).await;
+                    if let Err(HotShotError::InvalidState(e)) = res.as_ref() {
+                        if e.contains("Catchup already in progress")
+                            || e.contains("Starting catchup")
+                        {
+                            return;
+                        }
+                    }
+                    res.expect("Could not send transaction");
                 },
             }
         }

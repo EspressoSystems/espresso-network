@@ -43,6 +43,7 @@ pub fn spawn_timeout_task(test_sender: Sender<TestEvent>, timeout: Duration) -> 
     tokio::spawn(async move {
         sleep(timeout).await;
 
+        error!("Decide timeout triggered.");
         let _ = test_sender.broadcast(TestEvent::Shutdown).await;
     })
 }

@@ -28,6 +28,7 @@ impl CompletionTask {
                 .await
                 .is_err()
             {
+                tracing::error!("Completion Task timed out");
                 broadcast_event(TestEvent::Shutdown, &self.tx).await;
             }
         })

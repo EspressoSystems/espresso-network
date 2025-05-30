@@ -20,7 +20,7 @@ cross_tests!(
     TestName: test_epoch_success,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [
-        TestTypesEpochCatchupTypes,
+        TestTypesEpochCatchupTypes<EpochsTestVersions>,
     ],
     Versions: [EpochsTestVersions],
     Ignore: false,
