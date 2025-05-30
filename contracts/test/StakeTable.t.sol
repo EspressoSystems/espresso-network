@@ -27,6 +27,8 @@ import { OwnableUpgradeable } from
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { PausableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 // Token contract
 import { EspToken } from "../src/EspToken.sol";
@@ -2036,6 +2038,95 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
             )
         );
         proxy.unpause();
+        vm.stopPrank();
+    }
+
+    function test_expectRevert_WhenCallingPausedFunctions() public {
+        test_addingPauserAndPausingContractSucceeds();
+        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 3);
+
+        vm.startPrank(pauser);
+        proxy.pause();
+        vm.stopPrank();
+
+        address user = makeAddr("user");
+        vm.startPrank(user);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.delegate(makeAddr("validator"), 100);
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.undelegate(makeAddr("validator"), 100);
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.claimValidatorExit(makeAddr("validator"));
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.claimWithdrawal(makeAddr("validator"));
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.deregisterValidator();
+
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        proxy.updateConsensusKeysV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "");
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
+
+        vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
+        proxy.updateConsensusKeys(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1());
+
+        vm.stopPrank();
+
+        // unpause and see that the functions are callable
+        vm.startPrank(pauser);
+        proxy.unpause();
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        //it will revert because the validator doesn't exist but that proves that the functions are
+        // callable
+        vm.expectRevert(S.ValidatorInactive.selector);
+        proxy.delegate(makeAddr("validator"), 100);
+
+        vm.expectRevert(S.ValidatorInactive.selector);
+        proxy.undelegate(makeAddr("validator"), 100);
+
+        vm.expectRevert(S.ValidatorNotExited.selector);
+        proxy.claimValidatorExit(makeAddr("validator"));
+
+        vm.expectRevert(S.NothingToWithdraw.selector);
+        proxy.claimWithdrawal(makeAddr("validator"));
+
+        vm.expectRevert(S.ValidatorInactive.selector);
+        proxy.deregisterValidator();
+
+        vm.expectRevert(S.ValidatorInactive.selector);
+        proxy.updateConsensusKeysV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "");
+
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
+
+        vm.stopPrank();
+    }
+
+    function test_UnpausableFunctionsStillWorkWhenContractIsPaused() public {
+        test_addingPauserAndPausingContractSucceeds();
+        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 3);
+
+        vm.startPrank(pauser);
+        proxy.pause();
+        vm.stopPrank();
+
+        // it reverts because the schnorrkey is invalid but it's still able to call that function
+        // as it's not paused even though the contract is paused
+        address validator = makeAddr("validator");
+        vm.startPrank(validator);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
         vm.stopPrank();
     }
 }
