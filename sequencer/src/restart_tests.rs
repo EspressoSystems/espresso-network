@@ -539,7 +539,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 let EventType::Decide { qc, .. } = event.event else {
                     continue;
                 };
-                tracing::error!(?qc);
                 if qc.data.epoch >= Some(epoch) {
                     break;
                 }
