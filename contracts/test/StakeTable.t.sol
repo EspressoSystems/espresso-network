@@ -2129,4 +2129,36 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         proxy.registerValidatorV2(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), "", 0);
         vm.stopPrank();
     }
+
+    function test_OnlyAdminCanRevokePauserRole() public {
+        test_addingPauserAndPausingContractSucceeds();
+        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        (uint8 majorVersion,,) = proxy.getVersion();
+        assertEq(majorVersion, 3);
+
+        address admin = proxy.owner();
+        vm.startPrank(admin);
+        proxy.revokeRole(proxy.PAUSER_ROLE(), pauser);
+        vm.stopPrank();
+
+        vm.startPrank(pauser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                pauser,
+                proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.pause();
+        vm.stopPrank();
+
+        vm.startPrank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, admin, proxy.PAUSER_ROLE()
+            )
+        );
+        proxy.pause();
+        vm.stopPrank();
+    }
 }
