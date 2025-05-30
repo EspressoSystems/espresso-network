@@ -347,7 +347,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     }
 
     /// @notice Deregister a validator
-    function deregisterValidator() external virtual {
+    function deregisterValidator() public virtual {
         address validator = msg.sender;
         ensureValidatorActive(validator);
 
@@ -361,7 +361,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Delegate to a validator
     /// @param validator The validator to delegate to
     /// @param amount The amount to delegate
-    function delegate(address validator, uint256 amount) external virtual {
+    function delegate(address validator, uint256 amount) public virtual {
         ensureValidatorActive(validator);
         address delegator = msg.sender;
 
@@ -385,7 +385,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
     /// @notice Undelegate from a validator
     /// @param validator The validator to undelegate from
     /// @param amount The amount to undelegate
-    function undelegate(address validator, uint256 amount) external virtual {
+    function undelegate(address validator, uint256 amount) public virtual {
         ensureValidatorActive(validator);
         address delegator = msg.sender;
 
@@ -412,7 +412,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// @notice Withdraw previously delegated funds after an undelegation.
     /// @param validator The validator to withdraw from
-    function claimWithdrawal(address validator) external virtual {
+    function claimWithdrawal(address validator) public virtual {
         address delegator = msg.sender;
         // If entries are missing at any of the levels of the mapping this will return zero
         uint256 amount = undelegations[validator][delegator].amount;
@@ -434,7 +434,7 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
 
     /// @notice Withdraw previously delegated funds after a validator has exited
     /// @param validator The validator to withdraw from
-    function claimValidatorExit(address validator) external virtual {
+    function claimValidatorExit(address validator) public virtual {
         address delegator = msg.sender;
         uint256 unlocksAt = validatorExits[validator];
         if (unlocksAt == 0) {

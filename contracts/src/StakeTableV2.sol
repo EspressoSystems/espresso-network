@@ -124,7 +124,7 @@ contract StakeTableV2 is StakeTable {
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
         bytes memory schnorrSig
-    ) external virtual {
+    ) public virtual {
         address validator = msg.sender;
 
         ensureValidatorActive(validator);
