@@ -304,6 +304,7 @@ async fn main() -> anyhow::Result<()> {
     let network_config = TestConfigBuilder::default()
         .epoch_height(epoch_height)
         .builder_port(builder_port)
+        .stake_table_capacity(STAKE_TABLE_CAPACITY_FOR_TEST)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
         .l1_opt(l1_opt)

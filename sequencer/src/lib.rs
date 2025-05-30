@@ -961,6 +961,11 @@ pub mod testing {
                 anvil_provider: self.anvil_provider,
             }
         }
+
+        pub fn stake_table_capacity(mut self, stake_table_capacity: usize) -> Self {
+            self.config.stake_table_capacity = stake_table_capacity;
+            self
+        }
     }
 
     impl<const NUM_NODES: usize> Default for TestConfigBuilder<NUM_NODES> {
