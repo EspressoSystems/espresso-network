@@ -1,10 +1,10 @@
 #![cfg(test)]
 
-use std::{collections::HashSet, path::Path, str::FromStr, time::Duration};
+use std::{collections::HashSet, path::Path, time::Duration};
 
 use alloy::{
     network::EthereumWallet,
-    node_bindings::{Anvil, AnvilInstance},
+    node_bindings::Anvil,
     primitives::Address,
     providers::{
         ext::AnvilApi,
@@ -44,7 +44,7 @@ use hotshot_testing::{
 use hotshot_types::{
     data::EpochNumber,
     event::{Event, EventType},
-    light_client::{StateKeyPair, StateVerKey},
+    light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
     PeerConfig,
@@ -523,7 +523,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     }
 
     /// Wait for the given Epoch.
-    async fn wait_for_epoch(&self, epoch: EpochNumber) {
+    async fn _wait_for_epoch(&self, epoch: EpochNumber) {
         let Some(context) = &self.context else {
             tracing::info!("skipping progress check on stopped node");
             return;
@@ -795,15 +795,15 @@ impl TestNetwork {
         Ok(stake_table_address)
     }
 
-    async fn wait_for_epoch(&self, epoch: EpochNumber) {
+    async fn _wait_for_epoch(&self, epoch: EpochNumber) {
         join_all(
             self.da_nodes
                 .iter()
-                .map(|node| node.wait_for_epoch(epoch))
+                .map(|node| node._wait_for_epoch(epoch))
                 .chain(
                     self.regular_nodes
                         .iter()
-                        .map(|node| node.wait_for_epoch(epoch)),
+                        .map(|node| node._wait_for_epoch(epoch)),
                 ),
         )
         .await;
