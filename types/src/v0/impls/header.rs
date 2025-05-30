@@ -898,6 +898,7 @@ impl BlockHeader<SeqTypes> for Header {
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
             genesis_version,
+            0,
         );
 
         let ValidatedState {

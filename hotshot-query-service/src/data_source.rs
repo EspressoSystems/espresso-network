@@ -986,6 +986,7 @@ pub mod node_tests {
                 &metadata.encode(),
                 1,
                 <TestVersions as Versions>::Base::VERSION,
+                0,
             );
             let header = TestBlockHeader {
                 block_number: i,

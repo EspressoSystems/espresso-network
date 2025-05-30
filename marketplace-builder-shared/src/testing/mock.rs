@@ -101,6 +101,7 @@ pub async fn proposals_with_transactions(
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
             <TestVersions as Versions>::Base::VERSION,
+            0,
         ),
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&payload, &metadata),
         metadata,

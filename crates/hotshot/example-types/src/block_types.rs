@@ -345,9 +345,9 @@ impl<
 
     fn genesis<V: Versions>(
         _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
-        payload: TYPES::BlockPayload,
-        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        genesis_version: Version,
+        _payload: TYPES::BlockPayload,
+        _metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        _genesis_version: Version,
     ) -> Self {
         let metadata = TestMetadata {
             num_transactions: 0,

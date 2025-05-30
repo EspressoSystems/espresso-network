@@ -341,8 +341,9 @@ pub fn vid_commitment<V: Versions>(
     metadata: &[u8],
     total_weight: usize,
     version: Version,
+    epoch_start_block: u64,
 ) -> VidCommitment {
-    if version < V::Epochs::VERSION {
+    if version < V::Epochs::VERSION || epoch_start_block != 0 {
         let encoded_tx_len = encoded_transactions.len();
         advz_scheme(total_weight).commit_only(encoded_transactions).map(VidCommitment::V0).unwrap_or_else(|err| panic!("VidScheme::commit_only failure:(total_weight,payload_byte_len)=({total_weight},{encoded_tx_len}) error: {err}"))
     } else {
@@ -1215,6 +1216,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
             &self.block_header.metadata().encode(),
             num_storage_nodes,
             version,
+            0,
         );
         if commitment != self.block_header.payload_commitment() {
             return Err(BlockError::InconsistentPayloadCommitment);
@@ -1601,6 +1603,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
             &self.block_header.metadata().encode(),
             num_storage_nodes,
             version,
+            0,
         );
         if commitment != self.block_header.payload_commitment() {
             return Err(BlockError::InconsistentPayloadCommitment);
