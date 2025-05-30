@@ -2491,8 +2491,7 @@ mod test {
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_types::{
         data::{
-            ns_table::parse_ns_table, vid_commitment, vid_disperse::VidDisperseShare2, EpochNumber,
-            QuorumProposal2,
+            ns_table::parse_ns_table, vid_disperse::VidDisperseShare2, EpochNumber, QuorumProposal2,
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
@@ -2911,21 +2910,14 @@ mod test {
                 Payload::from_transactions([], &validated_state, &instance_state)
                     .await
                     .unwrap();
-            let builder_commitment = payload.builder_commitment(&metadata);
+
             let payload_bytes = payload.encode();
 
-            let payload_commitment = vid_commitment::<TestVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                4,
-                <TestVersions as Versions>::Base::VERSION,
-            );
-
-            let block_header = Header::genesis(
+            let block_header = Header::genesis::<TestVersions>(
                 &instance_state,
-                payload_commitment,
-                builder_commitment,
-                metadata,
+                payload.clone(),
+                &metadata,
+                <TestVersions as Versions>::Base::VERSION,
             );
 
             let null_quorum_data = QuorumData {

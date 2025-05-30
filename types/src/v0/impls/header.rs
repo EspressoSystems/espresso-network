@@ -6,13 +6,13 @@ use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
-    data::{VidCommitment, ViewNumber},
+    data::{vid_commitment, VidCommitment, ViewNumber},
     light_client::LightClientState,
     traits::{
-        block_contents::{BlockHeader, BuilderFee},
-        node_implementation::{ConsensusTime, NodeType},
+        block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::BuilderSignatureKey,
-        BlockPayload, ValidatedState as _,
+        BlockPayload, EncodeBytes, ValidatedState as _,
     },
     utils::BuilderCommitment,
 };
@@ -884,12 +884,22 @@ impl BlockHeader<SeqTypes> for Header {
         )?)
     }
 
-    fn genesis(
+    fn genesis<V: Versions>(
         instance_state: &NodeState,
-        payload_commitment: VidCommitment,
-        builder_commitment: BuilderCommitment,
-        ns_table: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
+        payload: <SeqTypes as NodeType>::BlockPayload,
+        metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
+        genesis_version: Version,
     ) -> Self {
+        let payload_bytes = payload.encode();
+        let builder_commitment = payload.builder_commitment(&metadata);
+
+        let payload_commitment = vid_commitment::<V>(
+            &payload_bytes,
+            &metadata.encode(),
+            GENESIS_VID_NUM_STORAGE_NODES,
+            genesis_version,
+        );
+
         let ValidatedState {
             fee_merkle_tree,
             block_merkle_tree,
@@ -913,7 +923,7 @@ impl BlockHeader<SeqTypes> for Header {
             instance_state.l1_genesis,
             payload_commitment,
             builder_commitment.clone(),
-            ns_table.clone(),
+            metadata.clone(),
             fee_merkle_tree_root,
             block_merkle_tree_root,
             reward_merkle_tree_root,

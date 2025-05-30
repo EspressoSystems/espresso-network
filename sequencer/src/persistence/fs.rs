@@ -1822,7 +1822,7 @@ mod test {
     use hotshot_example_types::node_types::TestVersions;
     use hotshot_query_service::testing::mocks::MockVersions;
     use hotshot_types::{
-        data::{vid_commitment, QuorumProposal2},
+        data::QuorumProposal2,
         light_client::LightClientState,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
@@ -1967,21 +1967,14 @@ mod test {
                 Payload::from_transactions([], &validated_state, &instance_state)
                     .await
                     .unwrap();
-            let builder_commitment = payload.builder_commitment(&metadata);
+
             let payload_bytes = payload.encode();
 
-            let payload_commitment = vid_commitment::<TestVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                4,
-                <TestVersions as Versions>::Base::VERSION,
-            );
-
-            let block_header = Header::genesis(
+            let block_header = Header::genesis::<TestVersions>(
                 &instance_state,
-                payload_commitment,
-                builder_commitment,
-                metadata,
+                payload.clone(),
+                &metadata,
+                <TestVersions as Versions>::Base::VERSION,
             );
 
             let state_cert = LightClientStateUpdateCertificate::<SeqTypes> {

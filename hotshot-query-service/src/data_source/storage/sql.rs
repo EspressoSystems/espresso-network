@@ -1365,7 +1365,7 @@ mod test {
         state_types::{TestInstanceState, TestValidatedState},
     };
     use hotshot_types::{
-        data::{vid_commitment, QuorumProposal, ViewNumber},
+        data::{QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
         traits::{
             block_contents::BlockHeader,
@@ -1790,22 +1790,12 @@ mod test {
             )
             .await
             .unwrap();
-            let builder_commitment =
-                <MockPayload as BlockPayload<MockTypes>>::builder_commitment(&payload, &metadata);
-            let payload_bytes = payload.encode();
 
-            let payload_commitment = vid_commitment::<MockVersions>(
-                &payload_bytes,
-                &metadata.encode(),
-                4,
-                <MockVersions as Versions>::Base::VERSION,
-            );
-
-            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis(
+            let mut block_header = <MockHeader as BlockHeader<MockTypes>>::genesis::<MockVersions>(
                 &instance_state,
-                payload_commitment,
-                builder_commitment,
-                metadata,
+                payload.clone(),
+                &metadata,
+                <MockVersions as Versions>::Base::VERSION,
             );
 
             block_header.block_number = i;
