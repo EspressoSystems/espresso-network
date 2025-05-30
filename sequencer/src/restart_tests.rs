@@ -10,7 +10,7 @@ use alloy::{
         ext::AnvilApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
         layers::AnvilProvider,
-        ProviderBuilder, RootProvider,
+        Provider, ProviderBuilder, RootProvider,
     },
     signers::local::LocalSigner,
 };
@@ -599,12 +599,12 @@ impl TestNetwork {
             chain_config: Default::default(),
             // TODO we apparently have two `capacity` configurations
             stake_table: StakeTableConfig { capacity: 200 },
-            l1_finalized: L1Finalized::Number { number: 0 },
+            l1_finalized: L1Finalized::Number { number: 2 },
             header: Default::default(),
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 3 },
             upgrade_version: Version { major: 0, minor: 3 },
-            epoch_height: Some(25),
+            epoch_height: Some(50),
             drb_difficulty: None,
             epoch_start_block: Some(1),
             stake_table_capacity: Some(200),
@@ -640,11 +640,11 @@ impl TestNetwork {
         };
 
         let anvil_port = ports.pick();
-        let anvil = Anvil::new().port(anvil_port).block_time(1u64).spawn();
+        let anvil = Anvil::new().port(anvil_port).spawn();
         let anvil_endpoint = anvil.endpoint();
 
         let l1_client = L1Client::anvil(&anvil).expect("create l1 client");
-        let anvil = AnvilProvider::new(l1_client.provider, Arc::new(anvil));
+        let anvil = AnvilProvider::new(l1_client.clone().provider, Arc::new(anvil));
 
         let api_ports = node_params
             .iter()
@@ -787,6 +787,8 @@ impl TestNetwork {
         .await
         .expect("stake table setup failed");
 
+        self.anvil.anvil_mine(Some(10), None).await.unwrap();
+
         self.anvil
             .anvil_set_interval_mining(1)
             .await
@@ -836,7 +838,7 @@ impl TestNetwork {
     async fn restart(&mut self, da_nodes: usize, regular_nodes: usize) {
         self.restart_helper(0..da_nodes, 0..regular_nodes, false)
             .await;
-        // self.wait_for_epoch(EpochNumber::new(3)).await;
+        self._wait_for_epoch(EpochNumber::new(3)).await;
         self.check_progress().await;
     }
 
