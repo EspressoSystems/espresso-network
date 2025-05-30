@@ -599,12 +599,14 @@ impl TestNetwork {
             chain_config: Default::default(),
             // TODO we apparently have two `capacity` configurations
             stake_table: StakeTableConfig { capacity: 200 },
-            l1_finalized: L1Finalized::Number { number: 2 },
+            // We need to wait for some finalized blocks, otherwise stake table
+            // can't be found.
+            l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 3 },
             upgrade_version: Version { major: 0, minor: 3 },
-            epoch_height: Some(50),
+            epoch_height: Some(25),
             drb_difficulty: None,
             epoch_start_block: Some(1),
             stake_table_capacity: Some(200),
