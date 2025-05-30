@@ -7,10 +7,8 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, MemoryImpl, PushCdnImpl, TestTypes,
-    TestTypesEpochCatchupTypes, TestTypesRandomizedLeader,
+    EpochsTestVersions, PushCdnImpl, TestTypesEpochCatchupTypes,
 };
-use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -28,8 +26,11 @@ async fn test_catchup_epochs() {
         next_view_timeout: 2000,
         ..Default::default()
     };
-    let mut metadata: TestDescription<TestTypesEpochCatchupTypes, PushCdnImpl, EpochsTestVersions> =
-        TestDescription::default().set_num_nodes(20, 7);
+    let mut metadata: TestDescription<
+        TestTypesEpochCatchupTypes<EpochsTestVersions>,
+        PushCdnImpl,
+        EpochsTestVersions,
+    > = TestDescription::default().set_num_nodes(20, 7);
     let catchup_node = vec![ChangeNode {
         idx: 19,
         updown: NodeAction::Up,
