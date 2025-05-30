@@ -75,10 +75,17 @@ pub struct PublicHotShotConfig {
     epoch_start_block: u64,
     #[serde(default = "default_stake_table_capacity")]
     stake_table_capacity: usize,
+    #[serde(default = "default_drb_difficulty")]
+    drb_difficulty: u64,
 }
 
 fn default_stake_table_capacity() -> usize {
     hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY
+}
+
+/// Default DRB difficulty, set to 0 (intended to be overwritten)
+fn default_drb_difficulty() -> u64 {
+    0
 }
 
 impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
@@ -110,6 +117,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             epoch_height,
             epoch_start_block,
             stake_table_capacity,
+            drb_difficulty,
         } = v;
 
         Self {
@@ -136,6 +144,7 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             epoch_height,
             epoch_start_block,
             stake_table_capacity,
+            drb_difficulty,
         }
     }
 }
@@ -166,6 +175,7 @@ impl PublicHotShotConfig {
             epoch_height: self.epoch_height,
             epoch_start_block: self.epoch_start_block,
             stake_table_capacity: self.stake_table_capacity,
+            drb_difficulty: self.drb_difficulty,
         }
     }
 

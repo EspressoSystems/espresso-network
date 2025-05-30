@@ -256,6 +256,8 @@ mod tests {
 
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
+        let difficulty_level = 10;
+
         // Initially, there is no saved info.
         if storage.load_drb_input(10).await.is_ok() {
             panic!("unexpected nonempty drb_input");
@@ -265,18 +267,21 @@ mod tests {
             epoch: 10,
             iteration: 10,
             value: [0u8; 32],
+            difficulty_level,
         };
 
         let drb_input_2 = DrbInput {
             epoch: 10,
             iteration: 20,
             value: [0u8; 32],
+            difficulty_level,
         };
 
         let drb_input_3 = DrbInput {
             epoch: 10,
             iteration: 30,
             value: [0u8; 32],
+            difficulty_level,
         };
 
         let _ = storage.store_drb_input(drb_input_1.clone()).await;

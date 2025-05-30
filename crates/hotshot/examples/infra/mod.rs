@@ -376,6 +376,7 @@ pub trait RunDa<
         let network = self.network();
 
         let epoch_height = config.config.epoch_height;
+        let drb_difficulty = config.config.drb_difficulty;
         let storage = TestStorage::<TYPES>::default();
 
         SystemContext::init(
@@ -384,7 +385,12 @@ pub trait RunDa<
             state_sk,
             config.node_index,
             config.config,
-            EpochMembershipCoordinator::new(membership, epoch_height, &storage.clone()),
+            EpochMembershipCoordinator::new(
+                membership,
+                epoch_height,
+                &storage.clone(),
+                drb_difficulty,
+            ),
             Arc::from(network),
             initializer,
             ConsensusMetricsValue::default(),
