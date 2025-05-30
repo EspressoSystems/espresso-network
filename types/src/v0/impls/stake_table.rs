@@ -1503,24 +1503,31 @@ impl Membership<SeqTypes> for EpochCommittees {
         max(higher_threshold, normal_threshold)
     }
 
-    #[allow(refining_impl_trait)]
     async fn add_epoch_root(
-        &self,
+        membership: Arc<RwLock<Self>>,
         epoch: Epoch,
         block_header: Header,
-    ) -> anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>> {
-        if self.state.contains_key(&epoch) {
+    ) -> anyhow::Result<()> {
+        tracing::error!("add_epoch_root called for epoch {} - STEP 1", epoch);
+        let membership_reader = membership.read().await;
+        if membership_reader.state.contains_key(&epoch) {
             tracing::info!(
                 "We already have the stake table for epoch {}. Skipping L1 fetching.",
                 epoch
             );
-            return Ok(None);
+            return Ok(());
         }
+        let fetcher = Arc::clone(&membership_reader.fetcher);
+        drop(membership_reader);
+        tracing::error!("add_epoch_root called for epoch {} - STEP 2", epoch);
 
-        let stake_tables = self.fetcher.fetch(epoch, block_header).await?;
+        let stake_tables = fetcher.fetch(epoch, block_header).await?;
+        tracing::error!("add_epoch_root called for epoch {} - STEP 3", epoch);
+
         // Store stake table in persistence
         {
-            let persistence_lock = self.fetcher.persistence.lock().await;
+            let persistence_lock = fetcher.persistence.lock().await;
+            tracing::error!("add_epoch_root called for epoch {} - STEP 3.5", epoch);
             if let Err(e) = persistence_lock
                 .store_stake(epoch, stake_tables.clone())
                 .await
@@ -1529,9 +1536,12 @@ impl Membership<SeqTypes> for EpochCommittees {
             }
         }
 
-        Ok(Some(Box::new(move |committee: &mut Self| {
-            committee.update_stake_table(epoch, stake_tables);
-        })))
+        tracing::error!("add_epoch_root called for epoch {} - STEP 5", epoch);
+        let mut membership_writer = membership.write().await;
+        tracing::error!("add_epoch_root called for epoch {} - STEP 6", epoch);
+        membership_writer.update_stake_table(epoch, stake_tables);
+        tracing::error!("add_epoch_root called for epoch {} - STEP 7", epoch);
+        Ok(())
     }
 
     fn has_stake_table(&self, epoch: Epoch) -> bool {
