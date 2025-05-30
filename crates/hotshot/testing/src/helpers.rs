@@ -287,7 +287,6 @@ pub async fn da_payload_commitment<TYPES: NodeType, V: Versions>(
         &metadata.encode(),
         membership.total_nodes().await,
         version,
-        0,
     )
 }
 
@@ -300,7 +299,7 @@ pub async fn build_payload_commitment<TYPES: NodeType, V: Versions>(
     // later calls. We need the VID commitment to be able to propose later.
     let encoded_transactions = Vec::new();
     let num_storage_nodes = membership.committee_members(view).await.len();
-    vid_commitment::<V>(&encoded_transactions, &[], num_storage_nodes, version, 0)
+    vid_commitment::<V>(&encoded_transactions, &[], num_storage_nodes, version)
 }
 
 pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
@@ -367,7 +366,6 @@ pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
         &metadata.encode(),
         membership.total_nodes().await,
         upgrade_lock.version_infallible(view_number).await,
-        0,
     );
 
     let next_epoch_da_payload_commitment =
@@ -381,7 +379,6 @@ pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
                     .total_nodes()
                     .await,
                 upgrade_lock.version_infallible(view_number).await,
-                0,
             ))
         } else {
             None

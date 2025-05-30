@@ -64,7 +64,6 @@ impl SimulatedChainState {
             &metadata.encode(),
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let block_builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(

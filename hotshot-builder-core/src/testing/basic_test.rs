@@ -117,7 +117,6 @@ mod tests {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let global_state = Arc::new(RwLock::new(GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -341,7 +340,6 @@ mod tests {
                         &metadata.encode(),
                         NUM_NODES_IN_VID_COMPUTATION,
                         <TestVersions as Versions>::Base::VERSION,
-                        0,
                     );
 
                     tracing::debug!(

@@ -535,7 +535,6 @@ mod tests {
             &leaf.block_header().metadata().encode(),
             2,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         storage
@@ -999,7 +998,6 @@ mod tests {
             &leaf.block_header().metadata().encode(),
             2,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         for i in 0..4 {

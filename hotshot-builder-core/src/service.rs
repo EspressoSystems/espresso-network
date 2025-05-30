@@ -1612,7 +1612,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -1691,7 +1690,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -1793,7 +1791,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -1922,7 +1919,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2030,7 +2026,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2044,13 +2039,8 @@ mod test {
             TEST_MAX_TX_NUM,
         );
 
-        let new_parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            9,
-            <TestVersions as Versions>::Base::VERSION,
-            0,
-        );
+        let new_parent_commit =
+            vid_commitment::<TestVersions>(&[], &[], 9, <TestVersions as Versions>::Base::VERSION);
         let new_view_num = ViewNumber::new(1);
         let builder_state_id = BuilderStateId {
             parent_commitment: new_parent_commit,
@@ -2211,7 +2201,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2225,13 +2214,8 @@ mod test {
             TEST_MAX_TX_NUM,
         );
 
-        let new_parent_commit = vid_commitment::<TestVersions>(
-            &[],
-            &[],
-            9,
-            <TestVersions as Versions>::Base::VERSION,
-            0,
-        );
+        let new_parent_commit =
+            vid_commitment::<TestVersions>(&[], &[], 9, <TestVersions as Versions>::Base::VERSION);
         let new_view_num = ViewNumber::new(1);
         let builder_state_id = BuilderStateId {
             parent_commitment: new_parent_commit,
@@ -2454,7 +2438,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2475,7 +2458,6 @@ mod test {
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
                 <TestVersions as Versions>::Base::VERSION,
-                0,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2521,7 +2503,6 @@ mod test {
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
                 <TestVersions as Versions>::Base::VERSION,
-                0,
             ),
             parent_view: ViewNumber::new(10),
         };
@@ -2543,7 +2524,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0
                 ),
                 parent_view: ViewNumber::new(10),
             }),
@@ -2576,7 +2556,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2597,7 +2576,6 @@ mod test {
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
                 <TestVersions as Versions>::Base::VERSION,
-                0,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2627,7 +2605,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0
                 ),
                 parent_view: ViewNumber::new(10),
             },
@@ -2677,7 +2654,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2698,7 +2674,6 @@ mod test {
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
                 <TestVersions as Versions>::Base::VERSION,
-                0,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2728,7 +2703,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0
                 ),
                 parent_view: ViewNumber::new(10),
             },
@@ -2754,7 +2728,6 @@ mod test {
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
                 <TestVersions as Versions>::Base::VERSION,
-                0,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2807,7 +2780,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
         let mut state = GlobalState::<TestTypes>::new(
             bootstrap_sender,
@@ -2828,7 +2800,6 @@ mod test {
                 &[],
                 TEST_NUM_NODES_IN_VID_COMPUTATION,
                 <TestVersions as Versions>::Base::VERSION,
-                0,
             );
             let view = ViewNumber::new(i as u64);
 
@@ -2864,7 +2835,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0
                 ),
                 parent_view: ViewNumber::new(10),
             },
@@ -2901,7 +2871,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0,
                 ),
                 parent_view: ViewNumber::new(i as u64),
             };
@@ -2918,7 +2887,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0,
                 ),
                 parent_view: ViewNumber::new(i as u64),
             };
@@ -2952,7 +2920,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = ProxyGlobalState::<TestTypes>::new(
@@ -2982,7 +2949,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0,
                 ),
                 1,
                 leader_public_key,
@@ -3025,7 +2991,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = ProxyGlobalState::<TestTypes>::new(
@@ -3055,7 +3020,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0,
                 ),
                 1,
                 leader_public_key,
@@ -3098,7 +3062,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = ProxyGlobalState::<TestTypes>::new(
@@ -3128,7 +3091,6 @@ mod test {
                     &[],
                     TEST_NUM_NODES_IN_VID_COMPUTATION,
                     <TestVersions as Versions>::Base::VERSION,
-                    0,
                 ),
                 1,
                 leader_public_key,
@@ -3172,7 +3134,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -3249,7 +3210,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -3396,7 +3356,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -3550,7 +3509,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -3612,7 +3570,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -3667,7 +3624,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -3772,7 +3728,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -3835,7 +3790,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -3891,7 +3845,6 @@ mod test {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let state = Arc::new(ProxyGlobalState::<TestTypes>::new(
@@ -4560,7 +4513,6 @@ mod test {
                 &[],
                 8,
                 <TestVersions as Versions>::Base::VERSION,
-                0,
             ),
             parent_view: ViewNumber::genesis(),
         };

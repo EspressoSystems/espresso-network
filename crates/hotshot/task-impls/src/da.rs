@@ -187,7 +187,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                 let metadata = proposal.data.metadata.encode();
                 let metadata_clone = metadata.clone();
                 let payload_commitment = spawn_blocking(move || {
-                    vid_commitment::<V>(&txns, &metadata, total_weight, version, 0)
+                    vid_commitment::<V>(&txns, &metadata, total_weight, version)
                 })
                 .await;
                 let payload_commitment = payload_commitment.unwrap();
@@ -215,7 +215,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> DaTaskState<TYP
                             &metadata_clone,
                             next_epoch_total_weight,
                             version,
-                            0,
                         )
                     })
                     .await;

@@ -65,7 +65,6 @@ pub fn setup_builder_for_test() -> TestSetup {
         &[],
         TEST_NUM_NODES_IN_VID_COMPUTATION,
         <TestVersions as Versions>::Base::VERSION,
-        0,
     );
     let bootstrap_builder_state_id = BuilderStateId::<TestTypes> {
         parent_commitment,
@@ -305,7 +304,6 @@ async fn progress_round_with_transactions(
             &metadata.encode(),
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         );
 
         let (block_payload, metadata) =
@@ -399,7 +397,6 @@ async fn test_empty_block_rate() {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         ),
         parent_view: ViewNumber::genesis(),
     };
@@ -456,7 +453,6 @@ async fn test_eager_block_rate() {
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
             <TestVersions as Versions>::Base::VERSION,
-            0,
         ),
         parent_view: ViewNumber::genesis(),
     };

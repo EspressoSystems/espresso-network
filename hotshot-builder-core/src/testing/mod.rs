@@ -63,13 +63,8 @@ pub async fn create_builder_state<V: Versions>(
     let (tx_sender, tx_receiver) =
         broadcast::<Arc<ReceivedTransaction<TestTypes>>>(channel_capacity);
 
-    let genesis_vid_commitment = vid_commitment::<V>(
-        &[],
-        &[],
-        num_storage_nodes,
-        <V as Versions>::Base::VERSION,
-        0,
-    );
+    let genesis_vid_commitment =
+        vid_commitment::<V>(&[], &[], num_storage_nodes, <V as Versions>::Base::VERSION);
     let genesis_builder_commitment = BuilderCommitment::from_bytes([]);
 
     // instantiate the global state
@@ -137,7 +132,6 @@ pub async fn calc_proposal_msg<V: Versions>(
         &metadata.encode(),
         num_storage_nodes,
         <V as Versions>::Base::VERSION,
-        0,
     );
     let block_builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
