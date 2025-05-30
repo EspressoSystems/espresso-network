@@ -37,6 +37,7 @@ use hotshot_testing::{
     test_builder::BuilderChange,
 };
 use hotshot_types::{
+    data::EpochNumber,
     event::{Event, EventType},
     light_client::{StateKeyPair, StateVerKey},
     network::{Libp2pConfig, NetworkConfig},
@@ -515,6 +516,33 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             sleep(Duration::from_secs(1)).await;
         }
     }
+
+    /// Wait for the given Epoch.
+    async fn wait_for_epoch(&self, epoch: EpochNumber) {
+        let Some(context) = &self.context else {
+            tracing::info!("skipping progress check on stopped node");
+            return;
+        };
+
+        let node_id = context.node_id();
+        tracing::error!(node_id, "waiting for epoch: {:?}", epoch);
+        let mut events = context.event_stream().await;
+
+        let timeout_duration = Duration::from_secs(30);
+        timeout(timeout_duration, async {
+            while let Some(event) = events.next().await {
+                let EventType::Decide { qc, .. } = event.event else {
+                    continue;
+                };
+                tracing::error!(?qc);
+                if qc.data.epoch >= Some(epoch) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for epoch after restart");
+    }
 }
 
 #[derive(Derivative)]
@@ -749,6 +777,20 @@ impl TestNetwork {
         Ok(stake_table_address)
     }
 
+    async fn wait_for_epoch(&self, epoch: EpochNumber) {
+        join_all(
+            self.da_nodes
+                .iter()
+                .map(|node| node.wait_for_epoch(epoch))
+                .chain(
+                    self.regular_nodes
+                        .iter()
+                        .map(|node| node.wait_for_epoch(epoch)),
+                ),
+        )
+        .await;
+    }
+
     async fn check_progress(&self) {
         try_join_all(
             self.da_nodes
@@ -776,6 +818,7 @@ impl TestNetwork {
     async fn restart(&mut self, da_nodes: usize, regular_nodes: usize) {
         self.restart_helper(0..da_nodes, 0..regular_nodes, false)
             .await;
+        // self.wait_for_epoch(EpochNumber::new(3)).await;
         self.check_progress().await;
     }
 
