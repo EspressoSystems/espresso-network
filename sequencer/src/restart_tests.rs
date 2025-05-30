@@ -5,6 +5,7 @@ use std::{collections::HashSet, path::Path, str::FromStr, time::Duration};
 use alloy::{
     network::EthereumWallet,
     node_bindings::{Anvil, AnvilInstance},
+    primitives::Address,
     providers::ProviderBuilder,
     signers::local::LocalSigner,
 };
@@ -415,7 +416,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             // conservative: of course if we actually make progress, not every view will time out,
             // and we will take less than this amount of time.
             let timeout_duration =
-                2 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+                10 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -549,14 +550,11 @@ impl TestNetwork {
         let mut ports = PortPicker::default();
 
         let tmp = TempDir::new().unwrap();
-        let genesis_file = tmp.path().join("genesis.toml");
-        tracing::info!(?genesis_file, "genesis_file");
+        let genesis_file_path = tmp.path().join("genesis.toml");
+        tracing::info!(?genesis_file_path, "genesis_file");
 
-        let genesis = Genesis {
-            chain_config: ChainConfig {
-                base_fee: 0.into(),
-                ..Default::default()
-            },
+        let mut genesis = Genesis {
+            chain_config: Default::default(),
             // TODO we apparently have two `capacity` configurations
             stake_table: StakeTableConfig { capacity: 200 },
             l1_finalized: L1Finalized::Number { number: 0 },
@@ -573,7 +571,6 @@ impl TestNetwork {
                 .into_iter()
                 .collect(),
         };
-        genesis.to_file(&genesis_file).unwrap();
 
         let node_params = (0..da_nodes + regular_nodes)
             .map(|i| NodeParams::new(&mut ports, i as u64, i < da_nodes))
@@ -614,7 +611,7 @@ impl TestNetwork {
             .map(|node| node.api_port)
             .collect::<Vec<_>>();
         let network_params = NetworkParams {
-            genesis_file: &genesis_file,
+            genesis_file: &genesis_file_path,
             orchestrator_port,
             cdn_port,
             l1_provider: &anvil_endpoint,
@@ -640,7 +637,15 @@ impl TestNetwork {
             anvil,
         };
 
-        network.deploy(genesis).await.unwrap();
+        let address = network.deploy(&genesis).await.unwrap();
+
+        let chain_config = ChainConfig {
+            base_fee: 0.into(),
+            stake_table_contract: Some(address),
+            ..Default::default()
+        };
+        genesis.chain_config = chain_config;
+        genesis.to_file(&genesis_file_path).unwrap();
 
         join_all(
             network
@@ -654,7 +659,7 @@ impl TestNetwork {
         network
     }
 
-    async fn deploy(&self, genesis: Genesis) -> anyhow::Result<()> {
+    async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
         let stake_table_version = StakeTableContractVersion::V2;
         let delegation_config = DelegationConfig::EqualAmounts; // TODO configurable?
 
@@ -727,6 +732,9 @@ impl TestNetwork {
             .address(Contract::EspTokenProxy)
             .expect("EspTokenProxy address not found");
 
+        tracing::error!(?stake_table_address);
+        tracing::error!(?token_addr);
+
         setup_stake_table_contract_for_test(
             l1_url.clone(),
             &deployer,
@@ -738,7 +746,7 @@ impl TestNetwork {
         .await
         .expect("stake table setup failed");
 
-        Ok(())
+        Ok(stake_table_address)
     }
 
     async fn check_progress(&self) {
