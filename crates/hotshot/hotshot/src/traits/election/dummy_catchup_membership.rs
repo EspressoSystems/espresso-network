@@ -1,4 +1,4 @@
-use std::{collections::HashSet, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashSet, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Ok;
