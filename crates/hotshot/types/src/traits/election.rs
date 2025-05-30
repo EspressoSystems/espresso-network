@@ -141,7 +141,7 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     fn has_stake_table(&self, epoch: TYPES::Epoch) -> bool;
 
     /// Returns if the randomized stake table is available for the given epoch
-    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> bool;
+    fn has_randomized_stake_table(&self, epoch: TYPES::Epoch) -> anyhow::Result<bool>;
 
     /// Gets the validated block header and epoch number of the epoch root
     /// at the given block height
@@ -172,8 +172,9 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         &self,
         _epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> impl std::future::Future<Output = Option<Box<dyn FnOnce(&mut Self) + Send>>> + Send {
-        async { None }
+    ) -> impl std::future::Future<Output = anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>>>
+           + Send {
+        async { Ok(None) }
     }
 
     /// Called to notify the Membership when a new DRB result has been calculated.

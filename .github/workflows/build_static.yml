@@ -69,7 +69,7 @@ jobs:
       - name: Compile all executables
         # timeout-minutes: 120
         run: |
-          nix develop $DEVSHELL --accept-flake-config --option sandbox relaxed -c cargo build --locked --release 
+          nix develop $DEVSHELL --accept-flake-config --option sandbox relaxed -c cargo build --locked --release
           -c cargo build --locked --release --manifest-path ./sequencer-sqlite/Cargo.toml --target-dir 'echo $CARGO_TARGET_DIR'
 
       - name: Upload artifacts
