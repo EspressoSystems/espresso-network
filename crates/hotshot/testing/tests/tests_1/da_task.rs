@@ -52,7 +52,7 @@ async fn test_da_task() {
         &encoded_transactions,
         &[],
         num_storage_node,
-        default_version,
+        default_version, 
     );
 
     let mut generator =
@@ -170,7 +170,7 @@ async fn test_da_task_storage_failure() {
         &encoded_transactions,
         &[],
         num_storage_node,
-        default_version,
+        default_version, 
     );
 
     let mut generator =

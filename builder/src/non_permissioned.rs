@@ -81,6 +81,7 @@ pub fn build_instance_state<V: Versions>(
         peers,
         V::Base::version(),
         coordinator,
+        0,
     )
 }
 

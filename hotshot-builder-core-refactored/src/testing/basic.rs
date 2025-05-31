@@ -4,7 +4,7 @@ use async_broadcast::broadcast;
 use hotshot::types::{EventType, SignatureKey};
 use hotshot_builder_api::v0_1::data_source::BuilderDataSource;
 use hotshot_example_types::{
-    block_types::{TestBlockHeader, TestMetadata, TestTransaction},
+    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TestTypes, TestVersions},
     state_types::{TestInstanceState, TestValidatedState},
 };
@@ -14,7 +14,7 @@ use hotshot_types::{
     simple_certificate::QuorumCertificate2,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{ConsensusTime, NodeType, Versions},
     },
     utils::BuilderCommitment,
 };
@@ -27,6 +27,7 @@ use marketplace_builder_shared::{
 };
 use tokio::time::sleep;
 use tracing_test::traced_test;
+use vbs::version::StaticVersionType;
 
 use crate::{
     service::{BuilderConfig, GlobalState, ProxyGlobalState},
@@ -197,13 +198,13 @@ async fn test_pruning() {
         QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default()).await;
     let leaf = Leaf2::from_quorum_proposal(&QuorumProposalWrapper {
         proposal: QuorumProposal2 {
-            block_header: <TestBlockHeader as BlockHeader<TestTypes>>::genesis(
+            block_header: <TestBlockHeader as BlockHeader<TestTypes>>::genesis::<TestVersions>(
                 &Default::default(),
-                Default::default(),
-                BuilderCommitment::from_bytes([]),
-                TestMetadata {
+                TestBlockPayload::genesis(),
+                &TestMetadata {
                     num_transactions: 0,
                 },
+                <TestVersions as Versions>::Base::version(),
             ),
             view_number: ViewNumber::new(DECIDE_VIEW),
             justify_qc: mock_qc.clone(),
