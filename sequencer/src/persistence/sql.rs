@@ -2571,8 +2571,10 @@ mod test {
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
         traits::{
-            block_contents::BlockHeader, node_implementation::Versions,
-            signature_key::SignatureKey, EncodeBytes,
+            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
+            node_implementation::Versions,
+            signature_key::SignatureKey,
+            EncodeBytes,
         },
         utils::EpochTransitionIndicator,
         vid::{
@@ -3031,7 +3033,7 @@ mod test {
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<TestVersions>(
                 payload,
-                4,
+                GENESIS_VID_NUM_STORAGE_NODES,
                 <TestVersions as Versions>::Base::VERSION,
             )
             .unwrap();
@@ -3069,7 +3071,9 @@ mod test {
 
             tx.commit().await.unwrap();
 
-            let disperse = advz_scheme(4).disperse(payload_bytes.clone()).unwrap();
+            let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
+                .disperse(payload_bytes.clone())
+                .unwrap();
 
             let vid = ADVZDisperseShare::<SeqTypes> {
                 view_number: ViewNumber::new(i),

@@ -1900,7 +1900,10 @@ mod test {
         light_client::LightClientState,
         simple_certificate::QuorumCertificate,
         simple_vote::QuorumData,
-        traits::{node_implementation::Versions, EncodeBytes},
+        traits::{
+            block_contents::GENESIS_VID_NUM_STORAGE_NODES, node_implementation::Versions,
+            EncodeBytes,
+        },
         vid::advz::advz_scheme,
     };
     use jf_vid::VidScheme;
@@ -2110,7 +2113,7 @@ mod test {
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<TestVersions>(
                 payload,
-                4,
+                GENESIS_VID_NUM_STORAGE_NODES,
                 <TestVersions as Versions>::Base::VERSION,
             )
             .unwrap();
@@ -2155,7 +2158,9 @@ mod test {
                 .unwrap();
 
             drop(inner);
-            let disperse = advz_scheme(4).disperse(payload_bytes.clone()).unwrap();
+            let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
+                .disperse(payload_bytes.clone())
+                .unwrap();
 
             let vid = ADVZDisperseShare::<SeqTypes> {
                 view_number: ViewNumber::new(i),

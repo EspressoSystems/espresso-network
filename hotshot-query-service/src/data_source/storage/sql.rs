@@ -1368,7 +1368,7 @@ mod test {
         data::{QuorumProposal, ViewNumber},
         simple_vote::QuorumData,
         traits::{
-            block_contents::BlockHeader,
+            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
             node_implementation::{ConsensusTime, Versions},
             EncodeBytes,
         },
@@ -1823,7 +1823,7 @@ mod test {
             let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
             leaf.fill_block_payload::<MockVersions>(
                 payload.clone(),
-                4,
+                GENESIS_VID_NUM_STORAGE_NODES,
                 <MockVersions as Versions>::Base::VERSION,
             )
             .unwrap();
