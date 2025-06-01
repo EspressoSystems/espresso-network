@@ -1993,8 +1993,13 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         vm.stopPrank();
 
         vm.startPrank(pauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Paused(pauser);
         proxy.pause();
         assertTrue(proxy.paused());
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Unpaused(pauser);
         proxy.unpause();
         assertFalse(proxy.paused());
         vm.stopPrank();
@@ -2048,6 +2053,8 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         assertEq(majorVersion, 3);
 
         vm.startPrank(pauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Paused(pauser);
         proxy.pause();
         vm.stopPrank();
 
@@ -2081,6 +2088,8 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
 
         // unpause and see that the functions are callable
         vm.startPrank(pauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Unpaused(pauser);
         proxy.unpause();
         vm.stopPrank();
 
@@ -2118,6 +2127,8 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         assertEq(majorVersion, 3);
 
         vm.startPrank(pauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Paused(pauser);
         proxy.pause();
         vm.stopPrank();
 
