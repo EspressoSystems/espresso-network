@@ -534,7 +534,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         };
 
         let node_id = context.node_id();
-        tracing::error!(node_id, "waiting for epoch: {:?}", epoch);
+        tracing::info!(node_id, "waiting for epoch: {:?}", epoch);
         let mut events = context.event_stream().await;
 
         let timeout_duration = Duration::from_secs(30);
@@ -544,7 +544,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     continue;
                 };
                 if qc.data.epoch >= Some(epoch) {
-                    tracing::error!(node_id, "reached epoch: {:?}", epoch);
+                    tracing::info!(node_id, "reached epoch: {:?}", epoch);
                     break;
                 }
             }
@@ -711,7 +711,7 @@ impl TestNetwork {
             .await
             .unwrap();
 
-        tracing::error!(
+        tracing::info!(
             "latest block head: {}, latest finalized: {}",
             head.unwrap().header.number,
             finalized.unwrap().header.number
@@ -798,7 +798,7 @@ impl TestNetwork {
             .address(Contract::EspTokenProxy)
             .expect("EspTokenProxy address not found");
 
-        tracing::error!(?stake_table_address, ?token_addr);
+        tracing::info!(?stake_table_address, ?token_addr);
 
         setup_stake_table_contract_for_test(
             l1_url.clone(),
