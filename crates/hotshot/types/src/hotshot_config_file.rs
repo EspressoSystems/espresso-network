@@ -20,6 +20,11 @@ fn default_builder_urls() -> Vec1<Url> {
     vec1::vec1![Url::parse("http://0.0.0.0:3311").unwrap()]
 }
 
+/// Default DRB difficulty, set to 0 (intended to be overwritten)
+fn default_drb_difficulty() -> u64 {
+    0
+}
+
 /// Holds configuration for a `HotShot`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = ""))]
@@ -61,6 +66,9 @@ pub struct HotShotConfigFile<TYPES: NodeType> {
     /// Stake table capacity for light client use
     #[serde(default = "default_stake_table_capacity")]
     pub stake_table_capacity: usize,
+    #[serde(default = "default_drb_difficulty")]
+    /// number of iterations for DRB calculation
+    pub drb_difficulty: u64,
 }
 
 fn default_stake_table_capacity() -> usize {
@@ -95,6 +103,7 @@ impl<TYPES: NodeType> From<HotShotConfigFile<TYPES>> for HotShotConfig<TYPES> {
             epoch_height: val.epoch_height,
             epoch_start_block: val.epoch_start_block,
             stake_table_capacity: val.stake_table_capacity,
+            drb_difficulty: val.drb_difficulty,
         }
     }
 }
@@ -147,6 +156,7 @@ impl<TYPES: NodeType> HotShotConfigFile<TYPES> {
             epoch_height: 0,
             epoch_start_block: 0,
             stake_table_capacity: crate::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+            drb_difficulty: 10,
         }
     }
 }

@@ -17,7 +17,7 @@ use crate::{
     v0::impls::{NodeState, ValidatedState},
     v0_3::ChainConfig,
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
-    NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxProof,
+    NsTableBuilder, Payload, PayloadByteLen, SeqTypes, Transaction, TxIndex, TxProof,
 };
 
 #[derive(serde::Deserialize, serde::Serialize, Error, Debug, Eq, PartialEq)]
@@ -44,9 +44,10 @@ impl Payload {
     /// Like [`QueryablePayload::transaction_with_proof`] except without the
     /// proof.
     pub fn transaction(&self, index: &Index) -> Option<Transaction> {
-        let ns_id = self.ns_table.read_ns_id(index.ns())?;
-        let ns_payload = self.ns_payload(index.ns());
-        ns_payload.export_tx(&ns_id, index.tx())
+        let ns = NsIndex(index.namespace as usize);
+        let ns_id = self.ns_table.read_ns_id(&ns)?;
+        let ns_payload = self.ns_payload(&ns);
+        ns_payload.export_tx(&ns_id, &TxIndex(index.position as usize))
     }
 
     // CRATE-VISIBLE HELPERS START HERE
@@ -206,7 +207,6 @@ impl BlockPayload<SeqTypes> for Payload {
 impl QueryablePayload<SeqTypes> for Payload {
     // TODO changes to QueryablePayload trait:
     // https://github.com/EspressoSystems/hotshot-query-service/issues/639
-    type TransactionIndex = Index;
     type Iter<'a> = Iter<'a>;
     type InclusionProof = TxProof;
 
@@ -224,7 +224,7 @@ impl QueryablePayload<SeqTypes> for Payload {
     fn transaction_with_proof(
         &self,
         _meta: &Self::Metadata,
-        index: &Self::TransactionIndex,
+        index: &Index,
     ) -> Option<(Self::Transaction, Self::InclusionProof)> {
         // TODO HACK! THE RETURNED PROOF MIGHT FAIL VERIFICATION.
         // https://github.com/EspressoSystems/hotshot-query-service/issues/639
@@ -240,11 +240,7 @@ impl QueryablePayload<SeqTypes> for Payload {
         TxProof::new(index, self, &common)
     }
 
-    fn transaction(
-        &self,
-        _meta: &Self::Metadata,
-        index: &Self::TransactionIndex,
-    ) -> Option<Self::Transaction> {
+    fn transaction(&self, _meta: &Self::Metadata, index: &Index) -> Option<Self::Transaction> {
         self.transaction(index)
     }
 }
