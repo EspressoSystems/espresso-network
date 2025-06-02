@@ -1014,7 +1014,7 @@ impl Fetcher {
         address_bytes[12..].copy_from_slice(Address::ZERO.as_slice());
         let topic1 = FixedBytes::<32>::from_slice(&address_bytes);
 
-        let mut from_block = stake_table_init_block - 5000u64;
+        let mut from_block = stake_table_init_block.saturating_sub(5000u64);
         let transfers = loop {
             let transfers = token
                 .Transfer_filter()
@@ -1029,8 +1029,7 @@ impl Fetcher {
             }
 
             // If no transfers found, go further back by 5000 blocks.
-
-            from_block -= 5000u64;
+            from_block = from_block.saturating_sub(5000u64);
             continue;
         };
 
