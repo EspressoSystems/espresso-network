@@ -1,5 +1,5 @@
 import { decodeFunctionCall } from "../safeSDK/decodeFunctionData";
-import { ethers } from "ethers";
+import { Interface } from "ethers";
 
 const abi = [
   {
@@ -13,7 +13,7 @@ const abi = [
 
 describe("decodeFunctionCall", () => {
   it("decodes updateEpochStartBlock(uint64) correctly", () => {
-    const iface = new ethers.Interface(abi);
+    const iface = new Interface(abi);
     const encodedData = iface.encodeFunctionData("updateEpochStartBlock", [3160636]);
 
     const decoded = decodeFunctionCall(abi, encodedData);
