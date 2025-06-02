@@ -55,8 +55,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
 
-      - name: Install JS deps
-        run: npm install --prefix ./scripts/multisigTransactionProposals/safeSDK
+      - name: Install Node.js dependencies
+        run: npm install
 
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
@@ -101,9 +101,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
 
-      - name: Install JS deps
-        run: npm install --prefix ./scripts/multisigTransactionProposals/safeSDK
-
+     - name: Install Node.js dependencies
+        run: npm install
+        
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
         run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
