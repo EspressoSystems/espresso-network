@@ -52,6 +52,12 @@ jobs:
         with:
           comment_on_pr: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+
+      - name: Install JS deps
+        run: npm install --prefix ./scripts/multisigTransactionProposals/safeSDK
+
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
         run: cargo nextest archive --locked --workspace --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
@@ -91,6 +97,12 @@ jobs:
         uses: catchpoint/workflow-telemetry-action@v2
         with:
           comment_on_pr: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+
+      - name: Install JS deps
+        run: npm install --prefix ./scripts/multisigTransactionProposals/safeSDK
 
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
