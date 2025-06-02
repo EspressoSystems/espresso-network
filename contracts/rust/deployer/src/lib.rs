@@ -536,145 +536,122 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         tracing::warn!("Dry run not specified, defaulting to false");
         false
     });
-    if dry_run {
-        tracing::info!("Dry run mode enabled (uses dummy data)");
-        let result = call_upgrade_proxy_script(
-            Address::random(),
-            Address::random(),
-            "0x".to_string(),
-            params.rpc_url,
-            Address::random(),
-            Some(dry_run),
-        )
-        .await;
-        // Check the result directly
-        if let Err(ref err) = result {
-            tracing::error!("LightClientProxy upgrade failed in dry run: {:?}", err);
-        } else {
-            tracing::info!("LightClientProxy upgrade proposal sent in dry run");
-            // IDEA: add a function to wait for the proposal to be executed
-        }
-
-        match result {
-            Ok(r) => Ok(r),
-            Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
-        }
-    } else {
-        tracing::info!("Real run mode enabled");
-        match contracts.address(Contract::LightClientProxy) {
-            // check if proxy already exists
-            None => Err(anyhow!(
-                "LightClientProxy (multisig owner) not found, can't upgrade"
-            )),
-            Some(proxy_addr) => {
-                tracing::info!("LightClientProxy found at {proxy_addr:#x}");
-                let proxy = LightClient::new(proxy_addr, &provider);
-                let owner = proxy.owner().call().await?;
-                let owner_addr = owner._0;
+    match contracts.address(Contract::LightClientProxy) {
+        // check if proxy already exists
+        None => Err(anyhow!(
+            "LightClientProxy (multisig owner) not found, can't upgrade"
+        )),
+        Some(proxy_addr) => {
+            tracing::info!("LightClientProxy found at {proxy_addr:#x}");
+            let proxy = LightClient::new(proxy_addr, &provider);
+            let owner = proxy.owner().call().await?;
+            let owner_addr = owner._0;
+            if !dry_run {
+                tracing::info!("Checking if owner is a contract");
                 assert!(
                     is_contract(&provider, owner_addr).await?,
                     "Owner is not a contract so not a multisig wallet"
                 );
-
-                // first deploy PlonkVerifierV2.sol (if not already deployed)
-                let pv2_addr = contracts
-                    .deploy(
-                        Contract::PlonkVerifierV2,
-                        PlonkVerifierV2::deploy_builder(&provider),
-                    )
-                    .await?;
-                // then deploy LightClientV2.sol
-                let target_lcv2_bytecode = if params.is_mock {
-                    LightClientV2Mock::BYTECODE.encode_hex()
-                } else {
-                    LightClientV2::BYTECODE.encode_hex()
-                };
-                let lcv2_linked_bytecode = {
-                    match target_lcv2_bytecode
-                        .matches(LIBRARY_PLACEHOLDER_ADDRESS)
-                        .count()
-                    {
-                        0 => return Err(anyhow!("lib placeholder not found")),
-                        1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
-                            LIBRARY_PLACEHOLDER_ADDRESS,
-                            &pv2_addr.encode_hex(),
-                            1,
-                        ))?,
-                        _ => {
-                            return Err(anyhow!(
+            }
+            // first deploy PlonkVerifierV2.sol (if not already deployed)
+            let pv2_addr = contracts
+                .deploy(
+                    Contract::PlonkVerifierV2,
+                    PlonkVerifierV2::deploy_builder(&provider),
+                )
+                .await?;
+            // then deploy LightClientV2.sol
+            let target_lcv2_bytecode = if params.is_mock {
+                LightClientV2Mock::BYTECODE.encode_hex()
+            } else {
+                LightClientV2::BYTECODE.encode_hex()
+            };
+            let lcv2_linked_bytecode = {
+                match target_lcv2_bytecode
+                    .matches(LIBRARY_PLACEHOLDER_ADDRESS)
+                    .count()
+                {
+                    0 => return Err(anyhow!("lib placeholder not found")),
+                    1 => Bytes::from_hex(target_lcv2_bytecode.replacen(
+                        LIBRARY_PLACEHOLDER_ADDRESS,
+                        &pv2_addr.encode_hex(),
+                        1,
+                    ))?,
+                    _ => {
+                        return Err(anyhow!(
                             "more than one lib placeholder found, consider using a different value"
                         ))
-                        },
-                    }
-                };
-                let lcv2_addr = if params.is_mock {
-                    let addr = LightClientV2Mock::deploy_builder(&provider)
-                        .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
-                        .deploy()
-                        .await?;
-                    tracing::info!("deployed LightClientV2Mock at {addr:#x}");
-                    addr
-                } else {
-                    contracts
-                        .deploy(
-                            Contract::LightClientV2,
-                            LightClientV2::deploy_builder(&provider)
-                                .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
-                        )
-                        .await?
-                };
-
-                // get initialized version number from proxy
-                let proxy_addr = contracts.address(Contract::LightClientProxy).unwrap();
-                let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
-                tracing::info!("Initialized version: {}", initialized);
-
-                // get contract version from proxy
-                let lcv2_proxy = LightClientV2::new(proxy_addr, &provider);
-                let lcv2_version = lcv2_proxy.getVersion().call().await?;
-
-                // only set the init data if the proxy was not initialized (when initialized the version number is the same as the contract version number)
-                let init_data = if initialized == lcv2_version.majorVersion
-                    && lcv2_version.majorVersion >= 1
-                {
-                    tracing::info!("Proxy was already initialized");
-                    vec![].into()
-                } else {
-                    tracing::info!("Proxy was not initialized");
-                    tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
-                    LightClientV2::new(lcv2_addr, &provider)
-                        .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
-                        .calldata()
-                        .to_owned()
-                };
-
-                // invoke upgrade on proxy via the safeSDK
-                let result = call_upgrade_proxy_script(
-                    proxy_addr,
-                    lcv2_addr,
-                    init_data.to_string(),
-                    params.rpc_url,
-                    owner_addr,
-                    Some(dry_run),
-                )
-                .await;
-
-                // Check the result directly
-                if let Err(ref err) = result {
-                    tracing::error!("LightClientProxy upgrade failed: {:?}", err);
-                } else {
-                    tracing::info!("LightClientProxy upgrade proposal sent");
-                    tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", owner_addr);
-                    // IDEA: add a function to wait for the proposal to be executed
+                    },
                 }
+            };
+            let lcv2_addr = if params.is_mock {
+                let addr = LightClientV2Mock::deploy_builder(&provider)
+                    .map(|req| req.with_deploy_code(lcv2_linked_bytecode))
+                    .deploy()
+                    .await?;
+                tracing::info!("deployed LightClientV2Mock at {addr:#x}");
+                addr
+            } else {
+                contracts
+                    .deploy(
+                        Contract::LightClientV2,
+                        LightClientV2::deploy_builder(&provider)
+                            .map(|req| req.with_deploy_code(lcv2_linked_bytecode)),
+                    )
+                    .await?
+            };
 
-                match result {
-                    Ok(r) => Ok(r),
-                    Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
-                }
-            },
-        }
+            // get initialized version number from proxy
+            let proxy_addr = contracts.address(Contract::LightClientProxy).unwrap();
+            let initialized = get_proxy_initialized_version(&provider, proxy_addr).await?;
+            tracing::info!("Initialized version: {}", initialized);
+
+            // get contract version from proxy
+            let lcv2_proxy = LightClientV2::new(proxy_addr, &provider);
+            let lcv2_version = lcv2_proxy.getVersion().call().await?;
+
+            // only set the init data if the proxy was not initialized (when initialized the version number is the same as the contract version number)
+            let init_data = if initialized == lcv2_version.majorVersion
+                && lcv2_version.majorVersion >= 1
+            {
+                tracing::info!("Proxy was already initialized");
+                vec![].into()
+            } else {
+                tracing::info!("Proxy was not initialized");
+                tracing::info!("Init Data to be signed.\n Function: initializeV2\n Arguments:\n blocks_per_epoch: {:?}\n epoch_start_block: {:?}", params.blocks_per_epoch, params.epoch_start_block);
+                LightClientV2::new(lcv2_addr, &provider)
+                    .initializeV2(params.blocks_per_epoch, params.epoch_start_block)
+                    .calldata()
+                    .to_owned()
+            };
+
+            // invoke upgrade on proxy via the safeSDK
+            let result = call_upgrade_proxy_script(
+                proxy_addr,
+                lcv2_addr,
+                init_data.to_string(),
+                params.rpc_url,
+                owner_addr,
+                Some(dry_run),
+            )
+            .await;
+
+            // Check the result directly
+            if let Err(ref err) = result {
+                tracing::error!("LightClientProxy upgrade failed: {:?}", err);
+            } else {
+                tracing::info!("LightClientProxy upgrade proposal sent");
+                tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", owner_addr);
+                // IDEA: add a function to wait for the proposal to be executed
+            }
+
+            match result {
+                Ok(r) => Ok(r),
+                Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
+            }
+        },
     }
+    // }
 }
 
 /// The primary logic for deploying and initializing an upgradable fee contract.
@@ -1067,7 +1044,10 @@ pub async fn deploy_timelock(
 
 #[cfg(test)]
 mod tests {
-    use alloy::{primitives::utils::parse_ether, providers::ProviderBuilder, sol_types::SolValue};
+    use alloy::{
+        node_bindings::Anvil, primitives::utils::parse_ether, providers::ProviderBuilder,
+        sol_types::SolValue,
+    };
     use sequencer_utils::test_utils::setup_test;
 
     use super::*;
@@ -1364,7 +1344,6 @@ mod tests {
     // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
     // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
     // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
-    #[cfg(feature = "safesdk")]
     async fn test_upgrade_light_client_to_v2_multisig_owner_helper(
         is_mock: bool,
         dry_run: bool,
@@ -1375,6 +1354,10 @@ mod tests {
         );
         let mut sepolia_rpc_url = "http://localhost:8545".to_string();
         let mut multisig_admin = Address::random();
+        let mut mnemonic =
+            "test test test test test test test test test test test junk".to_string();
+        let mut account_index = 0;
+        let anvil = Anvil::default().spawn();
         if !dry_run {
             dotenvy::from_filename_override(".env.deployer.rs.test").ok();
 
@@ -1382,27 +1365,46 @@ mod tests {
                 .expect("Failed to read .env.deployer.rs.test")
             {
                 let (key, val) = item?;
-                if key == "RPC_URL" {
+                if key == "ESPRESSO_SEQUENCER_L1_PROVIDER" {
                     sepolia_rpc_url = val.to_string();
-                } else if key == "SAFE_MULTISIG_ADDRESS" {
+                } else if key == "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS" {
                     multisig_admin = val.parse::<Address>()?;
+                } else if key == "ESPRESSO_SEQUENCER_ETH_MNEMONIC" {
+                    mnemonic = val.to_string();
+                } else if key == "ESPRESSO_DEPLOYER_ACCOUNT_INDEX" {
+                    account_index = val.parse::<u32>()?;
                 }
             }
 
             if sepolia_rpc_url.is_empty() || multisig_admin.is_zero() {
-                panic!("RPC_URL and SAFE_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
+                panic!("ESPRESSO_SEQUENCER_L1_PROVIDER and ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS must be set in .env.deployer.rs.test");
             }
         }
 
-        let provider = ProviderBuilder::new().on_anvil_with_wallet();
         let mut contracts = Contracts::new();
         let blocks_per_epoch = 10; // for test
         let epoch_start_block = 22;
+        let admin_signer = MnemonicBuilder::<English>::default()
+            .phrase(mnemonic)
+            .index(account_index)
+            .expect("wrong mnemonic or index")
+            .build()?;
+        let admin = admin_signer.address();
+        let provider = if !dry_run {
+            ProviderBuilder::new()
+                .wallet(admin_signer)
+                .connect(&sepolia_rpc_url)
+                .await?
+        } else {
+            ProviderBuilder::new()
+                .wallet(admin_signer)
+                .connect(&anvil.endpoint())
+                .await?
+        };
 
         // prepare `initialize()` input
         let genesis_state = LightClientStateSol::dummy_genesis();
         let genesis_stake = StakeTableStateSol::dummy_genesis();
-        let admin = provider.get_accounts().await?[0];
 
         let prover = Address::random();
 
@@ -1452,13 +1454,11 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "safesdk")]
     #[tokio::test]
     async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
         test_upgrade_light_client_to_v2_multisig_owner_helper(false, true).await
     }
 
-    #[cfg(feature = "safesdk")]
     #[tokio::test]
     #[ignore]
     async fn test_upgrade_light_client_to_v2_multisig_owner_real_run() -> Result<()> {
