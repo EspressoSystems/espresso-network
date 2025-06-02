@@ -65,6 +65,7 @@ function processCommandLineArguments(): UpgradeData {
     throw new Error(`Only ${UPGRADE_PROXY_CMD} command is supported.`);
   }
   const proxyAddress = args[1];
+  validateEthereumAddress(proxyAddress);
   const implementationAddress = args[2];
   validateEthereumAddress(implementationAddress);
   const initData = args[3];
