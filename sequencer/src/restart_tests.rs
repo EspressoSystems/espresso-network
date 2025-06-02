@@ -602,7 +602,9 @@ impl TestNetwork {
         let mut genesis = Genesis {
             chain_config: Default::default(),
             // TODO we apparently have two `capacity` configurations
-            stake_table: StakeTableConfig { capacity: 200 },
+            stake_table: StakeTableConfig {
+                capacity: STAKE_TABLE_CAPACITY_FOR_TEST,
+            },
             l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
             upgrades: Default::default(),
@@ -612,7 +614,7 @@ impl TestNetwork {
             drb_difficulty: None,
             epoch_start_block: Some(1),
             // TODO we apparently have two `capacity` configurations
-            stake_table_capacity: Some(200),
+            stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
