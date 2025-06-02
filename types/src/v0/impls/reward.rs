@@ -1,19 +1,15 @@
 use std::{collections::HashSet, iter::once, str::FromStr};
 
-use alloy::{
-    eips::BlockId,
-    primitives::{
-        utils::{format_ether, parse_units, ParseUnits},
-        Address, FixedBytes, U256,
-    },
+use alloy::primitives::{
+    utils::{parse_units, ParseUnits},
+    Address, U256,
 };
-use anyhow::{anyhow, bail, ensure, Context};
+use anyhow::{bail, ensure, Context};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
@@ -37,11 +33,7 @@ use super::{
     v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
 };
-use crate::{
-    eth_signature_key::EthKeyPair,
-    v0_1::{BLOCKS_PER_YEAR, INFLATION_RATE},
-    Delta, FeeAccount, L1Client,
-};
+use crate::{eth_signature_key::EthKeyPair, Delta, FeeAccount};
 
 impl Committable for RewardInfo {
     fn commit(&self) -> Commitment<Self> {
@@ -576,83 +568,6 @@ pub async fn find_validator_info(
         }
     }
     Ok(validator)
-}
-
-// This function is used to calculate the reward for a block
-// It fetches the initial supply from the token contract
-pub async fn fetch_block_reward(
-    l1_client: L1Client,
-    stake_table_contract: Option<Address>,
-) -> anyhow::Result<RewardAmount> {
-    let Some(stake_table_contract) = stake_table_contract else {
-        tracing::warn!("stake table contract address not found!");
-        return Ok(RewardAmount(U256::ZERO));
-    };
-
-    let provider = l1_client.provider;
-    let stake_table = StakeTableV2::new(stake_table_contract, provider.clone());
-    let stake_table_init_block = stake_table
-        .initializedAtBlock()
-        .call()
-        .await?
-        ._0
-        .to::<u64>();
-
-    let token_address = stake_table
-        .token()
-        .block(BlockId::finalized())
-        .call()
-        .await
-        .context("Failed to get token address")?
-        ._0;
-
-    // In the transfer event, the token1 represents the address of the sender
-    // here the sender is the zero address as the tokens were minted
-    let token = EspToken::new(token_address, provider.clone());
-    let mut address_bytes = [0u8; 32];
-    address_bytes[12..].copy_from_slice(Address::ZERO.as_slice());
-    let topic1 = FixedBytes::<32>::from_slice(&address_bytes);
-
-    let mut from_block = stake_table_init_block - 5000u64;
-    let transfers = loop {
-        let transfers = token
-            .Transfer_filter()
-            .from_block(from_block)
-            .to_block(stake_table_init_block)
-            .topic1(topic1)
-            .query()
-            .await?;
-
-        if !transfers.is_empty() {
-            break transfers;
-        }
-
-        // If no transfers found, go further back by 5000 blocks.
-
-        from_block = from_block - 5000u64;
-        continue;
-    };
-
-    // Take the first transfer log from zero address
-
-    let (mint_transfer_log, _log) = transfers[0].clone();
-
-    ensure!(
-        mint_transfer_log.from == Address::ZERO,
-        "The first token transfer should from the zero address"
-    );
-
-    tracing::info!(
-        "Initial token amount: {} ESP",
-        format_ether(mint_transfer_log.value)
-    );
-
-    let supply = mint_transfer_log.value;
-    ((supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
-        .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-        .ok_or_else(|| anyhow!("COMMISSION_BASIS_POINTS is zero"))?;
-
-    Ok(RewardAmount(supply))
 }
 
 #[cfg(test)]

@@ -67,6 +67,18 @@ pub struct Genesis {
 }
 
 impl Genesis {
+    pub fn latest_chain_config(&self) -> ChainConfig {
+        let mut latest = self.chain_config.clone();
+
+        for upgrade in self.upgrades.values() {
+            if let Some(cf) = upgrade.upgrade_type.chain_config() {
+                latest = cf;
+            }
+        }
+
+        latest
+    }
+
     pub fn max_base_fee(&self) -> FeeAmount {
         let mut base_fee = self.chain_config.base_fee;
 

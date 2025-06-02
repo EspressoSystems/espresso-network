@@ -1177,7 +1177,7 @@ impl EpochCommittees {
     /// to be called before calling `self.stake()` so that
     /// `Self.stake_table` only needs to be updated once in a given
     /// life-cycle but may be read from many times.
-    fn update_stake_table(
+    fn update(
         &mut self,
         epoch: EpochNumber,
         validators: IndexMap<Address, Validator<BLSPubKey>>,
@@ -1363,7 +1363,7 @@ impl EpochCommittees {
         };
 
         for (epoch, stake_table) in loaded_stake {
-            self.update_stake_table(epoch, stake_table, None);
+            self.update(epoch, stake_table, None);
         }
     }
 
@@ -1628,7 +1628,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         Ok(Some(Box::new(move |committee: &mut Self| {
-            committee.update_stake_table(epoch, stake_tables, block_reward);
+            committee.update(epoch, stake_tables, block_reward);
         })))
     }
 
