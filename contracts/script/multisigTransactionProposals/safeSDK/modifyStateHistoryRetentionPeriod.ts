@@ -63,10 +63,10 @@ export async function proposeSetStateHistoryRetentionTransaction(
   stateHistoryRetentionPeriod: number,
 ) {
   // Define the ABI of the function to be called
-  const abi = ["function setstateHistoryRetentionPeriod(uint32)"];
+  const abi = ["function setStateHistoryRetentionPeriod(uint32)"];
 
   // Encode the function call with the provided stateHistoryRetentionPeriod
-  const data = new ethers.Interface(abi).encodeFunctionData("setstateHistoryRetentionPeriod", [
+  const data = new ethers.Interface(abi).encodeFunctionData("setStateHistoryRetentionPeriod", [
     stateHistoryRetentionPeriod,
   ]);
 
