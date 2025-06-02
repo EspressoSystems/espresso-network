@@ -4,6 +4,10 @@ pragma solidity ^0.8.0;
 import { OwnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { PausableUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import { AccessControlUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import { StakeTable } from "./StakeTable.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
@@ -29,7 +33,9 @@ import { BLSSig } from "./libraries/BLSSig.sol";
 ///
 /// @notice The StakeTableV2 contract ABI is a superset of the original ABI. Consumers of the
 /// contract can use the V2 ABI, even if they would like to maintain backwards compatibility.
-contract StakeTableV2 is StakeTable {
+contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeable {
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
     // === Events ===
 
     /// @notice A validator is registered in the stake table
@@ -68,6 +74,13 @@ contract StakeTableV2 is StakeTable {
         _disableInitializers();
     }
 
+    function initializeV2(address pauser, address admin) public reinitializer(2) {
+        __AccessControl_init();
+
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(PAUSER_ROLE, pauser);
+    }
+
     function getVersion()
         public
         pure
@@ -76,6 +89,34 @@ contract StakeTableV2 is StakeTable {
         returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion)
     {
         return (2, 0, 0);
+    }
+
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
+    }
+
+    function claimValidatorExit(address validator) public virtual override whenNotPaused {
+        super.claimValidatorExit(validator);
+    }
+
+    function claimWithdrawal(address validator) public virtual override whenNotPaused {
+        super.claimWithdrawal(validator);
+    }
+
+    function delegate(address validator, uint256 amount) public virtual override whenNotPaused {
+        super.delegate(validator, amount);
+    }
+
+    function undelegate(address validator, uint256 amount) public virtual override whenNotPaused {
+        super.undelegate(validator, amount);
+    }
+
+    function deregisterValidator() public virtual override whenNotPaused {
+        super.deregisterValidator();
     }
 
     /// @notice Register a validator in the stake table
@@ -124,7 +165,7 @@ contract StakeTableV2 is StakeTable {
         EdOnBN254.EdOnBN254Point memory schnorrVK,
         BN254.G1Point memory blsSig,
         bytes memory schnorrSig
-    ) public virtual {
+    ) public virtual whenNotPaused {
         address validator = msg.sender;
 
         ensureValidatorActive(validator);

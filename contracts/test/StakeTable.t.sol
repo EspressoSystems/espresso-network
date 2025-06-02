@@ -36,7 +36,6 @@ import { EspToken } from "../src/EspToken.sol";
 // Target contracts
 import { StakeTable as S } from "../src/StakeTable.sol";
 import { StakeTableV2 } from "../src/StakeTableV2.sol";
-import { StakeTableV3 } from "../src/StakeTableV3.sol";
 
 contract StakeTable_register_Test is LightClientCommonTest {
     S public stakeTable;
@@ -1265,12 +1264,12 @@ contract StakeTableUpgradeV2Test is Test {
         stakeTableRegisterTest.setUp();
     }
 
-    function test_UpgradeToV2Succeeds() public {
-        (uint8 majorVersion,,) = S(stakeTableRegisterTest.stakeTable()).getVersion();
+    function test_UpgradeToV2Test_Succeeds() public {
+        (uint8 majorVersion,,) = S(address(stakeTableRegisterTest.proxy())).getVersion();
         assertEq(majorVersion, 1);
 
         vm.startPrank(stakeTableRegisterTest.admin());
-        address proxy = address(stakeTableRegisterTest.stakeTable());
+        address proxy = address(stakeTableRegisterTest.proxy());
         S(proxy).upgradeToAndCall(address(new StakeTableV2Test()), "");
 
         (uint8 majorVersionNew,,) = StakeTableV2Test(proxy).getVersion();
@@ -1841,9 +1840,9 @@ contract StakeTableTimelockTest is Test {
     }
 }
 
-contract StakeTableV3Test is StakeTableUpgradeV2Test {
+contract StakeTableV2PausableTest is StakeTableUpgradeV2Test {
     S public stakeTable;
-    address public pauser;
+    address public pauser = makeAddr("pauser");
 
     function setUp() public override {
         super.setUp();
@@ -1854,56 +1853,42 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         assertEq(patchVersion, 0);
     }
 
-    function test_UpgradeToV3Succeeds() public {
-        super.test_UpgradeToV2Succeeds();
-        address proxyAddress = address(stakeTableRegisterTest.proxy());
-        StakeTableV2 proxy = StakeTableV2(proxyAddress);
-
-        (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion) = proxy.getVersion();
-        assertEq(majorVersion, 2);
-        assertEq(minorVersion, 0);
-        assertEq(patchVersion, 0);
+    function test_UpgradeToV2_Succeeds() public {
+        (uint8 majorVersion,,) = S(address(stakeTableRegisterTest.proxy())).getVersion();
+        assertEq(majorVersion, 1);
 
         vm.startPrank(stakeTableRegisterTest.admin());
+        S proxy = S(address(stakeTableRegisterTest.proxy()));
         address admin = proxy.owner();
-        pauser = makeAddr("pauser");
         bytes memory initData =
-            abi.encodeWithSelector(StakeTableV3.initializeV3.selector, pauser, admin);
-        proxy.upgradeToAndCall(address(new StakeTableV3()), initData);
+            abi.encodeWithSelector(StakeTableV2.initializeV2.selector, pauser, admin);
+        proxy.upgradeToAndCall(address(new StakeTableV2()), initData);
 
-        StakeTableV3 proxyV3 = StakeTableV3(address(proxy));
+        (uint8 majorVersionNew,,) = StakeTableV2(address(proxy)).getVersion();
+        assertEq(majorVersionNew, 2);
 
-        (uint8 majorVersionNew,,) = proxyV3.getVersion();
-        assertEq(majorVersionNew, 3);
         assertNotEq(majorVersion, majorVersionNew);
-
-        assertEq(proxyV3.owner(), admin);
-        assertEq(proxyV3.hasRole(proxyV3.PAUSER_ROLE(), pauser), true);
-        assertEq(proxyV3.hasRole(proxyV3.DEFAULT_ADMIN_ROLE(), admin), true);
-
         vm.stopPrank();
     }
 
-    function test_InitializeFunction_IsProtected_InV3() public {
-        test_UpgradeToV3Succeeds();
+    function test_InitializeFunction_IsProtected_InV2() public {
+        test_UpgradeToV2_Succeeds();
         address proxyAddress = address(stakeTableRegisterTest.proxy());
-        StakeTableV3 stakeTableV3 = StakeTableV3(proxyAddress);
-        (uint8 majorVersionNew,,) = stakeTableV3.getVersion();
-        assertEq(majorVersionNew, 3);
+        StakeTableV2 stakeTableV2 = StakeTableV2(proxyAddress);
+        (uint8 majorVersionNew,,) = stakeTableV2.getVersion();
+        assertEq(majorVersionNew, 2);
 
-        vm.expectRevert(Initializable.InvalidInitialization.selector);
-        stakeTableV3.initialize(address(0), address(0), 0, address(0));
-
-        vm.expectRevert(Initializable.InvalidInitialization.selector);
-        stakeTableV3.initializeV3(address(0), address(0));
+        address admin = stakeTableV2.owner();
+        vm.expectRevert();
+        stakeTableV2.initializeV2(pauser, admin);
     }
 
-    function test_StorageLayout_IsCompatible_V1V3() public {
+    function test_StorageLayout_IsCompatible_V1V2() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
         cmds[1] = "contracts/test/script/compare-storage-layout.js";
         cmds[2] = "StakeTable";
-        cmds[3] = "StakeTableV3";
+        cmds[3] = "StakeTableV2";
 
         bytes memory output = vm.ffi(cmds);
         string memory result = string(output);
@@ -1911,24 +1896,11 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         assertEq(result, "true");
     }
 
-    function test_StorageLayout_IsCompatible_V2V3() public {
+    function test_StorageLayout_IsIncompatibleIfFieldIsMissingV2() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
         cmds[1] = "contracts/test/script/compare-storage-layout.js";
         cmds[2] = "StakeTableV2";
-        cmds[3] = "StakeTableV3";
-
-        bytes memory output = vm.ffi(cmds);
-        string memory result = string(output);
-
-        assertEq(result, "true");
-    }
-
-    function test_StorageLayout_IsIncompatibleIfFieldIsMissingV3() public {
-        string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout.js";
-        cmds[2] = "StakeTableV3";
         cmds[3] = "StakeTableMissingFieldTest";
 
         bytes memory output = vm.ffi(cmds);
@@ -1937,11 +1909,11 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         assertEq(result, "false");
     }
 
-    function test_StorageLayout_IsIncompatibleIfFieldsAreReorderedV3() public {
+    function test_StorageLayout_IsIncompatibleIfFieldsAreReorderedV2() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
         cmds[1] = "contracts/test/script/compare-storage-layout.js";
-        cmds[2] = "StakeTableV3";
+        cmds[2] = "StakeTableV2";
         cmds[3] = "StakeTableFieldsReorderedTest";
 
         bytes memory output = vm.ffi(cmds);
@@ -1950,11 +1922,11 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         assertEq(result, "false");
     }
 
-    function test_StorageLayout_IsIncompatibleBetweenDiffContractsV3() public {
+    function test_StorageLayout_IsIncompatibleBetweenDiffContractsV2() public {
         string[] memory cmds = new string[](4);
         cmds[0] = "node";
         cmds[1] = "contracts/test/script/compare-storage-layout.js";
-        cmds[2] = "StakeTableV3";
+        cmds[2] = "StakeTableV2";
         cmds[3] = "LightClient";
 
         bytes memory output = vm.ffi(cmds);
@@ -1963,16 +1935,16 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         assertEq(result, "false");
     }
 
-    function test_RevertWhen_DeprecatedFunctionsAreCalledV3() public {
+    function test_RevertWhen_DeprecatedFunctionsAreCalledV2() public {
         vm.startPrank(stakeTableRegisterTest.admin());
         address proxyAddress = address(stakeTableRegisterTest.proxy());
 
-        StakeTableV3 newImpl = new StakeTableV3();
+        StakeTableV2 newImpl = new StakeTableV2();
         bytes memory initData = "";
         S(proxyAddress).upgradeToAndCall(address(newImpl), initData);
         vm.stopPrank();
 
-        StakeTableV3 proxy = StakeTableV3(proxyAddress);
+        StakeTableV2 proxy = StakeTableV2(proxyAddress);
 
         vm.expectRevert(StakeTableV2.DeprecatedFunction.selector);
         proxy.registerValidator(BN254.P2(), EdOnBN254.EdOnBN254Point(0, 0), BN254.P1(), 0);
@@ -1983,14 +1955,12 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
 
     // pausability tests
     function test_addingPauserAndPausingContractSucceeds() public {
-        test_UpgradeToV3Succeeds();
-        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        test_UpgradeToV2_Succeeds();
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
         (uint8 majorVersion,,) = proxy.getVersion();
-        assertEq(majorVersion, 3);
+        assertEq(majorVersion, 2);
 
-        vm.startPrank(proxy.owner());
-        proxy.grantRole(proxy.PAUSER_ROLE(), pauser);
-        vm.stopPrank();
+        assertEq(proxy.hasRole(proxy.PAUSER_ROLE(), pauser), true);
 
         vm.startPrank(pauser);
         vm.expectEmit(false, false, false, true, address(stakeTable));
@@ -2003,13 +1973,31 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
         proxy.unpause();
         assertFalse(proxy.paused());
         vm.stopPrank();
+
+        address admin = proxy.owner();
+        address newPauser = makeAddr("newPauser");
+        vm.startPrank(admin);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit IAccessControl.RoleGranted(proxy.PAUSER_ROLE(), pauser, admin);
+        proxy.grantRole(proxy.PAUSER_ROLE(), newPauser);
+        vm.stopPrank();
+
+        vm.startPrank(newPauser);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Paused(newPauser);
+        proxy.pause();
+
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit PausableUpgradeable.Unpaused(newPauser);
+        proxy.unpause();
+        vm.stopPrank();
     }
 
     function test_revertWhen_InvalidAccountTriesToPauseOrUnpause() public {
         test_addingPauserAndPausingContractSucceeds();
-        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
         (uint8 majorVersion,,) = proxy.getVersion();
-        assertEq(majorVersion, 3);
+        assertEq(majorVersion, 2);
 
         address admin = proxy.owner();
         vm.startPrank(admin);
@@ -2048,9 +2036,9 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
 
     function test_expectRevert_WhenCallingPausedFunctions() public {
         test_addingPauserAndPausingContractSucceeds();
-        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
         (uint8 majorVersion,,) = proxy.getVersion();
-        assertEq(majorVersion, 3);
+        assertEq(majorVersion, 2);
 
         vm.startPrank(pauser);
         vm.expectEmit(false, false, false, true, address(stakeTable));
@@ -2122,9 +2110,9 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
 
     function test_UnpausableFunctionsStillWorkWhenContractIsPaused() public {
         test_addingPauserAndPausingContractSucceeds();
-        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
         (uint8 majorVersion,,) = proxy.getVersion();
-        assertEq(majorVersion, 3);
+        assertEq(majorVersion, 2);
 
         vm.startPrank(pauser);
         vm.expectEmit(false, false, false, true, address(stakeTable));
@@ -2143,12 +2131,14 @@ contract StakeTableV3Test is StakeTableUpgradeV2Test {
 
     function test_OnlyAdminCanRevokePauserRole() public {
         test_addingPauserAndPausingContractSucceeds();
-        StakeTableV3 proxy = StakeTableV3(address(stakeTableRegisterTest.proxy()));
+        StakeTableV2 proxy = StakeTableV2(address(stakeTableRegisterTest.proxy()));
         (uint8 majorVersion,,) = proxy.getVersion();
-        assertEq(majorVersion, 3);
+        assertEq(majorVersion, 2);
 
         address admin = proxy.owner();
         vm.startPrank(admin);
+        vm.expectEmit(false, false, false, true, address(stakeTable));
+        emit IAccessControl.RoleRevoked(proxy.PAUSER_ROLE(), pauser, admin);
         proxy.revokeRole(proxy.PAUSER_ROLE(), pauser);
         vm.stopPrank();
 
