@@ -6,7 +6,8 @@ use std::{
 };
 
 use alloy::{
-    primitives::{Address, U256},
+    eips::BlockId,
+    primitives::{utils::format_ether, Address, FixedBytes, U256},
     rpc::types::Log,
 };
 use anyhow::{bail, ensure, Context};
@@ -14,9 +15,12 @@ use async_lock::{Mutex, RwLock};
 use committable::Committable;
 use futures::stream::{self, StreamExt};
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
-use hotshot_contract_adapter::sol_types::StakeTableV2::{
-    self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-    ValidatorRegistered, ValidatorRegisteredV2,
+use hotshot_contract_adapter::sol_types::{
+    EspToken,
+    StakeTableV2::{
+        self, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
+        ValidatorRegistered, ValidatorRegisteredV2,
+    },
 };
 use hotshot_types::{
     data::{vid_disperse::VID_TARGET_TOTAL_STAKE, EpochNumber},
@@ -41,12 +45,13 @@ use tracing::Instrument;
 use super::v0_3::DAMembers;
 use super::{
     traits::{MembershipPersistence, StateCatchup},
-    v0_3::{
-        ChainConfig, EventKey, StakeTableEvent, StakeTableFetcher, StakeTableUpdateTask, Validator,
-    },
+    v0_3::{ChainConfig, EventKey, Fetcher, StakeTableEvent, StakeTableUpdateTask, Validator},
     Header, L1Client, Leaf2, PubKey, SeqTypes,
 };
-use crate::traits::EventsPersistenceRead;
+use crate::{
+    traits::EventsPersistenceRead,
+    v0_1::{RewardAmount, BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, INFLATION_RATE},
+};
 
 type Epoch = <SeqTypes as NodeType>::Epoch;
 
@@ -523,10 +528,11 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
-    fetcher: Arc<StakeTableFetcher>,
+    block_reward: RewardAmount,
+    fetcher: Arc<Fetcher>,
 }
 
-impl StakeTableFetcher {
+impl Fetcher {
     pub fn new(
         peers: Arc<dyn StateCatchup>,
         persistence: Arc<Mutex<dyn MembershipPersistence>>,
@@ -975,6 +981,81 @@ impl StakeTableFetcher {
         validators_from_l1_events(sorted.into_iter().map(|(_, e)| e))
     }
 
+    // This function is used to calculate the reward for a block
+    // It fetches the initial supply from the token contract
+    pub async fn fetch_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        let chain_config = self.chain_config.lock().await.clone();
+
+        let Some(stake_table_contract) = chain_config.stake_table_contract else {
+            bail!("No stake table contract address found in Chain config");
+        };
+
+        let provider = self.l1_client.provider.clone();
+        let stake_table = StakeTableV2::new(stake_table_contract, provider.clone());
+        let stake_table_init_block = stake_table
+            .initializedAtBlock()
+            .call()
+            .await?
+            ._0
+            .to::<u64>();
+
+        let token_address = stake_table
+            .token()
+            .block(BlockId::finalized())
+            .call()
+            .await
+            .context("Failed to get token address")?
+            ._0;
+
+        // In the transfer event, the token1 represents the address of the sender
+        // here the sender is the zero address as the tokens were minted
+        let token = EspToken::new(token_address, provider.clone());
+        let mut address_bytes = [0u8; 32];
+        address_bytes[12..].copy_from_slice(Address::ZERO.as_slice());
+        let topic1 = FixedBytes::<32>::from_slice(&address_bytes);
+
+        let mut from_block = stake_table_init_block - 5000u64;
+        let transfers = loop {
+            let transfers = token
+                .Transfer_filter()
+                .from_block(from_block)
+                .to_block(stake_table_init_block)
+                .topic1(topic1)
+                .query()
+                .await?;
+
+            if !transfers.is_empty() {
+                break transfers;
+            }
+
+            // If no transfers found, go further back by 5000 blocks.
+
+            from_block = from_block - 5000u64;
+            continue;
+        };
+
+        // Take the first transfer log from zero address
+
+        let (mint_transfer_log, _log) = transfers[0].clone();
+
+        ensure!(
+            mint_transfer_log.from == Address::ZERO,
+            "The first token transfer should from the zero address"
+        );
+
+        tracing::info!(
+            "Initial token amount: {} ESP",
+            format_ether(mint_transfer_log.value)
+        );
+
+        let supply = mint_transfer_log.value;
+        ((supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+            .ok_or_else(|| anyhow::anyhow!("COMMISSION_BASIS_POINTS is zero"))?;
+
+        Ok(RewardAmount(supply))
+    }
+
     pub async fn fetch(
         &self,
         epoch: Epoch,
@@ -1087,7 +1168,7 @@ impl EpochCommittees {
         self.first_epoch
     }
 
-    pub fn fetcher(&self) -> &StakeTableFetcher {
+    pub fn fetcher(&self) -> &Fetcher {
         &self.fetcher
     }
 
@@ -1100,6 +1181,7 @@ impl EpochCommittees {
         &mut self,
         epoch: EpochNumber,
         validators: IndexMap<Address, Validator<BLSPubKey>>,
+        block_reward: Option<RewardAmount>,
     ) {
         let mut address_mapping = HashMap::new();
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
@@ -1131,6 +1213,10 @@ impl EpochCommittees {
                 address_mapping,
             },
         );
+
+        if let Some(block_reward) = block_reward {
+            self.block_reward = block_reward;
+        }
     }
 
     pub fn validators(
@@ -1171,13 +1257,18 @@ impl EpochCommittees {
             .cloned()
     }
 
+    pub fn block_reward(&self) -> RewardAmount {
+        self.block_reward.clone()
+    }
+
     // We need a constructor to match our concrete type.
     pub fn new_stake(
         // TODO remove `new` from trait and rename this to `new`.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         committee_members: Vec<PeerConfig<SeqTypes>>,
         da_members: Vec<PeerConfig<SeqTypes>>,
-        fetcher: StakeTableFetcher,
+        block_reward: RewardAmount,
+        fetcher: Fetcher,
     ) -> Self {
         // For each member, get the stake table entry
         let stake_table: Vec<_> = committee_members
@@ -1244,6 +1335,7 @@ impl EpochCommittees {
             state: map,
             randomized_committees: BTreeMap::new(),
             first_epoch: None,
+            block_reward,
             fetcher: Arc::new(fetcher),
         }
     }
@@ -1271,7 +1363,7 @@ impl EpochCommittees {
         };
 
         for (epoch, stake_table) in loaded_stake {
-            self.update_stake_table(epoch, stake_table);
+            self.update_stake_table(epoch, stake_table, None);
         }
     }
 
@@ -1518,6 +1610,12 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let stake_tables = self.fetcher.fetch(epoch, block_header).await?;
+        let mut block_reward = None;
+
+        if self.block_reward == RewardAmount(U256::ZERO) {
+            block_reward = Some(self.fetcher.fetch_block_reward().await?);
+        }
+
         // Store stake table in persistence
         {
             let persistence_lock = self.fetcher.persistence.lock().await;
@@ -1530,7 +1628,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         Ok(Some(Box::new(move |committee: &mut Self| {
-            committee.update_stake_table(epoch, stake_tables);
+            committee.update_stake_table(epoch, stake_tables, block_reward);
         })))
     }
 

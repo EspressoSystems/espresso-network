@@ -1,15 +1,19 @@
 use std::{collections::HashSet, iter::once, str::FromStr};
 
-use alloy::primitives::{
-    utils::{parse_units, ParseUnits},
-    Address, U256,
+use alloy::{
+    eips::BlockId,
+    primitives::{
+        utils::{format_ether, parse_units, ParseUnits},
+        Address, FixedBytes, U256,
+    },
 };
-use anyhow::{bail, ensure, Context};
+use anyhow::{anyhow, bail, ensure, Context};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
 };
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot::types::BLSPubKey;
+use hotshot_contract_adapter::sol_types::{EspToken, StakeTableV2};
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::{election::Membership, node_implementation::ConsensusTime},
@@ -27,14 +31,17 @@ use sequencer_utils::{
 
 use super::{
     v0_1::{
-        block_reward, RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount,
-        RewardInfo, RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree,
-        COMMISSION_BASIS_POINTS,
+        RewardAccount, RewardAccountProof, RewardAccountQueryData, RewardAmount, RewardInfo,
+        RewardMerkleCommitment, RewardMerkleProof, RewardMerkleTree, COMMISSION_BASIS_POINTS,
     },
     v0_3::Validator,
     Leaf2, NodeState, ValidatedState,
 };
-use crate::{eth_signature_key::EthKeyPair, FeeAccount};
+use crate::{
+    eth_signature_key::EthKeyPair,
+    v0_1::{BLOCKS_PER_YEAR, INFLATION_RATE},
+    Delta, FeeAccount, L1Client,
+};
 
 impl Committable for RewardInfo {
     fn commit(&self) -> Commitment<Self> {
@@ -353,7 +360,45 @@ impl ComputedRewards {
     }
 }
 
-impl Validator<BLSPubKey> {
+pub struct RewardDistributor {
+    validator: Validator<BLSPubKey>,
+    block_reward: RewardAmount,
+}
+
+impl RewardDistributor {
+    pub fn new(validator: Validator<BLSPubKey>, block_reward: RewardAmount) -> Self {
+        Self {
+            validator,
+            block_reward,
+        }
+    }
+
+    pub fn validator(&self) -> Validator<BLSPubKey> {
+        self.validator.clone()
+    }
+
+    pub fn block_reward(&self) -> RewardAmount {
+        self.block_reward.clone()
+    }
+
+    pub fn distribute(&self, state: &mut ValidatedState, delta: &mut Delta) -> anyhow::Result<()> {
+        let reward_state = self.apply_rewards(state.reward_merkle_tree.clone())?;
+        state.reward_merkle_tree = reward_state;
+
+        // Update delta rewards
+        delta
+            .rewards_delta
+            .insert(RewardAccount(self.validator().account));
+        delta.rewards_delta.extend(
+            self.validator()
+                .delegators
+                .keys()
+                .map(|d| RewardAccount(*d)),
+        );
+
+        Ok(())
+    }
+
     pub fn apply_rewards(
         &self,
         mut reward_state: RewardMerkleTree,
@@ -395,24 +440,24 @@ impl Validator<BLSPubKey> {
     /// to ensure the total reward is exactly equal to block reward.
     pub fn compute_rewards(&self) -> anyhow::Result<ComputedRewards> {
         ensure!(
-            self.commission <= COMMISSION_BASIS_POINTS,
+            self.validator.commission <= COMMISSION_BASIS_POINTS,
             "commission must not exceed {COMMISSION_BASIS_POINTS}"
         );
 
         let mut rewards = Vec::new();
 
-        let total_reward = block_reward().0;
+        let total_reward = self.block_reward.0;
         let delegators_ratio_basis_points = U256::from(COMMISSION_BASIS_POINTS)
-            .checked_sub(U256::from(self.commission))
+            .checked_sub(U256::from(self.validator.commission))
             .context("overflow")?;
         let delegators_reward = delegators_ratio_basis_points
             .checked_mul(total_reward)
             .context("overflow")?;
 
         // Distribute delegator rewards
-        let total_stake = self.stake;
+        let total_stake = self.validator.stake;
         let mut delegators_rewards_distributed = U256::from(0);
-        for (delegator_address, delegator_stake) in &self.delegators {
+        for (delegator_address, delegator_stake) in &self.validator.delegators {
             let delegator_reward = RewardAmount::from(
                 (delegator_stake
                     .checked_mul(delegators_reward)
@@ -434,7 +479,7 @@ impl Validator<BLSPubKey> {
 
         Ok(ComputedRewards::new(
             rewards,
-            self.account,
+            self.validator.account,
             leader_commission.into(),
         ))
     }
@@ -533,6 +578,83 @@ pub async fn find_validator_info(
     Ok(validator)
 }
 
+// This function is used to calculate the reward for a block
+// It fetches the initial supply from the token contract
+pub async fn fetch_block_reward(
+    l1_client: L1Client,
+    stake_table_contract: Option<Address>,
+) -> anyhow::Result<RewardAmount> {
+    let Some(stake_table_contract) = stake_table_contract else {
+        tracing::warn!("stake table contract address not found!");
+        return Ok(RewardAmount(U256::ZERO));
+    };
+
+    let provider = l1_client.provider;
+    let stake_table = StakeTableV2::new(stake_table_contract, provider.clone());
+    let stake_table_init_block = stake_table
+        .initializedAtBlock()
+        .call()
+        .await?
+        ._0
+        .to::<u64>();
+
+    let token_address = stake_table
+        .token()
+        .block(BlockId::finalized())
+        .call()
+        .await
+        .context("Failed to get token address")?
+        ._0;
+
+    // In the transfer event, the token1 represents the address of the sender
+    // here the sender is the zero address as the tokens were minted
+    let token = EspToken::new(token_address, provider.clone());
+    let mut address_bytes = [0u8; 32];
+    address_bytes[12..].copy_from_slice(Address::ZERO.as_slice());
+    let topic1 = FixedBytes::<32>::from_slice(&address_bytes);
+
+    let mut from_block = stake_table_init_block - 5000u64;
+    let transfers = loop {
+        let transfers = token
+            .Transfer_filter()
+            .from_block(from_block)
+            .to_block(stake_table_init_block)
+            .topic1(topic1)
+            .query()
+            .await?;
+
+        if !transfers.is_empty() {
+            break transfers;
+        }
+
+        // If no transfers found, go further back by 5000 blocks.
+
+        from_block = from_block - 5000u64;
+        continue;
+    };
+
+    // Take the first transfer log from zero address
+
+    let (mint_transfer_log, _log) = transfers[0].clone();
+
+    ensure!(
+        mint_transfer_log.from == Address::ZERO,
+        "The first token transfer should from the zero address"
+    );
+
+    tracing::info!(
+        "Initial token amount: {} ESP",
+        format_ether(mint_transfer_log.value)
+    );
+
+    let supply = mint_transfer_log.value;
+    ((supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+        .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+        .ok_or_else(|| anyhow!("COMMISSION_BASIS_POINTS is zero"))?;
+
+    Ok(RewardAmount(supply))
+}
+
 #[cfg(test)]
 pub mod tests {
 
@@ -547,30 +669,34 @@ pub mod tests {
         // because the remainder after delegator distribution is sent to the validator.
 
         let validator = Validator::mock();
-        let rewards = validator.compute_rewards().unwrap();
+        let reward = RewardDistributor::new(
+            validator,
+            RewardAmount(U256::from(1902000000000000000_u128)),
+        );
+        let rewards = reward.compute_rewards().unwrap();
         let total = |rewards: ComputedRewards| {
             rewards
                 .all_rewards()
                 .iter()
                 .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
         };
-        assert_eq!(total(rewards.clone()), block_reward().into());
+        assert_eq!(total(rewards.clone()), reward.block_reward.into());
 
         let mut validator = Validator::mock();
         validator.commission = 0;
-        let rewards = validator.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), block_reward().into());
+        let rewards = reward.compute_rewards().unwrap();
+        assert_eq!(total(rewards.clone()), reward.block_reward.into());
 
         let mut validator = Validator::mock();
         validator.commission = 10000;
-        let rewards = validator.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), block_reward().into());
+        let rewards = reward.compute_rewards().unwrap();
+        assert_eq!(total(rewards.clone()), reward.block_reward.into());
         let leader_commission = rewards.leader_commission();
-        assert_eq!(*leader_commission, block_reward());
+        assert_eq!(*leader_commission, reward.block_reward.into());
 
         let mut validator = Validator::mock();
         validator.commission = 10001;
-        assert!(validator
+        assert!(reward
             .compute_rewards()
             .err()
             .unwrap()
@@ -581,27 +707,38 @@ pub mod tests {
     #[test]
     fn test_compute_rewards_validator_commission() {
         let mut validator = Validator::mock();
+        let reward = RewardDistributor::new(validator.clone(), RewardAmount(U256::ZERO));
         validator.commission = 0;
-        let rewards = validator.clone().compute_rewards().unwrap();
+
+        let rewards = reward.compute_rewards().unwrap();
 
         let leader_commission = rewards.leader_commission();
         let percentage =
-            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
+            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / reward.block_reward.0;
         assert_eq!(percentage, U256::ZERO);
 
         // 3%
         validator.commission = 300;
-        let rewards = validator.clone().compute_rewards().unwrap();
+        let reward = RewardDistributor::new(
+            validator.clone(),
+            RewardAmount(U256::from(1902000000000000000_u128)),
+        );
+
+        let rewards = reward.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
         let percentage =
-            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / block_reward().0;
+            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / reward.block_reward.0;
         println!("percentage: {percentage:?}");
         assert_eq!(percentage, U256::from(300));
 
         //100%
         validator.commission = 10000;
-        let rewards = validator.compute_rewards().unwrap();
+        let reward = RewardDistributor::new(
+            validator.clone(),
+            RewardAmount(U256::from(1902000000000000000_u128)),
+        );
+        let rewards = reward.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
-        assert_eq!(*leader_commission, block_reward());
+        assert_eq!(*leader_commission, reward.block_reward);
     }
 }

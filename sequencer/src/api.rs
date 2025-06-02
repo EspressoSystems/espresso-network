@@ -2011,10 +2011,10 @@ mod test {
     use espresso_types::{
         config::PublicHotShotConfig,
         traits::NullEventConsumer,
-        v0_1::{block_reward, RewardAmount, COMMISSION_BASIS_POINTS},
-        v0_3::StakeTableFetcher,
+        v0_1::{RewardAmount, COMMISSION_BASIS_POINTS},
+        v0_3::Fetcher,
         validators_from_l1_events, EpochVersion, FeeAmount, FeeVersion, Header, L1ClientOptions,
-        MockSequencerVersions, SequencerVersions, ValidatedState,
+        MockSequencerVersions, RewardDistributor, SequencerVersions, ValidatedState,
     };
     use futures::{
         future::{self, join_all},
@@ -3266,7 +3266,7 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersion::new()).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3303,8 +3303,14 @@ mod test {
         tracing::info!("amount={amount:?}");
 
         let epoch_start_block = 40;
+
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+        drop(membership);
+
         // The validator gets all the block reward so we can calculate the expected amount
-        let expected_amount = block_reward().0 * (U256::from(block_height - epoch_start_block));
+        let expected_amount = block_reward.0 * (U256::from(block_height - epoch_start_block));
 
         assert_eq!(amount.0, expected_amount, "reward amount don't match");
 
@@ -3358,7 +3364,11 @@ mod test {
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let network = TestNetwork::new(config, PosVersion::new()).await;
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+        drop(membership);
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -3423,7 +3433,7 @@ mod test {
             }
 
             // assert cumulative reward is equal to block reward
-            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward().0);
+            assert_eq!(cumulative_amount - prev_cumulative_amount, block_reward.0);
             tracing::info!("cumulative_amount is correct for block={block}");
             prev_cumulative_amount = cumulative_amount;
         }
@@ -3505,7 +3515,7 @@ mod test {
             }
             let l1_block = header.l1_finalized().expect("l1 block not found");
 
-            let events = StakeTableFetcher::fetch_events_from_contract(
+            let events = Fetcher::fetch_events_from_contract(
                 l1_client.clone(),
                 stake_table,
                 None,
@@ -3668,6 +3678,11 @@ mod test {
         let node_state = network.server.node_state();
         let coordinator = node_state.coordinator;
 
+        let membership = coordinator.membership().read().await;
+        let block_reward = membership.block_reward();
+
+        drop(membership);
+
         let mut rewards_map = HashMap::new();
 
         for leaf in leaves {
@@ -3680,6 +3695,7 @@ mod test {
                 .leader(leaf.leaf().view_number(), Some(epoch_number))
                 .expect("leader");
             let leader_eth_address = membership.address(&epoch_number, leader).expect("address");
+
             drop(membership);
 
             let validators = client
@@ -3692,6 +3708,7 @@ mod test {
                 .get(&leader_eth_address)
                 .expect("leader not found");
 
+            let compute_reward = RewardDistributor::new(leader_validator.clone(), block_reward);
             // Verify that the sum of delegator stakes equals the validator's total stake.
             for validator in validators.values() {
                 let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
@@ -3699,7 +3716,7 @@ mod test {
                 assert_eq!(delegator_stake_sum, validator.stake);
             }
 
-            let computed_rewards = leader_validator
+            let computed_rewards = compute_reward
                 .compute_rewards()
                 .expect("reward computation");
 
@@ -3709,7 +3726,7 @@ mod test {
             // amount may differ very slightly from the calculated value.
             // this asserts that it is within 10wei tolerance level.
             // 10 wei is 10* 10E-18
-            let total_reward = block_reward().0;
+            let total_reward = block_reward.0;
             let leader_commission_basis_points = U256::from(leader_validator.commission);
             let calculated_leader_commission_reward = leader_commission_basis_points
                 .checked_mul(total_reward)
