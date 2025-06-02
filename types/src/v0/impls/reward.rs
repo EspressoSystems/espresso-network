@@ -370,7 +370,7 @@ impl RewardDistributor {
     }
 
     pub fn block_reward(&self) -> RewardAmount {
-        self.block_reward.clone()
+        self.block_reward
     }
 
     pub fn distribute(&self, state: &mut ValidatedState, delta: &mut Delta) -> anyhow::Result<()> {
