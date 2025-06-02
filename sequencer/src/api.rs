@@ -4464,7 +4464,7 @@ mod test {
 
         // wait 3s to be sure that all the
         // transactions have been committed
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(3)).await;
 
         tracing::info!("getting node block height");
         let node_block_height = client
