@@ -53,6 +53,7 @@ pub struct Genesis {
     pub upgrade_version: Version,
     pub epoch_height: Option<u64>,
     pub drb_difficulty: Option<u64>,
+    pub drb_upgrade_difficulty: Option<u64>,
     pub epoch_start_block: Option<u64>,
     pub stake_table_capacity: Option<usize>,
     pub chain_config: ChainConfig,
@@ -1059,6 +1060,7 @@ mod test {
             upgrade_version = "0.2"
             epoch_height = 20
             drb_difficulty = 10
+            drb_upgrade_difficulty = 20
             epoch_start_block = 1
             stake_table_capacity = 200
 

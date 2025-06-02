@@ -157,6 +157,7 @@ impl Versions for MockVersions {
         0, 0,
     ];
     type Epochs = StaticVersion<0, 4>;
+    type DrbDifficultyUpgrade = StaticVersion<0, 5>;
 }
 
 /// A type alias for the mock base version
