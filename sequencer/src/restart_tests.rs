@@ -611,7 +611,7 @@ impl TestNetwork {
             upgrades: Default::default(),
             base_version: Version { major: 0, minor: 3 },
             upgrade_version: Version { major: 0, minor: 3 },
-            epoch_height: Some(25),
+            epoch_height: Some(15),
             drb_difficulty: None,
             epoch_start_block: Some(1),
             stake_table_capacity: Some(200),
@@ -647,7 +647,10 @@ impl TestNetwork {
         };
 
         let anvil_port = ports.pick();
-        let anvil = Anvil::new().port(anvil_port).spawn();
+        let anvil = Anvil::new()
+            .args(["--slots-in-an-epoch", "1"])
+            .port(anvil_port)
+            .spawn();
         let anvil_endpoint = anvil.endpoint();
 
         let l1_client = L1Client::anvil(&anvil).expect("create l1 client");
