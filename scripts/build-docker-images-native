@@ -136,7 +136,6 @@ images=(
  state-relay-server
  staking-cli
  submit-transactions
- upgrade
 )
 for image in "${images[@]}"; do
   docker build --platform $PLATFORM -t ghcr.io/espressosystems/espresso-sequencer/$image:main -f docker/$image.Dockerfile "$WORKDIR"

@@ -999,7 +999,7 @@ pub async fn call_upgrade_proxy_script(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     // if stderr is not empty, return the stderr
-    if !stderr.is_empty() {
+    if !output.status.success() {
         return Err(anyhow!("Upgrade script failed: {}", stderr));
     }
     Ok((stdout.to_string(), true))
