@@ -425,7 +425,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             // conservative: of course if we actually make progress, not every view will time out,
             // and we will take less than this amount of time.
             let timeout_duration =
-                10 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+                2 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -598,7 +598,6 @@ impl TestNetwork {
 
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
-        tracing::info!(?genesis_file_path, "genesis_file");
 
         let mut genesis = Genesis {
             chain_config: Default::default(),
@@ -612,6 +611,7 @@ impl TestNetwork {
             epoch_height: Some(15),
             drb_difficulty: None,
             epoch_start_block: Some(1),
+            // TODO we apparently have two `capacity` configurations
             stake_table_capacity: Some(200),
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
@@ -690,11 +690,11 @@ impl TestNetwork {
             anvil,
         };
 
-        let address = network.deploy(&genesis).await.unwrap();
+        let stake_table_address = network.deploy(&genesis).await.unwrap();
 
         let chain_config = ChainConfig {
-            base_fee: 0.into(),
-            stake_table_contract: Some(address),
+            base_fee: 1.into(),
+            stake_table_contract: Some(stake_table_address),
             ..Default::default()
         };
         genesis.chain_config = chain_config;
@@ -731,7 +731,7 @@ impl TestNetwork {
 
     async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
         let stake_table_version = StakeTableContractVersion::V2;
-        let delegation_config = DelegationConfig::EqualAmounts; // TODO configurable?
+        let delegation_config = DelegationConfig::EqualAmounts;
 
         let anvil_instance = &self.anvil.anvil();
         let l1_url: reqwest::Url = anvil_instance.endpoint().parse().unwrap();
@@ -798,8 +798,7 @@ impl TestNetwork {
             .address(Contract::EspTokenProxy)
             .expect("EspTokenProxy address not found");
 
-        tracing::error!(?stake_table_address);
-        tracing::error!(?token_addr);
+        tracing::error!(?stake_table_address, ?token_addr);
 
         setup_stake_table_contract_for_test(
             l1_url.clone(),
@@ -811,8 +810,6 @@ impl TestNetwork {
         )
         .await
         .expect("stake table setup failed");
-
-        self.anvil.anvil_mine(Some(10), None).await.unwrap();
 
         self.anvil
             .anvil_set_interval_mining(1)
