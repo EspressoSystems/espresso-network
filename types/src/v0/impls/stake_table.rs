@@ -984,7 +984,7 @@ impl Fetcher {
     // This function is used to calculate the reward for a block
     // It fetches the initial supply from the token contract
     pub async fn fetch_block_reward(&self) -> anyhow::Result<RewardAmount> {
-        let chain_config = self.chain_config.lock().await.clone();
+        let chain_config = *self.chain_config.lock().await;
 
         let Some(stake_table_contract) = chain_config.stake_table_contract else {
             bail!("No stake table contract address found in Chain config");
@@ -1030,7 +1030,7 @@ impl Fetcher {
 
             // If no transfers found, go further back by 5000 blocks.
 
-            from_block = from_block - 5000u64;
+            from_block -= 5000u64;
             continue;
         };
 
@@ -1258,7 +1258,7 @@ impl EpochCommittees {
     }
 
     pub fn block_reward(&self) -> RewardAmount {
-        self.block_reward.clone()
+        self.block_reward
     }
 
     // We need a constructor to match our concrete type.
