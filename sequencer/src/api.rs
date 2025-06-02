@@ -4275,6 +4275,7 @@ mod test {
         let epoch_6_block = EPOCH_HEIGHT * 6 + 1;
 
         // check that the node's state has reward accounts
+        let mut retries = 0;
         loop {
             sleep(Duration::from_secs(1)).await;
             let state = node_0.decided_state().await;
@@ -4287,6 +4288,11 @@ mod test {
             if !reward_accounts.is_empty() {
                 tracing::info!("Node's state has reward accounts. {reward_accounts:?}");
                 break;
+            }
+            retries += 1;
+
+            if retries > 120 {
+                panic!("max retries reached. failed to catchup reward state");
             }
         }
 
@@ -4308,8 +4314,6 @@ mod test {
 
         // shutdown consensus to freeze the state
         node_0.shutdown_consensus().await;
-        // wait few seconds to be sure that the node has shutdown all the tasks
-        sleep(Duration::from_secs(3)).await;
         let decided_leaf = node_0.decided_leaf().await;
         let state = node_0.decided_state().await;
 
@@ -4458,7 +4462,10 @@ mod test {
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
-        sleep(Duration::from_secs(5)).await;
+        // wait 3s to be sure that all the
+        // transactions have been committed
+        sleep(Duration::from_secs(2)).await;
+
         tracing::info!("getting node block height");
         let node_block_height = client
             .get::<u64>("node/block-height")
@@ -4484,7 +4491,6 @@ mod test {
             .await
             .unwrap();
         let mut tx = ds.write().await?;
-        // Attempt to reconstruct state without fee or reward accounts
 
         let (state, leaf) =
             reconstruct_state(&instance, &mut tx, node_block_height - 1, to_view, &[], &[])
@@ -4500,7 +4506,7 @@ mod test {
             "inconsistent block merkle tree"
         );
 
-        // Reconstruct state using fee accounts only
+        // Reconstruct fee state
         let (state, leaf) = reconstruct_state(
             &instance,
             &mut tx,
@@ -4526,7 +4532,7 @@ mod test {
             state.fee_merkle_tree.lookup(account).expect_ok().unwrap();
         }
 
-        // Reconstruct state using reward accounts only
+        // Reconstruct reward state
 
         let (state, leaf) = reconstruct_state(
             &instance,
@@ -4556,7 +4562,7 @@ mod test {
                 .is_ok(),
             "inconsistent block merkle tree"
         );
-        // Reconstruct state using both fee and reward accounts
+        // Reconstruct reward and fee state
 
         let (state, leaf) = reconstruct_state(
             &instance,
