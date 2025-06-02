@@ -615,6 +615,7 @@ impl TestNetwork {
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
+            drb_difficulty: None,
             epoch_start_block: None,
             stake_table_capacity: None,
             // Start with a funded account, so we can test catchup after restart.

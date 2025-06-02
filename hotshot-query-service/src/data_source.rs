@@ -255,7 +255,7 @@ pub mod availability_tests {
             }
 
             for (j, txn) in block.enumerate() {
-                tracing::info!("looking up transaction {i},{j}");
+                tracing::info!("looking up transaction {i},{j:?}");
 
                 // We should be able to look up the transaction by hash unless it is a duplicate.
                 // For duplicate transactions, this function returns the index of the first
@@ -270,10 +270,10 @@ pub mod availability_tests {
                 if let Ok(tx_data) = ds.get_transaction(txn.commit()).await.try_resolve() {
                     assert_eq!(tx_data.transaction(), &txn);
                     assert_eq!(tx_data.block_height(), ix.0);
-                    assert_eq!(tx_data.index(), ix.1 as u64);
+                    assert_eq!(tx_data.index(), ix.1.position as u64);
                 } else {
                     tracing::warn!(
-                        "skipping transaction index check for missing transaction {j} {txn:?}"
+                        "skipping transaction index check for missing transaction {j:?} {txn:?}"
                     );
                     // At least check that _some_ transaction can be fetched.
                     ds.get_transaction(txn.commit()).await.await;

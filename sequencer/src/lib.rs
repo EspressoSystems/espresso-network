@@ -371,15 +371,18 @@ where
     }
 
     let epoch_height = genesis.epoch_height.unwrap_or_default();
+    let drb_difficulty = genesis.drb_difficulty.unwrap_or_default();
     let epoch_start_block = genesis.epoch_start_block.unwrap_or_default();
     let stake_table_capacity = genesis
         .stake_table_capacity
         .unwrap_or(hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY);
 
     tracing::info!("setting epoch_height={epoch_height:?}");
+    tracing::info!("setting drb_difficulty={drb_difficulty:?}");
     tracing::info!("setting epoch_start_block={epoch_start_block:?}");
     tracing::info!("setting stake_table_capacity={stake_table_capacity:?}");
     network_config.config.epoch_height = epoch_height;
+    network_config.config.drb_difficulty = drb_difficulty;
     network_config.config.epoch_start_block = epoch_start_block;
     network_config.config.stake_table_capacity = stake_table_capacity;
 
@@ -529,6 +532,7 @@ where
         membership,
         network_config.config.epoch_height,
         &persistence.clone(),
+        network_config.config.drb_difficulty,
     );
 
     let instance_state = NodeState {
@@ -961,6 +965,11 @@ pub mod testing {
                 anvil_provider: self.anvil_provider,
             }
         }
+
+        pub fn stake_table_capacity(mut self, stake_table_capacity: usize) -> Self {
+            self.config.stake_table_capacity = stake_table_capacity;
+            self
+        }
     }
 
     impl<const NUM_NODES: usize> Default for TestConfigBuilder<NUM_NODES> {
@@ -1017,6 +1026,7 @@ pub mod testing {
                 epoch_height: 30,
                 epoch_start_block: 1,
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+                drb_difficulty: 10,
             };
 
             let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
@@ -1232,6 +1242,7 @@ pub mod testing {
                 membership,
                 config.epoch_height,
                 &persistence.clone(),
+                config.drb_difficulty,
             );
 
             let node_state = NodeState::new(
