@@ -23,7 +23,7 @@ async fn test_catchup_epochs() {
     hotshot::helpers::initialize_logging();
 
     let timing_data = TimingData {
-        next_view_timeout: 2000,
+        next_view_timeout: 5000,
         ..Default::default()
     };
     let mut metadata: TestDescription<
@@ -48,13 +48,13 @@ async fn test_catchup_epochs() {
     metadata.completion_task_description =
         CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
-                duration: Duration::from_secs(60),
+                duration: Duration::from_secs(120),
             },
         );
     metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
         num_successful_views: 50,
         possible_view_failures: vec![18, 19],
-        decide_timeout: Duration::from_secs(20),
+        decide_timeout: Duration::from_secs(15),
         ..Default::default()
     };
 
