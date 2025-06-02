@@ -265,6 +265,8 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    /// Number of epochs to wait after restart before running progress check.
+    wait_for_epoch: EpochNumber,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -336,6 +338,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             opt,
             num_nodes: network.peer_ports.len(),
             context: None,
+            wait_for_epoch: EpochNumber::new(3),
         }
     }
 
@@ -523,7 +526,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
     }
 
     /// Wait for the given Epoch.
-    async fn _wait_for_epoch(&self, epoch: EpochNumber) {
+    async fn wait_for_epoch(&self) {
+        let epoch = self.wait_for_epoch;
         let Some(context) = &self.context else {
             tracing::info!("skipping progress check on stopped node");
             return;
@@ -540,6 +544,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     continue;
                 };
                 if qc.data.epoch >= Some(epoch) {
+                    tracing::error!(node_id, "reached epoch: {:?}", epoch);
                     break;
                 }
             }
@@ -799,16 +804,12 @@ impl TestNetwork {
         Ok(stake_table_address)
     }
 
-    async fn _wait_for_epoch(&self, epoch: EpochNumber) {
+    async fn wait_for_epoch(&self) {
         join_all(
             self.da_nodes
                 .iter()
-                .map(|node| node._wait_for_epoch(epoch))
-                .chain(
-                    self.regular_nodes
-                        .iter()
-                        .map(|node| node._wait_for_epoch(epoch)),
-                ),
+                .map(TestNode::wait_for_epoch)
+                .chain(self.regular_nodes.iter().map(TestNode::wait_for_epoch)),
         )
         .await;
     }
@@ -840,7 +841,7 @@ impl TestNetwork {
     async fn restart(&mut self, da_nodes: usize, regular_nodes: usize) {
         self.restart_helper(0..da_nodes, 0..regular_nodes, false)
             .await;
-        self._wait_for_epoch(EpochNumber::new(3)).await;
+        self.wait_for_epoch().await;
         self.check_progress().await;
     }
 
