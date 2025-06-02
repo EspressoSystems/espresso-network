@@ -604,8 +604,6 @@ impl TestNetwork {
             chain_config: Default::default(),
             // TODO we apparently have two `capacity` configurations
             stake_table: StakeTableConfig { capacity: 200 },
-            // We need to wait for some finalized blocks, otherwise stake table
-            // can't be found.
             l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
             upgrades: Default::default(),
