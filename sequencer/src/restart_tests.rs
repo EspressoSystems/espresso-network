@@ -699,6 +699,23 @@ impl TestNetwork {
         genesis.chain_config = chain_config;
         genesis.to_file(&genesis_file_path).unwrap();
 
+        let finalized = l1_client
+            .get_block(alloy::eips::BlockId::finalized())
+            .full()
+            .await
+            .unwrap();
+        let head = l1_client
+            .get_block(alloy::eips::BlockId::latest())
+            .full()
+            .await
+            .unwrap();
+
+        tracing::error!(
+            "latest block head: {}, latest finalized: {}",
+            head.unwrap().header.number,
+            finalized.unwrap().header.number
+        );
+
         join_all(
             network
                 .da_nodes
