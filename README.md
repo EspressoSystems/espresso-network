@@ -173,7 +173,9 @@ variables (see the code for the full list `sequencer/src/bin/deploy.rs`). Common
 - `ESPRESSO_SEQUENCER_ETH_MNEMONIC` — Mnemonic for the deployer wallet
 - `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` — Multisig admin address
 - `ESPRESSO_DEPLOYER_ACCOUNT_INDEX` — Account index in the wallet
-- `ESPRESSO_SEQUENCER_URL` — Sequencer node URL for HotShot config You can use a `.env` file and load it with:
+- `ESPRESSO_SEQUENCER_URL` — Sequencer node URL for HotShot config 
+
+You can use a `.env` file and load it with:
 
 ```bash
 set -a
