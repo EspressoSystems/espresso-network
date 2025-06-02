@@ -1612,6 +1612,12 @@ impl Membership<SeqTypes> for EpochCommittees {
         let stake_tables = self.fetcher.fetch(epoch, block_header).await?;
         let mut block_reward = None;
 
+        // Assumes the stake table contract proxy address does not change
+        // In the future, if we want to support updates to the stake table contract address via chain config,
+        // or allow the contract to handle additional block reward calculation parameters (e.g., inflation, block time),
+        // the `fetch_block_reward` logic can be updated to support per-epoch rewards.
+        // Initially, the block reward is zero if the node starts on pre-epoch version
+        // but it is updated on the first call to `add_epoch_root()`
         if self.block_reward == RewardAmount(U256::ZERO) {
             block_reward = Some(self.fetcher.fetch_block_reward().await?);
         }
