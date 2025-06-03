@@ -584,34 +584,31 @@ pub mod tests {
         // because the remainder after delegator distribution is sent to the validator.
 
         let validator = Validator::mock();
-        let reward = RewardDistributor::new(
+        let mut distributor = RewardDistributor::new(
             validator,
             RewardAmount(U256::from(1902000000000000000_u128)),
         );
-        let rewards = reward.compute_rewards().unwrap();
+        let rewards = distributor.compute_rewards().unwrap();
         let total = |rewards: ComputedRewards| {
             rewards
                 .all_rewards()
                 .iter()
                 .fold(U256::ZERO, |acc, (_, r)| acc + r.0)
         };
-        assert_eq!(total(rewards.clone()), reward.block_reward.into());
+        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
 
-        let mut validator = Validator::mock();
-        validator.commission = 0;
-        let rewards = reward.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), reward.block_reward.into());
+        distributor.validator.commission = 0;
+        let rewards = distributor.compute_rewards().unwrap();
+        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
 
-        let mut validator = Validator::mock();
-        validator.commission = 10000;
-        let rewards = reward.compute_rewards().unwrap();
-        assert_eq!(total(rewards.clone()), reward.block_reward.into());
+        distributor.validator.commission = 10000;
+        let rewards = distributor.compute_rewards().unwrap();
+        assert_eq!(total(rewards.clone()), distributor.block_reward.into());
         let leader_commission = rewards.leader_commission();
-        assert_eq!(*leader_commission, reward.block_reward.into());
+        assert_eq!(*leader_commission, distributor.block_reward.into());
 
-        let mut validator = Validator::mock();
-        validator.commission = 10001;
-        assert!(reward
+        distributor.validator.commission = 10001;
+        assert!(distributor
             .compute_rewards()
             .err()
             .unwrap()
@@ -622,38 +619,34 @@ pub mod tests {
     #[test]
     fn test_compute_rewards_validator_commission() {
         let mut validator = Validator::mock();
-        let reward = RewardDistributor::new(validator.clone(), RewardAmount(U256::ZERO));
-        validator.commission = 0;
-
-        let rewards = reward.compute_rewards().unwrap();
-
-        let leader_commission = rewards.leader_commission();
-        let percentage =
-            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / reward.block_reward.0;
-        assert_eq!(percentage, U256::ZERO);
-
-        // 3%
-        validator.commission = 300;
-        let reward = RewardDistributor::new(
+        let mut distributor = RewardDistributor::new(
             validator.clone(),
             RewardAmount(U256::from(1902000000000000000_u128)),
         );
+        validator.commission = 0;
 
-        let rewards = reward.compute_rewards().unwrap();
+        let rewards = distributor.compute_rewards().unwrap();
+
         let leader_commission = rewards.leader_commission();
         let percentage =
-            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / reward.block_reward.0;
+            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.0;
+        assert_eq!(percentage, U256::ZERO);
+
+        // 3%
+        distributor.validator.commission = 300;
+
+        let rewards = distributor.compute_rewards().unwrap();
+        let leader_commission = rewards.leader_commission();
+        let percentage =
+            leader_commission.0 * U256::from(COMMISSION_BASIS_POINTS) / distributor.block_reward.0;
         println!("percentage: {percentage:?}");
         assert_eq!(percentage, U256::from(300));
 
         //100%
-        validator.commission = 10000;
-        let reward = RewardDistributor::new(
-            validator.clone(),
-            RewardAmount(U256::from(1902000000000000000_u128)),
-        );
-        let rewards = reward.compute_rewards().unwrap();
+        distributor.validator.commission = 10000;
+
+        let rewards = distributor.compute_rewards().unwrap();
         let leader_commission = rewards.leader_commission();
-        assert_eq!(*leader_commission, reward.block_reward);
+        assert_eq!(*leader_commission, distributor.block_reward);
     }
 }
