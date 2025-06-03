@@ -436,10 +436,7 @@ impl RewardDistributor {
             "commission must not exceed {COMMISSION_BASIS_POINTS}"
         );
 
-         ensure!(
-            self.block_reward.0 > U256::ZERO,
-            "block reward is zero"
-        );
+        ensure!(self.block_reward.0 > U256::ZERO, "block reward is zero");
 
         let mut rewards = Vec::new();
 
