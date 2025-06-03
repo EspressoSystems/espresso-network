@@ -349,6 +349,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             config.epoch_height,
             initializer.state_cert,
             config.drb_difficulty,
+            config.drb_upgrade_difficulty,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));

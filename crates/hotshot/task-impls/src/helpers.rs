@@ -168,25 +168,38 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     membership.write().await.add_drb_result(epoch, drb_result)
 }
 /// Start the DRB computation task for the next epoch.
-async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     seed: DrbSeedInput,
+    view: TYPES::View,
     epoch: TYPES::Epoch,
     membership: &Arc<RwLock<TYPES::Membership>>,
     storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
+    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) {
     let membership = membership.clone();
     let storage = storage.clone();
     let store_drb_progress_fn = store_drb_progress_fn(storage.clone());
     let load_drb_progress_fn = load_drb_progress_fn(storage.clone());
-    let consensus = consensus.clone();
-    let difficulty_level = consensus.read().await.drb_difficulty;
+    let version = upgrade_lock.version_infallible(view).await;
+
+    let consensus_reader = consensus.read().await;
+    let difficulty_level = if version >= V::DrbDifficultyUpgrade::VERSION {
+        consensus_reader.drb_difficulty
+    } else {
+        consensus_reader.drb_upgrade_difficulty
+    };
+
+    drop(consensus_reader);
+
     let drb_input = DrbInput {
         epoch: *epoch,
         iteration: 0,
         value: seed,
         difficulty_level,
     };
+
+    let consensus = consensus.clone();
     tokio::spawn(async move {
         let drb_result = hotshot_types::drb::compute_drb_result(
             drb_input,
@@ -200,14 +213,16 @@ async fn start_drb_task<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     });
 }
 /// Handles calling add_epoch_root and sync_l1 on Membership if necessary.
-async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     decided_leaf: &Leaf2<TYPES>,
     epoch_height: u64,
     membership: &Arc<RwLock<TYPES::Membership>>,
     storage: &I::Storage,
     consensus: &OuterConsensus<TYPES>,
+    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) {
     let decided_block_number = decided_leaf.block_header().block_number();
+    let view_number = decided_leaf.view_number();
 
     // Skip if this is not the expected block.
     if epoch_height != 0 && is_epoch_root(decided_block_number, epoch_height) {
@@ -253,12 +268,14 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         let len = drb_seed_input_vec.len().min(32);
         drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
 
-        start_drb_task::<TYPES, I>(
+        start_drb_task::<TYPES, I, V>(
             drb_seed_input,
+            view_number,
             next_epoch_number,
             membership,
             storage,
             consensus,
+            upgrade_lock,
         )
         .await;
     }
@@ -316,6 +333,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     with_epochs: bool,
     membership: &EpochMembershipCoordinator<TYPES>,
     storage: &I::Storage,
+    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let mut res = LeafChainTraversalOutcome::default();
     let consensus_reader = consensus.read().await;
@@ -404,12 +422,13 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
         drop(consensus_reader);
 
         for decided_leaf_info in &res.leaf_views {
-            decide_epoch_root::<TYPES, I>(
+            decide_epoch_root::<TYPES, I, V>(
                 &decided_leaf_info.leaf,
                 epoch_height,
                 membership.membership(),
                 storage,
                 &consensus,
+                &upgrade_lock,
             )
             .await;
         }
@@ -459,6 +478,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
     membership: &Arc<RwLock<TYPES::Membership>>,
     storage: &I::Storage,
     epoch_height: u64,
+    upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> LeafChainTraversalOutcome<TYPES> {
     let consensus_reader = consensus.read().await;
     let existing_upgrade_cert_reader = existing_upgrade_cert.read().await;
@@ -589,12 +609,13 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
 
     if with_epochs && res.new_decided_view_number.is_some() {
         for decided_leaf_info in &res.leaf_views {
-            decide_epoch_root::<TYPES, I>(
+            decide_epoch_root::<TYPES, I, V>(
                 &decided_leaf_info.leaf,
                 epoch_height,
                 membership,
                 storage,
                 &consensus,
+                &upgrade_lock,
             )
             .await;
         }

@@ -339,6 +339,9 @@ pub struct Consensus<TYPES: NodeType> {
     /// Number of iterations for the DRB calculation, taken from HotShotConfig
     pub drb_difficulty: u64,
 
+    /// Number of iterations for the DRB calculation post-difficulty upgrade, taken from HotShotConfig
+    pub drb_upgrade_difficulty: u64,
+
     /// Tables for the DRB seeds and results.
     pub drb_results: DrbResults<TYPES>,
 
@@ -455,6 +458,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         epoch_height: u64,
         state_cert: Option<LightClientStateUpdateCertificate<TYPES>>,
         drb_difficulty: u64,
+        drb_upgrade_difficulty: u64,
     ) -> Self {
         let transition_qc = if let Some(ref next_epoch_high_qc) = next_epoch_high_qc {
             if high_qc
@@ -495,6 +499,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             highest_block: 0,
             state_cert,
             drb_difficulty,
+            drb_upgrade_difficulty,
         }
     }
 
