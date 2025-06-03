@@ -532,6 +532,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
     contracts: &mut Contracts,
     params: LightClientV2UpgradeParams,
 ) -> Result<(String, bool)> {
+    let expected_major_version: u8 = 2;
     let dry_run = params.dry_run.unwrap_or_else(|| {
         tracing::warn!("Dry run not specified, defaulting to false");
         false
@@ -544,8 +545,7 @@ pub async fn upgrade_light_client_v2_multisig_owner(
         Some(proxy_addr) => {
             tracing::info!("LightClientProxy found at {proxy_addr:#x}");
             let proxy = LightClient::new(proxy_addr, &provider);
-            let owner = proxy.owner().call().await?;
-            let owner_addr = owner._0;
+            let owner_addr = proxy.owner().call().await?._0;
             if !dry_run {
                 tracing::info!("Checking if owner is a contract");
                 assert!(
@@ -553,13 +553,15 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                     "Owner is not a contract so not a multisig wallet"
                 );
             }
-            // first deploy PlonkVerifierV2.sol (if not already deployed)
+
+            // Deploy PlonkVerifierV2.sol (if not already deployed)
             let pv2_addr = contracts
                 .deploy(
                     Contract::PlonkVerifierV2,
                     PlonkVerifierV2::deploy_builder(&provider),
                 )
                 .await?;
+
             // then deploy LightClientV2.sol
             let target_lcv2_bytecode = if params.is_mock {
                 LightClientV2Mock::BYTECODE.encode_hex()
@@ -612,9 +614,12 @@ pub async fn upgrade_light_client_v2_multisig_owner(
 
             // only set the init data if the proxy was not initialized (when initialized the version number is the same as the contract version number)
             let init_data = if initialized == lcv2_version.majorVersion
-                && lcv2_version.majorVersion >= 1
+                && lcv2_version.majorVersion == expected_major_version
             {
-                tracing::info!("Proxy was already initialized");
+                tracing::info!(
+                    "Proxy was already initialized for version {}",
+                    expected_major_version
+                );
                 vec![].into()
             } else {
                 tracing::info!("Proxy was not initialized");
@@ -636,12 +641,14 @@ pub async fn upgrade_light_client_v2_multisig_owner(
             )
             .await;
 
-            // Check the result directly
             if let Err(ref err) = result {
                 tracing::error!("LightClientProxy upgrade failed: {:?}", err);
             } else {
                 tracing::info!("LightClientProxy upgrade proposal sent");
-                tracing::info!("Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}", owner_addr);
+                tracing::info!(
+                    "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+                    owner_addr
+                );
                 // IDEA: add a function to wait for the proposal to be executed
             }
 
@@ -651,7 +658,6 @@ pub async fn upgrade_light_client_v2_multisig_owner(
             }
         },
     }
-    // }
 }
 
 /// The primary logic for deploying and initializing an upgradable fee contract.
@@ -1049,6 +1055,7 @@ mod tests {
         sol_types::SolValue,
     };
     use sequencer_utils::test_utils::setup_test;
+    use serde_json;
 
     use super::*;
 
@@ -1339,14 +1346,12 @@ mod tests {
     // This test is used to test the upgrade of the LightClientProxy via the multisig wallet
     // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
     // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
-    // The test assumes that there is a file .env.deployer.rs.test in the root directory with the following variables:
-    // RPC_URL=
-    // SAFE_MULTISIG_ADDRESS=0x0000000000000000000000000000000000000000
-    // SAFE_ORCHESTRATOR_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000000
+    // The test assumes that there is a file .env.deployer.rs.test in the root directory:
     // Ensure that the private key has proposal rights on the Safe Multisig Wallet and the SDK supports the network
     async fn test_upgrade_light_client_to_v2_multisig_owner_helper(
         is_mock: bool,
         dry_run: bool,
+        upgrade_twice: bool,
     ) -> Result<()> {
         assert!(
             std::path::Path::new("../../../scripts/multisig-upgrade-entrypoint").exists(),
@@ -1419,6 +1424,18 @@ mod tests {
             Some(prover),
         )
         .await?;
+        if upgrade_twice {
+            // upgrade to v2
+            upgrade_light_client_v2(
+                &provider,
+                &mut contracts,
+                is_mock,
+                blocks_per_epoch,
+                epoch_start_block,
+            )
+            .await?;
+        }
+
         // transfer ownership to multisig
         let _receipt = transfer_ownership(
             &provider,
@@ -1429,6 +1446,7 @@ mod tests {
         .await?;
         let lc = LightClient::new(lc_proxy_addr, &provider);
         assert_eq!(lc.owner().call().await?._0, multisig_admin);
+
         // then send upgrade proposal to the multisig wallet
         let (result, success) = upgrade_light_client_v2_multisig_owner(
             &provider,
@@ -1437,7 +1455,7 @@ mod tests {
                 is_mock,
                 blocks_per_epoch,
                 epoch_start_block,
-                rpc_url: sepolia_rpc_url,
+                rpc_url: sepolia_rpc_url.clone(),
                 dry_run: Some(dry_run),
             },
         )
@@ -1447,7 +1465,25 @@ mod tests {
             result
         );
         assert!(success);
+        if dry_run {
+            let data: serde_json::Value = serde_json::from_str(&result)?;
+            assert_eq!(data["rpcUrl"], sepolia_rpc_url);
+            assert_eq!(data["safeAddress"], multisig_admin.to_string());
+            assert_eq!(data["proxyAddress"], lc_proxy_addr.to_string());
 
+            let expected_init_data = if upgrade_twice {
+                "0x" // no init data for the second upgrade because the proxy was already initialized
+            } else {
+                &LightClientV2::new(lc_proxy_addr, &provider)
+                    .initializeV2(blocks_per_epoch, epoch_start_block)
+                    .calldata()
+                    .to_owned()
+                    .to_string()
+            };
+
+            assert_eq!(data["initData"], expected_init_data.to_string());
+            assert_eq!(data["useHardwareWallet"], false);
+        }
         // v1 state persistence cannot be tested here because the upgrade proposal is not yet executed
         // One has to test that the upgrade proposal is available via the Safe UI
         // and then test that the v1 state is persisted
@@ -1456,13 +1492,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_upgrade_light_client_to_v2_multisig_owner_dry_run() -> Result<()> {
-        test_upgrade_light_client_to_v2_multisig_owner_helper(false, true).await
+        test_upgrade_light_client_to_v2_multisig_owner_helper(false, true, false).await
+    }
+
+    // We expect no init data for the second upgrade because the proxy was already initialized
+    #[tokio::test]
+    async fn test_upgrade_light_client_to_v2_twice_multisig_owner_dry_run() -> Result<()> {
+        test_upgrade_light_client_to_v2_multisig_owner_helper(false, true, true).await
     }
 
     #[tokio::test]
     #[ignore]
     async fn test_upgrade_light_client_to_v2_multisig_owner_real_run() -> Result<()> {
-        test_upgrade_light_client_to_v2_multisig_owner_helper(false, false).await
+        test_upgrade_light_client_to_v2_multisig_owner_helper(false, false, false).await
     }
 
     #[tokio::test]

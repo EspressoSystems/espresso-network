@@ -20,7 +20,7 @@ async function main() {
 
   try {
     const [upgradeData, dryRun] = processCommandLineArguments();
-    console.log("Upgrade Data : ", JSON.stringify(upgradeData));
+    console.log(JSON.stringify(upgradeData));
     if (!upgradeData.rpcUrl) {
       upgradeData.rpcUrl = getEnvVar("RPC_URL");
     }

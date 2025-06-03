@@ -4097,6 +4097,7 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-types",
  "sequencer-utils",
+ "serde_json",
  "surf-disco",
  "tide-disco",
  "tokio",

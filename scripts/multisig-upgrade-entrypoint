@@ -19,7 +19,6 @@ else
     REPO_ROOT=$(git rev-parse --show-toplevel)
     repo_path=$REPO_ROOT/contracts/script/multisigTransactionProposals/safeSDK/upgradeProxy.ts
     if [ -f "$repo_path" ]; then
-        echo "Using repo path: $repo_path"
         path=$repo_path
     else
         echo "Error: Neither $repo_path nor $docker_path exist."
