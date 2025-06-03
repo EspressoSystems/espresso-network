@@ -1,5 +1,20 @@
 name: Build
-
+# This workflow file is pretty complex, due to optimizations and features:
+#   - using public runners
+#   - rust caching
+#   - native docker multiplatform builds (without QEMU)
+#
+# 1. We build the binaries in 4 jobs for each of the 2 architectures. The jobs are broken up so that
+#    we get a decent amount of parallelism and a low overall runtime.
+# 2. We build the native docker image for each of 2 architectures using the binary artifacts from
+#    the first step. We push the images to the registry by digest.
+# 3. We merge the native docker images into a multiplatform image and push the combined image
+#    to the registry.
+# 4. We run the docker demo test to ensure that the images work as expected.
+#
+# For PR builds we don't build anything on ARM but only on AMD64. We pay separately for ARM builds
+# because they can't use the public github runners. For PR builds we don't push to the registry but
+# instead upload the docker images as artifacts and run the demo test against the artifacts.
 on:
   push:
     # TODO: FOR TESTING, restore branch gating
@@ -253,7 +268,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: "digests-amd64"
+          name: "digests-${{ matrix.service }}-amd64"
           path: "${{ runner.temp }}/digests/*"
           if-no-files-found: error
           retention-days: 1
@@ -263,10 +278,6 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build-arm
     runs-on: buildjet-2vcpu-ubuntu-2204-arm
-    # This is non-deterministic, a limitation of GHA. We but we only need the
-    # tag like (:main) at the end which is the same for each matrix build.
-    # outputs:
-    #   tags: ${{ steps.metadata.outputs.tags }}
     strategy:
       matrix:
         service:
@@ -337,7 +348,7 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: "digests-arm64"
+          name: "digests-${{ matrix.service }}-arm64"
           path: "${{ runner.temp }}/digests/*"
           if-no-files-found: error
           retention-days: 1
@@ -383,7 +394,7 @@ jobs:
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
-          pattern: "digests-*"
+          pattern: "digests-${{ matrix.service }}-*"
           path: "${{ runner.temp }}/digests"
           merge-multiple: true
 
@@ -412,7 +423,8 @@ jobs:
         run: |
           docker buildx imagetools inspect ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}:${{ steps.meta.outputs.version }}
 
-  test-demo:
+  test-demo-pr:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
     steps:
@@ -421,15 +433,13 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download artifacts (PR only)
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
 
       - name: Load docker images (PR only)
-        if: ${{ github.event_name == 'pull_request' }}
         run: |
           # load all *.tar files in the temp directory, the layout should
           # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
@@ -439,10 +449,35 @@ jobs:
 
       - name: Match the docker image tag built or pushed to the registry
         run: |
-          DOCKER_TAG=$(echo ${{ needs.build-dockers.outputs.tags }} | sed 's/.*://')
+          DOCKER_TAG=$(echo ${{ needs.build-dockers-amd.outputs.tags }} | sed 's/.*://')
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull remaining docker images
+        run: |
+          docker compose pull --policy missing
+
+      - name: Test docker demo
+        run: |
+          just demo --pull never &
+          set -o pipefail
+          timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+  test-demo-non-pr:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    steps:
+      - uses: taiki-e/install-action@just
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Match the docker image tag built or pushed to the registry
+        run: |
+          DOCKER_TAG=$(echo ${{ needs.build-dockers-amd.outputs.tags }} | sed 's/.*://')
+          echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
+
+      - name: Pull the docker images
         run: |
           docker compose pull --policy missing
 
