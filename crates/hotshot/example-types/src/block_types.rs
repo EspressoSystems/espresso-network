@@ -24,8 +24,6 @@ use hotshot_types::{
 };
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Keccak256};
-use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
