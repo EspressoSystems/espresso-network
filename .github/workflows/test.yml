@@ -52,9 +52,6 @@ jobs:
         with:
           comment_on_pr: false
 
-      - name: Install node deps
-        run: yarn
-
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
         run: cargo nextest archive --locked --workspace --exclude hotshot-testing --archive-file nextest-archive-postgres.tar.zst
@@ -94,9 +91,6 @@ jobs:
         uses: catchpoint/workflow-telemetry-action@v2
         with:
           comment_on_pr: false
-
-      - name: Install node deps
-        run: yarn
 
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
@@ -225,12 +219,18 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - uses: actions/checkout@v4
+
+      - name: Install node deps
+        run: yarn
+
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download archive
         uses: actions/download-artifact@v4
         with:
           name: nextest-archive-postgres
+      - name: Install node deps
+        run: yarn
 
       - name: Test
         run: |
@@ -255,6 +255,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Install node deps
+        run: yarn
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
