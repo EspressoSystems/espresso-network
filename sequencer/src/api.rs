@@ -3708,7 +3708,7 @@ mod test {
                 .get(&leader_eth_address)
                 .expect("leader not found");
 
-            let compute_reward = RewardDistributor::new(leader_validator.clone(), block_reward);
+            let distributor = RewardDistributor::new(leader_validator.clone(), block_reward);
             // Verify that the sum of delegator stakes equals the validator's total stake.
             for validator in validators.values() {
                 let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
@@ -3716,9 +3716,7 @@ mod test {
                 assert_eq!(delegator_stake_sum, validator.stake);
             }
 
-            let computed_rewards = compute_reward
-                .compute_rewards()
-                .expect("reward computation");
+            let computed_rewards = distributor.compute_rewards().expect("reward computation");
 
             // Verify that the leader commission amount is within the tolerated range.
             // Due to potential rounding errors in decimal calculations for delegator rewards,
