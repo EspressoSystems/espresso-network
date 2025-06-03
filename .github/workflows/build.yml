@@ -491,7 +491,7 @@ jobs:
 
   # This job enables having a single required status check for both test-demo jobs
   test-demo:
-    needs: [test-demo, test-demo-non-pr]
+    needs: [test-demo-pr, test-demo-non-pr]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}
