@@ -2383,7 +2383,6 @@ mod test {
         run_catchup_test("/v1").await;
     }
 
-    #[ignore]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_catchup_epochs() {
         setup_test();
