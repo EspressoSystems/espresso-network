@@ -143,7 +143,6 @@ jobs:
             github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
             || github.event_name == 'workflow_dispatch' ) }}
-          cache-provider: buildjet
 
       - name: Build ${{ matrix.binary }}
         run: |
