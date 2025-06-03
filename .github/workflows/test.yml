@@ -52,11 +52,8 @@ jobs:
         with:
           comment_on_pr: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-
-      - name: Install Node.js dependencies
-        run: npm install
+      - name: Install node deps
+        run: yarn
 
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
@@ -98,12 +95,9 @@ jobs:
         with:
           comment_on_pr: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Install node deps
+        run: yarn
 
-     - name: Install Node.js dependencies
-        run: npm install
-        
       - name: Build and archive tests
         # hotshot-testing is tested in hotshot.yml, exclude from compilation
         run: cargo nextest archive --locked --features "embedded-db testing" --workspace --exclude hotshot-testing --archive-file nextest-archive-sqlite.tar.zst
