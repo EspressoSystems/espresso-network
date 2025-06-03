@@ -69,6 +69,7 @@ use hotshot_types::{
 use rand::{rngs::StdRng, SeedableRng};
 use surf_disco::Url;
 use tracing::{debug, error, info, warn};
+use local_ip_address;
 
 #[derive(Debug, Clone)]
 /// Arguments passed to the orchestrator
