@@ -17,10 +17,9 @@ name: Build
 # instead upload the docker images as artifacts and run the demo test against the artifacts.
 on:
   push:
-    # TODO: FOR TESTING, restore branch gating
-    # branches:
-    #   - main
-    #   - release-*
+    branches:
+      - main
+      - release-*
     tags:
       # YYYYMMDD
       - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
