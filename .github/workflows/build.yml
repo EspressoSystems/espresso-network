@@ -12,9 +12,9 @@ name: Build
 #    to the registry.
 # 4. We run the docker demo test to ensure that the images work as expected.
 #
-# For PR builds we don't build anything on ARM but only on AMD64. We pay separately for ARM builds
-# because they can't use the public github runners. For PR builds we don't push to the registry but
-# instead upload the docker images as artifacts and run the demo test against the artifacts.
+# For PR builds we don't build anything on ARM but only on AMD64. For PR builds we don't push to the
+# registry but instead upload the docker images as artifacts and run the demo test against the
+# artifacts.
 on:
   push:
     branches:
