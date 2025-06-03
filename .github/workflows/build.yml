@@ -229,6 +229,8 @@ jobs:
           context: .
           file: ./docker/${{ matrix.service }}.Dockerfile
           labels: ${{ steps.metadata.outputs.labels  }}
+          # Note the tag is used later to run the demo test
+          tags: ${{ steps.metadata.outputs.tags }}
           platforms: linux/amd64
           outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
 
@@ -248,6 +250,7 @@ jobs:
           context: .
           file: ./docker/${{ matrix.service }}.Dockerfile
           labels: ${{ steps.metadata.outputs.labels  }}
+          # Note: the final multiarch image will receive the tag
           platforms: linux/amd64
           outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
 
@@ -329,6 +332,7 @@ jobs:
           context: .
           file: ./docker/${{ matrix.service }}.Dockerfile
           labels: ${{ steps.metadata.outputs.labels  }}
+          # Note: the final multiarch image will receive the tag
           platforms: linux/arm64
           outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{  matrix.service }},push-by-digest=true,name-canonical=true,push=true
 
