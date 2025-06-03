@@ -81,7 +81,7 @@ pub fn build_instance_state<V: Versions>(
         peers,
         V::Base::version(),
         coordinator,
-        genesis_version.unwrap_or_else(|| genesis.base_version),
+        genesis_version.unwrap_or(genesis.base_version),
     )
 }
 

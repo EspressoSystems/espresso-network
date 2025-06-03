@@ -547,9 +547,7 @@ where
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
-        genesis_version: genesis
-            .genesis_version
-            .unwrap_or_else(|| genesis.base_version),
+        genesis_version: genesis.genesis_version.unwrap_or(genesis.base_version),
     };
 
     // Initialize the Libp2p network
