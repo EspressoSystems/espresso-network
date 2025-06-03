@@ -62,7 +62,7 @@ pub struct QuorumProposalRecvTaskState<TYPES: NodeType, I: NodeImplementation<TY
     pub cur_epoch: Option<TYPES::Epoch>,
 
     /// Membership for Quorum Certs/votes
-    pub membership: EpochMembershipCoordinator<TYPES, V>,
+    pub membership: EpochMembershipCoordinator<TYPES>,
 
     /// View timeout from config.
     pub timeout: u64,
@@ -106,7 +106,7 @@ pub(crate) struct ValidationInfo<TYPES: NodeType, I: NodeImplementation<TYPES>, 
     pub(crate) consensus: OuterConsensus<TYPES>,
 
     /// Membership for Quorum Certs/votes
-    pub membership: EpochMembership<TYPES, V>,
+    pub membership: EpochMembership<TYPES>,
 
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,

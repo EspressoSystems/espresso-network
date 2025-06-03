@@ -7,7 +7,7 @@ use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_contract_adapter::sol_types::StakeTableV2::{
     ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
     ValidatorRegistered, ValidatorRegisteredV2,
-};use hotshot_types::traits::node_implementation::Versions;
+};
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
 };
@@ -65,10 +65,10 @@ pub type IndexedStake = (
 );
 
 #[derive(Clone, derive_more::derive::Debug)]
-pub struct StakeTableFetcher<V: Versions> {
+pub struct StakeTableFetcher {
     /// Peers for catching up the stake table
     #[debug(skip)]
-    pub(crate) peers: Arc<dyn StateCatchup<V>>,
+    pub(crate) peers: Arc<dyn StateCatchup>,
     /// Methods for stake table persistence.
     #[debug(skip)]
     pub(crate) persistence: Arc<Mutex<dyn MembershipPersistence>>,

@@ -4,7 +4,6 @@ use alloy::primitives::{Address, U256};
 use anyhow::{bail, Context};
 use committable::{Commitment, Committable};
 use hotshot::types::BLSPubKey;
-use hotshot_types::traits::node_implementation::Versions;
 use hotshot_query_service::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, ViewNumber},
@@ -754,9 +753,9 @@ impl ValidatedState {
     ///   * Resolves [`ChainConfig`].
     ///   * Performs catchup.
     ///   * Charges fees.
-    pub async fn apply_header<V: Versions>(
+    pub async fn apply_header(
         &self,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         peers: &impl StateCatchup,
         parent_leaf: &Leaf2,
         proposed_header: &Header,
@@ -869,7 +868,7 @@ impl ValidatedState {
     }
 
     /// Updates the `ValidatedState` if a protocol upgrade has occurred.
-    pub(crate) fn apply_upgrade<V: Versions>(&mut self, instance: &NodeState<V>, version: Version) {
+    pub(crate) fn apply_upgrade(&mut self, instance: &NodeState, version: Version) {
         // Check for protocol upgrade based on sequencer version
         if version <= instance.current_version {
             return;
@@ -894,9 +893,9 @@ impl ValidatedState {
     ///  If neither has the `ChainConfig`, it fetches the config from the peers.
     ///
     /// Returns an error if it fails to fetch the `ChainConfig` from the peers.
-    pub(crate) async fn get_chain_config<V: Versions>(
+    pub(crate) async fn get_chain_config(
         &self,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         peers: &impl StateCatchup,
         header_cf: &ResolvableChainConfig,
     ) -> anyhow::Result<ChainConfig> {
@@ -916,8 +915,8 @@ impl ValidatedState {
     }
 }
 
-pub async fn get_l1_deposits<V: Versions>(
-    instance: &NodeState<V>,
+pub async fn get_l1_deposits(
+    instance: &NodeState,
     header: &Header,
     parent_leaf: &Leaf2,
     fee_contract_address: Option<Address>,
@@ -939,9 +938,9 @@ pub async fn get_l1_deposits<V: Versions>(
     }
 }
 
-impl<V: Versions> HotShotState<SeqTypes> for ValidatedState {
+impl HotShotState<SeqTypes> for ValidatedState {
     type Error = BlockError;
-    type Instance = NodeState<V>;
+    type Instance = NodeState;
 
     type Time = ViewNumber;
 
@@ -1270,7 +1269,7 @@ mod test {
     }
 
     impl<'a> ValidatedTransition<'a> {
-        fn mock(instance: NodeState<V>, parent: &'a Header, proposal: Proposal<'a>) -> Self {
+        fn mock(instance: NodeState, parent: &'a Header, proposal: Proposal<'a>) -> Self {
             let expected_chain_config = instance.chain_config;
 
             Self {

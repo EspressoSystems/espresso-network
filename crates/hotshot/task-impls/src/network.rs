@@ -513,7 +513,7 @@ pub struct NetworkEventTaskState<
     pub epoch: Option<TYPES::Epoch>,
 
     /// network memberships
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// Storage to store actionable events
     pub storage: S,
@@ -1132,7 +1132,7 @@ impl<
                 let epoch = self.epoch.map(|x| x.u64());
                 let membership_coordinator = self.membership_coordinator.clone();
                 spawn(async move {
-                    net.update_view::<TYPES, _>(*keep_view, epoch, membership_coordinator)
+                    net.update_view::<TYPES>(*keep_view, epoch, membership_coordinator)
                         .await;
                 });
                 None

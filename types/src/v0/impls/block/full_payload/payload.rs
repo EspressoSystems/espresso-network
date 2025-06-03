@@ -8,7 +8,7 @@ use hotshot_types::{
     traits::{BlockPayload, EncodeBytes},
     utils::BuilderCommitment,
     vid::advz::{ADVZCommon, ADVZScheme},
-};use hotshot_types::traits::node_implementation::Versions;
+};
 use jf_vid::VidScheme;
 use sha2::Digest;
 use thiserror::Error;
@@ -126,12 +126,12 @@ impl Payload {
 }
 
 #[async_trait]
-impl<V: Versions> BlockPayload<SeqTypes> for Payload {
+impl BlockPayload<SeqTypes> for Payload {
     // TODO BlockPayload trait eliminate unneeded args, return vals of type
     // `Self::Metadata` https://github.com/EspressoSystems/HotShot/issues/3300
     type Error = BlockBuildingError;
     type Transaction = Transaction;
-    type Instance = NodeState<V>;
+    type Instance = NodeState;
     type Metadata = NsTable;
     type ValidatedState = ValidatedState;
 

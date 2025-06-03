@@ -37,7 +37,7 @@ use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
-    impls::{NodeState, Versions},
+    impls::NodeState,
     utils::BackoffParams,
     v0_1::{RewardAccount, RewardAccountProof, RewardMerkleCommitment},
     v0_3::{EventKey, IndexedStake, StakeTableEvent, Validator},
@@ -48,7 +48,7 @@ use crate::{
 };
 
 #[async_trait]
-pub trait StateCatchup<V: Versions>: Send + Sync {
+pub trait StateCatchup: Send + Sync {
     /// Fetch the leaf at the given height without retrying on transient errors.
     async fn try_fetch_leaf(
         &self,
@@ -82,7 +82,7 @@ pub trait StateCatchup<V: Versions>: Send + Sync {
     async fn try_fetch_accounts(
         &self,
         retry: usize,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         fee_merkle_tree_root: FeeMerkleCommitment,
@@ -92,7 +92,7 @@ pub trait StateCatchup<V: Versions>: Send + Sync {
     /// Fetch the given list of accounts, retrying on transient errors.
     async fn fetch_accounts(
         &self,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         fee_merkle_tree_root: FeeMerkleCommitment,
@@ -127,7 +127,7 @@ pub trait StateCatchup<V: Versions>: Send + Sync {
     async fn try_remember_blocks_merkle_tree(
         &self,
         retry: usize,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         mt: &mut BlockMerkleTree,
@@ -136,7 +136,7 @@ pub trait StateCatchup<V: Versions>: Send + Sync {
     /// Fetch and remember the blocks frontier, retrying on transient errors.
     async fn remember_blocks_merkle_tree(
         &self,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         mt: &mut BlockMerkleTree,
@@ -176,7 +176,7 @@ pub trait StateCatchup<V: Versions>: Send + Sync {
     async fn try_fetch_reward_accounts(
         &self,
         retry: usize,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitment,
@@ -186,7 +186,7 @@ pub trait StateCatchup<V: Versions>: Send + Sync {
     /// Fetch the given list of reward accounts, retrying on transient errors.
     async fn fetch_reward_accounts(
         &self,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitment,
@@ -228,7 +228,7 @@ pub trait StateCatchup<V: Versions>: Send + Sync {
 }
 
 #[async_trait]
-impl<V: Versions, T: StateCatchup<V> + ?Sized> StateCatchup<V> for Arc<T> {
+impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn try_fetch_leaf(
         &self,
         retry: usize,
@@ -254,7 +254,7 @@ impl<V: Versions, T: StateCatchup<V> + ?Sized> StateCatchup<V> for Arc<T> {
     async fn try_fetch_accounts(
         &self,
         retry: usize,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         fee_merkle_tree_root: FeeMerkleCommitment,
@@ -274,7 +274,7 @@ impl<V: Versions, T: StateCatchup<V> + ?Sized> StateCatchup<V> for Arc<T> {
 
     async fn fetch_accounts(
         &self,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         fee_merkle_tree_root: FeeMerkleCommitment,
@@ -288,7 +288,7 @@ impl<V: Versions, T: StateCatchup<V> + ?Sized> StateCatchup<V> for Arc<T> {
     async fn try_remember_blocks_merkle_tree(
         &self,
         retry: usize,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         mt: &mut BlockMerkleTree,
@@ -300,7 +300,7 @@ impl<V: Versions, T: StateCatchup<V> + ?Sized> StateCatchup<V> for Arc<T> {
 
     async fn remember_blocks_merkle_tree(
         &self,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         mt: &mut BlockMerkleTree,
@@ -328,7 +328,7 @@ impl<V: Versions, T: StateCatchup<V> + ?Sized> StateCatchup<V> for Arc<T> {
     async fn try_fetch_reward_accounts(
         &self,
         retry: usize,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitment,
@@ -348,7 +348,7 @@ impl<V: Versions, T: StateCatchup<V> + ?Sized> StateCatchup<V> for Arc<T> {
 
     async fn fetch_reward_accounts(
         &self,
-        instance: &NodeState<V>,
+        instance: &NodeState,
         height: u64,
         view: ViewNumber,
         reward_merkle_tree_root: RewardMerkleCommitment,
@@ -427,10 +427,10 @@ pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + DhtPersistentStorage
 {
     /// Use this storage as a state catchup backend, if supported.
-    fn into_catchup_provider<V: Versions>(
+    fn into_catchup_provider(
         self,
         _backoff: BackoffParams,
-    ) -> anyhow::Result<Arc<dyn StateCatchup<V>>> {
+    ) -> anyhow::Result<Arc<dyn StateCatchup>> {
         bail!("state catchup is not implemented for this persistence type");
     }
 
@@ -483,7 +483,7 @@ pub trait SequencerPersistence:
     /// if applicable,.
     async fn load_consensus_state<V: Versions>(
         &self,
-        state: NodeState<V>,
+        state: NodeState,
     ) -> anyhow::Result<(HotShotInitializer<SeqTypes>, Option<ViewNumber>)> {
         let genesis_validated_state = ValidatedState::genesis(&state).0;
         let highest_voted_view = match self

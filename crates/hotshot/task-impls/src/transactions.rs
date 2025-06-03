@@ -85,7 +85,7 @@ pub struct TransactionTaskState<TYPES: NodeType, V: Versions> {
     pub consensus: OuterConsensus<TYPES>,
 
     /// Membership for the quorum
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// Builder 0.1 API clients
     pub builder_clients: Vec<BuilderClientBase<TYPES>>,

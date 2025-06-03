@@ -44,7 +44,7 @@ where
 
 #[async_trait]
 impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> CreateTaskState<TYPES, I, V>
-    for NetworkRequestState<TYPES, I, V>
+    for NetworkRequestState<TYPES, I>
 {
     async fn create_from(handle: &SystemContextHandle<TYPES, I, V>) -> Self {
         Self {

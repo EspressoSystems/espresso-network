@@ -9,7 +9,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::states::InstanceState,
     HotShotConfig,
-};use hotshot_types::traits::node_implementation::Versions;
+};
 use indexmap::IndexMap;
 #[cfg(any(test, feature = "testing"))]
 use vbs::version::StaticVersionType;
@@ -33,17 +33,17 @@ use crate::EpochCommittees;
 ///
 /// For mutable state, use `ValidatedState`.
 #[derive(derive_more::Debug, Clone)]
-pub struct NodeState<V: Versions> {
+pub struct NodeState {
     pub node_id: u64,
     pub chain_config: ChainConfig,
     pub l1_client: L1Client,
     #[debug("{}", state_catchup.name())]
-    pub state_catchup: Arc<dyn StateCatchup<V>>,
+    pub state_catchup: Arc<dyn StateCatchup>,
     pub genesis_header: GenesisHeader,
     pub genesis_state: ValidatedState,
     pub l1_genesis: Option<L1BlockInfo>,
     #[debug(skip)]
-    pub coordinator: EpochMembershipCoordinator<SeqTypes, V>,
+    pub coordinator: EpochMembershipCoordinator<SeqTypes>,
     pub epoch_height: Option<u64>,
 
     /// Map containing all planned and executed upgrades.
@@ -104,14 +104,14 @@ impl MembershipPersistence for NoStorage {
     }
 }
 
-impl<V: Versions> NodeState<V> {
+impl NodeState {
     pub fn new(
         node_id: u64,
         chain_config: ChainConfig,
         l1_client: L1Client,
-        catchup: impl StateCatchup<V> + 'static,
+        catchup: impl StateCatchup + 'static,
         current_version: Version,
-        coordinator: EpochMembershipCoordinator<SeqTypes, V>,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
     ) -> Self {
         Self {
             node_id,
@@ -269,7 +269,7 @@ impl From<BTreeMap<Version, Upgrade>> for UpgradeMap {
 // This allows us to turn on `Default` on InstanceState trait
 // which is used in `HotShot` by `TestBuilderImplementation`.
 #[cfg(any(test, feature = "testing"))]
-impl<V: Versions> Default for NodeState<V> {
+impl Default for NodeState {
     fn default() -> Self {
         use hotshot_example_types::storage_types::TestStorage;
         use vbs::version::StaticVersion;
@@ -299,7 +299,7 @@ impl<V: Versions> Default for NodeState<V> {
     }
 }
 
-impl<V: Versions> InstanceState for NodeState<V> {}
+impl InstanceState for NodeState {}
 
 impl Upgrade {
     pub fn set_hotshot_config_parameters(&self, config: &mut HotShotConfig<SeqTypes>) {
@@ -382,7 +382,7 @@ pub mod mock {
     }
 
     #[async_trait]
-    impl<V: Versions> StateCatchup<V> for MockStateCatchup {
+    impl StateCatchup for MockStateCatchup {
         async fn try_fetch_leaf(
             &self,
             _retry: usize,
@@ -396,7 +396,7 @@ pub mod mock {
         async fn try_fetch_accounts(
             &self,
             _retry: usize,
-            _instance: &NodeState<V>,
+            _instance: &NodeState,
             _height: u64,
             view: ViewNumber,
             fee_merkle_tree_root: FeeMerkleCommitment,
@@ -426,7 +426,7 @@ pub mod mock {
         async fn try_remember_blocks_merkle_tree(
             &self,
             _retry: usize,
-            _instance: &NodeState<V>,
+            _instance: &NodeState,
             _height: u64,
             view: ViewNumber,
             mt: &mut BlockMerkleTree,
@@ -459,7 +459,7 @@ pub mod mock {
         async fn try_fetch_reward_accounts(
             &self,
             _retry: usize,
-            _instance: &NodeState<V>,
+            _instance: &NodeState,
             _height: u64,
             _view: ViewNumber,
             _reward_merkle_tree_root: RewardMerkleCommitment,

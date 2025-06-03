@@ -57,7 +57,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType, V: Versions>(
     qc: &QuorumCertificate2<TYPES>,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
-    membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
+    membership_coordinator: EpochMembershipCoordinator<TYPES>,
     consensus: OuterConsensus<TYPES>,
     sender_public_key: TYPES::SignatureKey,
     sender_private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -331,7 +331,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
     existing_upgrade_cert: Arc<RwLock<Option<UpgradeCertificate<TYPES>>>>,
     public_key: &TYPES::SignatureKey,
     with_epochs: bool,
-    membership: &EpochMembershipCoordinator<TYPES, V>,
+    membership: &EpochMembershipCoordinator<TYPES>,
     storage: &I::Storage,
     upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> LeafChainTraversalOutcome<TYPES> {
@@ -630,7 +630,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
 pub(crate) async fn parent_leaf_and_state<TYPES: NodeType, V: Versions>(
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: &Receiver<Arc<HotShotEvent<TYPES>>>,
-    membership: EpochMembershipCoordinator<TYPES, V>,
+    membership: EpochMembershipCoordinator<TYPES>,
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     consensus: OuterConsensus<TYPES>,
@@ -1146,7 +1146,7 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
     qc: &QuorumCertificate2<TYPES>,
     maybe_next_epoch_qc: Option<&NextEpochQuorumCertificate2<TYPES>>,
     consensus: &OuterConsensus<TYPES>,
-    membership_coordinator: &EpochMembershipCoordinator<TYPES, V>,
+    membership_coordinator: &EpochMembershipCoordinator<TYPES>,
     upgrade_lock: &UpgradeLock<TYPES, V>,
     epoch_height: u64,
 ) -> Result<()> {
@@ -1211,9 +1211,9 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType, V: Versions>(
 }
 
 /// Validates the light client state update certificate
-pub async fn validate_light_client_state_update_certificate<TYPES: NodeType, V: Versions>(
+pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     state_cert: &LightClientStateUpdateCertificate<TYPES>,
-    membership_coordinator: &EpochMembershipCoordinator<TYPES, V>,
+    membership_coordinator: &EpochMembershipCoordinator<TYPES>,
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
 

@@ -428,7 +428,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
     #[allow(clippy::panic)]
     pub async fn calculate_vid_disperse<V: Versions>(
         payload: &TYPES::BlockPayload,
-        membership: &EpochMembershipCoordinator<TYPES, V>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,

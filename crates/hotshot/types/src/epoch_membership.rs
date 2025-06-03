@@ -13,12 +13,11 @@ use hotshot_utils::{
 
 use crate::{
     data::Leaf2,
-    message::UpgradeLock,
     drb::{compute_drb_result, DrbInput, DrbResult},
     stake_table::HSStakeTable,
     traits::{
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
         storage::{
             load_drb_progress_fn, store_drb_progress_fn, store_drb_result_fn, LoadDrbProgressFn,
             Storage, StoreDrbProgressFn, StoreDrbResultFn,
@@ -28,16 +27,16 @@ use crate::{
     PeerConfig,
 };
 
-type EpochMap<TYPES, V> =
-    HashMap<<TYPES as NodeType>::Epoch, InactiveReceiver<Result<EpochMembership<TYPES, V>>>>;
+type EpochMap<TYPES> =
+    HashMap<<TYPES as NodeType>::Epoch, InactiveReceiver<Result<EpochMembership<TYPES>>>>;
 
-type EpochSender<TYPES, V> = (
+type EpochSender<TYPES> = (
     <TYPES as NodeType>::Epoch,
-    Sender<Result<EpochMembership<TYPES, V>>>,
+    Sender<Result<EpochMembership<TYPES>>>,
 );
 
 /// Struct to Coordinate membership catchup
-pub struct EpochMembershipCoordinator<TYPES: NodeType, V: Versions> {
+pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// The underlying membhersip
     membership: Arc<RwLock<TYPES::Membership>>,
 
@@ -45,7 +44,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType, V: Versions> {
     /// Any new callers wantin an `EpochMembership` will await on the signal
     /// alerting them the membership is ready.  The first caller for an epoch will
     /// wait for the actual catchup and allert future callers when it's done
-    catchup_map: Arc<Mutex<EpochMap<TYPES, V>>>,
+    catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
     /// Number of blocks in an epoch
     pub epoch_height: u64,
@@ -59,11 +58,9 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType, V: Versions> {
 
     /// difficulty level for the DRB calculation, taken from HotShotConfig
     drb_difficulty: u64,
-
-    upgrade_lock: Option<UpgradeLock<TYPES, V>>,
 }
 
-impl<TYPES: NodeType, V: Versions> Clone for EpochMembershipCoordinator<TYPES, V> {
+impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
     fn clone(&self) -> Self {
         Self {
             membership: Arc::clone(&self.membership),
@@ -73,12 +70,11 @@ impl<TYPES: NodeType, V: Versions> Clone for EpochMembershipCoordinator<TYPES, V
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
             store_drb_result_fn: self.store_drb_result_fn.clone(),
             drb_difficulty: self.drb_difficulty,
-            upgrade_lock: self.upgrade_lock.clone(),
         }
     }
 }
 
-impl<TYPES: NodeType, V: Versions> EpochMembershipCoordinator<TYPES, V>
+impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES>
 where
     Self: Send,
 {
@@ -97,7 +93,6 @@ where
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
             drb_difficulty,
-            upgrade_lock: None,
         }
     }
 
@@ -112,7 +107,7 @@ where
     pub async fn membership_for_epoch(
         &self,
         maybe_epoch: Option<TYPES::Epoch>,
-    ) -> Result<EpochMembership<TYPES, V>> {
+    ) -> Result<EpochMembership<TYPES>> {
         let ret_val = EpochMembership {
             epoch: maybe_epoch,
             coordinator: self.clone(),
@@ -156,7 +151,7 @@ where
     pub async fn stake_table_for_epoch(
         &self,
         maybe_epoch: Option<TYPES::Epoch>,
-    ) -> Result<EpochMembership<TYPES, V>> {
+    ) -> Result<EpochMembership<TYPES>> {
         let ret_val = EpochMembership {
             epoch: maybe_epoch,
             coordinator: self.clone(),
@@ -196,7 +191,7 @@ where
     async fn catchup(
         mut self,
         epoch: TYPES::Epoch,
-        epoch_tx: Sender<Result<EpochMembership<TYPES, V>>>,
+        epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
     ) {
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
@@ -297,7 +292,7 @@ where
     /// If it's not, it will try to return the stake table if already available.
     /// Returns an error if the catchup failed or the catchup is not in progress
     /// and the stake table is not available.
-    pub async fn wait_for_catchup(&self, epoch: TYPES::Epoch) -> Result<EpochMembership<TYPES, V>> {
+    pub async fn wait_for_catchup(&self, epoch: TYPES::Epoch) -> Result<EpochMembership<TYPES>> {
         let maybe_receiver = self
             .catchup_map
             .lock()
@@ -331,7 +326,7 @@ where
     async fn catchup_cleanup(
         &mut self,
         req_epoch: TYPES::Epoch,
-        cancel_epochs: Vec<EpochSender<TYPES, V>>,
+        cancel_epochs: Vec<EpochSender<TYPES>>,
         err: Error,
     ) {
         // Cleanup in case of error
@@ -484,10 +479,10 @@ where
     }
 }
 
-fn spawn_catchup<T: NodeType, V: Versions>(
-    coordinator: EpochMembershipCoordinator<T, V>,
+fn spawn_catchup<T: NodeType>(
+    coordinator: EpochMembershipCoordinator<T>,
     epoch: T::Epoch,
-    epoch_tx: Sender<Result<EpochMembership<T, V>>>,
+    epoch_tx: Sender<Result<EpochMembership<T>>>,
 ) {
     tokio::spawn(async move {
         coordinator.clone().catchup(epoch, epoch_tx).await;
@@ -495,14 +490,14 @@ fn spawn_catchup<T: NodeType, V: Versions>(
 }
 /// Wrapper around a membership that guarantees that the epoch
 /// has a stake table
-pub struct EpochMembership<TYPES: NodeType, V: Versions> {
+pub struct EpochMembership<TYPES: NodeType> {
     /// Epoch the `membership` is guaranteed to have a stake table for
     pub epoch: Option<TYPES::Epoch>,
     /// Underlying membership
-    pub coordinator: EpochMembershipCoordinator<TYPES, V>,
+    pub coordinator: EpochMembershipCoordinator<TYPES>,
 }
 
-impl<TYPES: NodeType, V: Versions> Clone for EpochMembership<TYPES, V> {
+impl<TYPES: NodeType> Clone for EpochMembership<TYPES> {
     fn clone(&self) -> Self {
         Self {
             coordinator: self.coordinator.clone(),
@@ -511,7 +506,7 @@ impl<TYPES: NodeType, V: Versions> Clone for EpochMembership<TYPES, V> {
     }
 }
 
-impl<TYPES: NodeType, V: Versions> EpochMembership<TYPES, V> {
+impl<TYPES: NodeType> EpochMembership<TYPES> {
     /// Get the epoch this membership is good for
     pub fn epoch(&self) -> Option<TYPES::Epoch> {
         self.epoch

@@ -52,7 +52,7 @@ pub struct VoteCollectionTaskState<
     pub public_key: TYPES::SignatureKey,
 
     /// Membership for voting
-    pub membership: EpochMembership<TYPES, V>,
+    pub membership: EpochMembership<TYPES>,
 
     /// accumulator handles aggregating the votes
     pub accumulator: Option<VoteAccumulator<TYPES, VOTE, CERT, V>>,
@@ -78,9 +78,9 @@ pub trait AggregatableVote<
     ///
     /// # Errors
     /// if the leader cannot be calculated
-    fn leader<V: Versions>(
+    fn leader(
         &self,
-        membership: &EpochMembership<TYPES, V>,
+        membership: &EpochMembership<TYPES>,
     ) -> impl Future<Output = Result<TYPES::SignatureKey>>;
 
     /// return the Hotshot event for the completion of this CERT
@@ -168,12 +168,12 @@ where
 }
 
 /// Info needed to create a vote accumulator task
-pub struct AccumulatorInfo<TYPES: NodeType, V: Versions> {
+pub struct AccumulatorInfo<TYPES: NodeType> {
     /// This nodes Pub Key
     pub public_key: TYPES::SignatureKey,
 
     /// Membership we are accumulation votes for
-    pub membership: EpochMembership<TYPES, V>,
+    pub membership: EpochMembership<TYPES>,
 
     /// View of the votes we are collecting
     pub view: TYPES::View,
@@ -190,7 +190,7 @@ pub struct AccumulatorInfo<TYPES: NodeType, V: Versions> {
 /// # Panics
 /// Calls unwrap but should never panic.
 pub async fn create_vote_accumulator<TYPES, VOTE, CERT, V>(
-    info: &AccumulatorInfo<TYPES, V>,
+    info: &AccumulatorInfo<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     upgrade_lock: UpgradeLock<TYPES, V>,
@@ -250,7 +250,7 @@ pub async fn handle_vote<
     collectors: &mut VoteCollectorsMap<TYPES, VOTE, CERT, V>,
     vote: &VOTE,
     public_key: TYPES::SignatureKey,
-    membership: &EpochMembership<TYPES, V>,
+    membership: &EpochMembership<TYPES>,
     id: u64,
     event: &Arc<HotShotEvent<TYPES>>,
     event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,
@@ -343,7 +343,7 @@ type ViewSyncFinalizeVoteState<TYPES, V> = VoteCollectionTaskState<
 impl<TYPES: NodeType> AggregatableVote<TYPES, QuorumVote<TYPES>, QuorumCertificate<TYPES>>
     for QuorumVote<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number() + 1).await
     }
     fn make_cert_event(
@@ -357,7 +357,7 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, QuorumVote<TYPES>, QuorumCertifica
 impl<TYPES: NodeType> AggregatableVote<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>>
     for QuorumVote2<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number() + 1).await
     }
     fn make_cert_event(
@@ -372,7 +372,7 @@ impl<TYPES: NodeType>
     AggregatableVote<TYPES, NextEpochQuorumVote2<TYPES>, NextEpochQuorumCertificate2<TYPES>>
     for NextEpochQuorumVote2<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         let epoch = membership
             .epoch
             .map(|e| TYPES::Epoch::new(e.saturating_sub(1)));
@@ -393,7 +393,7 @@ impl<TYPES: NodeType>
 impl<TYPES: NodeType> AggregatableVote<TYPES, UpgradeVote<TYPES>, UpgradeCertificate<TYPES>>
     for UpgradeVote<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number()).await
     }
     fn make_cert_event(
@@ -407,7 +407,7 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, UpgradeVote<TYPES>, UpgradeCertifi
 impl<TYPES: NodeType> AggregatableVote<TYPES, DaVote2<TYPES>, DaCertificate2<TYPES>>
     for DaVote2<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number()).await
     }
     fn make_cert_event(
@@ -421,7 +421,7 @@ impl<TYPES: NodeType> AggregatableVote<TYPES, DaVote2<TYPES>, DaCertificate2<TYP
 impl<TYPES: NodeType> AggregatableVote<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>>
     for TimeoutVote2<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         membership.leader(self.view_number() + 1).await
     }
     fn make_cert_event(
@@ -436,7 +436,7 @@ impl<TYPES: NodeType>
     AggregatableVote<TYPES, ViewSyncCommitVote2<TYPES>, ViewSyncCommitCertificate2<TYPES>>
     for ViewSyncCommitVote2<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         membership
             .leader(self.date().round + self.date().relay)
             .await
@@ -453,7 +453,7 @@ impl<TYPES: NodeType>
     AggregatableVote<TYPES, ViewSyncPreCommitVote2<TYPES>, ViewSyncPreCommitCertificate2<TYPES>>
     for ViewSyncPreCommitVote2<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         membership
             .leader(self.date().round + self.date().relay)
             .await
@@ -470,7 +470,7 @@ impl<TYPES: NodeType>
     AggregatableVote<TYPES, ViewSyncFinalizeVote2<TYPES>, ViewSyncFinalizeCertificate2<TYPES>>
     for ViewSyncFinalizeVote2<TYPES>
 {
-    async fn leader<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<TYPES::SignatureKey> {
+    async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         membership
             .leader(self.date().round + self.date().relay)
             .await
@@ -661,7 +661,7 @@ pub struct EpochRootVoteCollectionTaskState<TYPES: NodeType, V: Versions> {
     pub public_key: TYPES::SignatureKey,
 
     /// Membership for voting
-    pub membership: EpochMembership<TYPES, V>,
+    pub membership: EpochMembership<TYPES>,
 
     /// accumulator for quorum votes
     pub accumulator:
@@ -750,7 +750,7 @@ impl<TYPES: NodeType, V: Versions> EpochRootVoteCollectionTaskState<TYPES, V> {
 }
 
 async fn create_epoch_root_vote_collection_task_state<TYPES: NodeType, V: Versions>(
-    info: &AccumulatorInfo<TYPES, V>,
+    info: &AccumulatorInfo<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
     upgrade_lock: UpgradeLock<TYPES, V>,
@@ -790,7 +790,7 @@ pub async fn handle_epoch_root_vote<TYPES: NodeType, V: Versions>(
     collectors: &mut EpochRootVoteCollectorsMap<TYPES, V>,
     vote: &EpochRootQuorumVote<TYPES>,
     public_key: TYPES::SignatureKey,
-    membership: &EpochMembership<TYPES, V>,
+    membership: &EpochMembership<TYPES>,
     id: u64,
     event: &Arc<HotShotEvent<TYPES>>,
     event_stream: &Sender<Arc<HotShotEvent<TYPES>>>,

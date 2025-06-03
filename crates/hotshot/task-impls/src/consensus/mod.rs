@@ -56,7 +56,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub network: Arc<I::Network>,
 
     /// Membership for Quorum Certs/votes
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// A map of `QuorumVote` collector tasks.
     pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>,

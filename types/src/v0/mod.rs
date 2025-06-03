@@ -129,18 +129,16 @@ pub(crate) use v0_3::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
 #[derive(
     Clone, Copy, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize,
 )]
-pub struct SeqTypes<V: Versions> {
-  _pd: PhantomData<V>,
-}
+pub struct SeqTypes;
 
-impl<V: Versions> NodeType for SeqTypes<V> {
+impl NodeType for SeqTypes {
     type View = ViewNumber;
     type Epoch = EpochNumber;
     type BlockHeader = Header;
     type BlockPayload = Payload;
     type SignatureKey = PubKey;
     type Transaction = Transaction;
-    type InstanceState = NodeState<V>;
+    type InstanceState = NodeState;
     type ValidatedState = ValidatedState;
     type Membership = EpochCommittees;
     type BuilderSignatureKey = FeeAccount;

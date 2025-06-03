@@ -354,7 +354,7 @@ pub(crate) async fn update_shared_state<
     consensus: OuterConsensus<TYPES>,
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
     receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
-    membership: EpochMembershipCoordinator<TYPES, V>,
+    membership: EpochMembershipCoordinator<TYPES>,
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: UpgradeLock<TYPES, V>,
@@ -467,7 +467,7 @@ pub(crate) async fn update_shared_state<
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
-    membership: EpochMembership<TYPES, V>,
+    membership: EpochMembership<TYPES>,
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: UpgradeLock<TYPES, V>,

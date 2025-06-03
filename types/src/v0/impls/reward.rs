@@ -7,7 +7,7 @@ use alloy::primitives::{
 use anyhow::{bail, ensure, Context};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, Read, SerializationError, Valid, Validate,
-};use hotshot_types::traits::node_implementation::Versions;
+};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot::types::BLSPubKey;
 use hotshot_types::{
@@ -445,7 +445,7 @@ impl Validator<BLSPubKey> {
 /// Rewards are not distributed for these epochs because the stake table
 /// is built from the contract only when `add_epoch_root()` is called
 /// by HotShot, which happens starting from the third epoch.
-pub async fn first_two_epochs<V: Versions>(height: u64, instance_state: &NodeState<V>) -> anyhow::Result<bool> {
+pub async fn first_two_epochs(height: u64, instance_state: &NodeState) -> anyhow::Result<bool> {
     let epoch_height = instance_state
         .epoch_height
         .context("epoch height not found")?;
@@ -461,8 +461,8 @@ pub async fn first_two_epochs<V: Versions>(height: u64, instance_state: &NodeSta
     Ok(epoch <= first_epoch + 1)
 }
 
-pub async fn find_validator_info<V: Versions>(
-    instance_state: &NodeState<V>,
+pub async fn find_validator_info(
+    instance_state: &NodeState,
     validated_state: &mut ValidatedState,
     parent_leaf: &Leaf2,
     view: ViewNumber,

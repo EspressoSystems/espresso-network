@@ -23,7 +23,7 @@ use crate::{
     stake_table::HSStakeTable,
     traits::{
         block_contents::EncodeBytes,
-        node_implementation::{Versions, NodeType},
+        node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
         BlockPayload,
     },
@@ -67,10 +67,10 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
     /// Create VID dispersal from a specified membership for the target epoch.
     /// Uses the specified function to calculate share dispersal
     /// Allows for more complex stake table functionality
-    async fn from_membership<V: Versions>(
+    async fn from_membership(
         view_number: TYPES::View,
         mut vid_disperse: JfVidDisperse<ADVZScheme>,
-        membership: &EpochMembershipCoordinator<TYPES, V>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
     ) -> Self {
@@ -101,9 +101,9 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
     /// # Errors
     /// Returns an error if the disperse or commitment calculation fails
     #[allow(clippy::panic)]
-    pub async fn calculate_vid_disperse<V: Versions>(
+    pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
-        membership: &EpochMembershipCoordinator<TYPES, V>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
@@ -357,12 +357,12 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
     /// Create VID dispersal from a specified membership for the target epoch.
     /// Uses the specified function to calculate share dispersal
     /// Allows for more complex stake table functionality
-    async fn from_membership<V: Versions>(
+    async fn from_membership(
         view_number: TYPES::View,
         commit: AvidMCommitment,
         shares: &[AvidMShare],
         common: AvidMCommon,
-        membership: &EpochMembership<TYPES, V>,
+        membership: &EpochMembership<TYPES>,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,
     ) -> Self {
@@ -398,9 +398,9 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
     /// Returns an error if the disperse or commitment calculation fails
     #[allow(clippy::panic)]
     #[allow(clippy::single_range_in_vec_init)]
-    pub async fn calculate_vid_disperse<V: Versions>(
+    pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
-        membership: &EpochMembershipCoordinator<TYPES, V>,
+        membership: &EpochMembershipCoordinator<TYPES>,
         view: TYPES::View,
         target_epoch: Option<TYPES::Epoch>,
         data_epoch: Option<TYPES::Epoch>,

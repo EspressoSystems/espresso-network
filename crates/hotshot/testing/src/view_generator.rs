@@ -56,7 +56,7 @@ pub struct TestView {
     pub leaf: Leaf2<TestTypes>,
     pub view_number: ViewNumber,
     pub epoch_number: Option<EpochNumber>,
-    pub membership: EpochMembershipCoordinator<TestTypes, TestVersions>,
+    pub membership: EpochMembershipCoordinator<TestTypes>,
     pub node_key_map: Arc<TestNodeKeyMap>,
     pub vid_disperse: Proposal<TestTypes, VidDisperse<TestTypes>>,
     pub vid_proposal: (
@@ -75,7 +75,7 @@ pub struct TestView {
 
 impl TestView {
     async fn find_leader_key_pair(
-        membership: &EpochMembership<TestTypes, TestVersions>,
+        membership: &EpochMembership<TestTypes>,
         node_key_map: &Arc<TestNodeKeyMap>,
         view_number: <TestTypes as NodeType>::View,
     ) -> (
@@ -95,7 +95,7 @@ impl TestView {
     }
 
     pub async fn genesis<V: Versions>(
-        membership: &EpochMembershipCoordinator<TestTypes, TestVersions>,
+        membership: &EpochMembershipCoordinator<TestTypes>,
         node_key_map: Arc<TestNodeKeyMap>,
     ) -> Self {
         let genesis_view = ViewNumber::new(1);
@@ -576,7 +576,7 @@ impl TestView {
 
 pub struct TestViewGenerator<V: Versions> {
     pub current_view: Option<TestView>,
-    pub membership: EpochMembershipCoordinator<TestTypes, TestVersions>,
+    pub membership: EpochMembershipCoordinator<TestTypes>,
     pub node_key_map: Arc<TestNodeKeyMap>,
     pub _pd: PhantomData<fn(V)>,
     pub task: Option<BoxFuture<'static, TestView>>,
@@ -584,7 +584,7 @@ pub struct TestViewGenerator<V: Versions> {
 
 impl<V: Versions> TestViewGenerator<V> {
     pub fn generate(
-        membership: EpochMembershipCoordinator<TestTypes, TestVersions>,
+        membership: EpochMembershipCoordinator<TestTypes>,
         node_key_map: Arc<TestNodeKeyMap>,
     ) -> Self {
         TestViewGenerator {

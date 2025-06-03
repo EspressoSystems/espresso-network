@@ -155,7 +155,7 @@ pub async fn build_cert<
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
 >(
     data: DATAType,
-    epoch_membership: &EpochMembership<TYPES, V>,
+    epoch_membership: &EpochMembership<TYPES>,
     view: TYPES::View,
     public_key: &TYPES::SignatureKey,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -219,7 +219,7 @@ pub async fn build_assembled_sig<
     DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + 'static,
 >(
     data: &DATAType,
-    epoch_membership: &EpochMembership<TYPES, V>,
+    epoch_membership: &EpochMembership<TYPES>,
     view: TYPES::View,
     upgrade_lock: &UpgradeLock<TYPES, V>,
 ) -> <TYPES::SignatureKey as SignatureKey>::QcType {
@@ -275,7 +275,7 @@ pub fn key_pair_for_id<TYPES: NodeType>(
 }
 
 pub async fn da_payload_commitment<TYPES: NodeType, V: Versions>(
-    membership: &EpochMembership<TYPES, V>,
+    membership: &EpochMembership<TYPES>,
     transactions: Vec<TestTransaction>,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     version: Version,
@@ -291,7 +291,7 @@ pub async fn da_payload_commitment<TYPES: NodeType, V: Versions>(
 }
 
 pub async fn build_payload_commitment<TYPES: NodeType, V: Versions>(
-    membership: &EpochMembership<TYPES, V>,
+    membership: &EpochMembership<TYPES>,
     view: TYPES::View,
     version: Version,
 ) -> VidCommitment {
@@ -303,7 +303,7 @@ pub async fn build_payload_commitment<TYPES: NodeType, V: Versions>(
 }
 
 pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
-    membership: &EpochMembership<TYPES, V>,
+    membership: &EpochMembership<TYPES>,
     view_number: TYPES::View,
     epoch_number: Option<TYPES::Epoch>,
     payload: &TYPES::BlockPayload,
@@ -350,7 +350,7 @@ pub async fn build_vid_proposal<TYPES: NodeType, V: Versions>(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn build_da_certificate<TYPES: NodeType, V: Versions>(
-    membership: &EpochMembership<TYPES, V>,
+    membership: &EpochMembership<TYPES>,
     view_number: TYPES::View,
     epoch_number: Option<TYPES::Epoch>,
     transactions: Vec<TestTransaction>,
