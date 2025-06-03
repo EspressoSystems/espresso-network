@@ -775,16 +775,17 @@ pub mod node_tests {
     };
     use hotshot_types::{
         data::{vid_commitment, VidCommitment, VidShare},
-        traits::{block_contents::EncodeBytes, node_implementation::Versions},
+        traits::{
+            block_contents::{BlockHeader, EncodeBytes},
+            node_implementation::Versions,
+        },
         vid::advz::{advz_scheme, ADVZScheme},
     };
     use jf_vid::VidScheme;
     use vbs::version::StaticVersionType;
 
     use crate::{
-        availability::{
-            BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, VidCommonQueryData,
-        },
+        availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             storage::{NodeStorage, UpdateAvailabilityStorage},
             update::Transaction,
@@ -1232,7 +1233,9 @@ pub mod node_tests {
             let leaf = leaves.next().await.unwrap();
             let header = leaf.header().clone();
             if let Some(last_timestamp) = test_blocks.last_mut() {
-                if last_timestamp[0].timestamp() == header.timestamp() {
+                if <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&last_timestamp[0])
+                    == <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&header)
+                {
                     last_timestamp.push(header);
                 } else {
                     test_blocks.push(vec![header]);
@@ -1244,33 +1247,41 @@ pub mod node_tests {
         tracing::info!("blocks for testing: {test_blocks:#?}");
 
         // Define invariants that every response should satisfy.
-        let check_invariants =
-            |res: &TimeWindowQueryData<Header<MockTypes>>, start, end, check_prev| {
-                let mut prev = res.prev.as_ref();
-                if let Some(prev) = prev {
-                    if check_prev {
-                        assert!(prev.timestamp() < start);
-                    }
-                } else {
-                    // `prev` can only be `None` if the first block in the window is the genesis
-                    // block.
-                    assert_eq!(res.from().unwrap(), 0);
-                };
-                for header in &res.window {
-                    assert!(start <= header.timestamp());
-                    assert!(header.timestamp() < end);
-                    if let Some(prev) = prev {
-                        assert!(prev.timestamp() <= header.timestamp());
-                    }
-                    prev = Some(header);
+        let check_invariants = |res: &TimeWindowQueryData<Header<MockTypes>>,
+                                start,
+                                end,
+                                check_prev| {
+            let mut prev = res.prev.as_ref();
+            if let Some(prev) = prev {
+                if check_prev {
+                    assert!(<TestBlockHeader as BlockHeader<MockTypes>>::timestamp(prev) < start);
                 }
-                if let Some(next) = &res.next {
-                    assert!(next.timestamp() >= end);
-                    // If there is a `next`, there must be at least one previous block (either `prev`
-                    // itself or the last block if the window is nonempty), so we can `unwrap` here.
-                    assert!(next.timestamp() >= prev.unwrap().timestamp());
-                }
+            } else {
+                // `prev` can only be `None` if the first block in the window is the genesis
+                // block.
+                assert_eq!(res.from().unwrap(), 0);
             };
+            for header in &res.window {
+                assert!(start <= <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(header));
+                assert!(<TestBlockHeader as BlockHeader<MockTypes>>::timestamp(header) < end);
+                if let Some(prev) = prev {
+                    assert!(
+                        <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(prev)
+                            <= <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(header)
+                    );
+                }
+                prev = Some(header);
+            }
+            if let Some(next) = &res.next {
+                assert!(<TestBlockHeader as BlockHeader<MockTypes>>::timestamp(next) >= end);
+                // If there is a `next`, there must be at least one previous block (either `prev`
+                // itself or the last block if the window is nonempty), so we can `unwrap` here.
+                assert!(
+                    <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(next)
+                        >= <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(prev.unwrap())
+                );
+            }
+        };
 
         let get_window = |start, end| {
             let ds = ds.clone();
@@ -1286,7 +1297,7 @@ pub mod node_tests {
         };
 
         // Case 0: happy path. All blocks are available, including prev and next.
-        let start = test_blocks[1][0].timestamp();
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[1][0]);
         let end = start + 1;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[0].last().unwrap());
@@ -1295,14 +1306,14 @@ pub mod node_tests {
 
         // Case 1: no `prev`, start of window is before genesis.
         let start = 0;
-        let end = test_blocks[0][0].timestamp() + 1;
+        let end = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[0][0]) + 1;
         let res = get_window(start, end).await;
         assert_eq!(res.prev, None);
         assert_eq!(res.window, test_blocks[0]);
         assert_eq!(res.next.unwrap(), test_blocks[1][0]);
 
         // Case 2: no `next`, end of window is after the most recently sequenced block.
-        let start = test_blocks[2][0].timestamp();
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[2][0]);
         let end = i64::MAX as u64;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[1].last().unwrap());
@@ -1344,7 +1355,7 @@ pub mod node_tests {
         assert_eq!(more2.window[..more.window.len()], more.window);
 
         // Case 3: the window is empty.
-        let start = test_blocks[1][0].timestamp();
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[1][0]);
         let end = start;
         let res = get_window(start, end).await;
         assert_eq!(res.prev.unwrap(), *test_blocks[0].last().unwrap());
@@ -1366,8 +1377,8 @@ pub mod node_tests {
             .flatten()
             .collect::<Vec<_>>();
         // Make a query that would return everything, but gets limited.
-        let start = blocks[0].timestamp();
-        let end = test_blocks[2][0].timestamp();
+        let start = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&blocks[0]);
+        let end = <TestBlockHeader as BlockHeader<MockTypes>>::timestamp(&test_blocks[2][0]);
         let res = ds
             .get_header_window(WindowStart::Time(start), end, 1)
             .await

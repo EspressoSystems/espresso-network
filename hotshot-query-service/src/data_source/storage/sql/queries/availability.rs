@@ -16,7 +16,7 @@ use std::ops::RangeBounds;
 
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use snafu::OptionExt;
 use sqlx::FromRow;
 
@@ -27,9 +27,8 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryableHeader,
-        QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
-        VidCommonQueryData,
+        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryablePayload,
+        StateCertQueryData, TransactionHash, TransactionQueryData, VidCommonQueryData,
     },
     data_source::storage::{
         sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
@@ -44,7 +43,7 @@ where
     Types: NodeType,
     Mode: TransactionMode,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: QueryableHeader<Types>,
+    Header<Types>: BlockHeader<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>> {
         let mut query = QueryBuilder::default();

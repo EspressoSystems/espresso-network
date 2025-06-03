@@ -13,7 +13,7 @@
 #![cfg(feature = "sql-data-source")]
 
 pub use anyhow::Error;
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 pub use refinery::Migration;
 pub use sql::Transaction;
 
@@ -23,10 +23,7 @@ use super::{
     AvailabilityProvider, FetchingDataSource,
 };
 pub use crate::include_migrations;
-use crate::{
-    availability::{QueryableHeader, QueryablePayload},
-    Header, Payload,
-};
+use crate::{availability::QueryablePayload, Header, Payload};
 
 pub type Builder<Types, Provider> = fetching::Builder<Types, SqlStorage, Provider>;
 
@@ -40,7 +37,7 @@ impl Config {
     ) -> Result<SqlDataSource<Types, P>, Error>
     where
         Types: NodeType,
-        Header<Types>: QueryableHeader<Types>,
+        Header<Types>: BlockHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
         self.builder(provider).await?.build().await
@@ -54,7 +51,7 @@ impl Config {
     ) -> Result<Builder<Types, P>, Error>
     where
         Types: NodeType,
-        Header<Types>: QueryableHeader<Types>,
+        Header<Types>: BlockHeader<Types>,
         Payload<Types>: QueryablePayload<Types>,
     {
         SqlDataSource::connect(self, provider).await
@@ -301,7 +298,7 @@ pub type SqlDataSource<Types, P> = FetchingDataSource<Types, SqlStorage, P>;
 impl<Types, P: AvailabilityProvider<Types>> SqlDataSource<Types, P>
 where
     Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
+    Header<Types>: BlockHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     /// Connect to a remote database.

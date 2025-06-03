@@ -22,7 +22,7 @@ use futures::future::FutureExt;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidShare},
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
-    traits::{metrics::Metrics, node_implementation::NodeType},
+    traits::{block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType},
     vid::advz::{ADVZCommon, ADVZShare},
 };
 use itertools::Itertools;
@@ -37,7 +37,7 @@ use sqlx::{
 };
 
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData},
+    availability::{QueryablePayload, VidCommonMetadata, VidCommonQueryData},
     data_source::{
         storage::pruning::{PruneStorage, PrunerCfg, PrunerConfig},
         update::Transaction as _,
@@ -683,7 +683,7 @@ impl SqlStorage {
     ) -> QueryResult<VidCommonQueryData<Types>>
     where
         <Types as NodeType>::BlockPayload: QueryablePayload<Types>,
-        <Types as NodeType>::BlockHeader: QueryableHeader<Types>,
+        <Types as NodeType>::BlockHeader: BlockHeader<Types>,
     {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
@@ -699,7 +699,7 @@ impl SqlStorage {
     ) -> QueryResult<VidCommonMetadata<Types>>
     where
         <Types as NodeType>::BlockPayload: QueryablePayload<Types>,
-        <Types as NodeType>::BlockHeader: QueryableHeader<Types>,
+        <Types as NodeType>::BlockHeader: BlockHeader<Types>,
     {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
@@ -1068,7 +1068,7 @@ pub mod testing {
     use tokio::{net::TcpStream, time::timeout};
 
     use super::Config;
-    use crate::{availability::query_data::QueryableHeader, testing::sleep};
+    use crate::testing::sleep;
     #[derive(Debug)]
     pub struct TmpDb {
         #[cfg(not(feature = "embedded-db"))]
@@ -1383,7 +1383,7 @@ mod test {
 
     use super::{testing::TmpDb, *};
     use crate::{
-        availability::{LeafQueryData, QueryableHeader},
+        availability::LeafQueryData,
         data_source::storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         merklized_state::{MerklizedState, UpdateStateData},
         testing::{
@@ -1860,7 +1860,7 @@ mod test {
                     leaf.block_header().commit().to_string(),
                     payload_commitment.to_string(),
                     header_json,
-                    leaf.block_header().timestamp() as i64,
+                    <MockHeader as BlockHeader<MockTypes>>::timestamp(leaf.block_header()) as i64,
                 )],
             )
             .await

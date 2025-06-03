@@ -4,7 +4,7 @@ use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot::types::BLSPubKey;
-use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
+use hotshot_query_service::explorer::ExplorerHeader;
 use hotshot_types::{
     data::{VidCommitment, ViewNumber},
     light_client::LightClientState,
@@ -568,7 +568,7 @@ impl Header {
         &mut *field_mut!(self.height)
     }
 
-    pub fn timestamp(&self) -> u64 {
+    pub fn timestamp_internal(&self) -> u64 {
         *field!(self.timestamp)
     }
 
@@ -923,6 +923,10 @@ impl BlockHeader<SeqTypes> for Header {
         )
     }
 
+    fn timestamp(&self) -> u64 {
+        self.timestamp_internal()
+    }
+
     fn block_number(&self) -> u64 {
         self.height()
     }
@@ -957,12 +961,6 @@ impl BlockHeader<SeqTypes> for Header {
                 &block_comm_root_bytes,
             )?,
         })
-    }
-}
-
-impl QueryableHeader<SeqTypes> for Header {
-    fn timestamp(&self) -> u64 {
-        self.timestamp()
     }
 }
 

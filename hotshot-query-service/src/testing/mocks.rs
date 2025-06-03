@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
 use crate::{
-    availability::{QueryableHeader, QueryablePayload, TransactionIndex},
+    availability::{QueryablePayload, TransactionIndex},
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
     merklized_state::MerklizedState,
     types::HeightIndexed,
@@ -44,12 +44,6 @@ pub type MockTransaction = TestTransaction;
 
 pub fn mock_transaction(payload: Vec<u8>) -> MockTransaction {
     TestTransaction::new(payload)
-}
-
-impl QueryableHeader<MockTypes> for MockHeader {
-    fn timestamp(&self) -> u64 {
-        self.timestamp
-    }
 }
 
 impl ExplorerHeader<MockTypes> for MockHeader {

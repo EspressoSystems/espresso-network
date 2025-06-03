@@ -48,10 +48,6 @@ pub type TransactionInclusionProof<Types> =
 
 pub type Timestamp = time::OffsetDateTime;
 
-pub trait QueryableHeader<Types: NodeType>: BlockHeader<Types> {
-    fn timestamp(&self) -> u64;
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct TransactionIndex {
     /// Identifier of the namespace this transaction belongs to.
