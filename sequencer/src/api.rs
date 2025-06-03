@@ -2394,9 +2394,23 @@ mod test {
             .epoch_height(EPOCH_HEIGHT)
             .build();
         const NUM_NODES: usize = 5;
+
+        // Initialize storage for each node
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(Options::with_port(port))
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
             .network_config(network_config)
+            .persistences(persistence_options.clone())
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
@@ -2411,6 +2425,8 @@ mod test {
             .await
             .expect("Pos deployment failed")
             .build();
+
+        let state = config.states()[0].clone();
         let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
 
         // Wait for replica 0 to decide in the third epoch.
@@ -2445,13 +2461,16 @@ mod test {
             .collect::<Vec<_>>()
             .await;
 
+        let storage = SqlDataSource::create_storage().await;
+        let options = <SqlDataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
         tracing::error!("restarting node");
         let node = network
             .cfg
             .init_node(
                 1,
-                ValidatedState::default(),
-                no_storage::Options,
+                state,
+                options,
                 Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{port}").parse().unwrap()],
                     Default::default(),
