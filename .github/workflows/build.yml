@@ -233,7 +233,7 @@ jobs:
         id: build
         with:
           context: .
-          file: ${{ matrix.service }}.Dockerfile
+          file: ./docker/${{ matrix.service }}.Dockerfile
           labels: ${{ steps.metadata.outputs.labels  }}
           platforms: linux/amd64
           outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
@@ -318,7 +318,7 @@ jobs:
         id: build
         with:
           context: .
-          file: docker/${{ matrix.service }}.Dockerfile
+          file: ./docker/${{ matrix.service }}.Dockerfile
           labels: ${{ steps.metadata.outputs.labels  }}
           platforms: linux/arm64
           outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{  matrix.service }},push-by-digest=true,name-canonical=true,push=true
