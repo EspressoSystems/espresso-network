@@ -229,8 +229,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: nextest-archive-postgres
-      - name: Install node deps
-        run: yarn
 
       - name: Test
         run: |
