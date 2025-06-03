@@ -55,7 +55,7 @@ fn spawn_fetch_proposal<TYPES: NodeType, V: Versions>(
     qc: &QuorumCertificate2<TYPES>,
     event_sender: Sender<Arc<HotShotEvent<TYPES>>>,
     event_receiver: Receiver<Arc<HotShotEvent<TYPES>>>,
-    membership: EpochMembershipCoordinator<TYPES>,
+    membership: EpochMembershipCoordinator<TYPES, V>,
     consensus: OuterConsensus<TYPES>,
     sender_public_key: TYPES::SignatureKey,
     sender_private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,

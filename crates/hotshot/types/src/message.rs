@@ -570,7 +570,7 @@ where
     /// Checks that the signature of the quorum proposal is valid.
     /// # Errors
     /// Returns an error when the proposal signature is invalid.
-    pub async fn validate_signature(&self, membership: &EpochMembership<TYPES>) -> Result<()> {
+    pub async fn validate_signature<V: Versions>(&self, membership: &EpochMembership<TYPES, V>) -> Result<()> {
         let view_number = self.data.proposal.view_number();
         let view_leader_key = membership.leader(view_number).await?;
         let proposed_leaf = Leaf2::from_quorum_proposal(&self.data);

@@ -23,7 +23,7 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         network::{ConnectedNetwork, DataRequest, RequestKind},
-        node_implementation::{NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType, Versions},
         signature_key::SignatureKey,
     },
     utils::is_epoch_transition,
@@ -44,7 +44,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 /// The task will wait a it's `delay` and then send a request iteratively to peers
 /// for any data they don't have related to the proposal.  For now it's just requesting VID
 /// shares.
-pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
+pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
     /// Network to send requests over
     /// The underlying network
     pub network: Arc<I::Network>,
@@ -60,7 +60,7 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub delay: Duration,
 
     /// Membership (Used here only for DA)
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
 
     /// This nodes public key
     pub public_key: TYPES::SignatureKey,
@@ -81,7 +81,7 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub epoch_height: u64,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> Drop for NetworkRequestState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Drop for NetworkRequestState<TYPES, I, V> {
     fn drop(&mut self) {
         self.cancel_subtasks();
     }
@@ -92,7 +92,7 @@ type Signature<TYPES> =
     <<TYPES as NodeType>::SignatureKey as SignatureKey>::PureAssembledSignatureType;
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequestState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState for NetworkRequestState<TYPES, I, V> {
     type Event = HotShotEvent<TYPES>;
 
     #[instrument(skip_all, fields(id = self.id), name = "NetworkRequestState")]
@@ -230,7 +230,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
     }
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> NetworkRequestState<TYPES, I, V> {
     /// Creates and signs the payload, then will create a request task
     async fn spawn_requests(
         &mut self,

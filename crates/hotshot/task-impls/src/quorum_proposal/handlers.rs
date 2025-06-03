@@ -91,7 +91,7 @@ pub struct ProposalDependencyHandle<TYPES: NodeType, V: Versions> {
     pub instance_state: Arc<TYPES::InstanceState>,
 
     /// Membership for Quorum Certs/votes
-    pub membership: EpochMembership<TYPES>,
+    pub membership: EpochMembership<TYPES, V>,
 
     /// Our public key
     pub public_key: TYPES::SignatureKey,

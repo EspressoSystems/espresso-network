@@ -70,7 +70,7 @@ pub struct VoteDependencyHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     pub instance_state: Arc<TYPES::InstanceState>,
 
     /// Membership for Quorum certs/votes.
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
 
     /// Reference to the storage.
     pub storage: I::Storage,
@@ -410,7 +410,7 @@ pub struct QuorumVoteTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub network: Arc<I::Network>,
 
     /// Membership for Quorum certs/votes and DA committee certs/votes.
-    pub membership: EpochMembershipCoordinator<TYPES>,
+    pub membership: EpochMembershipCoordinator<TYPES, V>,
 
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,

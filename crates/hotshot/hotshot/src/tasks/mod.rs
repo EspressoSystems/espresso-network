@@ -67,7 +67,7 @@ pub async fn add_request_network_task<
 >(
     handle: &mut SystemContextHandle<TYPES, I, V>,
 ) {
-    let state = NetworkRequestState::<TYPES, I>::create_from(handle).await;
+    let state = NetworkRequestState::<TYPES, I, V>::create_from(handle).await;
 
     let task = Task::new(
         state,
@@ -327,7 +327,7 @@ where
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
-        memberships: EpochMembershipCoordinator<TYPES>,
+        memberships: EpochMembershipCoordinator<TYPES, V>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,

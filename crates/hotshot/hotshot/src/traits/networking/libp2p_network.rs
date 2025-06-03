@@ -56,7 +56,7 @@ use hotshot_types::{
     traits::{
         metrics::{Counter, Gauge, Metrics, NoMetrics},
         network::{ConnectedNetwork, NetworkError, Topic},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{ConsensusTime, NodeType, Versions},
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
     BoxSyncFuture,
@@ -978,11 +978,11 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     /// So the logic with libp2p is to prefetch upcoming leaders libp2p address to
     /// save time when we later need to direct message the leader our vote. Hence the
     /// use of the future view and leader to queue the lookups.
-    async fn update_view<'a, TYPES>(
+    async fn update_view<'a, TYPES, V: Versions>(
         &'a self,
         view: u64,
         epoch: Option<u64>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
     ) where
         TYPES: NodeType<SignatureKey = T::SignatureKey> + 'a,
     {

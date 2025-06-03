@@ -11,7 +11,7 @@ use alloy::{
 };
 use anyhow::{bail, ensure, Context};
 use async_lock::{Mutex, RwLock};
-use committable::Committable;
+use committable::Committable;use hotshot_types::traits::node_implementation::Versions;
 use futures::stream::{self, StreamExt};
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::StakeTableV2::{
@@ -515,7 +515,7 @@ impl std::fmt::Debug for StakeTableEvent {
 
 #[derive(Clone, derive_more::derive::Debug)]
 /// Type to describe DA and Stake memberships
-pub struct EpochCommittees {
+pub struct EpochCommittees<V: Versions> {
     /// Committee used when we're in pre-epoch state
     non_epoch_committee: NonEpochCommittee,
     /// Holds Stake table and da stake
@@ -523,12 +523,12 @@ pub struct EpochCommittees {
     /// Randomized committees, filled when we receive the DrbResult
     randomized_committees: BTreeMap<Epoch, RandomizedCommittee<StakeTableEntry<PubKey>>>,
     first_epoch: Option<Epoch>,
-    fetcher: Arc<StakeTableFetcher>,
+    fetcher: Arc<StakeTableFetcher<V>>,
 }
 
 impl StakeTableFetcher {
-    pub fn new(
-        peers: Arc<dyn StateCatchup>,
+    pub fn new<V: Versions>(
+        peers: Arc<dyn StateCatchup<V>>,
         persistence: Arc<Mutex<dyn MembershipPersistence>>,
         l1_client: L1Client,
         chain_config: ChainConfig,

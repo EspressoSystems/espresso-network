@@ -62,7 +62,7 @@ pub struct QuorumProposalTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>
     pub instance_state: Arc<TYPES::InstanceState>,
 
     /// Membership for Quorum Certs/votes
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
 
     /// Our public key
     pub public_key: TYPES::SignatureKey,

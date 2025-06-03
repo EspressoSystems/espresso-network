@@ -4,6 +4,7 @@ use anyhow::{ensure, Context};
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot::types::BLSPubKey;
+use hotshot_types::traits::node_implementation::Versions;
 use hotshot_query_service::{availability::QueryableHeader, explorer::ExplorerHeader};
 use hotshot_types::{
     data::{VidCommitment, ViewNumber},
@@ -725,7 +726,7 @@ impl From<anyhow::Error> for InvalidBlockHeader {
     }
 }
 
-impl BlockHeader<SeqTypes> for Header {
+impl<V: Versions> BlockHeader<SeqTypes> for Header {
     type Error = InvalidBlockHeader;
 
     #[tracing::instrument(
@@ -747,7 +748,7 @@ impl BlockHeader<SeqTypes> for Header {
     )]
     async fn new(
         parent_state: &ValidatedState,
-        instance_state: &NodeState,
+        instance_state: &NodeState<V>,
         parent_leaf: &Leaf2,
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
@@ -885,7 +886,7 @@ impl BlockHeader<SeqTypes> for Header {
     }
 
     fn genesis(
-        instance_state: &NodeState,
+        instance_state: &NodeState<V>,
         payload_commitment: VidCommitment,
         builder_commitment: BuilderCommitment,
         ns_table: <<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,

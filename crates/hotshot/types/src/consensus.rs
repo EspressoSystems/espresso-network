@@ -1159,7 +1159,7 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         consensus: OuterConsensus<TYPES>,
         view: <TYPES as NodeType>::View,
         target_epoch: Option<<TYPES as NodeType>::Epoch>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
         private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
         upgrade_lock: &UpgradeLock<TYPES, V>,
     ) -> Option<()> {

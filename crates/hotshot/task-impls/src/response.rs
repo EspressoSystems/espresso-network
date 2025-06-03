@@ -36,7 +36,7 @@ pub struct NetworkResponseState<TYPES: NodeType, V: Versions> {
     consensus: LockedConsensusState<TYPES>,
 
     /// Quorum membership for checking if requesters have state
-    membership: EpochMembershipCoordinator<TYPES>,
+    membership: EpochMembershipCoordinator<TYPES, V>,
 
     /// This replicas public key
     pub_key: TYPES::SignatureKey,
@@ -55,7 +55,7 @@ impl<TYPES: NodeType, V: Versions> NetworkResponseState<TYPES, V> {
     /// Create the network request state with the info it needs
     pub fn new(
         consensus: LockedConsensusState<TYPES>,
-        membership: EpochMembershipCoordinator<TYPES>,
+        membership: EpochMembershipCoordinator<TYPES, V>,
         pub_key: TYPES::SignatureKey,
         private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
         id: u64,

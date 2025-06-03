@@ -87,7 +87,7 @@ pub struct ViewSyncTaskState<TYPES: NodeType, V: Versions> {
     pub cur_epoch: Option<TYPES::Epoch>,
 
     /// Membership for the quorum
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
 
     /// This Nodes Public Key
     pub public_key: TYPES::SignatureKey,
@@ -174,7 +174,7 @@ pub struct ViewSyncReplicaTaskState<TYPES: NodeType, V: Versions> {
     pub id: u64,
 
     /// Membership for the quorum
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
 
     /// This Nodes Public Key
     pub public_key: TYPES::SignatureKey,
@@ -964,7 +964,7 @@ impl<TYPES: NodeType, V: Versions> ViewSyncReplicaTaskState<TYPES, V> {
     pub async fn membership_for_epoch(
         &self,
         epoch: Option<TYPES::Epoch>,
-    ) -> Option<EpochMembership<TYPES>> {
+    ) -> Option<EpochMembership<TYPES, V>> {
         match self
             .membership_coordinator
             .membership_for_epoch(epoch)

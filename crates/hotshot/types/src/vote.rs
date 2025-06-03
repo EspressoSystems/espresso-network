@@ -83,19 +83,19 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber<TYPES> {
     ) -> impl std::future::Future<Output = Result<()>>;
     /// Returns the amount of stake needed to create this certificate
     // TODO: Make this a static ratio of the total stake of `Membership`
-    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = U256> + Send;
+    fn threshold<V: Versions>(membership: &EpochMembership<TYPES, V>) -> impl Future<Output = U256> + Send;
 
     /// Get  Stake Table from Membership implementation.
-    fn stake_table(
-        membership: &EpochMembership<TYPES>,
+    fn stake_table<V: Versions>(
+        membership: &EpochMembership<TYPES, V>,
     ) -> impl Future<Output = HSStakeTable<TYPES>> + Send;
 
     /// Get Total Nodes from Membership implementation.
-    fn total_nodes(membership: &EpochMembership<TYPES>) -> impl Future<Output = usize> + Send;
+    fn total_nodes<V: Versions>(membership: &EpochMembership<TYPES, V>) -> impl Future<Output = usize> + Send;
 
     /// Get  `StakeTableEntry` from Membership implementation.
-    fn stake_table_entry(
-        membership: &EpochMembership<TYPES>,
+    fn stake_table_entry<V: Versions>(
+        membership: &EpochMembership<TYPES, V>,
         pub_key: &TYPES::SignatureKey,
     ) -> impl Future<Output = Option<PeerConfig<TYPES>>> + Send;
 
@@ -156,7 +156,7 @@ impl<
     pub async fn accumulate(
         &mut self,
         vote: &VOTE,
-        membership: EpochMembership<TYPES>,
+        membership: EpochMembership<TYPES, V>,
     ) -> Option<CERT> {
         let key = vote.signing_key();
 
@@ -263,11 +263,11 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
-    pub async fn accumulate(
+    pub async fn accumulate<V: Versions>(
         &mut self,
         key: &TYPES::SignatureKey,
         vote: &LightClientStateUpdateVote<TYPES>,
-        membership: &EpochMembership<TYPES>,
+        membership: &EpochMembership<TYPES, V>,
     ) -> Option<LightClientStateUpdateCertificate<TYPES>> {
         let epoch = membership.epoch()?;
         let threshold = membership.success_threshold().await;

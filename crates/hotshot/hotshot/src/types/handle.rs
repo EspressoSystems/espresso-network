@@ -65,7 +65,7 @@ pub struct SystemContextHandle<TYPES: NodeType, I: NodeImplementation<TYPES>, V:
     pub network: Arc<I::Network>,
 
     /// Memberships used by consensus
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,

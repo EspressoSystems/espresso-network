@@ -109,7 +109,7 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     pub network: Arc<I::Network>,
 
     /// Memberships used by consensus
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
 
     /// the metrics that the implementor is using.
     metrics: Arc<ConsensusMetricsValue>,
@@ -198,7 +198,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
-        memberships: EpochMembershipCoordinator<TYPES>,
+        memberships: EpochMembershipCoordinator<TYPES, V>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
@@ -238,7 +238,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
@@ -634,7 +634,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         node_id: u64,
         config: HotShotConfig<TYPES>,
-        memberships: EpochMembershipCoordinator<TYPES>,
+        memberships: EpochMembershipCoordinator<TYPES, V>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,
@@ -797,7 +797,7 @@ where
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
-        memberships: EpochMembershipCoordinator<TYPES>,
+        memberships: EpochMembershipCoordinator<TYPES, V>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         metrics: ConsensusMetricsValue,

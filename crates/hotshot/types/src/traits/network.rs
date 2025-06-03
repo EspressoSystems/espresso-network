@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{sync::mpsc::error::TrySendError, time::sleep};
 
-use super::{node_implementation::NodeType, signature_key::SignatureKey};
+use super::{node_implementation::{Versions, NodeType}, signature_key::SignatureKey};
 use crate::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::SequencingMessage,
     BoxSyncFuture,
@@ -255,11 +255,11 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
 
     /// Update view can be used for any reason, but mostly it's for canceling tasks,
     /// and looking up the address of the leader of a future view.
-    async fn update_view<'a, TYPES>(
+    async fn update_view<'a, TYPES, V: Versions>(
         &'a self,
         _view: u64,
         _epoch: Option<u64>,
-        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        _membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
     ) where
         TYPES: NodeType<SignatureKey = K> + 'a,
     {

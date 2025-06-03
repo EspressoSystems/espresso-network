@@ -55,7 +55,7 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Version
     /// Membership for the DA committee and quorum committee.
     /// We need the latter only for calculating the proper VID scheme
     /// from the number of nodes in the quorum.
-    pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    pub membership_coordinator: EpochMembershipCoordinator<TYPES, V>,
 
     /// The underlying network
     pub network: Arc<I::Network>,
