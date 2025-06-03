@@ -1795,7 +1795,6 @@ mod test {
                 &instance_state,
                 payload.clone(),
                 &metadata,
-                <MockVersions as Versions>::Base::VERSION,
             );
 
             block_header.block_number = i;

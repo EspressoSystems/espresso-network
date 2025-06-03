@@ -2989,12 +2989,8 @@ mod test {
 
             let payload_bytes = payload.encode();
 
-            let block_header = Header::genesis::<TestVersions>(
-                &instance_state,
-                payload.clone(),
-                &metadata,
-                <TestVersions as Versions>::Base::VERSION,
-            );
+            let block_header =
+                Header::genesis::<TestVersions>(&instance_state, payload.clone(), &metadata);
 
             let null_quorum_data = QuorumData {
                 leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),

@@ -51,6 +51,8 @@ pub struct Genesis {
     pub base_version: Version,
     #[serde(with = "version_ser")]
     pub upgrade_version: Version,
+    #[serde(default, with = "version_ser::option")]
+    pub genesis_version: Option<Version>,
     pub epoch_height: Option<u64>,
     pub drb_difficulty: Option<u64>,
     pub epoch_start_block: Option<u64>,
@@ -160,6 +162,33 @@ mod version_ser {
         };
 
         Ok(version)
+    }
+
+    pub mod option {
+        use serde::{de::IntoDeserializer, Deserializer, Serializer};
+
+        use super::*;
+
+        pub fn serialize<S>(ver: &Option<Version>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match ver {
+                Some(v) => super::serialize(v, serializer),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Version>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let opt = Option::<String>::deserialize(deserializer)?;
+            match opt {
+                Some(version_str) => super::deserialize(version_str.into_deserializer()).map(Some),
+                None => Ok(None),
+            }
+        }
     }
 }
 
@@ -367,6 +396,7 @@ mod test {
         .to_string();
 
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
+        assert_eq!(genesis.genesis_version, None);
         assert_eq!(genesis.stake_table, StakeTableConfig { capacity: 10 });
         assert_eq!(
             genesis.chain_config,
@@ -420,6 +450,7 @@ mod test {
         let toml = toml! {
             base_version = "0.1"
             upgrade_version = "0.2"
+            genesis_version = "0.1"
 
             [stake_table]
             capacity = 10
@@ -439,6 +470,10 @@ mod test {
         .to_string();
 
         let genesis: Genesis = toml::from_str(&toml).unwrap_or_else(|err| panic!("{err:#}"));
+        assert_eq!(
+            genesis.genesis_version,
+            Some(Version { major: 0, minor: 1 })
+        );
         assert_eq!(genesis.stake_table, StakeTableConfig { capacity: 10 });
         assert_eq!(
             genesis.chain_config,

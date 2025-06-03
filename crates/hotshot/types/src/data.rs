@@ -1107,15 +1107,9 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
                 .unwrap();
 
         let genesis_view = TYPES::View::genesis();
-        let upgrade_lock = UpgradeLock::<TYPES, V>::new();
-        let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
 
-        let block_header = TYPES::BlockHeader::genesis::<V>(
-            instance_state,
-            payload.clone(),
-            &metadata,
-            genesis_version,
-        );
+        let block_header =
+            TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
 
         let block_number = if V::Base::VERSION < V::Epochs::VERSION {
             None
@@ -1512,15 +1506,9 @@ impl<TYPES: NodeType> Leaf<TYPES> {
                 .unwrap();
 
         let genesis_view = TYPES::View::genesis();
-        let upgrade_lock = UpgradeLock::<TYPES, V>::new();
-        let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
 
-        let block_header = TYPES::BlockHeader::genesis::<V>(
-            instance_state,
-            payload.clone(),
-            &metadata,
-            genesis_version,
-        );
+        let block_header =
+            TYPES::BlockHeader::genesis::<V>(instance_state, payload.clone(), &metadata);
 
         let null_quorum_data = QuorumData {
             leaf_commit: Commitment::<Leaf<TYPES>>::default_commitment_no_preimage(),

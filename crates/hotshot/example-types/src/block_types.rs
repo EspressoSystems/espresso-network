@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::Version;
+use vbs::version::{StaticVersionType, Version};
 
 use crate::{
     node_types::TestTypes,
@@ -350,13 +350,12 @@ impl<
         _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         payload: TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
-        genesis_version: Version,
     ) -> Self {
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TYPES>>::builder_commitment(&payload, metadata);
 
         let payload_bytes = payload.encode();
-
+        let genesis_version = V::Base::version();
         let payload_commitment = vid_commitment::<V>(
             &payload_bytes,
             &metadata.encode(),

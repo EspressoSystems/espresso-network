@@ -292,6 +292,7 @@ mod test {
             drb_difficulty: None,
             epoch_start_block: None,
             stake_table_capacity: None,
+            genesis_version: None,
         };
         genesis.to_file(&genesis_file).unwrap();
 

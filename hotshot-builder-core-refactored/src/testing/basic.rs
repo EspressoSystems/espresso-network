@@ -14,7 +14,7 @@ use hotshot_types::{
     simple_certificate::QuorumCertificate2,
     traits::{
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::{ConsensusTime, NodeType},
     },
     utils::BuilderCommitment,
 };
@@ -27,7 +27,6 @@ use marketplace_builder_shared::{
 };
 use tokio::time::sleep;
 use tracing_test::traced_test;
-use vbs::version::StaticVersionType;
 
 use crate::{
     service::{BuilderConfig, GlobalState, ProxyGlobalState},
@@ -204,7 +203,6 @@ async fn test_pruning() {
                 &TestMetadata {
                     num_transactions: 0,
                 },
-                <TestVersions as Versions>::Base::version(),
             ),
             view_number: ViewNumber::new(DECIDE_VIEW),
             justify_qc: mock_qc.clone(),

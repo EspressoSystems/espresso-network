@@ -31,7 +31,6 @@ use super::{
     state::ValidatedState,
     v0_1::{IterableFeeInfo, RewardMerkleCommitment, RewardMerkleTree, REWARD_MERKLE_TREE_HEIGHT},
     v0_3::{ChainConfig, Validator},
-    V0_1,
 };
 use crate::{
     eth_signature_key::BuilderSignature,
@@ -889,21 +888,11 @@ impl BlockHeader<SeqTypes> for Header {
         instance_state: &NodeState,
         payload: <SeqTypes as NodeType>::BlockPayload,
         metadata: &<<SeqTypes as NodeType>::BlockPayload as BlockPayload<SeqTypes>>::Metadata,
-        genesis_version: Version,
     ) -> Self {
         let payload_bytes = payload.encode();
         let builder_commitment = payload.builder_commitment(metadata);
 
-        // If the genesis version is the epoch version and the epoch start block is not 0
-        // it means the upgrade to proof-of-stake has already occurred.
-        // so we use the old vid commitment
-        let vid_commitment_version = if instance_state.epoch_start_block != 0
-            && genesis_version == EpochVersion::version()
-        {
-            V0_1::version()
-        } else {
-            genesis_version
-        };
+        let vid_commitment_version = instance_state.genesis_version;
 
         let payload_commitment = vid_commitment::<V>(
             &payload_bytes,

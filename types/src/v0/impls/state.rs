@@ -1153,12 +1153,9 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTree {
 mod test {
     use hotshot::{helpers::initialize_logging, traits::BlockPayload};
     use hotshot_query_service::{testing::mocks::MockVersions, Resolvable};
-    use hotshot_types::traits::{
-        node_implementation::Versions, signature_key::BuilderSignatureKey,
-    };
+    use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use sequencer_utils::ser::FromStringOrInteger;
     use tracing::debug;
-    use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{
@@ -1174,12 +1171,7 @@ mod test {
                     .await
                     .unwrap();
 
-            let header = Header::genesis::<MockVersions>(
-                &instance,
-                payload.clone(),
-                &metadata,
-                <MockVersions as Versions>::Base::VERSION,
-            );
+            let header = Header::genesis::<MockVersions>(&instance, payload.clone(), &metadata);
 
             let header = header.sign();
 

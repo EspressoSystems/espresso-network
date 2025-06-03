@@ -547,7 +547,9 @@ where
         epoch_height: Some(epoch_height),
         state_catchup: Arc::new(state_catchup_providers.clone()),
         coordinator: coordinator.clone(),
-        epoch_start_block: genesis.epoch_start_block.unwrap_or_default(),
+        genesis_version: genesis
+            .genesis_version
+            .unwrap_or_else(|| genesis.base_version),
     };
 
     // Initialize the Libp2p network
@@ -1248,7 +1250,7 @@ pub mod testing {
                 Arc::new(catchup_providers.clone()),
                 V::Base::VERSION,
                 coordinator.clone(),
-                0,
+                Version { major: 0, minor: 1 },
             )
             .with_current_version(V::Base::version())
             .with_genesis(state)
@@ -1421,12 +1423,7 @@ mod test {
                     .unwrap();
 
             let genesis_state = NodeState::mock();
-            Header::genesis::<TestVersions>(
-                &genesis_state,
-                genesis_payload,
-                &genesis_ns_table,
-                <TestVersions as Versions>::Base::VERSION,
-            )
+            Header::genesis::<TestVersions>(&genesis_state, genesis_payload, &genesis_ns_table)
         };
 
         loop {
