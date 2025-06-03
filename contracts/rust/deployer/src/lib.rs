@@ -1055,7 +1055,6 @@ mod tests {
         sol_types::SolValue,
     };
     use sequencer_utils::test_utils::setup_test;
-    use serde_json;
 
     use super::*;
 
