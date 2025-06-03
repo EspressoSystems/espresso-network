@@ -441,7 +441,7 @@ jobs:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
 
-      - name: Load docker images (PR only)
+      - name: Load docker images
         run: |
           # load all *.tar files in the temp directory, the layout should
           # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
@@ -488,3 +488,22 @@ jobs:
           just demo --pull never &
           set -o pipefail
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+  # This job enables having a single required status check for both test-demo jobs
+  test-demo:
+    needs: [test-demo, test-demo-non-pr]
+    runs-on: ubuntu-latest
+    # explicitly run and fail the job if dependencies failed
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Aggregate demo test results
+        run: |
+          # useful for debugging
+          echo "All results: ${{ toJson(needs) }}"
+
+          if ${{ contains(needs.*.result, 'success') }}; then
+            echo "At least one job passed. Ok."
+          else
+            echo "No jobs passed. Failing."
+            exit 1
+          fi
