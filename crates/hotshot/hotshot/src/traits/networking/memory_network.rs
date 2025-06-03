@@ -207,7 +207,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
                 &subscribed_topics,
                 reliability_config.clone(),
             );
-            Box::pin(async move { net.into() })
+            Box::pin(async move { Arc::new(net) })
         })
     }
 
