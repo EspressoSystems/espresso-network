@@ -38,6 +38,8 @@ pub type BLSPubKey = VerKey;
 pub type BLSKeyPair = KeyPair;
 /// Public parameters for BLS signature scheme
 pub type BLSPublicParam = ();
+/// BLS signature type for consensus votes
+pub type BLSSignature = jf_signature::bls_over_bn254::Signature;
 
 impl PrivateSignatureKey for BLSPrivKey {
     fn to_bytes(&self) -> Vec<u8> {

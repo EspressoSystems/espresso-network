@@ -8,8 +8,8 @@ use jf_vid::{
 };
 
 use crate::{
-    Index, NsTable, NumTxs, NumTxsRange, Payload, PayloadByteLen, Transaction, TxPayloadRange,
-    TxProof, TxTableEntriesRange,
+    Index, NsIndex, NsTable, NumTxs, NumTxsRange, Payload, PayloadByteLen, Transaction, TxIndex,
+    TxPayloadRange, TxProof, TxTableEntriesRange,
 };
 
 impl TxProof {
@@ -20,6 +20,9 @@ impl TxProof {
         payload: &Payload,
         common: &ADVZCommon,
     ) -> Option<(Transaction, Self)> {
+        let ns_index = &NsIndex(index.namespace as usize);
+        let tx_index = &TxIndex(index.position as usize);
+
         let payload_byte_len = payload.byte_len();
         if !payload_byte_len.is_consistent(common) {
             tracing::warn!(
@@ -29,15 +32,15 @@ impl TxProof {
             );
             return None; // error: payload byte len inconsistent with common
         }
-        if !payload.ns_table().in_bounds(index.ns()) {
-            tracing::warn!("ns_index {:?} out of bounds", index.ns());
+        if !payload.ns_table().in_bounds(ns_index) {
+            tracing::warn!("ns_index {:?} out of bounds", ns_index);
             return None; // error: ns index out of bounds
         }
         // check tx index below
 
         let payload_bytes_arc = payload.encode(); // pacify borrow checker
         let payload_bytes = payload_bytes_arc.as_ref();
-        let ns_range = payload.ns_table().ns_range(index.ns(), &payload_byte_len);
+        let ns_range = payload.ns_table().ns_range(ns_index, &payload_byte_len);
         let ns_byte_len = ns_range.byte_len();
         let ns_payload = payload.read_ns_payload(&ns_range);
         let vid = advz_scheme(
@@ -55,7 +58,7 @@ impl TxProof {
         //
         // TODO the next line of code (and other code) could be easier to read
         // if we make a helpers that repeat computation we've already done.
-        if !NumTxs::new(&payload_num_txs, &ns_byte_len).in_bounds(index.tx()) {
+        if !NumTxs::new(&payload_num_txs, &ns_byte_len).in_bounds(tx_index) {
             return None; // error: tx index out of bounds
         }
 
@@ -65,7 +68,7 @@ impl TxProof {
 
         // Read the tx table entries for this tx and compute a proof of
         // correctness.
-        let tx_table_entries_range = TxTableEntriesRange::new(index.tx());
+        let tx_table_entries_range = TxTableEntriesRange::new(tx_index);
         let payload_tx_table_entries = ns_payload.read(&tx_table_entries_range);
         let payload_proof_tx_table_entries = {
             vid.payload_proof(payload_bytes, ns_range.block_range(&tx_table_entries_range))
@@ -85,7 +88,7 @@ impl TxProof {
         };
 
         let tx = {
-            let ns_id = payload.ns_table().read_ns_id_unchecked(index.ns());
+            let ns_id = payload.ns_table().read_ns_id_unchecked(ns_index);
             let tx_payload = ns_payload
                 .read(&tx_payload_range)
                 .to_payload_bytes()
@@ -96,7 +99,7 @@ impl TxProof {
         Some((
             tx,
             TxProof {
-                tx_index: index.tx().clone(),
+                tx_index: tx_index.clone(),
                 payload_num_txs,
                 payload_proof_num_txs,
                 payload_tx_table_entries,
