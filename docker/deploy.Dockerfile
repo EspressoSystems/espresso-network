@@ -12,6 +12,7 @@ RUN chmod +x /bin/deploy
 
 COPY scripts/multisig-upgrade-entrypoint /bin/multisig-upgrade-entrypoint
 RUN chmod +x /bin/multisig-upgrade-entrypoint
+ENV MULTISIG_UPGRADE_ENTRYPOINT_PATH=/bin/multisig-upgrade-entrypoint
 
 COPY contracts/script/multisigTransactionProposals/safeSDK ./contracts/script/multisigTransactionProposals/safeSDK/
 
