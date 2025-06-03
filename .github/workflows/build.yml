@@ -104,7 +104,7 @@ jobs:
 
   build-arm:
     name: Build ${{ matrix.binary }}
-    runs-on: buildjet-8vcpu-ubuntu-2204-arm
+    runs-on: ubuntu-24.04-arm64
     if: ${{ github.event_name != 'pull_request' }}
     strategy:
       matrix:
@@ -277,7 +277,7 @@ jobs:
     # Arm builds cost money, skip on PRs
     if: github.event_name != 'pull_request'
     needs: build-arm
-    runs-on: buildjet-2vcpu-ubuntu-2204-arm
+    runs-on: ubuntu-24.04-arm64
     strategy:
       matrix:
         service:
