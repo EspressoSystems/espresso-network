@@ -607,7 +607,7 @@ pub mod tests {
         let rewards = distributor.compute_rewards().unwrap();
         assert_eq!(total(rewards.clone()), distributor.block_reward.into());
         let leader_commission = rewards.leader_commission();
-        assert_eq!(*leader_commission, distributor.block_reward.into());
+        assert_eq!(*leader_commission, distributor.block_reward);
 
         distributor.validator.commission = 10001;
         assert!(distributor
@@ -620,12 +620,12 @@ pub mod tests {
 
     #[test]
     fn test_compute_rewards_validator_commission() {
-        let mut validator = Validator::mock();
+        let validator = Validator::mock();
         let mut distributor = RewardDistributor::new(
             validator.clone(),
             RewardAmount(U256::from(1902000000000000000_u128)),
         );
-        validator.commission = 0;
+        distributor.validator.commission = 0;
 
         let rewards = distributor.compute_rewards().unwrap();
 

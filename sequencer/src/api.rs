@@ -15,7 +15,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     v0::traits::SequencerPersistence,
-    v0_1::{RewardAccount, RewardMerkleTree},
+    v0_1::{RewardAccount, RewardAmount, RewardMerkleTree},
     v0_3::{ChainConfig, Validator},
     AccountQueryData, BlockMerkleTree, FeeAccount, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
@@ -227,6 +227,10 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, V: Versions, P: SequencerPersistence>
     ) -> anyhow::Result<IndexMap<Address, Validator<BLSPubKey>>> {
         self.as_ref().get_validators(epoch).await
     }
+
+    async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        self.as_ref().get_block_reward().await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
@@ -272,6 +276,20 @@ impl<N: ConnectedNetwork<PubKey>, V: Versions, P: SequencerPersistence>
             epoch,
             stake_table: self.get_stake_table(epoch).await?,
         })
+    }
+
+    async fn get_block_reward(&self) -> anyhow::Result<RewardAmount> {
+        let coordinator = self
+            .consensus()
+            .await
+            .read()
+            .await
+            .membership_coordinator
+            .clone();
+
+        let membership = coordinator.membership().read().await;
+
+        Ok(membership.block_reward())
     }
 
     /// Get the whole validators map
@@ -4129,5 +4147,73 @@ mod test {
                 "Stake table mismatch for epoch {epoch_num}",
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_block_reward_api() -> anyhow::Result<()> {
+        setup_test();
+        let epoch_height = 10;
+
+        type PosVersion = SequencerVersions<StaticVersion<0, 3>, StaticVersion<0, 0>>;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(epoch_height)
+            .build();
+
+        let api_port = pick_unused_port().expect("No ports free for query service");
+
+        const NUM_NODES: usize = 1;
+        // Initialize nodes.
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook::<PosVersion>(DelegationConfig::VariableAmounts, Default::default())
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, PosVersion::new()).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        let _blocks = client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(3)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        let block_reward = client
+            .get::<RewardAmount>("node/block-reward")
+            .send()
+            .await
+            .expect("failed to get block reward");
+        tracing::info!("block_reward={block_reward:?}");
+
+        assert!(block_reward.0 > U256::ZERO);
+
+        Ok(())
     }
 }
