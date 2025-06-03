@@ -273,7 +273,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         let mut inner = self.inner.write().await;
         inner
             .proposals_wrapper
-            .insert(proposal.data.view_number(), proposal.clone());
+            .insert(proposal.data.view_number, proposal.clone());
         Ok(())
     }
 
