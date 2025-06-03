@@ -2021,6 +2021,7 @@ mod test {
         stream::{StreamExt, TryStreamExt},
     };
     use hotshot::types::EventType;
+    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_example_types::node_types::EpochsTestVersions;
     use hotshot_query_service::{
         availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
@@ -2389,7 +2390,7 @@ mod test {
 
         // Start a sequencer network, using the query service for catchup.
         let port = pick_unused_port().expect("No ports free");
-        const EPOCH_HEIGHT: u64 = 5;
+        const EPOCH_HEIGHT: u64 = 15;
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .build();
@@ -2404,6 +2405,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
+            .pos_hook::<EpochsTestVersions>(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::default(),
+            )
+            .await
+            .expect("Pos deployment failed")
             .build();
         let mut network = TestNetwork::new(config, EpochsTestVersions {}).await;
 
@@ -2455,10 +2462,12 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                MockSequencerVersions::new(),
+                EpochsTestVersions {},
                 Default::default(),
             )
             .await;
+        tracing::error!("restarted node");
+
         let mut events = node.event_stream().await;
 
         // Wait for a (non-genesis) block proposed by each node, to prove that the lagging node has
@@ -2469,6 +2478,11 @@ mod test {
             let EventType::Decide { leaf_chain, .. } = event.event else {
                 continue;
             };
+            tracing::error!(
+                "post restart, got decide height {}",
+                leaf_chain[0].leaf.height()
+            );
+
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
                 let height = leaf.height();
                 let leaf_builder = (leaf.view_number().u64() as usize) % NUM_NODES;
