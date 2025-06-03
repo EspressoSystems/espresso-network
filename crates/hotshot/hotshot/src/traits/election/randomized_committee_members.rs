@@ -21,7 +21,7 @@ use hotshot_types::{
     PeerConfig,
 };
 use hotshot_utils::anytrace::Result;
-use rand::{rngs::StdRng, Rng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use tracing::error;
 
 use crate::traits::election::helpers::QuorumFilterConfig;
@@ -366,7 +366,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
                 .map(|(_, v)| v.clone())
                 .collect();
 
-            let mut rng: StdRng = rand::SeedableRng::seed_from_u64(*view_number);
+            let mut rng: StdRng = StdRng::seed_from_u64(view_number.u64());
 
             let randomized_view_number: u64 = rng.gen_range(0..=u64::MAX);
             #[allow(clippy::cast_possible_truncation)]
@@ -376,7 +376,7 @@ impl<TYPES: NodeType, CONFIG: QuorumFilterConfig> Membership<TYPES>
 
             Ok(TYPES::SignatureKey::public_key(&res.stake_table_entry))
         } else {
-            let mut rng: StdRng = rand::SeedableRng::seed_from_u64(*view_number);
+            let mut rng: StdRng = StdRng::seed_from_u64(view_number.u64());
 
             let randomized_view_number: u64 = rng.gen_range(0..=u64::MAX);
             #[allow(clippy::cast_possible_truncation)]
