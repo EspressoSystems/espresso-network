@@ -39,8 +39,8 @@ use crate::{
         impls::reward::{find_validator_info, first_two_epochs},
     },
     v0_1, v0_2, v0_3, BlockMerkleCommitment, EpochVersion, FeeAccount, FeeAmount, FeeInfo,
-    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsTable, SeqTypes,
-    UpgradeType,
+    FeeMerkleCommitment, Header, L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable,
+    PayloadByteLen, SeqTypes, UpgradeType,
 };
 
 impl v0_1::Header {
@@ -963,6 +963,13 @@ impl BlockHeader<SeqTypes> for Header {
 impl QueryableHeader<SeqTypes> for Header {
     fn timestamp(&self) -> u64 {
         self.timestamp()
+    }
+
+    fn namespace_size(&self, id: u32, payload_size: usize) -> u64 {
+        self.ns_table()
+            .ns_range(&NsIndex(id as usize), &PayloadByteLen(payload_size))
+            .byte_len()
+            .0 as u64
     }
 }
 
