@@ -13,10 +13,7 @@
 use std::ops::{Bound, RangeBounds};
 
 use async_trait::async_trait;
-use hotshot_types::{
-    data::VidShare,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-};
+use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 use jf_merkle_tree::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
@@ -24,9 +21,9 @@ use super::VersionedDataSource;
 use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream, LeafId,
-        LeafQueryData, PayloadMetadata, PayloadQueryData, QueryablePayload, StateCertQueryData,
-        TransactionHash, TransactionQueryData, UpdateAvailabilityData, VidCommonMetadata,
-        VidCommonQueryData,
+        LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload,
+        StateCertQueryData, TransactionHash, TransactionQueryData, UpdateAvailabilityData,
+        VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -161,6 +158,7 @@ where
     D: AvailabilityDataSource<Types> + Send + Sync,
     U: Send + Sync,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     async fn get_leaf<ID>(&self, id: ID) -> Fetch<LeafQueryData<Types>>
@@ -444,8 +442,8 @@ where
     U: Send + Sync,
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: ExplorerHeader<Types> + BlockHeader<Types>,
-    Transaction<Types>: ExplorerTransaction,
+    Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
+    Transaction<Types>: ExplorerTransaction<Types>,
 {
     async fn get_block_detail(
         &self,

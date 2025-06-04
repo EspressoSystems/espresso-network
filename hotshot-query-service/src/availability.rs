@@ -40,7 +40,7 @@ use snafu::{OptionExt, Snafu};
 use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, Payload, QueryError, VidCommon};
+use crate::{api::load_api, Header, Payload, QueryError, VidCommon};
 
 pub(crate) mod data_source;
 mod fetch;
@@ -231,6 +231,7 @@ where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     let id = match req.opt_integer_param("height")? {
@@ -253,6 +254,7 @@ where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     let from = req.integer_param::<_, usize>("from")?;
@@ -302,6 +304,7 @@ where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     let id = if let Some(height) = req.opt_integer_param("height")? {
@@ -325,6 +328,7 @@ pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
 where
     State: 'static + Send + Sync + ReadState,
     <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
+    Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
     let mut api = load_api::<State, Error, Ver>(

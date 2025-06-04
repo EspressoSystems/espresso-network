@@ -47,9 +47,21 @@ pub fn mock_transaction(payload: Vec<u8>) -> MockTransaction {
 }
 
 impl QueryableHeader<MockTypes> for MockHeader {
-    fn namespace_size(&self, id: u32, payload_size: usize) -> u64 {
+    type NamespaceId = i64;
+    type NamespaceIndex = i64;
+
+    fn namespace_id(&self, i: &i64) -> Option<i64> {
         // Test types only support a single namespace.
-        if id == 0 {
+        if *i == 0 {
+            Some(0)
+        } else {
+            None
+        }
+    }
+
+    fn namespace_size(&self, i: &i64, payload_size: usize) -> u64 {
+        // Test types only support a single namespace.
+        if *i == 0 {
             payload_size as u64
         } else {
             0
@@ -61,7 +73,6 @@ impl ExplorerHeader<MockTypes> for MockHeader {
     type BalanceAmount = i128;
     type WalletAddress = [u8; 32];
     type ProposerId = [u8; 32];
-    type NamespaceId = u64;
 
     fn proposer_id(&self) -> Self::ProposerId {
         [0; 32]
@@ -79,15 +90,13 @@ impl ExplorerHeader<MockTypes> for MockHeader {
         0
     }
 
-    fn namespace_ids(&self) -> Vec<Self::NamespaceId> {
+    fn namespace_ids(&self) -> Vec<i64> {
         vec![0]
     }
 }
 
-impl ExplorerTransaction for MockTransaction {
-    type NamespaceId = u64;
-
-    fn namespace_id(&self) -> Self::NamespaceId {
+impl ExplorerTransaction<MockTypes> for MockTransaction {
+    fn namespace_id(&self) -> i64 {
         0
     }
 
@@ -102,8 +111,8 @@ impl HeightIndexed for MockHeader {
     }
 }
 
-impl<Types: NodeType> QueryablePayload<Types> for MockPayload {
-    type Iter<'a> = <Vec<TransactionIndex> as IntoIterator>::IntoIter;
+impl QueryablePayload<MockTypes> for MockPayload {
+    type Iter<'a> = <Vec<TransactionIndex<MockTypes>> as IntoIterator>::IntoIter;
     type InclusionProof = ();
 
     fn len(&self, _meta: &Self::Metadata) -> usize {
@@ -111,9 +120,9 @@ impl<Types: NodeType> QueryablePayload<Types> for MockPayload {
     }
 
     fn iter(&self, meta: &Self::Metadata) -> Self::Iter<'_> {
-        (0..<TestBlockPayload as QueryablePayload<Types>>::len(self, meta))
+        (0..<TestBlockPayload as QueryablePayload<MockTypes>>::len(self, meta))
             .map(|i| TransactionIndex {
-                namespace: 0,
+                ns_index: 0,
                 position: i as u32,
             })
             .collect::<Vec<_>>()
@@ -123,7 +132,7 @@ impl<Types: NodeType> QueryablePayload<Types> for MockPayload {
     fn transaction_with_proof(
         &self,
         _meta: &Self::Metadata,
-        index: &TransactionIndex,
+        index: &TransactionIndex<MockTypes>,
     ) -> Option<(Self::Transaction, Self::InclusionProof)> {
         self.transactions
             .get(index.position as usize)
