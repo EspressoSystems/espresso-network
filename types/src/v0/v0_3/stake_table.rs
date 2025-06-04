@@ -3,10 +3,13 @@ use std::{collections::HashMap, sync::Arc};
 use alloy::primitives::{Address, U256};
 use async_lock::Mutex;
 use derive_more::derive::{From, Into};
-use hotshot::types::{BLSPubKey, SignatureKey};
-use hotshot_contract_adapter::sol_types::StakeTableV2::{
-    ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
-    ValidatorRegistered, ValidatorRegisteredV2,
+use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey};
+use hotshot_contract_adapter::{
+    sol_types::StakeTableV2::{
+        ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated, ValidatorExit,
+        ValidatorRegistered, ValidatorRegisteredV2,
+    },
+    stake_table::StakeTableSolError,
 };
 use hotshot_types::{
     data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, PeerConfig,
@@ -103,3 +106,51 @@ pub enum StakeTableEvent {
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
 }
+
+type ValidatorMap = IndexMap<Address, Validator<BLSPubKey>>;
+
+enum StakeTableEventHandlerError {
+    FailedToAuthenticate(StakeTableSolError),
+}
+
+// TODO move to impl folder
+// impl StakeTableEvent {
+//     pub fn handle(&self) -> Result<ValidatorMap, StakeTableEventHandlerError> {
+//         let mut validators = IndexMap::new();
+//         match self {
+//             Self::RegisterV2(event) => {
+//                 event
+//                     .authenticate()
+//                     .map_err(StakeTableEventHandlerError::FailedToAuthenticate)?;
+//                 self.register(validators);
+//             },
+//             _ => todo!(),
+//         }
+//     }
+//
+//     fn register(&self) -> Result<ValidatorMap, StakeTableEventHandlerError> {
+//         let ValidatorRegisteredV2 {
+//             account,
+//             blsVK,
+//             schnorrVK,
+//             commission,
+//             ..
+//         } = self;
+//
+//         let stake_table_key: BLSPubKey = blsVK.into();
+//         let state_ver_key: SchnorrPubKey = schnorrVK.into();
+//         // TODO uncomment
+//         // The stake table contract enforces that each bls key is only used once.
+//         // if bls_keys.contains(&stake_table_key) {
+//         //     bail!("bls key already used: {}", stake_table_key.to_string());
+//         // };
+//
+//         // // The contract does *not* enforce that each schnorr key is only used once.
+//         // if schnorr_keys.contains(&state_ver_key) {
+//         //     tracing::warn!("schnorr key already used: {}", state_ver_key.to_string());
+//         // };
+//
+//         bls_keys.insert(stake_table_key);
+//         schnorr_keys.insert(state_ver_key.clone());
+//     }
+// }
