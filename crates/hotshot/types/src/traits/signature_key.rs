@@ -451,6 +451,19 @@ pub trait StateSignatureKey:
         next_stake_table_state: &StakeTableState,
     ) -> bool;
 
+    /// Sign the state for legacy light client
+    fn legacy_sign_state(
+        private_key: &Self::StatePrivateKey,
+        light_client_state: &LightClientState,
+    ) -> Result<Self::StateSignature, Self::SignError>;
+
+    /// Verify the state signature for legacy light client
+    fn legacy_verify_state_sig(
+        &self,
+        signature: &Self::StateSignature,
+        light_client_state: &LightClientState,
+    ) -> bool;
+
     /// Generate a new key pair
     fn generated_from_seed_indexed(seed: [u8; 32], index: u64) -> (Self, Self::StatePrivateKey);
 }
