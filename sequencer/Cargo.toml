@@ -132,6 +132,7 @@ url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
 vid = { path = "../vid" }
+console-subscriber = "0.4"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["hotshot-testing"]

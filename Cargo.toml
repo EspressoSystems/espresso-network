@@ -108,6 +108,7 @@ tokio = { version = "1", default-features = false, features = [
     "macros",
     "parking_lot",
     "sync",
+    "tracing"
 ] }
 libp2p-identity = "0.2"
 tower-service = { version = "0.3", default-features = false }

@@ -10499,6 +10499,7 @@ dependencies = [
  "clap 4.5.37",
  "client",
  "committable",
+ "console-subscriber 0.4.1",
  "csv",
  "derivative",
  "derive_more 1.0.0",

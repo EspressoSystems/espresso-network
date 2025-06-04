@@ -17,7 +17,7 @@ use super::{
 
 pub async fn main() -> anyhow::Result<()> {
     let opt = Options::parse();
-    opt.logging.init();
+    console_subscriber::init();
 
     let modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
