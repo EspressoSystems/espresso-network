@@ -15,11 +15,14 @@
 use std::path::Path;
 
 use atomic_store::AtomicStoreLoader;
-use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
+use hotshot_types::traits::node_implementation::NodeType;
 
 pub use super::storage::fs::Transaction;
 use super::{storage::FileSystemStorage, AvailabilityProvider, FetchingDataSource};
-use crate::{availability::query_data::QueryablePayload, Header, Payload};
+use crate::{
+    availability::{query_data::QueryablePayload, QueryableHeader},
+    Header, Payload,
+};
 
 /// A data source for the APIs provided in this crate, backed by the local file system.
 ///
@@ -158,7 +161,7 @@ pub type FileSystemDataSource<Types, P> = FetchingDataSource<Types, FileSystemSt
 impl<Types: NodeType, P> FileSystemDataSource<Types, P>
 where
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types>,
+    Header<Types>: QueryableHeader<Types>,
     P: AvailabilityProvider<Types>,
 {
     /// Create a new [FileSystemDataSource] with storage at `path`.

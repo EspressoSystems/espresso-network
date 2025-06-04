@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 
 use crate::{
-    availability::{QueryablePayload, TransactionIndex},
+    availability::{QueryableHeader, QueryablePayload, TransactionIndex},
     explorer::traits::{ExplorerHeader, ExplorerTransaction},
     merklized_state::MerklizedState,
     types::HeightIndexed,
@@ -44,6 +44,17 @@ pub type MockTransaction = TestTransaction;
 
 pub fn mock_transaction(payload: Vec<u8>) -> MockTransaction {
     TestTransaction::new(payload)
+}
+
+impl QueryableHeader<MockTypes> for MockHeader {
+    fn namespace_size(&self, id: u32, payload_size: usize) -> u64 {
+        // Test types only support a single namespace.
+        if id == 0 {
+            payload_size as u64
+        } else {
+            0
+        }
+    }
 }
 
 impl ExplorerHeader<MockTypes> for MockHeader {

@@ -96,7 +96,6 @@ use futures::{
 use hotshot_types::{
     data::VidShare,
     traits::{
-        block_contents::BlockHeader,
         metrics::{Gauge, Metrics},
         node_implementation::NodeType,
     },
@@ -120,7 +119,7 @@ use super::{
 use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, Fetch, FetchStream,
-        HeaderQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData,
+        HeaderQueryData, LeafId, LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
         QueryablePayload, StateCertQueryData, TransactionHash, TransactionQueryData,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
@@ -389,7 +388,7 @@ impl<Types, S, P> Builder<Types, S, P>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types>,
+    Header<Types>: QueryableHeader<Types>,
     S: PruneStorage + VersionedDataSource + HasMetrics + MigrateTypes<Types> + 'static,
     for<'a> S::ReadOnly<'a>:
         AvailabilityStorage<Types> + PrunedHeightStorage + NodeStorage<Types> + AggregatesStorage,
@@ -502,7 +501,7 @@ impl<Types, S, P> FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types>,
+    Header<Types>: QueryableHeader<Types>,
     S: VersionedDataSource + PruneStorage + HasMetrics + MigrateTypes<Types> + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types> + UpdateAggregatesStorage<Types>,
     for<'a> S::ReadOnly<'a>:
@@ -1905,7 +1904,7 @@ impl<Types, S, P> ExplorerDataSource<Types> for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types> + explorer::traits::ExplorerHeader<Types>,
+    Header<Types>: QueryableHeader<Types> + explorer::traits::ExplorerHeader<Types>,
     crate::Transaction<Types>: explorer::traits::ExplorerTransaction,
     S: VersionedDataSource + 'static,
     for<'a> S::ReadOnly<'a>: ExplorerStorage<Types>,

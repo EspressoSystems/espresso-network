@@ -12,11 +12,11 @@
 
 //! Availability storage implementation for a database query engine.
 
-use std::ops::RangeBounds;
+use std::{collections::HashMap, ops::RangeBounds};
 
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
-use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
+use hotshot_types::traits::node_implementation::NodeType;
 use snafu::OptionExt;
 use sqlx::FromRow;
 
@@ -27,8 +27,9 @@ use super::{
 };
 use crate::{
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, QueryablePayload,
-        StateCertQueryData, TransactionHash, TransactionQueryData, VidCommonQueryData,
+        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, PayloadQueryData,
+        QueryableHeader, QueryablePayload, StateCertQueryData, TransactionHash,
+        TransactionQueryData, VidCommonQueryData,
     },
     data_source::storage::{
         sql::sqlx::Row, AvailabilityStorage, PayloadMetadata, VidCommonMetadata,
@@ -43,7 +44,7 @@ where
     Types: NodeType,
     Mode: TransactionMode,
     Payload<Types>: QueryablePayload<Types>,
-    Header<Types>: BlockHeader<Types>,
+    Header<Types>: QueryableHeader<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>> {
         let mut query = QueryBuilder::default();
@@ -122,7 +123,10 @@ where
             .fetch_optional(self.as_mut())
             .await?
             .context(MissingSnafu)?;
-        let payload = PayloadMetadata::from_row(&row)?;
+        let mut payload = PayloadMetadata::from_row(&row)?;
+        payload.namespaces = self
+            .load_namespaces::<Types>(payload.height(), payload.size)
+            .await?;
         Ok(payload)
     }
 
@@ -278,13 +282,24 @@ where
               {where_clause} AND p.num_transactions IS NOT NULL
               ORDER BY h.height ASC"
         );
-        Ok(query
+        let rows = query
             .query(&sql)
             .fetch(self.as_mut())
-            .map(|res| PayloadMetadata::from_row(&res?))
-            .map_err(QueryError::from)
-            .collect()
-            .await)
+            .collect::<Vec<_>>()
+            .await;
+        let mut payloads = vec![];
+        for row in rows {
+            let res = async {
+                let mut meta = PayloadMetadata::from_row(&row?)?;
+                meta.namespaces = self
+                    .load_namespaces::<Types>(meta.height(), meta.size)
+                    .await?;
+                Ok(meta)
+            }
+            .await;
+            payloads.push(res);
+        }
+        Ok(payloads)
     }
 
     async fn get_vid_common_range<R>(
@@ -387,5 +402,48 @@ where
         .fetch_one(self.as_mut())
         .await?;
         Ok(StateCertQueryData::from_row(&row)?)
+    }
+}
+
+impl<Mode> Transaction<Mode>
+where
+    Mode: TransactionMode,
+{
+    async fn load_namespaces<Types>(
+        &mut self,
+        height: u64,
+        payload_size: u64,
+    ) -> QueryResult<HashMap<u32, NamespaceInfo>>
+    where
+        Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
+        Payload<Types>: QueryablePayload<Types>,
+    {
+        let header = self
+            .get_header(BlockId::<Types>::from(height as usize))
+            .await?;
+        let map = query(
+            "SELECT namespace, max(position) + 1 AS count
+               FROM  transactions
+               WHERE block_height = $1
+               GROUP BY namespace",
+        )
+        .bind(height as i64)
+        .fetch(self.as_mut())
+        .map_ok(|row| {
+            let id = row.get::<i64, _>("namespace") as u32;
+            let num_transactions = row.get::<i64, _>("count") as u64;
+            let size = header.namespace_size(id, payload_size as usize);
+            (
+                id,
+                NamespaceInfo {
+                    num_transactions,
+                    size,
+                },
+            )
+        })
+        .try_collect()
+        .await?;
+        Ok(map)
     }
 }

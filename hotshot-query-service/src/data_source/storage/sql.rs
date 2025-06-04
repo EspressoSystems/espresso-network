@@ -22,7 +22,7 @@ use futures::future::FutureExt;
 use hotshot_types::{
     data::{Leaf, Leaf2, VidShare},
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
-    traits::{block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType},
+    traits::{metrics::Metrics, node_implementation::NodeType},
     vid::advz::{ADVZCommon, ADVZShare},
 };
 use itertools::Itertools;
@@ -37,7 +37,7 @@ use sqlx::{
 };
 
 use crate::{
-    availability::{QueryablePayload, VidCommonMetadata, VidCommonQueryData},
+    availability::{QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData},
     data_source::{
         storage::pruning::{PruneStorage, PrunerCfg, PrunerConfig},
         update::Transaction as _,
@@ -683,7 +683,7 @@ impl SqlStorage {
     ) -> QueryResult<VidCommonQueryData<Types>>
     where
         <Types as NodeType>::BlockPayload: QueryablePayload<Types>,
-        <Types as NodeType>::BlockHeader: BlockHeader<Types>,
+        <Types as NodeType>::BlockHeader: QueryableHeader<Types>,
     {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),
@@ -699,7 +699,7 @@ impl SqlStorage {
     ) -> QueryResult<VidCommonMetadata<Types>>
     where
         <Types as NodeType>::BlockPayload: QueryablePayload<Types>,
-        <Types as NodeType>::BlockHeader: BlockHeader<Types>,
+        <Types as NodeType>::BlockHeader: QueryableHeader<Types>,
     {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),

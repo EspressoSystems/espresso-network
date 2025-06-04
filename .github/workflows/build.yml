@@ -1,5 +1,20 @@
 name: Build
-
+# This workflow file is pretty complex, due to optimizations and features:
+#   - using public runners
+#   - rust caching
+#   - native docker multiplatform builds (without QEMU)
+#
+# 1. We build the binaries in 4 jobs for each of the 2 architectures. The jobs are broken up so that
+#    we get a decent amount of parallelism and a low overall runtime.
+# 2. We build the native docker image for each of 2 architectures using the binary artifacts from
+#    the first step. We push the images to the registry by digest.
+# 3. We merge the native docker images into a multiplatform image and push the combined image
+#    to the registry.
+# 4. We run the docker demo test to ensure that the images work as expected.
+#
+# For PR builds we don't build anything on ARM but only on AMD64. For PR builds we don't push to the
+# registry but instead upload the docker images as artifacts and run the demo test against the
+# artifacts.
 on:
   push:
     branches:
@@ -20,11 +35,10 @@ concurrency:
 env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
-  DOCKER_PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
 
 jobs:
-  build-x86:
-    name: Build ${{ matrix.binary }}
+  build-amd:
+    name: Build ${{ matrix.binary }} AMD
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -83,13 +97,13 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: x86-${{ matrix.binary }}
+          name: amd-${{ matrix.binary }}
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
   build-arm:
-    name: Build ${{ matrix.binary }}
-    runs-on: buildjet-8vcpu-ubuntu-2204-arm
+    name: Build ${{ matrix.binary }} ARM
+    runs-on: ubuntu-24.04-arm
     if: ${{ github.event_name != 'pull_request' }}
     strategy:
       matrix:
@@ -128,7 +142,6 @@ jobs:
             github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
             || github.event_name == 'workflow_dispatch' ) }}
-          cache-provider: buildjet
 
       - name: Build ${{ matrix.binary }}
         run: |
@@ -151,7 +164,8 @@ jobs:
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
-  build-dockers:
+  build-dockers-amd:
+    needs: build-amd
     runs-on: ubuntu-latest
     # This is non-deterministic, a limitation of GHA. We but we only need the
     # tag like (:main) at the end which is the same for each matrix build.
@@ -176,9 +190,6 @@ jobs:
           - state-relay-server
           - submit-transactions
 
-    needs: [build-x86, build-arm]
-    # if build_arm is skipped, run this job anyway
-    if: ${{ !(failure() || cancelled()) }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -186,24 +197,9 @@ jobs:
       - name: Download executables AMD
         uses: actions/download-artifact@v4
         with:
-          pattern: x86-*
+          pattern: amd-*
           path: target/amd64/release
           merge-multiple: true
-
-      - name: Download executables ARM
-        if: github.event_name != 'pull_request'
-        uses: actions/download-artifact@v4
-        with:
-          pattern: arm-*
-          path: target/arm64/release
-          merge-multiple: true
-
-      - name: Setup QEMU
-        if: ${{ github.event_name != 'pull_request' }}
-        uses: docker/setup-qemu-action@v3
-        with:
-          # Temporary fix (See https://github.com/docker/setup-qemu-action/issues/198)
-          image: tonistiigi/binfmt:qemu-v7.0.0-28
 
       - name: Setup Docker BuildKit (buildx)
         uses: docker/setup-buildx-action@v3
@@ -220,62 +216,232 @@ jobs:
         uses: docker/metadata-action@v5
         id: metadata
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
+          images: ghcr.io/espressosystems/espresso-sequencer/${{matrix.service}}
 
       # There is no straightforward way to import a multiplatform image from a tar file with
       # docker.
       #   - On PRs: build only amd64 and upload as artifact to later run the demo test.
       #   - On main: push to the registry and fetch from the registry to run the demo test.
-
-      - name: Build and push ${{ matrix.service }} docker image (non-PR)
-        if: ${{ github.event_name != 'pull_request' }}
+      - name: Build docker image and export to file (on PRs)
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./docker/${{ matrix.service }}.Dockerfile
-          platforms: ${{ env.DOCKER_PLATFORMS }}
-          tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels  }}
-          outputs: type=registry
-
-      - name: Build and export ${{ matrix.service }} docker image (PR only)
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./docker/${{ matrix.service }}.Dockerfile
+          # Note the tag is used later to run the demo test
           tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels  }}
+          platforms: linux/amd64
           outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
 
-      - name: Upload artifact (PR only)
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Upload docker image artifact (on PRs)
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.service }}-docker-image
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
           if-no-files-found: error
 
-  test-demo:
-    # if build_arm is skipped, run this job anyway
-    if: ${{ !(failure() || cancelled()) }}
+      - name: Build and push docker (non-PR)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        id: build
+        with:
+          context: .
+          file: ./docker/${{ matrix.service }}.Dockerfile
+          labels: ${{ steps.metadata.outputs.labels  }}
+          # Note: the final multiarch image will receive the tag
+          platforms: linux/amd64
+          outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export docker image digest
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -x
+          digest_dir="${{ runner.temp }}/digests"
+          mkdir -p "${digest_dir}"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${digest_dir}/${digest#sha256:}"
+          ls -lah "${digest_dir}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: "digests-${{ matrix.service }}-amd64"
+          path: "${{ runner.temp }}/digests/*"
+          if-no-files-found: error
+          retention-days: 1
+
+  build-dockers-arm:
+    # Arm builds cost money, skip on PRs
+    if: github.event_name != 'pull_request'
+    needs: build-arm
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        service:
+          - bridge
+          - builder
+          - cdn-broker
+          - cdn-marshal
+          - cdn-whitelist
+          - deploy
+          - espresso-dev-node
+          - nasty-client
+          - node-validator
+          - orchestrator
+          - prover-service
+          - sequencer
+          - staking-cli
+          - state-relay-server
+          - submit-transactions
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download executables ARM
+        uses: actions/download-artifact@v4
+        with:
+          pattern: arm-*
+          path: target/arm64/release
+          merge-multiple: true
+
+      - name: Setup Docker BuildKit (buildx)
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Github Container Repo
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate ${{ matrix.service }} docker metadata
+        uses: docker/metadata-action@v5
+        id: metadata
+        with:
+          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
+
+      - name: Build and push docker
+        uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: ./docker/${{ matrix.service }}.Dockerfile
+          labels: ${{ steps.metadata.outputs.labels  }}
+          # Note: the final multiarch image will receive the tag
+          platforms: linux/arm64
+          outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{  matrix.service }},push-by-digest=true,name-canonical=true,push=true
+
+
+      - name: Export docker image digest
+        shell: bash
+        run: |
+          set -x
+          digest_dir="${{ runner.temp }}/digests"
+          mkdir -p "${digest_dir}"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${digest_dir}/${digest#sha256:}"
+          ls -lah "${digest_dir}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: "digests-${{ matrix.service }}-arm64"
+          path: "${{ runner.temp }}/digests/*"
+          if-no-files-found: error
+          retention-days: 1
+
+  # Merge the AMD64 and ARM64 images into the final (multiplatform) image.
+  #
+  # For documentation refer to
+  # https://docs.docker.com/build/ci/github-actions/multi-platform/#distribute-build-across-multiple-runners
+  create-multiplatform-docker-image:
+    if: github.event_name != 'pull_request'
+    needs: [build-dockers-amd, build-dockers-arm]
     runs-on: ubuntu-latest
-    needs: [build-dockers]
+    strategy:
+      matrix:
+        service:
+          - bridge
+          - builder
+          - cdn-broker
+          - cdn-marshal
+          - cdn-whitelist
+          - deploy
+          - espresso-dev-node
+          - nasty-client
+          - node-validator
+          - orchestrator
+          - prover-service
+          - sequencer
+          - staking-cli
+          - state-relay-server
+          - submit-transactions
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Github Container Repo
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner  }}
+          password: ${{ secrets.GITHUB_TOKEN  }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "digests-${{ matrix.service }}-*"
+          path: "${{ runner.temp }}/digests"
+          merge-multiple: true
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
+
+      - name: Create manifest list and push
+        working-directory: "${{ runner.temp }}/digests"
+        run: |
+          # Count the number of files in the directory
+          file_count=$(find . -type f | wc -l)
+
+          if [ "$file_count" -ne 2 ]; then
+            echo "Should have exactly 2 digests to combine, something went wrong"
+            ls -lah
+            exit 1
+          fi
+
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}:${{ steps.meta.outputs.version }}
+
+  test-demo-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd]
     steps:
       - uses: taiki-e/install-action@just
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download artifacts (PR only)
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
 
-      - name: Load docker images (PR only)
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Load docker images
         run: |
           # load all *.tar files in the temp directory, the layout should
           # be ${{ runner.temp }}/docker-images/<artifact-name>/<service>.tar
@@ -285,7 +451,7 @@ jobs:
 
       - name: Match the docker image tag built or pushed to the registry
         run: |
-          DOCKER_TAG=$(echo ${{ needs.build-dockers.outputs.tags }} | sed 's/.*://')
+          DOCKER_TAG=$(echo ${{ needs.build-dockers-amd.outputs.tags }} | sed 's/.*://')
           echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
 
       - name: Pull remaining docker images
@@ -297,3 +463,47 @@ jobs:
           just demo --pull never &
           set -o pipefail
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+  test-demo-non-pr:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    steps:
+      - uses: taiki-e/install-action@just
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Match the docker image tag built or pushed to the registry
+        run: |
+          DOCKER_TAG=$(echo ${{ needs.build-dockers-amd.outputs.tags }} | sed 's/.*://')
+          echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_ENV
+
+      - name: Pull the docker images
+        run: |
+          docker compose pull --policy missing
+
+      - name: Test docker demo
+        run: |
+          just demo --pull never &
+          set -o pipefail
+          timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+  # This job enables having a single required status check for both test-demo jobs
+  test-demo:
+    needs: [test-demo-pr, test-demo-non-pr]
+    runs-on: ubuntu-latest
+    # explicitly run and fail the job if dependencies failed
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Aggregate demo test results
+        run: |
+          # useful for debugging
+          echo "All results: ${{ toJson(needs) }}"
+
+          if ${{ contains(needs.*.result, 'success') }}; then
+            echo "At least one job passed. Ok."
+          else
+            echo "No jobs passed. Failing."
+            exit 1
+          fi
