@@ -94,6 +94,14 @@ struct Args {
     #[clap(short, long, env = "ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI")]
     pub max_gas_price: Option<String>,
 
+    /// Indicated if the prover is using the old V1 LightClient contract
+    #[clap(
+        long = "v1-contract",
+        env = "ESPRESSO_STATE_PROVER_V1_CONTRACT",
+        default_value = "false"
+    )]
+    pub v1_contract: bool,
+
     #[clap(flatten)]
     logging: logging::Config,
 }

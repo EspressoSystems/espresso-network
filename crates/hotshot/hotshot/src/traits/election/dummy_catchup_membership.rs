@@ -208,16 +208,15 @@ where
         self.inner.set_first_epoch(epoch, initial_drb_result);
     }
 
-    #[allow(refining_impl_trait)]
     async fn add_epoch_root(
-        &self,
+        membership: Arc<RwLock<Self>>,
         epoch: TYPES::Epoch,
         _block_header: TYPES::BlockHeader,
-    ) -> anyhow::Result<Option<Box<dyn FnOnce(&mut Self) + Send>>> {
-        Ok(Some(Box::new(move |mem: &mut Self| {
-            tracing::error!("Adding epoch root for {epoch}");
-            mem.epochs.insert(epoch);
-        })))
+    ) -> anyhow::Result<()> {
+        let mut membership_writer = membership.write().await;
+        tracing::error!("Adding epoch root for {epoch}");
+        membership_writer.epochs.insert(epoch);
+        Ok(())
     }
 
     fn first_epoch(&self) -> Option<TYPES::Epoch> {
