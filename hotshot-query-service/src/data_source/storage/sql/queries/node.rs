@@ -12,7 +12,10 @@
 
 //! Node storage implementation for a database query engine.
 
-use std::ops::{Bound, RangeBounds};
+use std::{
+    collections::HashMap,
+    ops::{Bound, RangeBounds},
+};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -293,19 +296,48 @@ impl<Mode: TransactionMode> AggregatesStorage for Transaction<Mode> {
     }
 
     async fn load_prev_aggregate(&mut self) -> anyhow::Result<Option<Aggregate>> {
-        let res  : Option<(i64, i64,i64)> = query_as(
-            "SELECT height, num_transactions, payload_size FROM aggregate ORDER BY height DESC limit 1",
+        // Get the maximum height for which we have stored aggregated results
+        // then query all the namespace info for that height
+        let res: Option<(i64,)> = query_as(
+            "SELECT height FROM aggregate WHERE namespace = -1 ORDER BY height DESC LIMIT 1",
         )
         .fetch_optional(self.as_mut())
         .await?;
 
-        Ok(
-            res.map(|(height, num_transactions, payload_size)| Aggregate {
-                height,
-                num_transactions,
-                payload_size,
-            }),
+        let Some((max_height,)) = res else {
+            return Ok(None);
+        };
+
+        let rows: Vec<(i64, i64, i64)> = query_as(
+            r#"
+        SELECT namespace, num_transactions, payload_size from aggregate WHERE height = $1
+        "#,
         )
+        .bind(max_height)
+        .fetch_all(self.as_mut())
+        .await?;
+
+        let mut num_transactions = HashMap::new();
+        let mut payload_size = HashMap::new();
+
+        for (namespace_id, num_tx, payload_sz) in rows {
+            // Null namespace is represented as - 1 in database
+            // as it is part of primary key and primary key can not be NULL
+            // This namespace represents the cumulative sum of all the namespaces
+            let key = if namespace_id == -1 {
+                None
+            } else {
+                Some(namespace_id as u32)
+            };
+            num_transactions.insert(key, num_tx as usize);
+            payload_size.insert(key, payload_sz as usize);
+        }
+
+        Ok(Some(Aggregate {
+            height: max_height,
+            num_transactions,
+            payload_size,
+        }))
     }
 }
 
@@ -316,12 +348,12 @@ impl<Types: NodeType> UpdateAggregatesStorage<Types> for Transaction<Write> {
         blocks: &[PayloadMetadata<Types>],
     ) -> anyhow::Result<Aggregate> {
         let height = blocks[0].height();
-        let (prev_tx_count, prev_size) = (
-            u64::try_from(prev.num_transactions)?,
-            u64::try_from(prev.payload_size)?,
-        );
+        let (prev_tx_count, prev_size) = (prev.num_transactions, prev.payload_size);
+
+        let mut rows = Vec::new();
+
         // Cumulatively sum up new statistics for each block in this chunk.
-        let rows = blocks
+        let aggregates = blocks
             .iter()
             .scan(
                 (height, prev_tx_count, prev_size),
@@ -335,25 +367,41 @@ impl<Types: NodeType> UpdateAggregatesStorage<Types> for Transaction<Write> {
                     }
                     *height += 1;
 
-                    *tx_count += block.num_transactions;
-                    *size += block.size;
-                    Some(Ok((block.height as i64, *tx_count as i64, *size as i64)))
+                    *tx_count.entry(None).or_insert(0) += block.num_transactions as usize;
+                    *size.entry(None).or_insert(0) += block.size as usize;
+
+                    rows.push((*height as i64, -1, tx_count[&None] as i64, size[&None] as i64));
+
+                    for (&ns_id, info) in &block.namespaces {
+                        let key = Some(ns_id);
+
+                        *tx_count.entry(key).or_insert(0) += info.num_transactions as usize;
+                        *size.entry(key).or_insert(0) += info.size as usize;
+
+                        rows.push((
+                            *height as i64,
+                            ns_id as i64,
+                            tx_count[&key] as i64,
+                            size[&key] as i64,
+                        ));
+                    }
+
+                    Some(Ok((block.height as i64, tx_count.clone(), size.clone())))
                 },
             )
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let last_aggregate = rows.last().cloned();
-
-        self.upsert(
-            "aggregate",
-            ["height", "num_transactions", "payload_size"],
-            ["height"],
-            rows,
-        )
-        .await?;
+        let last_aggregate = aggregates.last().cloned();
 
         let (height, num_transactions, payload_size) =
             last_aggregate.ok_or_else(|| anyhow!("no row"))?;
 
+        self.upsert(
+            "aggregate",
+            ["height", "namespace", "num_transactions", "payload_size"],
+            ["height", "namespace"],
+            rows,
+        )
+        .await?;
         Ok(Aggregate {
             height,
             num_transactions,

@@ -58,6 +58,7 @@
 
 use std::ops::RangeBounds;
 
+use alloy::primitives::map::HashMap;
 use async_trait::async_trait;
 use futures::future::Future;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
@@ -248,8 +249,8 @@ pub trait NodeStorage<Types: NodeType> {
 #[derive(Clone, Debug, Default)]
 pub struct Aggregate {
     pub height: i64,
-    pub num_transactions: i64,
-    pub payload_size: i64,
+    pub num_transactions: HashMap<Option<u32>, usize>,
+    pub payload_size: HashMap<Option<u32>, usize>,
 }
 
 pub trait AggregatesStorage {
