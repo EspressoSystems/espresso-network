@@ -562,6 +562,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> QuorumVoteTaskS
                 *new_view
             );
 
+            println!("Number of vote dependencies: {}", self.vote_dependencies.len());
+
             // Cancel the old dependency tasks.
             for view in *self.latest_voted_view..(*new_view) {
                 if let Some(dependency) = self.vote_dependencies.remove(&TYPES::View::new(view)) {
