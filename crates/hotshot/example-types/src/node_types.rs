@@ -24,8 +24,13 @@ use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
-    traits::node_implementation::{NodeType, Versions},
+    stake_table::HSStakeTable,
+    traits::{
+        node_implementation::{NodeType, Versions},
+        signature_key::SignatureKey,
+    },
     upgrade_config::UpgradeConstants,
+    PeerConfig,
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
@@ -113,10 +118,25 @@ impl NodeType for TestTypesRandomizedLeader {
     serde::Serialize,
     serde::Deserialize,
 )]
-pub struct TestTypesEpochCatchupTypes<V: Versions> {
+pub struct TestTypesEpochCatchupTypes<V: Versions, InnerTypes: NodeType> {
     _ph: PhantomData<V>,
+    _pd: PhantomData<InnerTypes>,
 }
-impl<V: Versions + Default + Ord + Hash> NodeType for TestTypesEpochCatchupTypes<V> {
+impl<V: Versions + Default + Ord + Hash, InnerTypes: NodeType> NodeType
+    for TestTypesEpochCatchupTypes<V, InnerTypes>
+where
+    InnerTypes::Epoch: From<EpochNumber>,
+    EpochNumber: From<InnerTypes::Epoch>,
+    InnerTypes::View: From<ViewNumber>,
+    BLSPubKey: From<InnerTypes::SignatureKey>,
+    for<'a> &'a InnerTypes::SignatureKey: From<&'a BLSPubKey>,
+    <InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry:
+        From<<BLSPubKey as SignatureKey>::StakeTableEntry>,
+    InnerTypes::StateSignatureKey: From<SchnorrPubKey>,
+    <BLSPubKey as SignatureKey>::StakeTableEntry:
+        From<<InnerTypes::SignatureKey as SignatureKey>::StakeTableEntry>,
+    SchnorrPubKey: From<InnerTypes::StateSignatureKey>,
+{
     const UPGRADE_CONSTANTS: UpgradeConstants = TEST_UPGRADE_CONSTANTS;
 
     type View = ViewNumber;
@@ -127,7 +147,8 @@ impl<V: Versions + Default + Ord + Hash> NodeType for TestTypesEpochCatchupTypes
     type Transaction = TestTransaction;
     type ValidatedState = TestValidatedState;
     type InstanceState = TestInstanceState;
-    type Membership = DummyCatchupCommittee<TestTypesEpochCatchupTypes<V>, V>;
+    type Membership =
+        DummyCatchupCommittee<TestTypesEpochCatchupTypes<V, InnerTypes>, V, InnerTypes>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
 }

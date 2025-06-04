@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    EpochsTestVersions, PushCdnImpl, TestTypesEpochCatchupTypes,
+    EpochsTestVersions, PushCdnImpl, TestTypes, TestTypesEpochCatchupTypes,
 };
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
@@ -27,7 +27,7 @@ async fn test_catchup_epochs() {
         ..Default::default()
     };
     let mut metadata: TestDescription<
-        TestTypesEpochCatchupTypes<EpochsTestVersions>,
+        TestTypesEpochCatchupTypes<EpochsTestVersions, TestTypes>,
         PushCdnImpl,
         EpochsTestVersions,
     > = TestDescription::default().set_num_nodes(20, 7);
