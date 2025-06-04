@@ -639,23 +639,16 @@ pub async fn upgrade_light_client_v2_multisig_owner(
                 owner_addr,
                 Some(dry_run),
             )
-            .await;
+            .await?;
 
-            if let Err(ref err) = result {
-                tracing::error!("LightClientProxy upgrade failed: {:?}", err);
-            } else {
-                tracing::info!("LightClientProxy upgrade proposal sent");
-                tracing::info!(
-                    "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
-                    owner_addr
-                );
-                // IDEA: add a function to wait for the proposal to be executed
-            }
+            tracing::info!("LightClientProxy upgrade proposal sent");
+            tracing::info!(
+                "Send this link to the signers to sign the proposal: https://app.safe.global/transactions/queue?safe={}",
+                owner_addr
+            );
+            // IDEA: add a function to wait for the proposal to be executed
 
-            match result {
-                Ok(r) => Ok(r),
-                Err(e) => Err(anyhow!("Upgrade proposal failed: {:?}", e)),
-            }
+            Ok(result)
         },
     }
 }
@@ -948,18 +941,19 @@ pub async fn call_upgrade_proxy_script(
     tracing::info!("Dry run: {}", dry_run);
     tracing::info!("Sending the upgrade proposal to multisig: {}", safe_addr);
 
-    let script_path = if let Ok(env_path) = std::env::var("MULTISIG_UPGRADE_ENTRYPOINT_PATH") {
-        PathBuf::from(env_path)
+    let script_path = if let Ok(cargo_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        PathBuf::from(cargo_manifest_dir).join("../../../scripts/multisig-upgrade-entrypoint")
     } else {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../scripts/multisig-upgrade-entrypoint")
+        // just the script name (assumes it's in PATH) (/bin/multisig-upgrade-entrypoint)
+        PathBuf::from("/bin/multisig-upgrade-entrypoint")
     };
-
-    assert!(
-        script_path.exists(),
-        "Script not found at {:?}",
-        script_path
-    );
+    if !script_path.exists() {
+        anyhow::bail!(
+            "Upgrade entrypoint script not found at {:?}. \
+            Make sure it is present in your PATH or at the expected location.",
+            script_path
+        );
+    }
     let output = Command::new(script_path)
         .arg("--from-rust")
         .arg("--proxy")
