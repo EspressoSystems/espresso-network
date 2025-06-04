@@ -162,33 +162,39 @@
 <a href=#162 id=162 data-nosnippet>162</a>        <span class="kw">async move </span>{ <span class="macro">anyhow::bail!</span>(<span class="string">"Not implemented"</span>) }
 <a href=#163 id=163 data-nosnippet>163</a>    }
 <a href=#164 id=164 data-nosnippet>164</a>
-<a href=#165 id=165 data-nosnippet>165</a>    <span class="attr">#[allow(clippy::type_complexity)]
-<a href=#166 id=166 data-nosnippet>166</a>    </span><span class="doccomment">/// Handles notifications that a new epoch root has been created
-<a href=#167 id=167 data-nosnippet>167</a>    /// Is called under a read lock to the Membership. Return a callback
-<a href=#168 id=168 data-nosnippet>168</a>    /// with Some to have that callback invoked under a write lock.
-<a href=#169 id=169 data-nosnippet>169</a>    ///
-<a href=#170 id=170 data-nosnippet>170</a>    /// #3967 REVIEW NOTE: this is only called if epoch is Some. Is there any reason to do otherwise?
-<a href=#171 id=171 data-nosnippet>171</a>    </span><span class="kw">fn </span>add_epoch_root(
-<a href=#172 id=172 data-nosnippet>172</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#173 id=173 data-nosnippet>173</a>        _epoch: TYPES::Epoch,
-<a href=#174 id=174 data-nosnippet>174</a>        _block_header: TYPES::BlockHeader,
-<a href=#175 id=175 data-nosnippet>175</a>    ) -&gt; <span class="kw">impl </span>std::future::Future&lt;Output = anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>FnOnce(<span class="kw-2">&amp;mut </span><span class="self">Self</span>) + Send&gt;&gt;&gt;&gt;
-<a href=#176 id=176 data-nosnippet>176</a>           + Send {
-<a href=#177 id=177 data-nosnippet>177</a>        <span class="kw">async </span>{ <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) }
-<a href=#178 id=178 data-nosnippet>178</a>    }
-<a href=#179 id=179 data-nosnippet>179</a>
-<a href=#180 id=180 data-nosnippet>180</a>    <span class="doccomment">/// Called to notify the Membership when a new DRB result has been calculated.
-<a href=#181 id=181 data-nosnippet>181</a>    /// Observes the same semantics as add_epoch_root
-<a href=#182 id=182 data-nosnippet>182</a>    </span><span class="kw">fn </span>add_drb_result(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _epoch: TYPES::Epoch, _drb_result: DrbResult);
+<a href=#165 id=165 data-nosnippet>165</a>    <span class="doccomment">/// Handles notifications that a new epoch root has been created.
+<a href=#166 id=166 data-nosnippet>166</a>    </span><span class="kw">fn </span>add_epoch_root(
+<a href=#167 id=167 data-nosnippet>167</a>        _membership: Arc&lt;RwLock&lt;<span class="self">Self</span>&gt;&gt;,
+<a href=#168 id=168 data-nosnippet>168</a>        _epoch: TYPES::Epoch,
+<a href=#169 id=169 data-nosnippet>169</a>        _block_header: TYPES::BlockHeader,
+<a href=#170 id=170 data-nosnippet>170</a>    ) -&gt; <span class="kw">impl </span>std::future::Future&lt;Output = anyhow::Result&lt;()&gt;&gt; + Send {
+<a href=#171 id=171 data-nosnippet>171</a>        <span class="kw">async </span>{ <span class="prelude-val">Ok</span>(()) }
+<a href=#172 id=172 data-nosnippet>172</a>    }
+<a href=#173 id=173 data-nosnippet>173</a>
+<a href=#174 id=174 data-nosnippet>174</a>    <span class="doccomment">/// Called to notify the Membership when a new DRB result has been calculated.
+<a href=#175 id=175 data-nosnippet>175</a>    /// Observes the same semantics as add_epoch_root
+<a href=#176 id=176 data-nosnippet>176</a>    </span><span class="kw">fn </span>add_drb_result(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _epoch: TYPES::Epoch, _drb_result: DrbResult);
+<a href=#177 id=177 data-nosnippet>177</a>
+<a href=#178 id=178 data-nosnippet>178</a>    <span class="doccomment">/// Called to notify the Membership that Epochs are enabled.
+<a href=#179 id=179 data-nosnippet>179</a>    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
+<a href=#180 id=180 data-nosnippet>180</a>    /// when this is called. The value of initial_drb_result should be used for DRB
+<a href=#181 id=181 data-nosnippet>181</a>    /// calculations for epochs (epoch+1) and earlier.
+<a href=#182 id=182 data-nosnippet>182</a>    </span><span class="kw">fn </span>set_first_epoch(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {}
 <a href=#183 id=183 data-nosnippet>183</a>
-<a href=#184 id=184 data-nosnippet>184</a>    <span class="doccomment">/// Called to notify the Membership that Epochs are enabled.
-<a href=#185 id=185 data-nosnippet>185</a>    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
-<a href=#186 id=186 data-nosnippet>186</a>    /// when this is called. The value of initial_drb_result should be used for DRB
-<a href=#187 id=187 data-nosnippet>187</a>    /// calculations for epochs (epoch+1) and earlier.
-<a href=#188 id=188 data-nosnippet>188</a>    </span><span class="kw">fn </span>set_first_epoch(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _epoch: TYPES::Epoch, _initial_drb_result: DrbResult) {}
+<a href=#184 id=184 data-nosnippet>184</a>    <span class="doccomment">/// Get first epoch if epochs are enabled, `None` otherwise
+<a href=#185 id=185 data-nosnippet>185</a>    </span><span class="kw">fn </span>first_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
+<a href=#186 id=186 data-nosnippet>186</a>        <span class="prelude-val">None
+<a href=#187 id=187 data-nosnippet>187</a>    </span>}
+<a href=#188 id=188 data-nosnippet>188</a>}
 <a href=#189 id=189 data-nosnippet>189</a>
-<a href=#190 id=190 data-nosnippet>190</a>    <span class="doccomment">/// Get first epoch if epochs are enabled, `None` otherwise
-<a href=#191 id=191 data-nosnippet>191</a>    </span><span class="kw">fn </span>first_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;TYPES::Epoch&gt; {
-<a href=#192 id=192 data-nosnippet>192</a>        <span class="prelude-val">None
-<a href=#193 id=193 data-nosnippet>193</a>    </span>}
-<a href=#194 id=194 data-nosnippet>194</a>}</code></pre></div></section></main></body></html>
+<a href=#190 id=190 data-nosnippet>190</a><span class="kw">pub fn </span>membership_spawn_add_epoch_root&lt;TYPES: NodeType&gt;(
+<a href=#191 id=191 data-nosnippet>191</a>    membership: Arc&lt;RwLock&lt;<span class="kw">impl </span>Membership&lt;TYPES&gt; + <span class="lifetime">'static</span>&gt;&gt;,
+<a href=#192 id=192 data-nosnippet>192</a>    epoch: TYPES::Epoch,
+<a href=#193 id=193 data-nosnippet>193</a>    block_header: TYPES::BlockHeader,
+<a href=#194 id=194 data-nosnippet>194</a>) {
+<a href=#195 id=195 data-nosnippet>195</a>    tokio::spawn(<span class="kw">async move </span>{
+<a href=#196 id=196 data-nosnippet>196</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = Membership::&lt;TYPES&gt;::add_epoch_root(membership, epoch, block_header).<span class="kw">await </span>{
+<a href=#197 id=197 data-nosnippet>197</a>            <span class="macro">tracing::error!</span>(<span class="string">"Failed to add epoch root for epoch {}: {}"</span>, epoch, e);
+<a href=#198 id=198 data-nosnippet>198</a>        }
+<a href=#199 id=199 data-nosnippet>199</a>    });
+<a href=#200 id=200 data-nosnippet>200</a>}</code></pre></div></section></main></body></html>

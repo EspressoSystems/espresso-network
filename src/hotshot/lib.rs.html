@@ -1219,25 +1219,29 @@
 <a href=#1219 id=1219 data-nosnippet>1219</a>    <span class="kw">for </span>epoch_info <span class="kw">in </span>start_epoch_info {
 <a href=#1220 id=1220 data-nosnippet>1220</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(block_header) = <span class="kw-2">&amp;</span>epoch_info.block_header {
 <a href=#1221 id=1221 data-nosnippet>1221</a>            <span class="macro">tracing::info!</span>(<span class="string">"Calling add_epoch_root for epoch {:?}"</span>, epoch_info.epoch);
-<a href=#1222 id=1222 data-nosnippet>1222</a>            <span class="kw">let </span>write_callback = {
-<a href=#1223 id=1223 data-nosnippet>1223</a>                <span class="kw">let </span>membership_reader = membership.read().<span class="kw">await</span>;
-<a href=#1224 id=1224 data-nosnippet>1224</a>                membership_reader
-<a href=#1225 id=1225 data-nosnippet>1225</a>                    .add_epoch_root(epoch_info.epoch, block_header.clone())
-<a href=#1226 id=1226 data-nosnippet>1226</a>                    .<span class="kw">await
-<a href=#1227 id=1227 data-nosnippet>1227</a>            </span>};
-<a href=#1228 id=1228 data-nosnippet>1228</a>
-<a href=#1229 id=1229 data-nosnippet>1229</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(write_callback)) = write_callback {
-<a href=#1230 id=1230 data-nosnippet>1230</a>                <span class="kw">let </span><span class="kw-2">mut </span>membership_writer = membership.write().<span class="kw">await</span>;
-<a href=#1231 id=1231 data-nosnippet>1231</a>                write_callback(<span class="kw-2">&amp;mut *</span>membership_writer);
-<a href=#1232 id=1232 data-nosnippet>1232</a>            }
-<a href=#1233 id=1233 data-nosnippet>1233</a>        }
-<a href=#1234 id=1234 data-nosnippet>1234</a>    }
-<a href=#1235 id=1235 data-nosnippet>1235</a>
-<a href=#1236 id=1236 data-nosnippet>1236</a>    <span class="kw">for </span>epoch_info <span class="kw">in </span>start_epoch_info {
-<a href=#1237 id=1237 data-nosnippet>1237</a>        <span class="macro">tracing::info!</span>(<span class="string">"Calling add_drb_result for epoch {:?}"</span>, epoch_info.epoch);
-<a href=#1238 id=1238 data-nosnippet>1238</a>        membership
-<a href=#1239 id=1239 data-nosnippet>1239</a>            .write()
-<a href=#1240 id=1240 data-nosnippet>1240</a>            .<span class="kw">await
-<a href=#1241 id=1241 data-nosnippet>1241</a>            </span>.add_drb_result(epoch_info.epoch, epoch_info.drb_result);
-<a href=#1242 id=1242 data-nosnippet>1242</a>    }
-<a href=#1243 id=1243 data-nosnippet>1243</a>}</code></pre></div></section></main></body></html>
+<a href=#1222 id=1222 data-nosnippet>1222</a>
+<a href=#1223 id=1223 data-nosnippet>1223</a>            Membership::add_epoch_root(
+<a href=#1224 id=1224 data-nosnippet>1224</a>                Arc::clone(membership),
+<a href=#1225 id=1225 data-nosnippet>1225</a>                epoch_info.epoch,
+<a href=#1226 id=1226 data-nosnippet>1226</a>                block_header.clone(),
+<a href=#1227 id=1227 data-nosnippet>1227</a>            )
+<a href=#1228 id=1228 data-nosnippet>1228</a>            .<span class="kw">await
+<a href=#1229 id=1229 data-nosnippet>1229</a>            </span>.unwrap_or_else(|err| {
+<a href=#1230 id=1230 data-nosnippet>1230</a>                <span class="comment">// REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
+<a href=#1231 id=1231 data-nosnippet>1231</a>                </span><span class="macro">tracing::error!</span>(
+<a href=#1232 id=1232 data-nosnippet>1232</a>                    <span class="string">"Failed to add epoch root for epoch {:?}: {}"</span>,
+<a href=#1233 id=1233 data-nosnippet>1233</a>                    epoch_info.epoch,
+<a href=#1234 id=1234 data-nosnippet>1234</a>                    err
+<a href=#1235 id=1235 data-nosnippet>1235</a>                );
+<a href=#1236 id=1236 data-nosnippet>1236</a>            });
+<a href=#1237 id=1237 data-nosnippet>1237</a>        }
+<a href=#1238 id=1238 data-nosnippet>1238</a>    }
+<a href=#1239 id=1239 data-nosnippet>1239</a>
+<a href=#1240 id=1240 data-nosnippet>1240</a>    <span class="kw">for </span>epoch_info <span class="kw">in </span>start_epoch_info {
+<a href=#1241 id=1241 data-nosnippet>1241</a>        <span class="macro">tracing::info!</span>(<span class="string">"Calling add_drb_result for epoch {:?}"</span>, epoch_info.epoch);
+<a href=#1242 id=1242 data-nosnippet>1242</a>        membership
+<a href=#1243 id=1243 data-nosnippet>1243</a>            .write()
+<a href=#1244 id=1244 data-nosnippet>1244</a>            .<span class="kw">await
+<a href=#1245 id=1245 data-nosnippet>1245</a>            </span>.add_drb_result(epoch_info.epoch, epoch_info.drb_result);
+<a href=#1246 id=1246 data-nosnippet>1246</a>    }
+<a href=#1247 id=1247 data-nosnippet>1247</a>}</code></pre></div></section></main></body></html>

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"trait":["Membership"]};
+window.SIDEBAR_ITEMS = {"fn":["membership_spawn_add_epoch_root"],"trait":["Membership"]};
