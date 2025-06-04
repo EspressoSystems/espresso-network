@@ -75,7 +75,7 @@ cargo_home="${HOME}/.cargo-docker"
 echo "Using cargo home directory: $cargo_home"
 
 # Enable target artifact caching but use a different target directory for docker builds to avoid
-# conflicts with native builds. The relative path is used to ensure s. t. it's on the host and
+# conflicts with builds on the host. The relative path is used to ensure it's valid on the host and
 # inside the container.
 cargo_target_dir="./target/docker"
 echo "Using cargo target directory: $cargo_target_dir"
