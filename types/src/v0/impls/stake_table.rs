@@ -1048,7 +1048,7 @@ impl StakeTableFetcher {
         Self::new(peers, Arc::new(Mutex::new(persistence)), l1, chain_config)
     }
 }
-/// Holds Stake table and da stake
+/// Holds Stake table and DA members
 #[derive(Clone, Debug)]
 struct NonEpochCommittee {
     /// The nodes eligible for leadership.
@@ -1069,16 +1069,19 @@ struct NonEpochCommittee {
     indexed_da_members: HashMap<PubKey, PeerConfig<SeqTypes>>,
 }
 
-/// Holds Stake table and da stake
+/// Holds Stake table and DA members
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct EpochCommittee {
     /// The nodes eligible for leadership.
     /// NOTE: This is currently a hack because the DA leader needs to be the quorum
     /// leader but without voting rights.
     eligible_leaders: Vec<PeerConfig<SeqTypes>>,
-    /// Keys for nodes participating in the network
+    /// Ordered keys for nodes participating in the network
     stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>>,
+    /// Ordered keys for nodes participating in the network
     validators: IndexMap<Address, Validator<BLSPubKey>>,
+    /// Mapping of BLS keys used to sign consensus to etherium addresses holding
+    /// stake on the l1.
     address_mapping: HashMap<BLSPubKey, Address>,
 }
 
@@ -1294,10 +1297,9 @@ enum GetStakeTablesError {
 }
 
 #[derive(Error, Debug)]
-#[error("Could not lookup leader")] // TODO error variants? message?
+#[error("Could not lookup leader")]
 pub struct LeaderLookupError;
 
-// #[async_trait]
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
     // DO NOT USE. Dummy constructor to comply w/ trait.
@@ -2015,7 +2017,7 @@ mod tests {
         }
         .into();
 
-        // first ensure that wan build a valid stake table
+        // first ensure that we build a valid stake table
         assert!(active_validator_set_from_l1_events(
             vec![register.clone(), delegate.clone()].into_iter()
         )
