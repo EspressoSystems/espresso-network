@@ -149,7 +149,7 @@ impl NodeState {
         )));
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage, 10);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
         Self::new(
             0,
             chain_config,
@@ -177,7 +177,7 @@ impl NodeState {
             StakeTableFetcher::mock(),
         )));
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage, 10);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             0,
@@ -205,7 +205,7 @@ impl NodeState {
         )));
 
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage, 10);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
         Self::new(
             0,
             ChainConfig::default(),
@@ -286,7 +286,7 @@ impl Default for NodeState {
             StakeTableFetcher::mock(),
         )));
         let storage = TestStorage::default();
-        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage, 10);
+        let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
         Self::new(
             1u64,

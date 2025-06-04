@@ -247,7 +247,6 @@ async fn init_consensus(
                     Arc::new(RwLock::new(membership)),
                     config.epoch_height,
                     &storage.clone(),
-                    config.drb_difficulty,
                 );
 
                 SystemContext::init(

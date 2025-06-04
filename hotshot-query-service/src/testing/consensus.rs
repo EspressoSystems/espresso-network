@@ -203,7 +203,6 @@ impl<D: DataSourceLifeCycle + UpdateStatusData, V: Versions> MockNetwork<D, V> {
                             membership,
                             config.epoch_height,
                             &hs_storage.clone(),
-                            DIFFICULTY_LEVEL,
                         );
 
                         let hotshot = SystemContext::init(

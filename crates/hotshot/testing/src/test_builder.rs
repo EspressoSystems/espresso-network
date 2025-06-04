@@ -261,12 +261,8 @@ pub async fn create_test_handle<
     let private_key = validator_config.private_key.clone();
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();
-    let membership_coordinator = EpochMembershipCoordinator::new(
-        memberships,
-        config.epoch_height,
-        &storage.clone(),
-        config.drb_difficulty,
-    );
+    let membership_coordinator =
+        EpochMembershipCoordinator::new(memberships, config.epoch_height, &storage.clone());
 
     let behaviour = (metadata.behaviour)(node_id);
     match behaviour {

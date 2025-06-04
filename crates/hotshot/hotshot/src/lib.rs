@@ -13,7 +13,7 @@ pub mod documentation;
 use committable::Committable;
 use futures::future::{select, Either};
 use hotshot_types::{
-    drb::{DrbResult, INITIAL_DRB_RESULT},
+    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificate,
@@ -393,6 +393,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         debug!("Starting Consensus");
         let consensus = self.consensus.read().await;
+
+        debug!("Setting DRB difficulty selector in membership");
+        let drb_difficulty_selector =
+            drb_difficulty_selector(self.upgrade_lock.clone(), &self.config);
+
+        self.membership_coordinator
+            .set_drb_difficulty_selector(drb_difficulty_selector)
+            .await;
 
         let first_epoch = option_epoch_from_block_number::<TYPES>(
             V::Base::VERSION >= V::Epochs::VERSION,

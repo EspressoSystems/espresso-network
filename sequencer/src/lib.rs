@@ -532,7 +532,6 @@ where
         membership,
         network_config.config.epoch_height,
         &persistence.clone(),
-        network_config.config.drb_difficulty,
     );
 
     let instance_state = NodeState {
@@ -1243,7 +1242,6 @@ pub mod testing {
                 membership,
                 config.epoch_height,
                 &persistence.clone(),
-                config.drb_difficulty,
             );
 
             let node_state = NodeState::new(
