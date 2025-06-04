@@ -24,13 +24,11 @@ use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
     data::{EpochNumber, ViewNumber},
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
-    stake_table::HSStakeTable,
     traits::{
         node_implementation::{NodeType, Versions},
         signature_key::SignatureKey,
     },
     upgrade_config::UpgradeConstants,
-    PeerConfig,
 };
 use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
