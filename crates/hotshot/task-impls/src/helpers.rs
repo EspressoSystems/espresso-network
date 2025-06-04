@@ -325,6 +325,7 @@ impl<TYPES: NodeType + Default> Default for LeafChainTraversalOutcome<TYPES> {
 /// # Panics
 /// If the leaf chain contains no decided leaf while reaching a decided view, which should be
 /// impossible.
+#[allow(clippy::too_many_arguments)]
 pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
     proposal: &QuorumProposalWrapper<TYPES>,
     consensus: OuterConsensus<TYPES>,
@@ -428,7 +429,7 @@ pub async fn decide_from_proposal_2<TYPES: NodeType, I: NodeImplementation<TYPES
                 membership.membership(),
                 storage,
                 &consensus,
-                &upgrade_lock,
+                upgrade_lock,
             )
             .await;
         }
@@ -615,7 +616,7 @@ pub async fn decide_from_proposal<TYPES: NodeType, I: NodeImplementation<TYPES>,
                 membership,
                 storage,
                 &consensus,
-                &upgrade_lock,
+                upgrade_lock,
             )
             .await;
         }
