@@ -194,8 +194,8 @@ fi
 echo "Running cargo commands: $cargo_cmd_line"
 
 # Get the default toolchain in the container to set RUSTUP_TOOLCHAIN during build. Without it rustup
-# will re-download the "stable" toolchain from rust-toolchain.toml rust-toolchain.toml, even if that
-# is the default/installed version in the container.
+# will re-download the "stable" toolchain from rust-toolchain.toml, even if "stable" matches the
+# default/installed version in the container.
 rustup_toolchain="$(docker run --rm rust rustup show active-toolchain | cut -d ' ' -f 1)"
 echo "Using rustup toolchain: $rustup_toolchain"
 
