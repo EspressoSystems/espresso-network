@@ -36,13 +36,17 @@ func NewMultipleNodesClient(urls []string) (*MultipleNodesClient, error) {
 }
 
 func (c *MultipleNodesClient) FetchLatestBlockHeight(ctx context.Context) (uint64, error) {
+	var errs []error
 	for _, node := range c.nodes {
 		height, err := node.FetchLatestBlockHeight(ctx)
 		if err == nil {
 			return height, nil
+		} else {
+			fmt.Printf("Encountered an error while attempting to fetch latest block height from one node. Error: %v\nNode: %v\n", err, node)
+			errs = append(errs, err)
 		}
 	}
-	return 0, errors.New("fetch latest block height failed with all nodes")
+	return 0, fmt.Errorf("fetch latest block height failed with all nodes, Errors: %v\n", errs)
 }
 
 func (c *MultipleNodesClient) FetchHeaderByHeight(ctx context.Context, height uint64) (types.HeaderImpl, error) {
@@ -129,13 +133,17 @@ func (c *MultipleNodesClient) FetchVidCommonByHeight(ctx context.Context, blockH
 
 func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.Transaction) (*common.TaggedBase64, error) {
 	// Check if one node is successfully able to submit the transaction
+	var errs []error
 	for _, node := range c.nodes {
 		hash, err := node.SubmitTransaction(ctx, tx)
 		if err == nil {
 			return hash, nil
+		} else {
+			fmt.Printf("Encountered an error while attempting to submit transaction with one node.\n Error: %v \n Node: %v \n", err, node)
+			errs = append(errs, err)
 		}
 	}
-	return nil, errors.New("submit transaction failed with all nodes")
+	return nil, fmt.Errorf("Encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs)
 }
 
 func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -158,6 +166,7 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 		}(node)
 	}
 
+	var errs []error
 	var valueCount sync.Map
 	majorityCount := (len(nodes) / 2) + 1
 	responseCount := 0
@@ -184,10 +193,14 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 					}
 
 				}
+			} else {
+				fmt.Printf("Encountered an error while attempting to fetch with majority.\n Error: %v \n", res.err)
+				errs = append(errs, res.err)
 			}
+
 			responseCount++
 			if responseCount == len(nodes) {
-				return json.RawMessage{}, errors.New("no majority consensus reached")
+				return json.RawMessage{}, fmt.Errorf("No majority consensus reached with potential errors. Errors: %v\n", errs)
 			}
 		case <-ctx.Done():
 			return json.RawMessage{}, ctx.Err()
