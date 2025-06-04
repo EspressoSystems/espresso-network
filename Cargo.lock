@@ -10632,8 +10632,6 @@ dependencies = [
  "async-trait",
  "clap 4.5.39",
  "committable",
- "derive_more 1.0.0",
- "dotenvy",
  "hotshot",
  "hotshot-example-types",
  "log-panics",
