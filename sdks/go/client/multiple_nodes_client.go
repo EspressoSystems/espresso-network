@@ -182,6 +182,7 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 				// and if it is, we increase the count and check for majority
 				if err != nil {
 					fmt.Printf("error: failed to normalize json value: %v, error: %v", res.value, err)
+					errs = append(errs, err)
 				} else {
 					count, _ := valueCount.LoadOrStore(hash, 0)
 					if countInt, ok := count.(int); ok {
