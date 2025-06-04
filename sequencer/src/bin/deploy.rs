@@ -136,7 +136,7 @@ struct Options {
 
     /// Option to test locally but with a real eth network
     #[clap(long, default_value = "false")]
-    pub local_eth_testing: bool,
+    pub mock_espresso_live_network: bool,
 
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
@@ -219,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if opt.deploy_light_client_v1 {
-        let (genesis_state, genesis_stake) = if opt.local_eth_testing {
+        let (genesis_state, genesis_stake) = if opt.mock_espresso_live_network {
             light_client_genesis_from_stake_table(&Default::default(), DEFAULT_STAKE_TABLE_CAPACITY)
                 .unwrap()
         } else {
@@ -234,7 +234,7 @@ async fn main() -> anyhow::Result<()> {
     }
     if opt.upgrade_light_client_v2 {
         let (blocks_per_epoch, epoch_start_block) =
-            if (opt.dry_run && opt.use_multisig) || opt.local_eth_testing {
+            if (opt.dry_run && opt.use_multisig) || opt.mock_espresso_live_network {
                 (10, 22)
             } else {
                 // fetch epoch length from HotShot config
