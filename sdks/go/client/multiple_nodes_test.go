@@ -16,7 +16,7 @@ import (
 )
 
 var errs []error
-var defaultFetchWithMajorityError = fmt.Errorf("No majority consensus reached with potential errors. Errors: %v\n", errs)
+var defaultFetchWithMajorityError = fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs)
 
 // MockClient is a mock implementation of the Client interface
 type MockClient struct {
