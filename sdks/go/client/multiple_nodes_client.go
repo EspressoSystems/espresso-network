@@ -18,7 +18,7 @@ var _ QueryService = (*MultipleNodesClient)(nil)
 var _ SubmitAPI = (*MultipleNodesClient)(nil)
 var _ EspressoClient = (*MultipleNodesClient)(nil)
 
-var IncorrectUrlAmountErr = errors.New("The MultipleNodesClient must be constructed with more than one node url")
+var IncorrectUrlAmountErr = errors.New("the MultipleNodesClient must be constructed with more than one node url")
 
 type MultipleNodesClient struct {
 	nodes []*Client
@@ -42,7 +42,7 @@ func (c *MultipleNodesClient) FetchLatestBlockHeight(ctx context.Context) (uint6
 		if err == nil {
 			return height, nil
 		} else {
-			fmt.Printf("Encountered an error while attempting to fetch latest block height from one node. Error: %v\nNode: %v\n", err, node)
+			fmt.Printf("encountered an error while attempting to fetch latest block height from one node. Error: %v\nNode: %v\n", err, node)
 			errs = append(errs, err)
 		}
 	}
@@ -139,11 +139,11 @@ func (c *MultipleNodesClient) SubmitTransaction(ctx context.Context, tx common.T
 		if err == nil {
 			return hash, nil
 		} else {
-			fmt.Printf("Encountered an error while attempting to submit transaction with one node.\n Error: %v \n Node: %v \n", err, node)
+			fmt.Printf("encountered an error while attempting to submit transaction with one node.\n Error: %v \n Node: %v \n", err, node)
 			errs = append(errs, err)
 		}
 	}
-	return nil, fmt.Errorf("Encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs)
+	return nil, fmt.Errorf("encountered an error with all nodes while attempting to SubmitTransaction.\n Errors: %v \n", errs)
 }
 
 func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -194,13 +194,13 @@ func FetchWithMajority[T any](ctx context.Context, nodes []*T, fetchFunc func(*T
 
 				}
 			} else {
-				fmt.Printf("Encountered an error while attempting to fetch with majority.\n Error: %v \n", res.err)
+				fmt.Printf("encountered an error while attempting to fetch with majority.\n Error: %v \n", res.err)
 				errs = append(errs, res.err)
 			}
 
 			responseCount++
 			if responseCount == len(nodes) {
-				return json.RawMessage{}, fmt.Errorf("No majority consensus reached with potential errors. Errors: %v\n", errs)
+				return json.RawMessage{}, fmt.Errorf("no majority consensus reached with potential errors. Errors: %v\n", errs)
 			}
 		case <-ctx.Done():
 			return json.RawMessage{}, ctx.Err()
