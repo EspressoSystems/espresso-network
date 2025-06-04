@@ -443,7 +443,7 @@ async fn load_chain_config<Mode: TransactionMode>(
 /// range of leaves, and the STF requires all associated data to be present in the `ValidatedState`;
 /// otherwise, it will attempt to trigger catchup itself.
 #[tracing::instrument(skip(instance, tx))]
-async fn reconstruct_state<Mode: TransactionMode>(
+pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
     instance: &NodeState,
     tx: &mut Transaction<Mode>,
     from_height: u64,
@@ -728,14 +728,14 @@ where
 }
 
 #[cfg(any(test, feature = "testing"))]
-mod impl_testable_data_source {
+pub(crate) mod impl_testable_data_source {
 
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
 
     use super::*;
     use crate::api::{self, data_source::testing::TestableSequencerDataSource};
 
-    fn tmp_options(db: &TmpDb) -> Options {
+    pub fn tmp_options(db: &TmpDb) -> Options {
         #[cfg(not(feature = "embedded-db"))]
         {
             let opt = crate::persistence::sql::PostgresOptions {
