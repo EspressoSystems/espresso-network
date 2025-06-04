@@ -47,9 +47,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     clean)
-        clean=true
-        shift 1
-        ;;
+      clean=true
+      shift 1
+      ;;
     --)
       shift
       cargo_build_args="$*"
